@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    // Figma's plugin main thread is a QuickJS-like realm: ES6 but NO browser/DOM globals.
+    // "dom" is deliberately omitted — it would pull in DOM-typed console/fetch/timers that
+    // conflict with the narrower ones @figma/plugin-typings declares (see index.d.ts).
+    "target": "es6",
+    "lib": ["es2019"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    // Plugin API types are hosted under /@figma (not DefinitelyTyped's /@types). Load them via
+    // `types` so bundler module resolution finds the scoped package — this makes the globals
+    // (figma, __html__) available without imports AND works under the TS7 native compiler, which
+    // no longer auto-includes packages found via `typeRoots`.
+    "types": ["@figma/plugin-typings"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "figma-augment.d.ts"]
+}

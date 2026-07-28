@@ -1,0 +1,233 @@
+<style>
+  body { font: 13px -apple-system, sans-serif; margin: 0; padding: 14px; color: #222; }
+  #status { margin-bottom: 12px; color: #555; min-height: 18px; }
+  #status.err { color: #c0362c; }
+  button { display: block; width: 100%; margin: 6px 0; padding: 8px; border: 1px solid #ccc;
+           border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:not(:disabled):hover { background: #f4f4f4; }
+  .primary { background: #0d99ff; color: #fff; border-color: #0d99ff; font-weight: 600; }
+  .primary:not(:disabled):hover { background: #0a86e0; }
+  .sep { height: 1px; background: #eee; margin: 12px 0; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #999; margin: 4px 0; }
+  .hint { margin-top: 12px; font-size: 11px; color: #999; }
+  .row { display: flex; gap: 6px; }
+  .row button { margin: 6px 0; }
+  input { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
+  #bridge { font-size: 11px; margin-top: 12px; padding: 6px 8px; border-radius: 6px; background: #f6f6f6; color: #888; }
+  #bridge.on { background: #e7f7ec; color: #1a7f3c; }
+</style>
+
+<div id="status">Loading…</div>
+
+<div class="label">Export</div>
+<button id="run-sel" disabled>Export current selection</button>
+<button id="run-full" class="primary">Export design system + all page frames</button>
+
+<div class="sep"></div>
+<div class="label">Downloads</div>
+<div id="downloads"></div>
+<button id="assets" disabled>Download assets (<span id="acount">0</span>)</button>
+
+<div class="sep"></div>
+<div class="label">Bridge token</div>
+<div class="row">
+  <input id="token" type="password" placeholder="paste token from the bridge console" />
+  <button id="save-token" style="flex: 0 0 60px">Save</button>
+</div>
+
+<div id="bridge">Bridge: offline (start figma-pull or the MCP to connect)</div>
+<div class="hint">Save into <code>design/</code> (assets into <code>design/assets/</code>). Bridge is localhost-only; the token authenticates it.</div>
+
+<script>
+  // Everything is wrapped so a single init error can NEVER leave the UI silently frozen:
+  //  - window.onerror surfaces any uncaught error as visible text in #status (no DevTools needed).
+  //  - window.onmessage is registered immediately (catches early messages from code.js).
+  //  - DOM-dependent wiring (button handlers, get-token) runs on DOMContentLoaded, never before the
+  //    elements exist — the classic "script ran before the buttons" freeze.
+  (function () {
+    var BRIDGE_PORT = 8787;
+    var assetsState = [];
+    var ws = null;
+    var bridgeToken = "";
+    var busy = false;        // an export is in flight — block a second run (the main thread serializes too)
+    var lastSelCount = 0;    // last-known selection count, so we restore run-sel state after a run ends
+
+    function $(id) { return document.getElementById(id); }
+    function setStatus(text, isErr) {
+      var s = $("status");
+      if (!s) return;
+      s.textContent = text;
+      s.className = isErr ? "err" : "";
+    }
+    function setBusy(b) {
+      busy = b;
+      var rf = $("run-full"); if (rf) rf.disabled = b;
+      var rs = $("run-sel"); if (rs) rs.disabled = b || lastSelCount === 0;
+    }
+
+    // Any uncaught UI-script error becomes visible text in the plugin window.
+    window.onerror = function (msg, src, line) {
+      setStatus("UI error: " + msg + (line ? " (line " + line + ")" : ""), true);
+      return false;
+    };
+
+    function b64ToBytes(b64) {
+      var bin = atob(b64 || "");
+      var arr = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr;
+    }
+    function dl(name, blob) {
+      var a = document.createElement("a");
+      var url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = name;
+      a.click();
+      // Release the blob once the browser has started the download — otherwise every export leaks
+      // the (multi-MB) object URL for the plugin window's lifetime.
+      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    }
+    function send(type) {
+      setStatus("Exporting…");
+      parent.postMessage({ pluginMessage: { type: type } }, "*");
+    }
+
+    // ---- messages FROM the Figma main thread (code.js). Registered immediately. ----
+    window.onmessage = function (e) {
+      var m = e.data && e.data.pluginMessage;
+      if (!m) return;
+
+      if (m.type === "selection") {
+        lastSelCount = m.count;
+        var rs = $("run-sel");
+        if (rs && !busy) rs.disabled = m.count === 0;
+        setStatus(
+          m.count === 0
+            ? "Select a frame for single-screen export, or use the blue button for the whole page."
+            : m.count + " selected" + (m.name ? ' — "' + m.name + '"' : "") + "."
+        );
+        return;
+      }
+      if (m.type === "error") { setBusy(false); setStatus(m.message, true); return; }
+      if (m.type === "files") {
+        setBusy(false);
+        setStatus("Ready: " + m.summary);
+        var wrap = $("downloads");
+        if (wrap) {
+          wrap.innerHTML = "";
+          m.files.forEach(function (f) {
+            var row = document.createElement("div");
+            row.className = "row";
+            var d = document.createElement("button");
+            d.textContent = "Download " + f.name;
+            d.onclick = function () { dl(f.name, new Blob([f.content], { type: "application/json" })); };
+            row.appendChild(d);
+            if (f.copyable) {
+              var c = document.createElement("button");
+              c.textContent = "Copy";
+              c.style.flex = "0 0 70px";
+              c.onclick = function () { navigator.clipboard.writeText(f.content); };
+              row.appendChild(c);
+            }
+            wrap.appendChild(row);
+          });
+        }
+        assetsState = m.assets || [];
+        var ac = $("acount"); if (ac) ac.textContent = assetsState.length;
+        var ab = $("assets"); if (ab) ab.disabled = assetsState.length === 0;
+        return;
+      }
+      if (m.type === "token") {
+        bridgeToken = m.token || "";
+        var t = $("token"); if (t) t.value = bridgeToken;
+        connect();
+        return;
+      }
+      if (m.type === "bridge-result") {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ id: m.id, ok: m.ok, result: m.result, error: m.error }));
+        }
+        return;
+      }
+    };
+
+    // ---- the localhost bridge (WebSocket client) ----
+    function setBridge(on, text) {
+      var el = $("bridge");
+      if (!el) return;
+      el.className = on ? "on" : "";
+      el.textContent = "Bridge: " + text;
+    }
+    // Reconnect discipline. Every handler below is guarded by `s === ws` so only the CURRENT socket
+    // can drive state, and reconnects go through a single shared timer. Without both, each retired
+    // socket kept its own live reconnect chain: saving the token closed a socket AND called connect()
+    // immediately, then 3s later the closed socket's onclose connected again — so sockets multiplied
+    // with every save (and with every stale-socket terminate() from the bridge).
+    var reconnectTimer = null;
+    function scheduleReconnect() {
+      if (reconnectTimer) return; // one pending reconnect at a time, ever
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, 3000);
+    }
+    function dropSocket() {
+      if (!ws) return;
+      var old = ws;
+      ws = null;
+      old.onopen = old.onclose = old.onerror = old.onmessage = null; // retire it silently
+      try { old.close(); } catch (e) {}
+    }
+    function connect() {
+      if (!bridgeToken) { setBridge(false, "offline — paste the bridge token above"); return; }
+      if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // already CONNECTING/OPEN
+      var s;
+      try {
+        s = new WebSocket("ws://localhost:" + BRIDGE_PORT + "/?token=" + encodeURIComponent(bridgeToken));
+      } catch (e) { setBridge(false, "offline"); scheduleReconnect(); return; }
+      ws = s;
+      s.onopen = function () { if (s !== ws) return; setBridge(true, "connected (localhost:" + BRIDGE_PORT + ")"); };
+      s.onclose = function () { if (s !== ws) return; ws = null; setBridge(false, "offline"); scheduleReconnect(); };
+      s.onerror = function () { try { s.close(); } catch (e) {} };
+      s.onmessage = function (ev) {
+        if (s !== ws) return;
+        var cmd;
+        try { cmd = JSON.parse(ev.data); } catch (e) { return; }
+        parent.postMessage({ pluginMessage: { type: "bridge", id: cmd.id, cmd: cmd.cmd, args: cmd.args } }, "*");
+      };
+    }
+
+    // ---- DOM-dependent wiring — runs only once the elements exist ----
+    function init() {
+      try {
+        var rs = $("run-sel"); if (rs) rs.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-selection"); };
+        var rf = $("run-full"); if (rf) rf.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-full"); };
+        var st = $("save-token"); if (st) st.onclick = function () {
+          var t = $("token"); bridgeToken = (t && t.value ? t.value : "").trim();
+          parent.postMessage({ pluginMessage: { type: "set-token", token: bridgeToken } }, "*");
+          dropSocket(); // retires handlers first, so the old socket can't schedule its own reconnect
+          connect();
+        };
+        // Source images keep their ORIGINAL container format (png/jpg/webp/gif, detected from magic
+        // bytes in assets.ts), so the MIME must follow a.format rather than always claiming PNG.
+        var MIME = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+        var as = $("assets"); if (as) as.onclick = function () {
+          assetsState.forEach(function (a) {
+            var type = MIME[a.format] || "application/octet-stream";
+            var blob = a.text != null ? new Blob([a.text], { type: type }) : new Blob([b64ToBytes(a.base64)], { type: type });
+            // a.file is the name the plugin already wrote into the tree's `asset` path — use it
+            // verbatim rather than re-deriving the convention (this copy had already drifted: it
+            // sanitised the id but not the format).
+            dl(a.file, blob);
+          });
+        };
+        // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.
+        parent.postMessage({ pluginMessage: { type: "get-token" } }, "*");
+        setStatus("Ready — select a frame, or use the blue button.");
+      } catch (e) {
+        setStatus("UI init error: " + (e && e.message ? e.message : e), true);
+      }
+    }
+
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+  })();
+</script>

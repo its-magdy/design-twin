@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Generated Figma exports (regenerable via the plugin / figma-pull).
+# NOTE: your hand-authored config maps are NOT regenerable — if you keep
+# target.json / tokens.json / components.json in design/, un-ignore them.
+design/
+
+# Live-test scratch output
+livetest-tmp/
+out-selection/
+out-full/
+out-allpages/
+
+# macOS
+.DS_Store

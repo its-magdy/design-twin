@@ -1,0 +1,27 @@
+{
+  "name": "figma-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local bridge between Claude Code and the Design Export for AI Figma plugin (read CLI + write MCP).",
+  "type": "commonjs",
+  "bin": {
+    "figma-pull": "./figma-pull.js"
+  },
+  "scripts": {
+    "pull": "node figma-pull.js",
+    "pull:selection": "node figma-pull.js design --selection",
+    "mcp": "node figma-mcp.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2",
+    "@types/node": "^26.1.1"
+  }
+}

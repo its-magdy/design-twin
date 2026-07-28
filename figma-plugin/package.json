@@ -1,0 +1,16 @@
+{
+  "name": "design-export-for-ai-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma plugin (main thread) for the free-plan design-to-code read pipeline. TypeScript source in src/, bundled to code.js which manifest.json loads.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node build.js",
+    "watch": "node build.js --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.131.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  }
+}

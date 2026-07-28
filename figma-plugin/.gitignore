@@ -1,0 +1,2 @@
+node_modules/
+# code.js is a build artifact but committed on purpose (zero-build import). Keep it tracked.

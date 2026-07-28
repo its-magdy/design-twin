@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://local/codeconnect.local.schema.json",
+  "title": "Local Code Connect map",
+  "description": "Free-plan equivalent of Figma Code Connect. Maps a Figma component (keyed by its stable publish key) to a code component + declarative, no-eval prop transforms. Authored by hand or bootstrapped from the extractor's component catalog; validated by tooling/map-validate.js; drift-checked by tooling/drift-lint.js.",
+  "type": "object",
+  "required": ["version", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "figmaFileKey": { "type": "string", "description": "Optional scope; the file this map targets." },
+    "components": {
+      "type": "object",
+      "description": "Keyed by the Figma component publish `key` (stable across renames/moves). For unpublished/local components with no key, key by node id and set figma.unstable=true.",
+      "additionalProperties": { "$ref": "#/definitions/entry" }
+    }
+  },
+  "definitions": {
+    "entry": {
+      "type": "object",
+      "required": ["figma", "code"],
+      "additionalProperties": false,
+      "properties": {
+        "figma": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "description": "Stable publish key (primary identity)." },
+            "id": { "type": "string", "description": "Advisory: last-known node id. Never trusted for identity." },
+            "name": { "type": "string", "description": "Advisory: last-known layer name (readable lint output + name-fallback matching)." },
+            "unstable": { "type": "boolean", "description": "true when keyed by id/name because no publish key exists — rename-fragile." }
+          }
+        },
+        "code": {
+          "type": "object",
+          "required": ["module", "export"],
+          "additionalProperties": false,
+          "properties": {
+            "module": { "type": "string", "description": "Import specifier, e.g. \"@/ui/Button\"." },
+            "export": { "type": "string", "description": "Exported symbol, e.g. \"Button\"." },
+            "targets": {
+              "type": "object",
+              "description": "Optional per-stack override of module/export.",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "module": { "type": "string" }, "export": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "props": {
+          "type": "object",
+          "description": "Keyed by the Figma property name (as it appears in componentPropertyDefinitions, #id suffix stripped).",
+          "additionalProperties": { "$ref": "#/definitions/prop" }
+        },
+        "variantOverrides": {
+          "type": "array",
+          "description": "Route a Figma component-set to different code components by variant subset. Most-specific `when` wins.",
+          "items": {
+            "type": "object",
+            "required": ["when", "code"],
+            "additionalProperties": false,
+            "properties": {
+              "when": { "type": "object", "additionalProperties": { "type": "string" } },
+              "code": {
+                "type": "object",
+                "required": ["module", "export"],
+                "additionalProperties": false,
+                "properties": { "module": { "type": "string" }, "export": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "childrenByLayer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "layerNamePattern": { "type": "string" },
+            "slot": { "type": "string" }
+          }
+        },
+        "status": {
+          "enum": ["active", "deprecated", "needs-review"],
+          "default": "active",
+          "description": "needs-review = bootstrapped or fuzzy-matched, not yet confirmed by a human."
+        }
+      }
+    },
+    "prop": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "codeProp"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "enum" },
+            "codeProp": { "type": "string" },
+            "values": {
+              "type": "object",
+              "description": "Figma VARIANT option -> code value. Should be exhaustive over the option set; unmapped options are omitted.",
+              "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+            },
+            "default": { "type": ["string", "number", "boolean"] },
+            "omitDefault": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "codeProp"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "boolean" },
+            "codeProp": { "type": "string" },
+            "default": { "type": "boolean" },
+            "omitDefault": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "codeProp"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "string" },
+            "codeProp": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "instance" },
+            "codeProp": { "type": "string" },
+            "slot": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}
