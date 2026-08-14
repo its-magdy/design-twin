@@ -10,7 +10,7 @@
 //                             PRESERVED as "{group.token}"; structured color {colorSpace,components,
 //                             alpha?,hex(6-digit)}; every leaf carries a valid $type).
 //   toCSS(ds[, opts])      -> :root + [data-theme="mode"] custom properties (zero-dependency).
-//   lintTokens(ds)         -> string[] of problems (never-silent guarantee): group/leaf collisions,
+//   lintTokens(ds[, opts]) -> string[] of problems (never-silent guarantee): group/leaf collisions,
 //                             duplicate names, malformed/missing color, missing default-mode value,
 //                             dangling aliases, CSS var-name collisions, empty names.
 //
@@ -21,11 +21,29 @@ const round = (x) => Math.round(x * 10000) / 10000;
 
 // --- name handling. CSS custom properties ARE case-sensitive, so var names PRESERVE case
 // (only non-[A-Za-z0-9-] is folded) — otherwise "Gray/100" and "gray/100" would collide. ---
+// Memoized by name: emitTokens runs toDTCG, toCSS and lintNames over the SAME variable list, and each
+// pass re-derives these from the name (a split plus a regex chain per segment, twice over for
+// cssVarName). At 500-2000 variables that is ~6 recomputations per token for a value that is a pure
+// function of the name. The returned array is shared, so callers must treat it as read-only — no
+// current caller mutates it. Cache lifetime is one CLI process / one emitTokens call chain.
+const segsCache = new Map();
 function segs(name) {
-  return String(name || "").split("/").map((s) => s.trim().replace(/[.{}$]/g, "").replace(/\s+/g, "-")).filter(Boolean);
+  const key = String(name || "");
+  let v = segsCache.get(key);
+  if (v === undefined) {
+    v = key.split("/").map((s) => s.trim().replace(/[.{}$]/g, "").replace(/\s+/g, "-")).filter(Boolean);
+    segsCache.set(key, v);
+  }
+  return v;
 }
 const dtcgRef = (tokenName) => "{" + segs(tokenName).join(".") + "}";
-const cssVarName = (tokenName) => "--" + segs(tokenName).join("-").replace(/[^A-Za-z0-9-]/g, "-");
+const varNameCache = new Map();
+const cssVarName = (tokenName) => {
+  const key = String(tokenName || "");
+  let v = varNameCache.get(key);
+  if (v === undefined) varNameCache.set(key, (v = "--" + segs(key).join("-").replace(/[^A-Za-z0-9-]/g, "-")));
+  return v;
+};
 
 // --- color: accept #rgb / #rgba / #rrggbb / #rrggbbaa; normalize to 6- or 8-digit lowercase. ---
 function normHex(v) {
@@ -207,9 +225,51 @@ function toDTCG(designSystem, warnings) {
 // and for letter-spacing outright invalid CSS (a bare number is not a valid <length>). Use opts.unitless
 // to override per-token when a source genuinely encodes a multiplier.
 const UNITLESS_SCOPES = new Set(["OPACITY", "FONT_WEIGHT"]);
+// Scopes are only a signal when the designer NARROWED them. Figma's default is ALL_SCOPES, and real
+// files overwhelmingly leave it there (it's the very smell `hygiene[]` reports) — so a scopes-only
+// rule emits `font-weight: 500px` / `opacity: 0.5px` on the common case. Both are invalid CSS the
+// browser drops. When scopes carry no signal, fall back to the NAME. Narrow scopes still win, so an
+// explicitly-scoped variable is never second-guessed by a name match.
+// Matched per `/`-SEGMENT, not as a substring of the whole name. A substring rule (what this was)
+// cannot tell "font-weight/bold" from "font-weight-scale/lg": both contain "font-weight" followed by a
+// non-letter, but the second is a multiplier — the one FLOAT in the family where dropping the unit is
+// the wrong call. Figma names are `/`-delimited groups, so the group IS the unit of meaning: a segment
+// that is exactly the property (ignoring case and -/_/space) names it; one that merely starts with it
+// names something else. "text/font-weight" and "Opacity/disabled" both still match.
+const UNITLESS_NAME_SEGMENTS = new Set(["opacity", "fontweight"]);
+function unitlessName(name) {
+  // segs() is this module's ONE definition of "a Figma token name split into meaningful segments"
+  // (it trims, strips .{}$ and folds whitespace). Re-splitting on "/" here let the unit heuristic
+  // segment a name differently from cssVarName/dtcgRef, so the linter could claim a heuristic hit on
+  // a token whose emitted var name was built from other segments.
+  return segs(name).some((seg) => UNITLESS_NAME_SEGMENTS.has(seg.replace(/[-_ ]/g, "").toLowerCase()));
+}
+// The SCOPE rule, in one place: a variable is unitless only when EVERY scope says so. Real files scope
+// a single FLOAT to several text properties at once (e.g. FONT_WEIGHT + FONT_SIZE + LINE_HEIGHT on one
+// "Body" size token) — `.some()` let one unitless scope override the length scopes sitting right next
+// to it, emitting a bare number (`--Body-2: 18;`) on what is, in practice, a px value.
+// Scopes are a STRONG SIGNAL, not ground truth: per the Plugin API docs on Variable.scopes, setting
+// them "does not prevent that variable from being bound in other scopes (for example, via the Plugin
+// API). This only limits the variables that are shown in pickers within the Figma UI." So an
+// OPACITY-scoped FLOAT can still be bound to a width. It's the best evidence the file has and stays
+// authoritative; opts.unitless is the escape hatch when it's wrong.
+function scopesSayUnitless(scopes) {
+  return !!scopes.length && scopes.every((s) => UNITLESS_SCOPES.has(s));
+}
+// WHO decided this token's unit, in one place: "override" (the caller named it), "scopes" (the
+// designer narrowed them), "name" (no scope signal — the heuristic guessed), or "px" (the default).
+// One function so the emitter and the linter cannot disagree about which tokens the heuristic touched:
+// numberUnit maps the decision to a unit, and lintNames warns iff the decision was "name".
+function unitDecision(variable, opts) {
+  if (opts && opts.unitless && opts.unitless.has && opts.unitless.has(variable.name)) return "override";
+  const scopes = variable.scopes || [];
+  if (scopesSayUnitless(scopes)) return "scopes";
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (!narrowed && unitlessName(variable.name)) return "name";
+  return "px";
+}
 function numberUnit(variable, opts) {
-  if (opts && opts.unitless && opts.unitless.has && opts.unitless.has(variable.name)) return "";
-  return (variable.scopes || []).some((s) => UNITLESS_SCOPES.has(s)) ? "" : "px";
+  return unitDecision(variable, opts) === "px" ? "px" : "";
 }
 
 // A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (0 stays unitless).
@@ -244,11 +304,12 @@ function toCSS(designSystem, opts) {
     if (base === undefined) continue; // never emit `--x: undefined;`
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
-    rootLines.push(`  ${cssVarName(v.name)}: ${cssValue(base, unit)};`);
+    const varName = cssVarName(v.name); // hoisted for the same reason: split/replace/join per mode otherwise
+    rootLines.push(`  ${varName}: ${cssValue(base, unit)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
-      (perMode[m] || (perMode[m] = [])).push(`  ${cssVarName(v.name)}: ${cssValue(values[m], unit)};`);
+      (perMode[m] || (perMode[m] = [])).push(`  ${varName}: ${cssValue(values[m], unit)};`);
     }
   }
   let out = rootLines.length ? ":root {\n" + rootLines.join("\n") + "\n}\n" : "";
@@ -258,9 +319,21 @@ function toCSS(designSystem, opts) {
 
 // Never-silent guarantee: every problem the emitters guard against is also reported here so a caller
 // can surface it (mirrors the extractor's manifest.warnings discipline).
-function lintTokens(designSystem) {
+// `opts` is the SAME object you pass to toCSS. It has to be, because the name-heuristic warning below
+// only makes sense for tokens the heuristic actually decided — and `opts.unitless` pre-empts it in
+// numberUnit. Linting with different opts than you emitted with reports guesses that were never made.
+// Same two warning sources emitTokens uses (toDTCG + lintNames) — toCSS contributes none, so a
+// lint-only caller must not pay for building and discarding the whole stylesheet.
+function lintTokens(designSystem, opts) {
   const warnings = [];
-  toDTCG(designSystem, warnings); // collects collision / missing-value / malformed-hex / empty-name / dup-name
+  toDTCG(designSystem, warnings);
+  lintNames(designSystem, opts, warnings);
+  return warnings;
+}
+
+// The half of the lint that does NOT come from toDTCG. Split out so emitTokens can lint off the
+// warnings toDTCG already collected instead of building the whole DTCG tree a second time.
+function lintNames(designSystem, opts, warnings) {
   const vars = (designSystem && designSystem.variables) || [];
   // Dangling aliases: an aliasOf whose target isn't a defined token.
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
@@ -288,14 +361,46 @@ function lintTokens(designSystem) {
     if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its tokens.css selector`);
   }
 
-  // CSS var-name collisions from distinct source names (e.g. "spacing/4" vs "spacing-4").
+  // One pass per variable for the three name-derived checks below; `segs`/`cssVarName` are split +
+  // regex chains, so computing each once per token keeps the lint linear in the token count.
+  //  - Character folding (e.g. "(Space 3)" -> "---Space-3-"): same never-silent rule as the value/mode
+  //    escapers. The "expected" form is built from segs() and compared to cssVarName()'s own output, so
+  //    the detector is derived from the rewriter rather than being a twin that can drift out of sync.
+  //  - FLOATs left unitless because their NAME looked like an opacity/font-weight, with no scope to
+  //    confirm it. That is a guess — a defensible one, and better than emitting `opacity: 0.5px`, but it
+  //    is still this file rewriting output off a pattern match, and every other such rewrite announces
+  //    itself. Say which tokens it touched so a wrong guess is visible; the fix is to narrow the
+  //    variable's scopes in Figma (or pass opts.unitless).
+  //  - CSS var-name collisions from distinct source names (e.g. "spacing/4" vs "spacing-4").
   const byVar = new Map();
-  for (const v of vars) { if (!segs(v.name).length) continue; const k = cssVarName(v.name); (byVar.get(k) || byVar.set(k, new Set()).get(k)).add(v.name); }
+  for (const v of vars) {
+    if (v.resolvedType === "FLOAT" && unitDecision(v, opts) === "name") {
+      warnings.push(`token '${v.name}' has no narrowed scopes (Figma's ALL_SCOPES default); emitted UNITLESS because its name reads as an opacity/font-weight — scope it in Figma to make this explicit`);
+    }
+    const s = segs(v.name);
+    if (!s.length) continue;
+    const folded = cssVarName(v.name);
+    if (folded !== "--" + s.join("-")) {
+      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
+    }
+    (byVar.get(folded) || byVar.set(folded, new Set()).get(folded)).add(v.name);
+  }
   for (const [k, set] of byVar) if (set.size > 1) warnings.push(`CSS variable ${k} produced by multiple tokens: ${[...set].join(", ")}`);
   return warnings;
 }
 
-module.exports = { toDTCG, toCSS, lintTokens, hexToColorValue, cssVarName };
+// Both emitters + the lint under ONE opts object and ONE pass over the design system. lintTokens has
+// to be called with the same opts as toCSS (it reports guesses the emitter actually made); making
+// that one call removes the coupling from the caller instead of documenting it.
+function emitTokens(designSystem, opts) {
+  const warnings = [];
+  const dtcg = toDTCG(designSystem, warnings);
+  const css = toCSS(designSystem, opts);
+  lintNames(designSystem, opts, warnings);
+  return { dtcg, css, warnings };
+}
+
+module.exports = { toDTCG, toCSS, lintTokens, emitTokens, hexToColorValue, cssVarName };
 
 // CLI: node tooling/tokens.js <design-system.json> [outDir]
 if (require.main === module) {
@@ -305,8 +410,10 @@ if (require.main === module) {
   const outDir = process.argv[3] || ".";
   if (!input) { console.error("usage: node tooling/tokens.js <design-system.json> [outDir]"); process.exit(1); }
   const ds = JSON.parse(fs.readFileSync(input, "utf8"));
-  fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(toDTCG(ds), null, 2));
-  fs.writeFileSync(path.join(outDir, "tokens.css"), toCSS(ds));
-  lintTokens(ds).forEach((w) => console.error("warn  " + w)); // lintTokens re-runs toDTCG to collect the same warnings
+  fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
+  const { dtcg, css, warnings } = emitTokens(ds); // one pass: emit + lint share the same opts and traversal
+  fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+  fs.writeFileSync(path.join(outDir, "tokens.css"), css);
+  warnings.forEach((w) => console.error("warn  " + w));
   console.log(`wrote tokens.dtcg.json + tokens.css (${(ds.variables || []).length} variables)`);
 }

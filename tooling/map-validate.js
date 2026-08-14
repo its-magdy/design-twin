@@ -41,6 +41,8 @@ const isBool = (v) => typeof v === "boolean";
 // `allowed` is always one of the KEYS lists; the Array.isArray guard is belt-and-braces so a
 // non-list can never turn a validation error into a thrown TypeError (see KEYS.prop above).
 const noExtra = (obj, allowed, at, err) => { if (!Array.isArray(allowed)) return; for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)"); };
+// "present but not a string" — the schema's most repeated rule, spelled once next to noExtra.
+const optStrings = (obj, keys, at, err) => { for (const k of keys) if (obj[k] !== undefined && !isStr(obj[k])) err(`${at}.${k}`, "must be a string"); };
 
 function validateMap(map) {
   const errors = [];
@@ -62,7 +64,7 @@ function validateMap(map) {
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
-      for (const k of ["key", "id"]) if (e.figma[k] !== undefined && !isStr(e.figma[k])) err(`${at}.figma.${k}`, "must be a string");
+      optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
       if (e.figma.unstable !== undefined && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
 
@@ -76,7 +78,7 @@ function validateMap(map) {
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
           if (!isObj(tv)) err(ta, "must be an object");
-          else { noExtra(tv, KEYS.target, ta, err); for (const k of ["module", "export"]) if (tv[k] !== undefined && !isStr(tv[k])) err(`${ta}.${k}`, "must be a string"); }
+          else { noExtra(tv, KEYS.target, ta, err); optStrings(tv, ["module", "export"], ta, err); }
         }
       }
     }
@@ -103,7 +105,7 @@ function validateMap(map) {
 
     if (e.childrenByLayer !== undefined) {
       if (!isObj(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
-      else { noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err); for (const k of ["layerNamePattern", "slot"]) if (e.childrenByLayer[k] !== undefined && !isStr(e.childrenByLayer[k])) err(`${at}.childrenByLayer.${k}`, "must be a string"); }
+      else { noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err); optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err); }
     }
   }
   return { ok: errors.length === 0, errors };
