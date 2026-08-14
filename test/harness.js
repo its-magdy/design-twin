@@ -348,9 +348,12 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("text style variable binding (fontSize -> token)", bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad");
 
   // --- Tier-1 read additions ---
-  // inferredVariables (Figma's token suggestions for unbound fields) is ALWAYS on — the root has no
-  // explicit fills binding, so the suggestion surfaces.
-  ok("inferred token suggestion (unbound field)", tree.inferredTokens && typeof tree.inferredTokens.fills === "string");
+  // [AUDIT-6b] inferredVariables USED to be emitted as `inferredTokens` for every unbound field. It
+  // measured 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
+  // value-coincidence. The mock still SUPPLIES inferredVariables on scrollFrame, so this pins that the
+  // extractor ignores it rather than that the fixture stopped providing it.
+  ok("[AUDIT-6b] inferredTokens is no longer emitted", tree.inferredTokens === undefined);
+  ok("[AUDIT-6b] and no inferred* key leaks under another name", !Object.keys(tree).some((k) => /^inferred/.test(k)));
   // css / measurements / pluginData are OPT-IN — off by default.
   // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
   // is tiny (4 nodes), so the CSS oracle comes back without an explicit opt-in.
@@ -409,6 +412,77 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const imgLeaf = await sandbox.serialize(imageRect, 0, false);
   ok("childless image node still exported as PNG asset", typeof imgLeaf.asset === "string" && imgLeaf.asset.indexOf(".png") !== -1);
 
+  // --- [RD-noassets] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
+  // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it
+  // was the only O(nodes) read with no opt-out — getCSSAsync, its cheaper twin, has had one all along.
+  // Skipping must be LOUD: a missing `asset` is otherwise indistinguishable from "no graphic here".
+  // Driven through the PUBLIC collect API (not by poking runOpts), so the test exercises the same
+  // path figma-pull --no-assets uses rather than an internal it could drift from.
+  let exportCalls = 0;
+  const countingRect = { type: "RECTANGLE", name: "Photo2", visible: true, id: "img:2", width: 40, height: 40,
+    fills: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "abc123" }],
+    exportAsync: async () => { exportCalls++; return new Uint8Array([137, 80, 78, 71]); } };
+  const prevSelection = sandbox.figma.currentPage.selection;
+  sandbox.figma.currentPage.selection = [countingRect];
+
+  const skipRun = await sandbox.collectSelection({ skipAssets: true });
+  const skipCalls = exportCalls;
+  const skipNode = skipRun.screen.nodes[0];
+  ok("[RD-noassets] no asset is emitted when skipping", skipNode.asset === undefined);
+  // The per-ROOT reference screenshot is deliberately still taken: it's one render per exported root
+  // (the self-correction image), not the O(nodes) pass that caused the hang. So the contract is
+  // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
+  ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
+  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipRun.screen.nodes[0].reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
+  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
+  ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
+    skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
+
+  const normalRun = await sandbox.collectSelection({});
+  ok("[RD-noassets] DEFAULT is unchanged — the asset still exports",
+    typeof normalRun.screen.nodes[0].asset === "string");
+
+  // --- [RD-noassets-shape] a FLATTENED CONTAINER must stay flattened when skipping ---
+  // The case above is a childless RECTANGLE — a leaf either way, so it cannot catch the real bug:
+  // an `iconLike` CONTAINER (icon-named, <=96px, no TEXT descendant) is normally flattened to ONE
+  // svg and serialized as a leaf. When --no-assets returned `undefined` for it, serialize recursed
+  // into its vector guts instead, so the flag QUIETLY CHANGED THE TREE it promises not to touch —
+  // measured 41 -> 161 nodes and 4.3x the JSON on a 40-icon sheet, i.e. the flag INFLATED the very
+  // payload it exists to shrink (and the skip counter counted those child vectors, not the exports).
+  // Several vector children, and the icon nested one level down: with a single child the two trees
+  // differ by too little for the node-count/size assertions below to actually discriminate.
+  const iconVec = (i) => ({ type: "VECTOR", name: "path" + i, visible: true, id: "ic:v" + i, width: 16, height: 16,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    exportAsync: async () => "<svg/>" });
+  const iconFrame = { type: "FRAME", name: "icon/home", visible: true, id: "ic:1", width: 24, height: 24,
+    children: [iconVec(1), iconVec(2), iconVec(3)], findOne: () => null, exportAsync: async () => "<svg/>" };
+  const iconSheet = { type: "FRAME", name: "Sheet", visible: true, id: "ic:0", width: 100, height: 100,
+    children: [iconFrame], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
+  sandbox.figma.currentPage.selection = [iconSheet];
+  const iconNormal = await sandbox.collectSelection({});
+  const iconSkipped = await sandbox.collectSelection({ skipAssets: true });
+  const nNode = iconNormal.screen.nodes[0].children[0], sNode = iconSkipped.screen.nodes[0].children[0];
+
+  ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
+    typeof nNode.asset === "string" && !nNode.children);
+  ok("[RD-noassets-shape] --no-assets keeps it a LEAF — no descent into the icon's vectors",
+    sNode.asset === undefined && !sNode.children);
+  ok("[RD-noassets-shape] the node count is IDENTICAL to the full export (structure unaffected)",
+    iconSkipped.screen.manifest.nodes === iconNormal.screen.manifest.nodes);
+  ok("[RD-noassets-shape] and the tree is no larger than the full export's",
+    JSON.stringify(iconSkipped.screen.nodes).length <= JSON.stringify(iconNormal.screen.nodes).length);
+  // Per-node, not just a manifest total: a consumer must be able to tell "graphic omitted here" from
+  // "this node has no graphic" at the node it cares about.
+  ok("[RD-noassets-shape] the omission is marked ON the node, not only counted",
+    sNode.assetSkipped === true);
+  ok("[RD-noassets-shape] the counter matches the exports that would REALLY have happened (1, not 2)",
+    iconSkipped.screen.manifest.assetsSkipped === 1);
+  ok("[RD-noassets-shape] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
+
+  ok("[RD-noassets] and exportAsync did run when not skipping", exportCalls > skipCalls);
+  ok("[RD-noassets] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
+  sandbox.figma.currentPage.selection = prevSelection;
+
   // --- FIX: hasMissingFont -> flag + warning so codegen knows the recorded font may be substituted ---
   const legacyText = { type: "TEXT", name: "Legacy", visible: true, id: "t:missing", characters: "x", width: 50,
     fontName: { family: "Proxima Nova", style: "Regular" }, fontSize: 12, hasMissingFont: true, getStyledTextSegments: () => [] };
@@ -457,6 +531,58 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("node still resolves the library token by name", libSel.screen.nodes[0].tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent");
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
   ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
+
+  // ---- [RD-alias] library variable reached ONLY through another variable's ALIAS ----
+  // Regression from the first real export (2026-07-28). varName.ids() is a SNAPSHOT of ids referenced
+  // by NODES; a library primitive reached only via another variable's alias entered the memo cache
+  // LATER (when values were resolved), so its NAME resolved — `aliasOf` showed a friendly name —
+  // while the variable itself was dropped from variables[]. Downstream that is a dangling reference
+  // (theming silently breaks) PLUS a false "broken alias … could not be resolved" hygiene line
+  // accusing a healthy file. On the real file: 4 dangling refs, 0 genuinely broken.
+  // Alias chains are multi-level, so this pins a TWO-hop chain that a single extra pass would miss:
+  //   node -> v_semlib (local) -> v_libmid (library) -> v_libprim (library)
+  const LIB_MID = { id: "v_libmid", name: "brand/mid", resolvedType: "COLOR", variableCollectionId: "c_lib",
+    scopes: [], codeSyntax: {}, remote: true,
+    valuesByMode: { m_l: { type: "VARIABLE_ALIAS", id: "v_libprim" }, m_d: { type: "VARIABLE_ALIAS", id: "v_libprim" } } };
+  const LIB_PRIM = { id: "v_libprim", name: "brand/gray-100", resolvedType: "COLOR", variableCollectionId: "c_lib",
+    scopes: [], codeSyntax: {}, remote: true,
+    valuesByMode: { m_l: { r: 0.9, g: 0.9, b: 0.9, a: 1 }, m_d: { r: 0.2, g: 0.2, b: 0.2, a: 1 } } };
+  const EXTRA = { v_libmid: LIB_MID, v_libprim: LIB_PRIM, v_lib: LIB_VAR };
+  sandbox.figma.variables.getVariableByIdAsync = async (id) => EXTRA[id] || prevGetVar(id);
+  // A LOCAL semantic token whose value aliases the library chain — neither library var is node-bound.
+  VARS.v_semlib = { id: "v_semlib", name: "semantic/surface", resolvedType: "COLOR", variableCollectionId: "c_sem",
+    scopes: ["FRAME_FILL"], codeSyntax: {}, remote: false,
+    valuesByMode: { m_light: { type: "VARIABLE_ALIAS", id: "v_libmid" }, m_dark: { type: "VARIABLE_ALIAS", id: "v_libmid" } } };
+
+  const chainNode = { type: "FRAME", name: "ChainCard", visible: true, id: "9:2", width: 100, height: 40,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0.9, g: 0.9, b: 0.9 }, opacity: 1 }],
+    boundVariables: { fills: [{ type: "VARIABLE_ALIAS", id: "v_semlib" }] } };
+  sandbox.figma.currentPage.selection = [chainNode];
+  const chainSel = await sandbox.collectSelection({ css: false });
+  const cv = (n) => chainSel.variables.variables.find((v) => v.name === n);
+
+  ok("[RD-alias] hop 1 (aliased library var) is included", !!cv("brand/mid"));
+  ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
+  ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
+    !!cv("brand/gray-100") && cv("brand/gray-100").values.Light === "#e6e6e6");
+  ok("[RD-alias] the intermediate still reads as an alias", !!cv("brand/mid") && cv("brand/mid").values.Light &&
+    cv("brand/mid").values.Light.aliasOf === "brand/gray-100");
+  // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
+  ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
+    !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
+  // And the whole point: no emitted alias may point at a name that isn't in the dump.
+  ok("[RD-alias] no alias dangles — every aliasOf target exists in variables[]", (() => {
+    const names = new Set(chainSel.variables.variables.map((v) => v.name));
+    for (const v of chainSel.variables.variables) {
+      for (const val of Object.values(v.values || {})) {
+        if (val && typeof val === "object" && val.aliasOf && !names.has(val.aliasOf)) return false;
+      }
+    }
+    return true;
+  })());
+  // Drop only the local seed. The id resolver STAYS on the EXTRA-aware handler — it is a superset of
+  // the v_lib override above, and later alias-hygiene tests still need v_lib to resolve.
+  delete VARS.v_semlib;
 
   // Alias hygiene must distinguish "points at a library variable we resolved" from "genuinely
   // dangling". The check keyed off the LOCAL id set alone, so every legitimate library alias was
@@ -513,12 +639,216 @@ Object.assign(sandbox, sandbox.__designExport || {});
   let fullErr = null, full = null;
   try { full = await sandbox.collectFull({ allPages: true, css: false }); } catch (e) { fullErr = e; }
   ok("unreadable page does NOT abort the export", fullErr === null && !!full);
-  ok("readable pages still exported alongside the bad one", full && full.screensDoc.screens.length > 0);
-  ok("unreadable page is warned, not silently dropped", full && full.screensDoc.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
-  ok("untraversable page warned in the component catalog too", full && full.screensDoc.manifest.warnings.some((w) => /component catalog.*Locked Page/.test(w)));
-  ok("loadAllPagesAsync failure is itself reported", full && full.screensDoc.manifest.warnings.some((w) => /loadAllPagesAsync failed/.test(w)));
+  ok("readable pages still exported alongside the bad one", full && full.layersDoc.layers.length > 0);
+  ok("unreadable page is warned, not silently dropped", full && full.layersDoc.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
+  ok("untraversable page warned in the component catalog too", full && full.layersDoc.manifest.warnings.some((w) => /component catalog.*Locked Page/.test(w)));
+  ok("loadAllPagesAsync failure is itself reported", full && full.layersDoc.manifest.warnings.some((w) => /loadAllPagesAsync failed/.test(w)));
+  // ---- [LIST] listPages: the cheap structural index ----
+  // Reuses the unreadable-page fixture above (root.children is still [goodPage, badPage] and
+  // loadAllPagesAsync still throws) — the case where an index is most tempting to get wrong.
+  const listBad = await sandbox.listPages({});
+  const badEntry = listBad.pages.find((p) => p.name === "Locked Page");
+  ok("[LIST] an unreadable page is still LISTED", !!badEntry);
+  // The whole trap: an index that shows a readable-looking page with no frames reads as "this page is
+  // empty" and the caller stops looking. It must be distinguishable.
+  ok("[LIST] an unreadable page is flagged, not shown as empty", !!badEntry && badEntry.unreadable === true && badEntry.frames === undefined);
+  ok("[LIST] and the reason is warned", listBad.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
+  ok("[LIST] a readable page still lists its frames alongside the bad one",
+    Array.isArray(listBad.pages.find((p) => p.name === "Page 1").frames));
   sandbox.figma.root.children = prevRootChildren;
   sandbox.figma.loadAllPagesAsync = prevLoadAll;
+
+  const listed = await sandbox.listPages({});
+  ok("[LIST] reports the file name", listed.file === "My File");
+  ok("[LIST] lists every page", listed.pages.length === sandbox.figma.root.children.length);
+  ok("[LIST] marks the current page", listed.pages.some((p) => p.current === true));
+  const lf = listed.pages[0].frames;
+  ok("[LIST] top-level frames carry id/name/type", Array.isArray(lf) && lf.length > 0 && lf.every((f) => f.id && f.name && f.type));
+  ok("[LIST] frames carry size", lf.every((f) => typeof f.w === "number" && typeof f.h === "number"));
+  // The POINT of the op: it is an index, not an export. No recursion, no serialization, no assets.
+  ok("[LIST] frames do NOT recurse (no children)", lf.every((f) => f.children === undefined));
+  ok("[LIST] frames carry no serialized detail (no fills/layout/tokens)",
+    lf.every((f) => f.fills === undefined && f.layout === undefined && f.tokens === undefined));
+  ok("[LIST] no assets are produced", listed.assets === undefined);
+  ok("[LIST] manifest counts pages and frames", listed.manifest.pages === listed.pages.length && typeof listed.manifest.frames === "number");
+  // depth 1 = page names only, and must NOT pay for loading pages.
+  // depth 2 must load — but PER PAGE, never with the blanket loadAllPagesAsync that the Figma docs
+  // say to avoid "unless absolutely necessary". Same total work when every page is walked, but paid
+  // incrementally, isolated per page, and without leaving the whole document resident for the session.
+  let loadCalls = 0;
+  let perPageLoads = 0;
+  const prevLoad2 = sandbox.figma.loadAllPagesAsync;
+  sandbox.figma.loadAllPagesAsync = async () => { loadCalls++; };
+  for (const p of sandbox.figma.root.children) if (!p.loadAsync) p.loadAsync = async () => { perPageLoads++; };
+  const depth1 = await sandbox.listPages({ depth: 1 });
+  ok("[LIST] depth 1 lists pages", depth1.pages.length === listed.pages.length && depth1.depth === 1);
+  ok("[LIST] depth 1 omits frames entirely", depth1.pages.every((p) => p.frames === undefined));
+  ok("[LIST] depth 1 loads NOTHING (that's why it's near-free)", loadCalls === 0 && perPageLoads === 0);
+  await sandbox.listPages({ depth: 2 });
+  ok("[LIST] depth 2 loads each page individually, NOT loadAllPagesAsync",
+    loadCalls === 0 && perPageLoads === sandbox.figma.root.children.length);
+  // A page that fails to load must cost only ITSELF — the whole reason for loading one at a time.
+  const flaky = sandbox.figma.root.children[0];
+  const prevFlakyLoad = flaky.loadAsync;
+  flaky.loadAsync = async () => { throw new Error("nope"); };
+  const listFlaky = await sandbox.listPages({ depth: 2 });
+  ok("[LIST] a page that fails to load is warned, and the others still list",
+    listFlaky.manifest.warnings.some((w) => /failed to load/.test(w)) && listFlaky.pages.length === sandbox.figma.root.children.length);
+  flaky.loadAsync = prevFlakyLoad;
+  sandbox.figma.loadAllPagesAsync = prevLoad2;
+
+  // ---- [CHILDREN] listChildren: the node-scoped twin of listPages depth 2 ----
+  // listPages stops at a PAGE's top-level frames; this peeks one level inside a given NODE instead —
+  // same cost model (no recursion, no assets), just addressed by id.
+  const grandchild = { id: "gc:1", name: "Icon", type: "VECTOR", width: 12, height: 12 };
+  const childText = { id: "ch:1", name: "Label", type: "TEXT", width: 40, height: 12, visible: false };
+  const childFrame = { id: "ch:2", name: "Row", type: "FRAME", width: 100, height: 20, children: [grandchild] };
+  const parentFrame = { id: "p:children", name: "Card", type: "FRAME", children: [childText, childFrame] };
+  const leafNode = { id: "leaf:children", name: "Glyph", type: "VECTOR", width: 8, height: 8 }; // no `children` key
+  const prevGetNodeC = sandbox.figma.getNodeByIdAsync;
+  sandbox.figma.getNodeByIdAsync = async (id) => ({ "p:children": parentFrame, "leaf:children": leafNode }[id] || null);
+
+  const kids = await sandbox.listChildren("p:children");
+  ok("[CHILDREN] reports the queried node's own id/name/type", kids.id === "p:children" && kids.name === "Card" && kids.type === "FRAME");
+  ok("[CHILDREN] lists DIRECT children only", kids.children.length === 2);
+  ok("[CHILDREN] each child carries id/name/type", kids.children.every((c) => c.id && c.name && c.type));
+  ok("[CHILDREN] children carry size", kids.children.every((c) => typeof c.w === "number" && typeof c.h === "number"));
+  ok("[CHILDREN] a hidden child is flagged", kids.children.find((c) => c.id === "ch:1").hidden === true);
+  ok("[CHILDREN] a child that itself has children is flagged hasChildren:true", kids.children.find((c) => c.id === "ch:2").hasChildren === true);
+  // The whole point of the op: it does NOT recurse. The grandchild must never appear anywhere.
+  ok("[CHILDREN] does NOT recurse into grandchildren", JSON.stringify(kids).indexOf("gc:1") === -1);
+  ok("[CHILDREN] no serialized detail leaks in (no fills/layout/tokens)",
+    kids.children.every((c) => c.fills === undefined && c.layout === undefined && c.tokens === undefined));
+  ok("[CHILDREN] no assets are produced", kids.assets === undefined);
+
+  let leafErr = null;
+  try { await sandbox.listChildren("leaf:children"); } catch (e) { leafErr = e; }
+  ok("[CHILDREN] a leaf node (nothing to list) errors rather than returning an empty list", !!leafErr && /leaf/.test(leafErr.message));
+
+  let childrenMissErr = null;
+  try { await sandbox.listChildren("nope:children"); } catch (e) { childrenMissErr = e; }
+  ok("[CHILDREN] an unknown node id errors", !!childrenMissErr && /not in the open file/.test(childrenMissErr.message));
+
+  let childrenEmptyErr = null;
+  try { await sandbox.listChildren(""); } catch (e) { childrenEmptyErr = e; }
+  ok("[CHILDREN] an empty id errors", !!childrenEmptyErr && /No node id/.test(childrenEmptyErr.message));
+
+  // A node on an UNLOADED page: getNodeByIdAsync only sees loaded pages under dynamic-page access, so
+  // there has to be a fallback. It must load pages ONE AT A TIME and stop the moment the node
+  // resolves — not call loadAllPagesAsync, which the Figma docs say to avoid unless necessary, and
+  // which would pay for a 25-page file to find a node on page 1.
+  let allPagesCalls = 0, incrementalLoads = 0;
+  const prevLoadAll3 = sandbox.figma.loadAllPagesAsync;
+  const prevRoot3 = sandbox.figma.root.children;
+  sandbox.figma.loadAllPagesAsync = async () => { allPagesCalls++; };
+  let unlockedPage = false;
+  const lazyPage = { name: "Lazy", id: "p:lazy", loadAsync: async () => { incrementalLoads++; unlockedPage = true; }, get children() { return []; } };
+  const laterPage = { name: "Later", id: "p:later", loadAsync: async () => { incrementalLoads++; }, get children() { return []; } };
+  sandbox.figma.root.children = [lazyPage, laterPage];
+  sandbox.figma.getNodeByIdAsync = async (id) => (id === "deep:1" && unlockedPage ? parentFrame : null);
+  const lazyKids = await sandbox.listChildren("deep:1");
+  ok("[CHILDREN] a node on an unloaded page is still found", lazyKids.children.length === 2);
+  ok("[CHILDREN] the lookup loads pages incrementally, never loadAllPagesAsync", allPagesCalls === 0 && incrementalLoads === 1);
+  ok("[CHILDREN] and stops as soon as the node resolves (later pages untouched)", incrementalLoads < sandbox.figma.root.children.length);
+  sandbox.figma.root.children = prevRoot3;
+  sandbox.figma.loadAllPagesAsync = prevLoadAll3;
+
+  sandbox.figma.getNodeByIdAsync = prevGetNodeC;
+
+  // ---- [PAGE] --page: export ONE named page (not the one that happens to be open) ----
+  // Verified against the Plugin API docs: PageNode.loadAsync() loads a single page, root.children is
+  // readable without loading, and figma.currentPage does NOT need to change — so a --page export
+  // leaves the user's editor where it is. That last fact is what made the metadata bugs below
+  // possible: three fields still assumed "exported page == currentPage".
+  const pgA = { name: "Screens", id: "p:A", children: [scrollFrame], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const pgB = { name: "Screens", id: "p:B", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const pgC = { name: "Archive", id: "p:C", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const prevKids = sandbox.figma.root.children;
+  const prevCurrent = sandbox.figma.currentPage;
+  sandbox.figma.root.children = [pgA, pgB, pgC];
+
+  const byId = await sandbox.collectFull({ page: "p:A", css: false });
+  ok("[PAGE] resolves a page by id", byId.layersDoc.layers.length > 0);
+  // The three metadata bugs an API review caught: all reported figma.currentPage, which is NOT the
+  // exported page (loadAsync deliberately does not navigate).
+  ok("[PAGE] scope is a distinct 'page', not 'current-page'", byId.layersDoc.scope === "page");
+  ok("[PAGE] `page` names the EXPORTED page, not the open one", byId.layersDoc.page === "Screens");
+  ok("[PAGE] does not navigate the user (currentPage unchanged)", sandbox.figma.currentPage === prevCurrent);
+  // Every layer carries its page ID, not just the page NAME. The name is user-editable and the Plugin
+  // API guarantees no uniqueness for it — pgA and pgB above are BOTH "Screens" — so a consumer keyed
+  // on the name (bridge/pages-layout.js buckets pages into directories) merged two distinct pages
+  // into one. The id is the only stable page identity that survives into the export.
+  ok("[PAGE] every layer carries its page ID, not just the display name",
+    byId.layersDoc.layers.every((l) => l.pageId === "p:A" && l.page === "Screens"));
+  ok("[PAGE] and so does every index entry, so the manifest can disambiguate too",
+    byId.layersDoc.index.every((e) => e.pageId === "p:A"));
+
+  const byName = await sandbox.collectFull({ page: "Archive", css: false });
+  ok("[PAGE] resolves an unambiguous page by name", byName.layersDoc.page === "Archive");
+  const byCase = await sandbox.collectFull({ page: "  aRcHiVe ", css: false });
+  ok("[PAGE] falls back to a UNIQUE case-insensitive name", byCase.layersDoc.page === "Archive");
+
+  // Figma ALLOWS duplicate page names. Exact-name matching used to pick-first with no guard, which is
+  // the likeliest real collision. Nothing here is interactive, so a wrong silent pick is unrecoverable.
+  let dupErr = null;
+  try { await sandbox.collectFull({ page: "Screens", css: false }); } catch (e) { dupErr = e; }
+  ok("[PAGE] a DUPLICATE exact name errors instead of picking one", !!dupErr && /ambiguous/.test(dupErr.message));
+  ok("[PAGE] the ambiguity error says to use the id", !!dupErr && /use its id/.test(dupErr.message));
+  ok("[PAGE] and lists the available pages (self-healing)", !!dupErr && /p:A/.test(dupErr.message) && /p:C/.test(dupErr.message));
+
+  let missErr = null;
+  try { await sandbox.collectFull({ page: "Nope", css: false }); } catch (e) { missErr = e; }
+  ok("[PAGE] an unknown page errors", !!missErr && /no page matches/.test(missErr.message));
+  ok("[PAGE] the not-found error lists the valid choices", !!missErr && /Available pages/.test(missErr.message) && /"Archive"/.test(missErr.message));
+
+  // Repeatable, and de-duplicated if the same page is named twice.
+  const multi = await sandbox.collectFull({ page: ["p:A", "p:C"], css: false });
+  ok("[PAGE] accepts MULTIPLE pages", Array.isArray(multi.layersDoc.pages) && multi.layersDoc.pages.length === 2);
+  ok("[PAGE] multi-page export omits the singular `page` field", multi.layersDoc.page === undefined);
+  const dedup = await sandbox.collectFull({ page: ["p:A", "p:A"], css: false });
+  ok("[PAGE] the same page twice is exported once", dedup.layersDoc.pages === undefined && dedup.layersDoc.page === "Screens");
+
+  // ---- [MEAS] measurements are read from the EXPORTED pages, not from whatever page is open ----
+  // This used to hardcode figma.currentPage, so a --page export of a non-current page attached the
+  // OPEN page's redlines to a doc about a different page. Each entry now carries its own page tag.
+  const redline = (id) => [{ start: { node: { id } , side: "LEFT" }, end: { node: { id }, side: "RIGHT" }, offset: 8, freeText: id }];
+  pgA.getMeasurements = () => redline("a");
+  pgC.getMeasurements = () => redline("c");
+  const measMulti = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
+  ok("[MEAS] each redline is tagged with the page it came from",
+    measMulti.layersDoc.measurements.some((m) => m.page === "Screens" && m.text === "a") &&
+    measMulti.layersDoc.measurements.some((m) => m.page === "Archive" && m.text === "c"));
+  ok("[MEAS] and with the page ID too — the name alone can't tell two same-named pages apart",
+    measMulti.layersDoc.measurements.every((m) => m.pageId === (m.text === "a" ? "p:A" : "p:C")));
+  // Two pages CAN legitimately share identical redlines — that is data, not an error: emit both.
+  pgC.getMeasurements = () => redline("a");
+  const measDup = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
+  ok("[MEAS] identical sets on two pages are both emitted, not de-duplicated", measDup.layersDoc.measurements.length === 2);
+  delete pgA.getMeasurements;
+  delete pgC.getMeasurements;
+
+  // An explicitly-empty selector is a caller bug (an interpolated variable that came out blank) —
+  // falling back silently would export the wrong page and say nothing.
+  const blank = await sandbox.collectFull({ page: "   ", css: false });
+  ok("[PAGE] an empty selector warns rather than silently falling back",
+    blank.layersDoc.manifest.warnings.some((w) => /page selector was empty/.test(w)));
+
+  // allPages + page are MUTUALLY EXCLUSIVE. The branch below used to be `if (allPages) … else if
+  // (page)`, so allPages silently won: a caller asking for one page got all of them — a plausible
+  // export of the WRONG scope. figma-pull's arg parser refused this, but the MCP path did not, and
+  // the guard belongs at the collector where EVERY caller passes through it.
+  let bothErr = null;
+  try { await sandbox.collectFull({ allPages: true, page: "p:A", css: false }); } catch (e) { bothErr = e; }
+  ok("[PAGE] allPages + page is REFUSED, not silently resolved", !!bothErr && /different scopes/.test(bothErr.message));
+  ok("[PAGE] the scope-conflict error names both ways out", !!bothErr && /page:\[ids\]/.test(bothErr.message) && /whole file/.test(bothErr.message));
+  // An all-pages export with no page selector must be unaffected by that guard.
+  const stillAll = await sandbox.collectFull({ allPages: true, css: false });
+  ok("[PAGE] allPages alone still exports every page", stillAll.layersDoc.scope === "all-pages");
+  // A blank selector alongside allPages is NOT a conflict — it trims to nothing, so there is no
+  // second scope to conflict with, and refusing it would fail a run that asked for exactly one thing.
+  const allBlank = await sandbox.collectFull({ allPages: true, page: "  ", css: false });
+  ok("[PAGE] allPages + a BLANK page selector is not a conflict", allBlank.layersDoc.scope === "all-pages");
+  sandbox.figma.root.children = prevKids;
 
   // ---- WRITE plane (writes.ts) ----
   // Previously untested entirely. The two contracts that matter to an agent driving figma_write:
@@ -596,6 +926,236 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("write: PAGE parent is loadAsync'd before appendChild", pPage.ok === true && pageLoads.length === 1);
 
   sandbox.figma.getNodeByIdAsync = prevGetNode;
+
+  // ==================================================================================
+  // Audit 2026-08-08 punch-list. The read plane was already broad; these are about the
+  // output being USABLE — recoverable icons, a readable warnings list, and no payload
+  // that nothing consumes.
+  // ==================================================================================
+
+  // ---- [AUDIT-1] failed vector exports: skip the empty ones, recover the real ones ----
+  // The live export reported assetsFailed: 807 and left 663 vector nodes with NO `asset` at all —
+  // icons simply unimplementable. Two distinct causes were collapsed into one counter and one
+  // warning each: nodes that paint NOTHING (Figma rightly refuses to render them — not a failure),
+  // and nodes that do paint but whose export threw (a real loss, and recoverable from geometry).
+  const vecHost = (id, kids) => ({ type: "FRAME", name: "Host" + id, visible: true, id: "vh:" + id,
+    width: 100, height: 100, layoutMode: "NONE", children: kids,
+    exportAsync: async () => new Uint8Array([137, 80, 78, 71]) });
+  const boom = async () => { throw new Error("could not be exported"); };
+  const prevSel2 = sandbox.figma.currentPage.selection;
+
+  const invisibleVec = { type: "VECTOR", name: "empty-path", visible: true, id: "iv:1", width: 16, height: 16,
+    fills: [{ type: "SOLID", visible: false, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], strokes: [], exportAsync: boom };
+  const zeroAreaVec = { type: "VECTOR", name: "collapsed", visible: true, id: "iv:2", width: 0, height: 24,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], exportAsync: boom };
+  sandbox.figma.currentPage.selection = [vecHost("inv", [invisibleVec, zeroAreaVec])];
+  const invRun = await sandbox.collectSelection({ css: false });
+  const [invNode, zeroNode] = invRun.screen.nodes[0].children;
+
+  ok("[AUDIT-1] a vector with no visible paint is skipped (no asset, no geometry)",
+    invNode.asset === undefined && invNode.geometry === undefined);
+  ok("[AUDIT-1] a zero-area vector is skipped too", zeroNode.asset === undefined && zeroNode.geometry === undefined);
+  ok("[AUDIT-1] the skip is COUNTED in its own counter", invRun.screen.manifest.assetsSkippedInvisible === 2);
+  // The whole point of separating them: these must not inflate assetsFailed, which is the number an
+  // agent (and this repo's own audit) reads as "icons you have lost".
+  ok("[AUDIT-1] and NOT counted as a failure", invRun.screen.manifest.assetsFailed === 0);
+  ok("[AUDIT-1] and NOT warned — there is nothing to render, so there is nothing to report",
+    !invRun.screen.manifest.warnings.some((w) => /asset export/.test(w)));
+  ok("[AUDIT-1] exportAsync is never even attempted on them (they would have thrown)",
+    invRun.screen.manifest.warnings.every((w) => !/could not be exported/.test(w)));
+
+  // A node that DOES paint and still fails to export falls back to its resolved outlines. Docs call
+  // `vectorPaths` "simple, but incomplete", so the fallback reads fillGeometry/strokeGeometry.
+  const brokenVec = { type: "VECTOR", name: "icon-path", visible: true, id: "gv:1", width: 24, height: 24,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    fillGeometry: [{ data: "M0 0h24v24H0z", windingRule: "NONZERO" }],
+    strokeGeometry: [{ data: "M2 2h20" }],
+    vectorPaths: [{ data: "M9 9L1 1" }], // deliberately DIFFERENT: the fallback must not read this
+    exportAsync: boom };
+  sandbox.figma.currentPage.selection = [vecHost("geo", [brokenVec])];
+  const geoRun = await sandbox.collectSelection({ css: false });
+  const geoNode = geoRun.screen.nodes[0].children[0];
+  ok("[AUDIT-1] a real export failure falls back to fillGeometry", geoNode.geometry && geoNode.geometry.fills[0] === "M0 0h24v24H0z");
+  ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry.strokes[0] === "M2 2h20");
+  // Without w/h the path data has no coordinate space — a consumer cannot build a viewBox from it.
+  ok("[AUDIT-1] geometry carries the node's own w/h so it can be rendered as inline SVG",
+    geoNode.geometry.w === 24 && geoNode.geometry.h === 24);
+  ok("[AUDIT-1] the incomplete `vectorPaths` is NOT what gets captured", JSON.stringify(geoNode.geometry).indexOf("M9 9L1 1") === -1);
+  ok("[AUDIT-1] a recovered node is still a LEAF, like a successful export", geoNode.children === undefined && geoNode.asset === undefined);
+  ok("[AUDIT-1] recovery is counted, and is not a failure",
+    geoRun.screen.manifest.assetsGeometry === 1 && geoRun.screen.manifest.assetsFailed === 0);
+
+  // Only when BOTH the export and the geometry are gone is it a genuine, warn-worthy failure.
+  const hopelessVec = { type: "VECTOR", name: "gone", visible: true, id: "hv:1", width: 24, height: 24,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], exportAsync: boom };
+  sandbox.figma.currentPage.selection = [vecHost("bad", [hopelessVec])];
+  const badRun = await sandbox.collectSelection({ css: false });
+  ok("[AUDIT-1] an unrecoverable node IS counted as failed", badRun.screen.manifest.assetsFailed === 1);
+  ok("[AUDIT-1] and IS warned, naming the node and the reason",
+    badRun.screen.manifest.warnings.some((w) => /asset export failed/.test(w) && /gone \(hv:1\)/.test(w) && /could not be exported/.test(w)));
+
+  // ---- [2026-08-13] isAsset: Figma's own icon/raster heuristic, OR'd into iconLike ----
+  // A container that the name/size regex would NOT flag (unconventional name) but that Figma's own
+  // `isAsset` says is an icon/raster subtree should still flatten to one asset leaf.
+  const oddNameVec = { type: "VECTOR", name: "shape9", visible: true, id: "oa:v1", width: 16, height: 16,
+    fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 0, b: 0 }, opacity: 1 }], exportAsync: async () => "<svg/>" };
+  const oddNameFrame = { type: "FRAME", name: "Group 42", visible: true, id: "oa:1", width: 20, height: 20,
+    isAsset: true, children: [oddNameVec], findOne: () => null, exportAsync: async () => "<svg/>" };
+  sandbox.figma.currentPage.selection = [oddNameFrame];
+  const isAssetRun = await sandbox.collectSelection({});
+  ok("[isAsset] a container Figma flags as an asset flattens even with a non-matching name",
+    typeof isAssetRun.screen.nodes[0].asset === "string" && !isAssetRun.screen.nodes[0].children);
+
+  const oddNameFrameWithText = { type: "FRAME", name: "Group 43", visible: true, id: "oa:2", width: 20, height: 20,
+    isAsset: true, children: [{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }],
+    findOne: (pred) => ([{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }].find(pred) || null),
+    exportAsync: async () => "<svg/>" };
+  sandbox.figma.currentPage.selection = [oddNameFrameWithText];
+  const isAssetTextRun = await sandbox.collectSelection({});
+  ok("[isAsset] isAsset:true is still overridden by a real TEXT descendant — never flatten real content",
+    Array.isArray(isAssetTextRun.screen.nodes[0].children));
+
+  // ---- [2026-08-13] variableWidthStrokeProperties: tapered strokes ----
+  const taperedNode = { type: "VECTOR", name: "brush", visible: true, id: "vw:1", width: 40, height: 4,
+    strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    strokeWeight: 2,
+    variableWidthStrokeProperties: { strokeWeightProfile: { type: "MULTI_POINT",
+      mapping: [{ position: 0, value: 1 }, { position: 0.5, value: 4 }, { position: 1, value: 1 }] } },
+    fills: [], exportAsync: async () => "<svg/>" };
+  sandbox.figma.currentPage.selection = [taperedNode];
+  const taperedRun = await sandbox.collectSelection({});
+  const taperedStroke = taperedRun.screen.nodes[0].strokes;
+  ok("[variableWidth] a tapered stroke's profile type is captured",
+    !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "multi_point");
+  ok("[variableWidth] and its points, with position+weight",
+    taperedStroke.variableWidth.points.length === 3 && taperedStroke.variableWidth.points[1].pos === 0.5 && taperedStroke.variableWidth.points[1].weight === 4);
+
+  const plainStrokeNode = { type: "VECTOR", name: "plain", visible: true, id: "vw:2", width: 40, height: 4,
+    strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    strokeWeight: 2, fills: [], exportAsync: async () => "<svg/>" };
+  sandbox.figma.currentPage.selection = [plainStrokeNode];
+  const plainRun = await sandbox.collectSelection({});
+  ok("[variableWidth] a normal stroke with no profile emits no variableWidth key",
+    !plainRun.screen.nodes[0].strokes || plainRun.screen.nodes[0].strokes.variableWidth === undefined);
+
+  // ---- [AUDIT-6c] the warnings manifest is aggregated by kind, not one entry per node ----
+  // A real export produced 896 warnings, ~800 asset failures + 80 identical missingFont sentences.
+  // At that length the list is not readable, and the one-off warnings that DO need attention (an
+  // unreadable page, a failed page load) are invisible inside it. The manifest stays a flat string[].
+  const missingFontText = (i) => ({ type: "TEXT", name: "Label" + i, visible: true, id: "mf:" + i, characters: "x", width: 50,
+    fontName: { family: "Proxima Nova", style: "Regular" }, fontSize: 12, hasMissingFont: true, getStyledTextSegments: () => [] });
+  const manyFonts = [];
+  for (let i = 1; i <= 12; i++) manyFonts.push(missingFontText(i));
+  sandbox.figma.currentPage.selection = [vecHost("fonts", manyFonts)];
+  const aggRun = await sandbox.collectSelection({ css: false });
+  const aggWarnings = aggRun.screen.manifest.warnings;
+  const fontLines = aggWarnings.filter((w) => /missing font/.test(w));
+
+  ok("[AUDIT-6c] 12 missing-font nodes produce ONE warning, not 12", fontLines.length === 1);
+  ok("[AUDIT-6c] the summary carries the real count", /12 node\(s\)/.test(fontLines[0]));
+  ok("[AUDIT-6c] and example nodes, so it stays actionable", /Label1 \(mf:1\)/.test(fontLines[0]));
+  ok("[AUDIT-6c] examples are capped (~10) and the remainder is stated, not silently dropped",
+    /\(\+2 more\)/.test(fontLines[0]) && (fontLines[0].match(/mf:/g) || []).length === 10);
+  // Backward compatibility: the skill's "read warnings first" step reads a plain list of strings.
+  ok("[AUDIT-6c] the manifest is still a flat array of strings", Array.isArray(aggWarnings) && aggWarnings.every((w) => typeof w === "string"));
+  // Per-node flags are untouched — aggregation is about the MANIFEST, not about hiding the signal.
+  ok("[AUDIT-6c] every affected node still carries its own missingFont flag",
+    aggRun.screen.nodes[0].children.every((c) => c.missingFont === true));
+  sandbox.figma.currentPage.selection = prevSel2;
+
+  // ---- [AUDIT-6a] box.x/y is page-space and must not survive inside an auto-layout parent ----
+  const boxed = (id, extra) => Object.assign({ type: "FRAME", name: "Row" + id, visible: true, id: "bx:" + id,
+    width: 100, height: 20, layoutMode: "NONE", children: [],
+    absoluteBoundingBox: { x: 40, y: 80, width: 100, height: 20 } }, extra || {});
+  const flowKid = boxed("flow");
+  const absKid = boxed("abs", { layoutPositioning: "ABSOLUTE" });
+  const autoParent = { type: "FRAME", name: "Stack", visible: true, id: "bx:p", width: 100, height: 100,
+    layoutMode: "VERTICAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    absoluteBoundingBox: { x: 5, y: 6, width: 100, height: 100 }, children: [flowKid, absKid] };
+  const stack = await sandbox.serialize(autoParent, 0, false);
+  const [flowOut, absOut] = stack.children;
+  ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box.w === 100 && flowOut.box.h === 20);
+  ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box.x === undefined && flowOut.box.y === undefined);
+  // The exceptions have to survive, or absolutely-positioned overlays lose their only placement data.
+  ok("[AUDIT-6a] an ABSOLUTE child keeps box.x/y", absOut.box.x === 40 && absOut.box.y === 80);
+  const looseParent = { type: "FRAME", name: "Canvas", visible: true, id: "bx:l", width: 100, height: 100,
+    layoutMode: "NONE", children: [boxed("loose")] };
+  const loose = await sandbox.serialize(looseParent, 0, false);
+  ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", loose.children[0].box.x === 40 && loose.children[0].box.y === 80);
+  // The export ROOT has no parent in the doc, so its own page-space origin is the only anchor there is.
+  ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box.x === 5 && stack.box.y === 6);
+
+  // ---- [AUDIT-6b] widthMode/heightMode: emit only the non-default values ----
+  const sizing = (h, v) => ({ type: "FRAME", name: "S", visible: true, id: "sz:1", width: 10, height: 10,
+    layoutMode: "NONE", layoutSizingHorizontal: h, layoutSizingVertical: v, children: [] });
+  const fixedBoth = await sandbox.serialize(sizing("FIXED", "FIXED"), 0, false);
+  ok("[AUDIT-6b] the FIXED default emits neither key", fixedBoth.widthMode === undefined && fixedBoth.heightMode === undefined);
+  const sizedFill = await sandbox.serialize(sizing("FILL", "HUG"), 0, false);
+  ok("[AUDIT-6b] FILL/HUG (the values that change the CSS) still emit", sizedFill.widthMode === "fill" && sizedFill.heightMode === "hug");
+
+  // ---- [AUDIT-5] numberOfFixedChildren: sticky headers/footers/FABs ----
+  const stickyFrame = { type: "FRAME", name: "Screen", visible: true, id: "fx:1", width: 375, height: 800,
+    layoutMode: "NONE", overflowDirection: "VERTICAL", numberOfFixedChildren: 2, children: [] };
+  const sticky = await sandbox.serialize(stickyFrame, 0, false);
+  ok("[AUDIT-5] numberOfFixedChildren -> fixedChildren", sticky.fixedChildren === 2);
+  const plainFrame = await sandbox.serialize({ type: "FRAME", name: "Plain", visible: true, id: "fx:2",
+    width: 10, height: 10, layoutMode: "NONE", numberOfFixedChildren: 0, children: [] }, 0, false);
+  ok("[AUDIT-5] and is omitted at the 0 default (it is on every frame)", plainFrame.fixedChildren === undefined);
+
+  // ---- [AUDIT-5] exportSettings: the designer's own asset intent ----
+  const exportNode = await sandbox.serialize({ type: "FRAME", name: "Logo", visible: true, id: "ex:1",
+    width: 40, height: 40, layoutMode: "NONE", children: [],
+    exportSettings: [
+      { format: "SVG", suffix: "", constraint: { type: "SCALE", value: 1 } },
+      { format: "PNG", suffix: "@3x", constraint: { type: "SCALE", value: 3 } },
+    ] }, 0, false);
+  ok("[AUDIT-5] exportSettings captured, format lowercased", Array.isArray(exportNode.exportSettings) && exportNode.exportSettings[0].format === "svg");
+  ok("[AUDIT-5] the density suffix + scale survive", exportNode.exportSettings[1].suffix === "@3x" && exportNode.exportSettings[1].constraint.value === 3);
+  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", exportNode.exportSettings[0].constraint === undefined);
+  ok("[AUDIT-5] a node with no presets emits nothing", plainFrame.exportSettings === undefined);
+
+  // ---- [AUDIT-5] skew: the sheared transform the decomposition used to throw away ----
+  const xf = (m) => ({ type: "FRAME", name: "T", visible: true, id: "sk:1", width: 10, height: 10,
+    layoutMode: "NONE", relativeTransform: m, children: [] });
+  const skewed = await sandbox.serialize(xf([[1, 0.5, 0], [0, 1, 0]]), 0, false);
+  ok("[AUDIT-5] shear in relativeTransform -> skew (degrees, CSS skewX)", skewed.skew === 26.57);
+  ok("[AUDIT-5] a sheared node is not mistaken for a flip", skewed.flipped === undefined);
+  // A pure rotation shears by exactly 0 — the decomposition must not manufacture a skew for it.
+  const rot = Math.PI / 6;
+  const rotated = await sandbox.serialize(xf([[Math.cos(rot), -Math.sin(rot), 0], [Math.sin(rot), Math.cos(rot), 0]]), 0, false);
+  ok("[AUDIT-5] a pure rotation emits NO skew", rotated.skew === undefined);
+  const flippedNode = await sandbox.serialize(xf([[-1, 0, 0], [0, 1, 0]]), 0, false);
+  ok("[AUDIT-5] a pure flip still reads as flipped, with no skew", flippedNode.flipped === true && flippedNode.skew === undefined);
+
+  // ---- [AUDIT-4] index size hints: the skill says "read ONLY that file", so say how big it is ----
+  const sized = await sandbox.collectFull({ css: false });
+  const entry = sized.layersDoc.index[0];
+  const layerTree = sized.layersDoc.layers[0].tree;
+  const countTree = (t) => 1 + (Array.isArray(t.children) ? t.children.reduce((a, c) => a + countTree(c), 0) : 0);
+  ok("[AUDIT-4] index entries carry a subtree node count", entry.nodes === countTree(layerTree));
+  ok("[AUDIT-4] and an approximate serialized byte size", typeof entry.bytes === "number" && entry.bytes > 100);
+  ok("[AUDIT-4] bytes tracks the tree that actually lands in the layer file",
+    Math.abs(entry.bytes - JSON.stringify(layerTree).length) < 2);
+  ok("[AUDIT-4] the identity fields are unchanged", !!entry.id && !!entry.name && !!entry.type && !!entry.page);
+
+  // ---- [AUDIT-5] page backgrounds: the canvas a screen sits on ----
+  const bgPage = { name: "Dark", id: "p:bg", loadAsync: async () => {}, children: [scrollFrame],
+    findAllWithCriteria: () => [],
+    backgrounds: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.1, b: 0.1 }, opacity: 1 }],
+    prototypeBackgrounds: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }] };
+  const defaultPage = { name: "Plain", id: "p:plain", loadAsync: async () => {}, children: [],
+    findAllWithCriteria: () => [],
+    backgrounds: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }] };
+  const prevKids2 = sandbox.figma.root.children;
+  sandbox.figma.root.children = [bgPage, defaultPage];
+  const bgRun = await sandbox.collectFull({ allPages: true, css: false });
+  const bgEntry = (bgRun.layersDoc.pageSettings || []).find((p) => p.pageId === "p:bg");
+  ok("[AUDIT-5] a page's chosen canvas background is captured", bgEntry && bgEntry.background[0].color === "#1a1a1a");
+  ok("[AUDIT-5] prototypeBackgrounds is captured separately", bgEntry && bgEntry.prototypeBackground[0].color === "#000000");
+  ok("[AUDIT-5] the page entry is keyed by pageId, not by the non-unique name", bgEntry && bgEntry.page === "Dark");
+  // Figma's own default carries no designer intent — emitting it would put a line on every page.
+  ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p) => p.pageId === "p:plain"));
+  sandbox.figma.root.children = prevKids2;
 
   report();
 })().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });

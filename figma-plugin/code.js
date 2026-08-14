@@ -1,12 +1,196 @@
 // GENERATED from src/*.ts by build.js — do not edit by hand. Run `npm run build`.
 "use strict";
 (() => {
+  var __create = Object.create;
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getProtoOf = Object.getPrototypeOf;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __commonJS = (cb, mod) => function __require() {
+    try {
+      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    } catch (e) {
+      throw mod = 0, e;
+    }
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+    mod
+  ));
+
+  // ../bridge/pages-layout.js
+  var require_pages_layout = __commonJS({
+    "../bridge/pages-layout.js"(exports, module) {
+      "use strict";
+      function safe2(id) {
+        return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+      }
+      function buildPageLayout2(layersDoc, sep) {
+        const { layers, index, ...meta } = layersDoc || {};
+        const join = (...parts) => ["pages"].concat(parts).join(sep);
+        const byPage = /* @__PURE__ */ new Map();
+        const pages = [];
+        const layerFiles = [];
+        const usedDirs = /* @__PURE__ */ new Set();
+        const uniqueDir = (name) => {
+          const base = safe2(name) || "page";
+          if (!usedDirs.has(base)) {
+            usedDirs.add(base);
+            return base;
+          }
+          let i = 2;
+          while (usedDirs.has(base + "_" + i)) i++;
+          usedDirs.add(base + "_" + i);
+          return base + "_" + i;
+        };
+        (layers || []).forEach((l, i) => {
+          const pageName = l.page || "(no page)";
+          const key = l.pageId || "name:" + pageName;
+          let bucket = byPage.get(key);
+          if (!bucket) {
+            bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
+            byPage.set(key, bucket);
+            bucket.index = join(bucket.dir, "index.json");
+            pages.push(bucket);
+          }
+          const base = safe2(l.name || "layer") + "__" + safe2(l.id) + ".json";
+          layerFiles.push({
+            path: join(bucket.dir, base),
+            data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources }
+          });
+          bucket.entries.push({ ...(index || [])[i], file: join(bucket.dir, base) });
+        });
+        meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+        const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
+        return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
+      }
+      module.exports = { buildPageLayout: buildPageLayout2, safe: safe2 };
+    }
+  });
+
+  // ../bridge/errmsg.js
+  var require_errmsg = __commonJS({
+    "../bridge/errmsg.js"(exports, module) {
+      "use strict";
+      var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
+      module.exports = { errMsg: errMsg2 };
+    }
+  });
+
+  // ../bridge/read-opts.js
+  var require_read_opts = __commonJS({
+    "../bridge/read-opts.js"(exports, module) {
+      "use strict";
+      var READ_OPTS = [
+        {
+          name: "css",
+          flag: "--css",
+          describe: "Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."
+        },
+        {
+          // NOT "Dev Mode only": per developers.figma.com only addMeasurement/editMeasurement/
+          // deleteMeasurement carry that restriction — PageNode.getMeasurements() has no such note. And no
+          // longer "current page": collect.ts reads measurements from the page(s) actually exported.
+          name: "measurements",
+          flag: "--measurements",
+          describe: "Include measurement redlines (spacing specs the designer placed) for the exported page(s). Reading them does not require Dev Mode."
+        },
+        {
+          name: "pluginData",
+          flag: "--plugin-data",
+          describe: "Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."
+        },
+        {
+          name: "motion",
+          flag: "--motion",
+          describe: "Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."
+        },
+        {
+          name: "sharedData",
+          flag: "--shared-data",
+          describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
+        },
+        {
+          // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
+          // real render round-trip — SVG per vector, 2x PNG per image) PER NODE, run sequentially, and
+          // unlike getCSSAsync it was never gated despite being the same O(nodes) shape and far more
+          // expensive. On a real design-system page it dominates the export and can outgrow the bridge's
+          // frame limit. Opt-IN to skipping, so the default stays exactly as it was.
+          name: "skipAssets",
+          flag: "--no-assets",
+          describe: "Skip the per-node SVG/PNG render pass \u2014 the dominant cost on a big file. Structure, layout and tokens are unaffected; skipped nodes stay leaves marked `assetSkipped: true`. Asset BYTES are stripped from MCP results anyway, so this is usually pure savings here."
+        }
+      ];
+      function readOptDefaults2() {
+        const o = {};
+        for (const d of READ_OPTS) o[d.name] = false;
+        return o;
+      }
+      module.exports = { READ_OPTS, readOptDefaults: readOptDefaults2 };
+    }
+  });
+
+  // ../bridge/node-id.js
+  var require_node_id = __commonJS({
+    "../bridge/node-id.js"(exports, module) {
+      "use strict";
+      var ID = "[A-Za-z0-9%:;_-]+";
+      var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
+      function decode(s) {
+        try {
+          return decodeURIComponent(s);
+        } catch (e) {
+          return s;
+        }
+      }
+      function normalizeNodeId(raw) {
+        if (!raw) return void 0;
+        const s = decode(String(raw).trim()).replace(/-/g, ":");
+        return /^I?\d+:\d+(?:[;:]\d+:\d+)*$/.test(s) || /^\d+$/.test(s) ? s : void 0;
+      }
+      function parseNodeId(input) {
+        if (!input) return void 0;
+        const s = String(input).trim();
+        try {
+          const nid = new URL(s).searchParams.get("node-id");
+          if (nid) return normalizeNodeId(nid);
+        } catch (e) {
+        }
+        const m = s.match(NODE_ID_RE);
+        if (m) return normalizeNodeId(m[1]);
+        return normalizeNodeId(s);
+      }
+      function toNodeId2(raw) {
+        return parseNodeId(raw) || (raw == null ? "" : String(raw));
+      }
+      module.exports = { ID, parseNodeId, toNodeId: toNodeId2 };
+    }
+  });
+
   // src/util.ts
+  var import_pages_layout = __toESM(require_pages_layout());
+  var import_errmsg = __toESM(require_errmsg());
+  var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
   var round = (n) => typeof n === "number" ? Math.round(n * 100) / 100 : n;
-  var safe = (id) => id.replace(/[^a-zA-Z0-9]/g, "_");
   var propName = (k) => k.split("#")[0];
-  var errMsg = (e) => String(e && e.message || e);
   var nonEmpty = (o) => Object.keys(o).length ? o : void 0;
+  function putNonEmpty(o, key, v) {
+    const kept = v && nonEmpty(v);
+    if (kept) o[key] = kept;
+  }
   var xy = (v) => ({ x: round(v.x), y: round(v.y) });
   function putXY(o, key, v) {
     if (v && typeof v === "object") o[key] = xy(v);
@@ -52,17 +236,48 @@
     return out + chunk;
   }
 
+  // src/main.ts
+  var import_pages_layout2 = __toESM(require_pages_layout());
+
   // src/state.ts
+  var import_read_opts = __toESM(require_read_opts());
   var assets = [];
-  var runOpts = { css: false, measurements: false, pluginData: false, motion: false, sharedData: false };
+  var runOpts = (0, import_read_opts.readOptDefaults)();
   var imageSizeCache = /* @__PURE__ */ new Map();
   var warnings = [];
-  var stats = { nodes: 0, assetsFailed: 0, truncated: 0 };
+  var newStats = () => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+  var stats = newStats();
   function warn(msg) {
     warnings.push(msg);
   }
+  var WARN_EXAMPLES = 10;
+  var grouped = /* @__PURE__ */ new Map();
+  function warnKind(kind, ref) {
+    let g = grouped.get(kind);
+    if (!g) {
+      g = { count: 0, examples: [] };
+      grouped.set(kind, g);
+    }
+    g.count++;
+    if (ref && g.examples.length < WARN_EXAMPLES) g.examples.push(ref);
+  }
+  function groupedWarnings() {
+    const out = [];
+    grouped.forEach((g, kind) => {
+      let line = kind + ": " + g.count + " node(s)";
+      if (g.examples.length) {
+        line += " \u2014 e.g. " + g.examples.join("; ");
+        if (g.count > g.examples.length) line += " (+" + (g.count - g.examples.length) + " more)";
+      }
+      out.push(line);
+    });
+    return out;
+  }
+  var SKIP_ASSETS_NOTE = (n) => `--no-assets: ${n} node(s) that would have exported an SVG/PNG were skipped; each is marked 'assetSkipped: true' in the tree and stays a leaf, exactly as the full export serializes it (structure, layout and tokens are unaffected). The per-root reference screenshot is still captured \u2014 it is one render per exported root, not per node.`;
   function manifest() {
-    return { ...stats, skipped: stats.truncated, warnings: warnings.slice() };
+    const note = runOpts.skipAssets && stats.assetsSkipped ? SKIP_ASSETS_NOTE(stats.assetsSkipped) : null;
+    const all = warnings.concat(groupedWarnings());
+    return { ...stats, skipped: stats.truncated, warnings: note ? all.concat(note) : all };
   }
   function memoName(fetch) {
     const cache = /* @__PURE__ */ new Map();
@@ -90,19 +305,8 @@
   var varName = memoName((id) => figma.variables.getVariableByIdAsync(id));
   var styleNameLookup = memoName((id) => figma.getStyleByIdAsync(id));
   var nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id));
-  var collectionCache = /* @__PURE__ */ new Map();
-  function getCollection(id) {
-    let p = collectionCache.get(id);
-    if (!p) {
-      try {
-        p = figma.variables && figma.variables.getVariableCollectionByIdAsync ? Promise.resolve(figma.variables.getVariableCollectionByIdAsync(id)).catch(() => null) : Promise.resolve(null);
-      } catch (e) {
-        p = Promise.resolve(null);
-      }
-      collectionCache.set(id, p);
-    }
-    return p;
-  }
+  var collectionLookup = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null));
+  var getCollection = collectionLookup.obj;
   var runChain = Promise.resolve();
   function serializeRun(fn) {
     const next = runChain.then(() => fn(), () => fn());
@@ -114,16 +318,28 @@
   function releaseAssets() {
     assets.length = 0;
   }
+  async function loadAllPages(consequence) {
+    if (!figma.loadAllPagesAsync) return;
+    try {
+      await figma.loadAllPagesAsync();
+    } catch (e) {
+      warn("loadAllPagesAsync failed (" + consequence + "): " + (0, import_errmsg.errMsg)(e));
+    }
+  }
   function resetRun() {
-    assets.length = 0;
+    releaseAssets();
     warnings = [];
-    stats = { nodes: 0, assetsFailed: 0, truncated: 0 };
+    grouped = /* @__PURE__ */ new Map();
+    stats = newStats();
     varName.reset();
     styleNameLookup.reset();
     nodeNameLookup.reset();
-    collectionCache.clear();
+    collectionLookup.reset();
     imageSizeCache.clear();
   }
+
+  // src/collect.ts
+  var import_node_id = __toESM(require_node_id());
 
   // src/layout.ts
   var ALIGN = {
@@ -279,8 +495,23 @@
     const localIds = new Set(localVars.map((v) => v.id));
     const variables = [];
     const hygiene = [];
-    const referenced = varName.ids().filter((id) => !localIds.has(id));
-    const remoteVars = (await Promise.all(referenced.map((id) => varName.obj(id)))).filter(Boolean);
+    const aliasTargets = (v) => {
+      const out = [];
+      for (const modeId of Object.keys(v.valuesByMode || {})) {
+        const raw = v.valuesByMode[modeId];
+        if (raw && raw.type === "VARIABLE_ALIAS" && raw.id) out.push(raw.id);
+      }
+      return out;
+    };
+    const remoteVars = [];
+    const seen = new Set(localIds);
+    let frontier = [...new Set(varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+    while (frontier.length) {
+      for (const id of frontier) seen.add(id);
+      const fetched = (await Promise.all(frontier.map((id) => varName.obj(id)))).filter(Boolean);
+      remoteVars.push(...fetched);
+      frontier = [...new Set([].concat(...fetched.map(aliasTargets)))].filter((id) => !seen.has(id));
+    }
     const missingCollIds = [...new Set(remoteVars.map((v) => v.variableCollectionId).filter((cid) => cid && !collById.has(cid)))];
     for (const c of await Promise.all(missingCollIds.map((cid) => getCollection(cid)))) {
       if (c) collById.set(c.id, c);
@@ -298,13 +529,16 @@
     for (const v of localVars.concat(remoteVars)) {
       const values = {};
       let hasAlias = false;
-      for (const modeId of Object.keys(v.valuesByMode)) {
+      const modeIds = Object.keys(v.valuesByMode);
+      const resolved = await Promise.all(modeIds.map((modeId) => resolveModeValue(v.valuesByMode[modeId], v.resolvedType)));
+      for (let i = 0; i < modeIds.length; i++) {
+        const modeId = modeIds[i];
         const raw = v.valuesByMode[modeId];
         if (raw && raw.type === "VARIABLE_ALIAS") {
           hasAlias = true;
           if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + raw.id + " could not be resolved");
         }
-        values[modeName[modeId] || modeId] = await resolveModeValue(raw, v.resolvedType);
+        values[modeName[modeId] || modeId] = resolved[i];
       }
       const rec = {
         name: v.name,
@@ -317,7 +551,7 @@
         values
       };
       if (v.scopes && v.scopes.length) rec.scopes = v.scopes;
-      if (v.codeSyntax && Object.keys(v.codeSyntax).length) rec.codeSyntax = v.codeSyntax;
+      putNonEmpty(rec, "codeSyntax", v.codeSyntax);
       if (v.description) rec.description = v.description;
       if (v.remote) rec.remote = true;
       if (v.hiddenFromPublishing) rec.hiddenFromPublishing = true;
@@ -354,7 +588,7 @@
   // src/assets.ts
   var ASSET_DIR = "assets/";
   function register(a) {
-    const file = safe(a.id) + "." + safe(a.format);
+    const file = (0, import_pages_layout.safe)(a.id) + "." + (0, import_pages_layout.safe)(a.format);
     assets.push({ ...a, file });
     return ASSET_DIR + file;
   }
@@ -393,48 +627,100 @@
         }
       }
     } catch (e) {
-      warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
+      warn("source image unavailable for hash " + hash + " (" + (0, import_errmsg.errMsg)(e) + ")");
     }
     return size;
   }
-  var VECTOR_TYPES = ["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"];
-  var ICON_CONTAINER_TYPES = ["FRAME", "INSTANCE", "GROUP", "COMPONENT"];
+  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+  var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+  function paints(v) {
+    return Array.isArray(v) ? v : null;
+  }
+  function hasVisiblePaint(n, fills) {
+    if (fills && fills.some((p) => p.visible !== false)) return true;
+    const s = paints(n.strokes);
+    return !!s && s.some((p) => p.visible !== false);
+  }
+  function hasArea(n) {
+    if (typeof n.width !== "number" || typeof n.height !== "number") return true;
+    return n.width > 0 && n.height > 0;
+  }
+  function geometryOf(n) {
+    const ds = (g) => Array.isArray(g) ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
+    const fills = ds(n.fillGeometry);
+    const strokes = ds(n.strokeGeometry);
+    if (!fills.length && !strokes.length) return void 0;
+    const out = {};
+    if (fills.length) out.fills = fills;
+    if (strokes.length) out.strokes = strokes;
+    if (typeof n.width === "number") {
+      out.w = round(n.width);
+      out.h = round(n.height);
+    }
+    return out;
+  }
   async function collectAsset(node) {
-    const isVector = VECTOR_TYPES.includes(node.type);
+    const isVector = VECTOR_TYPES.has(node.type);
     const n = node;
     const fills = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
     const kids = "children" in node && Array.isArray(n.children) ? n.children : null;
     const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
     let iconLike = false;
-    if (ICON_CONTAINER_TYPES.includes(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
+    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
       try {
         iconLike = !n.findOne((x) => x.type === "TEXT");
       } catch (e) {
         iconLike = false;
       }
     }
-    try {
-      if (isVector || iconLike) {
-        const svg = await node.exportAsync({ format: "SVG_STRING" });
-        if (!svg || svg.indexOf("<svg") === -1) {
-          warn("asset export empty/invalid: " + node.name);
-          stats.assetsFailed++;
-          return void 0;
-        }
-        return register({ id: node.id, name: node.name, format: "svg", text: svg });
+    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+      try {
+        iconLike = !n.findOne((x) => x.type === "TEXT");
+      } catch (e) {
+        iconLike = false;
       }
+    }
+    if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
+      stats.assetsSkipped++;
+      return { skipped: true };
+    }
+    if (isVector || iconLike) {
+      if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      let svg = null;
+      let reason = "empty/invalid SVG";
+      try {
+        svg = await node.exportAsync({ format: "SVG_STRING" });
+      } catch (e) {
+        reason = (0, import_errmsg.errMsg)(e);
+      }
+      if (svg && svg.indexOf("<svg") !== -1) {
+        return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
+      }
+      const geo = geometryOf(n);
+      if (geo) {
+        stats.assetsGeometry++;
+        return { geometry: geo };
+      }
+      stats.assetsFailed++;
+      warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
+      return void 0;
+    }
+    try {
       if (hasImage) {
         const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
         if (!bytes || !bytes.length) {
-          warn("asset export empty: " + node.name);
           stats.assetsFailed++;
+          warnKind("image asset export empty", node.name + " (" + node.id + ")");
           return void 0;
         }
-        return register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) });
+        return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
       }
     } catch (e) {
-      warn("asset export failed: " + node.name + " (" + errMsg(e) + ")");
       stats.assetsFailed++;
+      warnKind("image asset export failed", node.name + " (" + node.id + "): " + (0, import_errmsg.errMsg)(e));
     }
     return void 0;
   }
@@ -451,7 +737,7 @@
       }
       return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
     } catch (e) {
-      warn("reference screenshot failed: " + node.name + " (" + errMsg(e) + ")");
+      warn("reference screenshot failed: " + node.name + " (" + (0, import_errmsg.errMsg)(e) + ")");
       return void 0;
     }
   }
@@ -468,7 +754,7 @@
         return o;
       });
     } catch (e) {
-      warn("dev resources unavailable for '" + node.name + "' (" + errMsg(e) + ")");
+      warn("dev resources unavailable for '" + node.name + "' (" + (0, import_errmsg.errMsg)(e) + ")");
       return void 0;
     }
   }
@@ -549,6 +835,7 @@
     return out.length ? out : void 0;
   }
   async function simplifyStrokes(node) {
+    var _a;
     if (!("strokes" in node) || !Array.isArray(node.strokes)) return void 0;
     const vis = node.strokes.filter((s) => s.visible !== false);
     if (!vis.length) return void 0;
@@ -556,8 +843,8 @@
     const solids = vis.filter((s) => s.type === "SOLID");
     if (solids.length) out.colors = solids.map(solidHex);
     if (vis.some((s) => s.type !== "SOLID")) {
-      const paints = await simplifyFills(vis);
-      if (paints) out.paints = paints;
+      const paints2 = await simplifyFills(vis);
+      if (paints2) out.paints = paints2;
     }
     const strokeWeight = node.strokeWeight;
     if (strokeWeight && strokeWeight !== figma.mixed) {
@@ -573,7 +860,7 @@
         const v = numProp(node, k);
         if (v != null) sides[s] = v;
       });
-      if (Object.keys(sides).length) out.weights = sides;
+      putNonEmpty(out, "weights", sides);
     }
     const n = node;
     if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
@@ -581,6 +868,13 @@
     if ("strokeCap" in node && n.strokeCap && n.strokeCap !== figma.mixed && n.strokeCap !== "NONE") out.cap = String(n.strokeCap).toLowerCase();
     if ("strokeJoin" in node && n.strokeJoin && n.strokeJoin !== figma.mixed && n.strokeJoin !== "MITER") out.join = String(n.strokeJoin).toLowerCase();
     if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
+    const vw = n.variableWidthStrokeProperties;
+    if (vw && Array.isArray((_a = vw.strokeWeightProfile) == null ? void 0 : _a.mapping) && vw.strokeWeightProfile.mapping.length) {
+      out.variableWidth = {
+        profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
+        points: vw.strokeWeightProfile.mapping.map((p) => ({ pos: round(p.position), weight: round(p.value) }))
+      };
+    }
     return out;
   }
 
@@ -761,9 +1055,9 @@
     if (typeof t.maxLines === "number" && t.maxLines) out.maxLines = t.maxLines;
     if (t.hasMissingFont === true) {
       out.missingFont = true;
-      warn("missing font on text '" + node.name + "' \u2014 Figma is substituting a fallback; recorded family may differ from render");
+      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", node.name + " (" + node.id + ")");
     }
-    if (node.width === 0) warn("zero-width text node (possible collapsed thread): " + node.name);
+    if (node.width === 0) warnKind("zero-width text node (possible collapsed thread)", node.name + " (" + node.id + ")");
     return out;
   }
 
@@ -900,12 +1194,12 @@
         try {
           nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
         } catch (e) {
-          warn("component catalog: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") \u2014 its components are missing");
+          warn("component catalog: page '" + page.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its components are missing");
           continue;
         }
         for (const n of nodes) {
           if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") continue;
-          const entry = { name: n.name, id: n.id, type: n.type, page: page.name };
+          const entry = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
           if (n.key) entry.key = n.key;
@@ -915,7 +1209,10 @@
             if (defs && Object.keys(defs).length) {
               entry.props = {};
               let variantCombos = 1;
-              for (const k of Object.keys(defs)) {
+              const keys = Object.keys(defs);
+              const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
+              for (let i = 0; i < keys.length; i++) {
+                const k = keys[i];
                 const d = defs[k];
                 const p = { key: k, type: d.type };
                 if (d.type === "VARIANT") {
@@ -927,14 +1224,14 @@
                   p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
                 }
                 if (d.description) p.description = d.description;
-                const dbv = await resolveBoundMap(d.boundVariables);
+                const dbv = boundPerKey[i];
                 if (dbv) p.tokens = dbv;
                 entry.props[propName(k)] = p;
               }
               if (variantCombos > 30) hygiene.push("variant explosion: '" + n.name + "' has " + variantCombos + " combinations (>30 \u2014 consider boolean/instance-swap props)");
             }
           } catch (e) {
-            warn("component '" + n.name + "': property definitions unreadable (" + errMsg(e) + ") \u2014 props omitted");
+            warn("component '" + n.name + "': property definitions unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 props omitted");
           }
           if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
@@ -965,13 +1262,7 @@
       safeList(() => figma.getLocalGridStylesAsync ? figma.getLocalGridStylesAsync() : Promise.resolve([]))
     ]);
     const hygiene = [];
-    if (figma.loadAllPagesAsync) {
-      try {
-        await figma.loadAllPagesAsync();
-      } catch (e) {
-        warn("loadAllPagesAsync failed (component catalog may be incomplete): " + errMsg(e));
-      }
-    }
+    await loadAllPages("component catalog may be incomplete");
     const components = await collectComponentCatalog(hygiene);
     let colorProfile;
     try {
@@ -1010,7 +1301,7 @@
     };
     const vars = await dumpVariables();
     return {
-      exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      exportedAt: exportedAt(),
       file: figma.root && figma.root.name || void 0,
       colorProfile,
       // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
@@ -1065,9 +1356,9 @@
       if (typeof binding.keyframeOperation === "string" && binding.keyframeOperation !== "SET") o.op = binding.keyframeOperation.toLowerCase();
       const kf = keyframes(binding.keyframes);
       if (kf) o.keyframes = kf;
-      if (Object.keys(o).length) out[field] = o;
+      putNonEmpty(out, field, o);
     }
-    return Object.keys(out).length ? out : void 0;
+    return nonEmpty(out);
   }
   function collectMotion(node) {
     const n = node;
@@ -1085,15 +1376,17 @@
         return o;
       });
     }
-    return Object.keys(out).length ? out : void 0;
+    return nonEmpty(out);
   }
 
   // src/serialize.ts
   var MAX_DEPTH = 60;
   var LOWER_ENUMS = [
     ["layoutAlign", "alignSelf", "INHERIT"],
-    ["layoutSizingHorizontal", "widthMode"],
-    ["layoutSizingVertical", "heightMode"],
+    // FIXED is the default on nearly every node — two keys of pure noise per node. Only FILL/HUG
+    // (the values that actually change the generated CSS) are worth emitting.
+    ["layoutSizingHorizontal", "widthMode", "FIXED"],
+    ["layoutSizingVertical", "heightMode", "FIXED"],
     ["overflowDirection", "scroll", "NONE"]
   ];
   var GRID_SELF_ENUMS = [
@@ -1107,20 +1400,6 @@
     ["bottomRightRadius", "br"],
     ["bottomLeftRadius", "bl"]
   ];
-  async function resolveInferred(node, alreadyBound) {
-    const inf = node.inferredVariables;
-    if (!inf || typeof inf !== "object") return void 0;
-    const out = {};
-    for (const field of Object.keys(inf)) {
-      if (alreadyBound && field in alreadyBound) continue;
-      let candidates = inf[field];
-      if (Array.isArray(candidates) && Array.isArray(candidates[0])) candidates = candidates.flat();
-      if (!Array.isArray(candidates)) candidates = [candidates];
-      const names = (await Promise.all(candidates.map((a) => resolveVar(a)))).filter(Boolean);
-      if (names.length) out[field] = names.length === 1 ? names[0] : names;
-    }
-    return nonEmpty(out);
-  }
   function pluginData(node) {
     const n = node;
     if (typeof n.getPluginDataKeys !== "function") return void 0;
@@ -1161,7 +1440,7 @@
         } catch (e) {
         }
       }
-      if (Object.keys(bucket).length) out[ns] = bucket;
+      putNonEmpty(out, ns, bucket);
     }
     return nonEmpty(out);
   }
@@ -1195,8 +1474,8 @@
         const bv = bound[i];
         if (bv && bv.value) propTokens[propName(k)] = bv.value;
       });
-      if (Object.keys(props).length) out.props = props;
-      if (Object.keys(propTokens).length) out.propTokens = propTokens;
+      putNonEmpty(out, "props", props);
+      putNonEmpty(out, "propTokens", propTokens);
     }
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") out.component = node.name;
     const lay = layout(node);
@@ -1222,10 +1501,14 @@
     }
     if ("absoluteBoundingBox" in node && n.absoluteBoundingBox) {
       const b = n.absoluteBoundingBox;
-      out.box = { x: round(b.x), y: round(b.y), w: round(b.width), h: round(b.height) };
+      out.box = { w: round(b.width), h: round(b.height) };
+      if (!parentControlsLayout || absoluteInParent) {
+        out.box.x = round(b.x);
+        out.box.y = round(b.y);
+      }
       const rb = n.absoluteRenderBounds;
       if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
-        out.renderBox = { x: round(rb.x), y: round(rb.y), w: round(rb.width), h: round(rb.height) };
+        out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
       }
     }
     if ("layoutGrids" in node && Array.isArray(n.layoutGrids) && n.layoutGrids.length) {
@@ -1253,13 +1536,18 @@
     if ("constraints" in node && n.constraints && (n.constraints.horizontal !== "MIN" || n.constraints.vertical !== "MIN")) {
       out.pin = { h: n.constraints.horizontal.toLowerCase(), v: n.constraints.vertical.toLowerCase() };
     }
+    if ("numberOfFixedChildren" in node && typeof n.numberOfFixedChildren === "number" && n.numberOfFixedChildren > 0) {
+      out.fixedChildren = n.numberOfFixedChildren;
+    }
     if ("clipsContent" in node && n.clipsContent) out.clip = true;
-    const fills = await simplifyFills("fills" in node ? n.fills : void 0);
+    const [fills, strokes, effects] = await Promise.all([
+      simplifyFills("fills" in node ? n.fills : void 0),
+      simplifyStrokes(node),
+      simplifyEffects("effects" in node ? n.effects : void 0)
+    ]);
     if (fills) out.fills = fills;
-    const strokes = await simplifyStrokes(node);
     if (strokes) out.strokes = strokes;
     if ("strokesIncludedInLayout" in node && n.strokesIncludedInLayout) out.strokesInLayout = true;
-    const effects = await simplifyEffects("effects" in node ? n.effects : void 0);
     if (effects) out.effects = effects;
     if ("cornerRadius" in node) {
       if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = n.cornerRadius;
@@ -1268,15 +1556,20 @@
         for (const [k, s] of CORNER_KEYS) {
           if (k in node && typeof n[k] === "number" && n[k]) corners[s] = n[k];
         }
-        if (Object.keys(corners).length) out.radius = corners;
+        putNonEmpty(out, "radius", corners);
       }
     }
     if ("opacity" in node && n.opacity < 1) out.opacity = round(n.opacity);
     if ("rotation" in node && n.rotation) out.rotation = round(n.rotation);
     if ("relativeTransform" in node && Array.isArray(n.relativeTransform) && n.relativeTransform.length === 2) {
       const m = n.relativeTransform;
-      const det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
-      if (det < 0) out.flipped = true;
+      const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
+      if (a * d - c * b < 0) out.flipped = true;
+      const sx = Math.sqrt(a * a + b * b);
+      if (sx > 1e-6) {
+        const skewDeg = Math.atan2(a * c + b * d, sx * sx) * 180 / Math.PI;
+        if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
+      }
     }
     if ("blendMode" in node && n.blendMode && n.blendMode !== "NORMAL" && n.blendMode !== "PASS_THROUGH") out.blendMode = n.blendMode.toLowerCase();
     if ("isMask" in node && n.isMask) out.mask = true;
@@ -1291,17 +1584,28 @@
         if (typeof a.startingAngle === "number") arc.start = round(a.startingAngle);
         if (typeof a.endingAngle === "number") arc.end = round(a.endingAngle);
         if (typeof a.innerRadius === "number" && a.innerRadius) arc.innerRadius = round(a.innerRadius);
-        if (Object.keys(arc).length) out.arc = arc;
+        putNonEmpty(out, "arc", arc);
       }
     }
     if (node.type === "STAR") {
       const shape = {};
       if (typeof n.pointCount === "number") shape.points = n.pointCount;
       if (typeof n.innerRadius === "number") shape.innerRadius = round(n.innerRadius);
-      if (Object.keys(shape).length) out.shape = shape;
+      putNonEmpty(out, "shape", shape);
     }
     if (node.type === "POLYGON" && typeof n.pointCount === "number") out.shape = { points: n.pointCount };
     if (node.type === "BOOLEAN_OPERATION" && n.booleanOperation) out.booleanOp = String(n.booleanOperation).toLowerCase();
+    if ("exportSettings" in node && Array.isArray(n.exportSettings) && n.exportSettings.length) {
+      out.exportSettings = n.exportSettings.map((es) => {
+        const o = { format: String(es.format || "").toLowerCase() };
+        if (es.suffix) o.suffix = es.suffix;
+        const con = es.constraint;
+        if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
+          o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
+        }
+        return o;
+      });
+    }
     if ("detachedInfo" in node && n.detachedInfo) {
       out.detachedFrom = n.detachedInfo.type === "library" ? { key: n.detachedInfo.componentKey } : { componentId: n.detachedInfo.componentId };
     }
@@ -1355,30 +1659,37 @@
     if (reactions) out.reactions = reactions;
     if (varModes) out.variableModes = varModes;
     if (css) out.css = css;
-    const inferred = await resolveInferred(node, tokens);
-    if (inferred) out.inferredTokens = inferred;
+    if (asset && "skipped" in asset) {
+      out.assetSkipped = true;
+      return out;
+    }
+    if (asset && "geometry" in asset) {
+      out.geometry = asset.geometry;
+      return out;
+    }
     if (asset) {
-      out.asset = asset;
+      out.asset = asset.path;
       return out;
     }
     if (node.type === "TABLE" && typeof n.numRows === "number" && typeof n.numColumns === "number") {
-      const rows = [];
-      for (let r = 0; r < n.numRows; r++) {
-        const row = [];
-        for (let cc = 0; cc < n.numColumns; cc++) {
-          try {
-            const cell = n.cellAt(r, cc);
-            if (!cell) continue;
-            const co = { row: r, col: cc };
-            if (cell.text) Object.assign(co, await serializeText(cell.text));
-            const cfills = await simplifyFills(cell.fills);
-            if (cfills) co.fills = cfills;
-            row.push(co);
-          } catch (e) {
-          }
-        }
-        if (row.length) rows.push(row);
-      }
+      const grid = await Promise.all(
+        Array.from({ length: n.numRows }, (_, r) => Promise.all(
+          Array.from({ length: n.numColumns }, async (__, cc) => {
+            try {
+              const cell = n.cellAt(r, cc);
+              if (!cell) return void 0;
+              const co = { row: r, col: cc };
+              if (cell.text) Object.assign(co, await serializeText(cell.text));
+              const cfills = await simplifyFills(cell.fills);
+              if (cfills) co.fills = cfills;
+              return co;
+            } catch (e) {
+              return void 0;
+            }
+          })
+        ))
+      );
+      const rows = grid.map((row) => row.filter((c) => !!c)).filter((row) => row.length);
       if (rows.length) out.tableCells = rows;
     }
     const children = "children" in node ? n.children : void 0;
@@ -1410,49 +1721,139 @@
     return tree;
   }
   async function screenResult(title, fileBase, nodes) {
-    const screen = { exportedAt: (/* @__PURE__ */ new Date()).toISOString(), screen: title, nodes, manifest: manifest() };
+    const screen = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
     const measurements = collectMeasurements();
     if (measurements) screen.measurements = measurements;
-    return { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+    return { screenName: (0, import_pages_layout.safe)(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+  }
+  function summarize(nd) {
+    const o = { name: nd.name, id: nd.id, type: nd.type };
+    if ("width" in nd) {
+      o.w = Math.round(nd.width);
+      o.h = Math.round(nd.height);
+    }
+    if (nd.visible === false) o.hidden = true;
+    return o;
+  }
+  async function loadPageSafely(page, sink, what) {
+    if (typeof page.loadAsync !== "function") return false;
+    try {
+      await page.loadAsync();
+    } catch (e) {
+      sink("page '" + page.name + "' failed to load" + (what ? " " + what : "") + ": " + (0, import_errmsg.errMsg)(e));
+      return false;
+    }
+    return true;
+  }
+  function pageChildren(page, sink, consequence) {
+    try {
+      return page.children;
+    } catch (e) {
+      sink("page '" + page.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + (0, import_errmsg.errMsg)(e));
+      return null;
+    }
+  }
+  async function findNodeById(nodeId, sink) {
+    let node = await figma.getNodeByIdAsync(nodeId);
+    if (!node) {
+      for (const page of figma.root.children) {
+        if (!await loadPageSafely(page, sink, "during node lookup")) continue;
+        node = await figma.getNodeByIdAsync(nodeId);
+        if (node) break;
+      }
+    }
+    if (!node) throw new Error("Node " + nodeId + " is not in the open file \u2014 open the Figma file this link points to, then retry.");
+    return node;
+  }
+  function resolvePages(wanted, all) {
+    const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
+    const pick = (sel, matches, how) => {
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) {
+        throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) \u2014 use its id. Available pages:
+  ${avail()}`);
+      }
+      return null;
+    };
+    const resolveOne = (sel) => {
+      const byId = all.find((p) => p.id === sel);
+      if (byId) return byId;
+      const exact = pick(sel, all.filter((p) => p.name === sel), "share it");
+      if (exact) return exact;
+      const ci = pick(sel, all.filter((p) => p.name.trim().toLowerCase() === sel.toLowerCase()), "match ignoring case");
+      if (ci) return ci;
+      throw new Error(`no page matches ${JSON.stringify(sel)}. Available pages:
+  ${avail()}`);
+    };
+    const picked = [];
+    for (const sel of wanted) {
+      const p = resolveOne(sel);
+      if (!picked.some((x) => x.id === p.id)) picked.push(p);
+    }
+    return picked;
   }
   function applyOpts(opts) {
     for (const k of Object.keys(runOpts)) runOpts[k] = !!(opts && opts[k]);
   }
   var CSS_AUTO_NODE_CAP = 60;
-  function subtreeSize(node, cap) {
+  function subtreeIsSmall(node) {
     let count = 0;
     const stack = [node];
-    while (stack.length && count <= cap) {
+    while (stack.length) {
       const n = stack.pop();
-      count++;
+      if (++count > CSS_AUTO_NODE_CAP) return false;
       if (n && "children" in n && Array.isArray(n.children)) {
         for (const c of n.children) stack.push(c);
       }
     }
-    return count;
+    return true;
   }
   function autoCss(opts, node) {
     const o = { ...opts };
-    if (o.css === void 0 && subtreeSize(node, CSS_AUTO_NODE_CAP) <= CSS_AUTO_NODE_CAP) o.css = true;
+    if (o.css === void 0 && subtreeIsSmall(node)) o.css = true;
     return o;
   }
-  function collectMeasurements() {
-    const p = figma.currentPage;
-    if (!runOpts.measurements || typeof p.getMeasurements !== "function") return void 0;
-    try {
-      const ms = p.getMeasurements();
-      if (!Array.isArray(ms) || !ms.length) return void 0;
-      const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
-      return ms.map((m) => {
-        const o = { start: side(m.start), end: side(m.end) };
-        if (m.freeText) o.text = m.freeText;
-        if (m.offset != null) o.offset = m.offset;
-        return o;
-      });
-    } catch (e) {
-      warn("measurements unavailable (Dev Mode only): " + errMsg(e));
-      return void 0;
+  var DEFAULT_PAGE_BG = ["#ffffff", "#f5f5f5", "#e5e5e5"];
+  function isDefaultBg(f) {
+    return !f || f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1;
+  }
+  async function pageBackground(page) {
+    const p = page;
+    const out = {};
+    const bg = await simplifyFills(p.backgrounds);
+    if (!isDefaultBg(bg)) out.background = bg;
+    const proto = await simplifyFills(p.prototypeBackgrounds);
+    if (!isDefaultBg(proto)) out.prototypeBackground = proto;
+    return nonEmpty(out);
+  }
+  function countNodes(tree) {
+    let n = 1;
+    const kids = tree.children;
+    if (Array.isArray(kids)) for (const k of kids) n += countNodes(k);
+    return n;
+  }
+  function collectMeasurements(pages) {
+    if (!runOpts.measurements) return void 0;
+    const targets = pages && pages.length ? pages : [figma.currentPage];
+    const out = [];
+    for (const page of targets) {
+      const p = page;
+      if (typeof p.getMeasurements !== "function") continue;
+      try {
+        const ms = p.getMeasurements();
+        if (!Array.isArray(ms) || !ms.length) continue;
+        const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
+        for (const m of ms) {
+          const o = { page: page.name, pageId: page.id, start: side(m.start), end: side(m.end) };
+          if (m.freeText) o.text = m.freeText;
+          if (m.offset != null) o.offset = m.offset;
+          out.push(o);
+        }
+      } catch (e) {
+        warn("measurements unavailable for page '" + page.name + "': " + (0, import_errmsg.errMsg)(e));
+      }
     }
+    return out.length ? out : void 0;
   }
   async function collectSelection(opts) {
     resetRun();
@@ -1473,18 +1874,9 @@
   }
   async function collectNode(rawId, opts) {
     resetRun();
-    const nodeId = String(rawId || "").replace(/-/g, ":");
+    const nodeId = (0, import_node_id.toNodeId)(rawId);
     if (!nodeId) throw new Error("No node id provided.");
-    let node = await figma.getNodeByIdAsync(nodeId);
-    if (!node && figma.loadAllPagesAsync) {
-      try {
-        await figma.loadAllPagesAsync();
-      } catch (e) {
-        warn("loadAllPagesAsync failed (cross-page node lookup may miss): " + errMsg(e));
-      }
-      node = await figma.getNodeByIdAsync(nodeId);
-    }
-    if (!node) throw new Error("Node " + nodeId + " is not in the open file \u2014 open the Figma file this link points to, then retry.");
+    const node = await findNodeById(nodeId, warn);
     applyOpts(autoCss(opts, node));
     try {
       const page = pageOf(node);
@@ -1497,61 +1889,160 @@
     if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
     return screenResult(node.name, node.name, [tree]);
   }
-  var FRAME_TYPES = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP", "SECTION"];
-  var TOP_LEVEL_TYPES = FRAME_TYPES.concat(["TEXT", "RECTANGLE", "ELLIPSE", "POLYGON", "STAR", "LINE", "VECTOR", "BOOLEAN_OPERATION", "TABLE"]);
+  var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
+    "FRAME",
+    "COMPONENT",
+    "COMPONENT_SET",
+    "INSTANCE",
+    "GROUP",
+    "SECTION",
+    "TEXT",
+    "RECTANGLE",
+    "ELLIPSE",
+    "POLYGON",
+    "STAR",
+    "LINE",
+    "VECTOR",
+    "BOOLEAN_OPERATION",
+    "TABLE"
+  ]);
+  async function listPages(opts) {
+    const depth = opts && opts.depth === 1 ? 1 : 2;
+    const localWarnings = [];
+    const sink = (m) => localWarnings.push(m);
+    const roots = figma.root.children;
+    const currentId = figma.currentPage && figma.currentPage.id;
+    const pages = [];
+    let frameCount = 0;
+    if (depth >= 2) {
+      await Promise.all(roots.map((p) => loadPageSafely(p, sink, "\u2014 its frames may be missing")));
+    }
+    for (const page of roots) {
+      const entry = { name: page.name, id: page.id };
+      if (page.id === currentId) entry.current = true;
+      if (depth >= 2) {
+        const children = pageChildren(page, sink, "its frames are NOT listed");
+        if (!children) {
+          entry.unreadable = true;
+          pages.push(entry);
+          continue;
+        }
+        const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
+        frameCount += frames.length;
+        entry.frames = frames;
+      }
+      pages.push(entry);
+    }
+    return {
+      exportedAt: exportedAt(),
+      file: figma.root.name,
+      depth,
+      pages,
+      manifest: { pages: pages.length, frames: depth >= 2 ? frameCount : void 0, warnings: localWarnings }
+    };
+  }
+  async function listChildren(rawId) {
+    const nodeId = (0, import_node_id.toNodeId)(rawId);
+    if (!nodeId) throw new Error("No node id provided.");
+    const localWarnings = [];
+    const node = await findNodeById(nodeId, (m) => localWarnings.push(m));
+    if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf \u2014 it has no children to list.");
+    let kids;
+    try {
+      kids = node.children;
+    } catch (e) {
+      throw new Error("Node " + nodeId + "'s children could not be read: " + (0, import_errmsg.errMsg)(e));
+    }
+    const children = [];
+    for (const nd of kids) {
+      const c = summarize(nd);
+      if ("children" in nd) c.hasChildren = nd.children.length > 0;
+      children.push(c);
+    }
+    return {
+      exportedAt: exportedAt(),
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      children,
+      manifest: { children: children.length, warnings: localWarnings }
+    };
+  }
   async function collectFull(opts) {
     resetRun();
     applyOpts(opts);
     const allPages = !!(opts && opts.allPages);
-    if (allPages && figma.loadAllPagesAsync) {
-      try {
-        await figma.loadAllPagesAsync();
-      } catch (e) {
-        warn("loadAllPagesAsync failed (all-pages export may miss pages): " + errMsg(e));
-      }
+    if (allPages) await loadAllPages("all-pages export may miss pages");
+    const rawWanted = opts && opts.page !== void 0 ? (Array.isArray(opts.page) ? opts.page : [opts.page]).map((s) => String(s).trim()) : [];
+    if (rawWanted.length && rawWanted.every((s) => !s)) {
+      warn("page selector was empty after trimming \u2014 ignored, exported " + (allPages ? "every page instead" : "the current page instead"));
     }
-    const pages = allPages ? figma.root.children : [figma.currentPage];
-    const screens = [];
+    const wanted = rawWanted.filter(Boolean);
+    if (allPages && wanted.length) {
+      throw new Error("allPages and page select different scopes \u2014 pass only one (page:[ids] for a bounded pull, allPages for the whole file).");
+    }
+    let pages;
+    if (allPages) {
+      pages = figma.root.children;
+    } else if (wanted.length) {
+      const picked = resolvePages(wanted, figma.root.children);
+      await Promise.all(picked.map((p) => loadPageSafely(p, warn, "")));
+      pages = picked;
+    } else {
+      pages = [figma.currentPage];
+    }
+    const layers = [];
     const index = [];
     const flows = [];
+    const pageSettings = [];
     for (const page of pages) {
-      let children;
-      try {
-        if (Array.isArray(page.flowStartingPoints)) {
-          for (const fp of page.flowStartingPoints) flows.push({ page: page.name, nodeId: fp.nodeId, name: fp.name });
-        }
-        children = page.children;
-      } catch (e) {
-        warn("page '" + page.name + "' could not be read (not loaded) \u2014 its frames are missing from this export: " + errMsg(e));
-        continue;
+      const children = pageChildren(page, warn, "its frames are missing from this export");
+      if (!children) continue;
+      const bg = await pageBackground(page);
+      if (bg) pageSettings.push({ page: page.name, pageId: page.id, ...bg });
+      if (Array.isArray(page.flowStartingPoints)) {
+        for (const fp of page.flowStartingPoints) flows.push({ page: page.name, pageId: page.id, nodeId: fp.nodeId, name: fp.name });
       }
       const frames = [];
       for (const nd of children) {
-        if (TOP_LEVEL_TYPES.includes(nd.type)) frames.push(nd);
+        if (TOP_LEVEL_TYPES.has(nd.type)) frames.push(nd);
         else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
       }
       for (const f of frames) {
         const { tree, ref, dev } = await serializeWithRefs(f);
         if (tree) {
-          screens.push({ name: f.name, id: f.id, page: page.name, tree, reference: ref, devResources: dev });
-          index.push({ name: f.name, id: f.id, type: f.type, page: page.name });
+          layers.push({ name: f.name, id: f.id, page: page.name, pageId: page.id, tree, reference: ref, devResources: dev });
+          index.push({
+            name: f.name,
+            id: f.id,
+            type: f.type,
+            page: page.name,
+            pageId: page.id,
+            nodes: countNodes(tree),
+            bytes: JSON.stringify(tree).length
+          });
         }
       }
     }
     const designSystem = await buildDesignSystem();
-    const measurements = collectMeasurements();
-    const screensDoc = {
-      exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      scope: allPages ? "all-pages" : "current-page",
-      page: allPages ? void 0 : figma.currentPage.name,
-      pages: allPages ? pages.map((p) => p.name) : void 0,
+    const measurements = collectMeasurements(pages);
+    const layersDoc = {
+      exportedAt: exportedAt(),
+      // Three cases, not two. Folding an explicit --page into "current-page" left the consumer unable
+      // to tell whether it got the page it asked for, next to a `page` field naming a page that was
+      // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
+      // whatever the user happens to be looking at).
+      scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
+      page: allPages || pages.length !== 1 ? void 0 : pages[0].name,
+      pages: allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0,
       flows: flows.length ? flows : void 0,
+      pageSettings: pageSettings.length ? pageSettings : void 0,
       measurements: measurements || void 0,
       index,
-      screens,
+      layers,
       manifest: manifest()
     };
-    return { designSystem, screensDoc, assets: assets.slice() };
+    return { designSystem, layersDoc, assets: assets.slice() };
   }
 
   // src/writes.ts
@@ -1650,7 +2141,7 @@
           applied,
           failedAt: i,
           failedOp: list[i] && list[i].op,
-          error: errMsg(e)
+          error: (0, import_errmsg.errMsg)(e)
         };
       }
     }
@@ -1679,6 +2170,14 @@
         return await serializeRun(() => collectNode(args && args.nodeId, args));
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
+      // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
+      // pull to run, so routing them through serializeRun would queue them behind the very export they
+      // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
+      // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
+      case "listPages":
+        return await listPages(args || {});
+      case "listChildren":
+        return await listChildren(args && args.nodeId);
       case "write":
         return await serializeRun(() => applyWrites(args && args.ops));
       default:
@@ -1687,7 +2186,7 @@
   }
 
   // src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, buildDesignSystem, applyWrites };
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, listPages, listChildren, buildDesignSystem, applyWrites };
   figma.showUI(__html__, { width: 360, height: 380 });
   console.log("[export] main.ts loaded (main thread)");
   async function runExport(collect, toFiles) {
@@ -1695,11 +2194,11 @@
     try {
       r = await serializeRun(collect);
     } catch (e) {
-      figma.ui.postMessage({ type: "error", message: errMsg(e) });
+      figma.ui.postMessage({ type: "error", message: (0, import_errmsg.errMsg)(e) });
       return;
     }
-    const { files, summary } = toFiles(r);
-    figma.ui.postMessage({ type: "files", files, assets: r.assets, summary });
+    const { files, layerFiles, summary } = toFiles(r);
+    figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary });
     releaseAssets();
   }
   var runSelection = () => runExport(collectSelection, (r) => ({
@@ -1709,13 +2208,19 @@
     ],
     summary: `${r.screenName} \u2014 ${r.assets.length} asset(s)`
   }));
-  var runFull = () => runExport(collectFull, (r) => ({
-    files: [
-      { name: "design-system.json", content: JSON.stringify(r.designSystem, null, 2) },
-      { name: "screens.json", content: JSON.stringify(r.screensDoc, null, 2) }
-    ],
-    summary: `${r.screensDoc.screens.length} screen(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`
-  }));
+  var SEP = "__";
+  var runFull = () => runExport(collectFull, (r) => {
+    const { meta, layerFiles, indexFiles, rootIndex } = (0, import_pages_layout2.buildPageLayout)(r.layersDoc, SEP);
+    const batch = [...layerFiles, ...indexFiles].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
+    return {
+      files: [
+        { name: "design-system.json", content: JSON.stringify(r.designSystem, null, 2) },
+        { name: rootIndex, content: JSON.stringify(meta, null, 2) }
+      ],
+      layerFiles: batch,
+      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`
+    };
+  });
   function notifySelection() {
     const sel = figma.currentPage.selection;
     figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
@@ -1737,7 +2242,7 @@
       try {
         result = await handleBridge(msg.cmd, msg.args);
       } catch (e) {
-        error = errMsg(e);
+        error = (0, import_errmsg.errMsg)(e);
       }
       figma.ui.postMessage({ type: "bridge-result", id: msg.id, ok: !error, result, error });
       releaseAssets();

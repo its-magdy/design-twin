@@ -1,5 +1,5 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
-import { collectFull, collectSelection, collectNode, CollectOpts } from "./collect";
+import { collectFull, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
 import { applyWrites } from "./writes";
 import { serializeRun } from "./state";
 
@@ -21,6 +21,14 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
       return await serializeRun(() => collectNode(args && args.nodeId, args as CollectOpts));
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
+    // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
+    // pull to run, so routing them through serializeRun would queue them behind the very export they
+    // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
+    // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
+    case "listPages":
+      return await listPages(args || {});
+    case "listChildren":
+      return await listChildren(args && args.nodeId);
     case "write":
       return await serializeRun(() => applyWrites(args && args.ops));
     default:

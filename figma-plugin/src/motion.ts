@@ -2,7 +2,7 @@
 // readable FREE via the Plugin API — this is a new plane the paid get_motion_context used to own.
 // Opt-in (runOpts.motion) because it's niche and can be verbose. Reads are defensive/`any`: the
 // KeyframeValue / MotionEasing / Timeline / *KeyframeBinding types are wide unions.
-import { Obj, round, rgbaToHex, easingCurve, xy } from "./util";
+import { Obj, round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty } from "./util";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value.
 // TEXT_DATA / BOOL need no transformation, so they fall through to `default` rather than restating it.
@@ -46,9 +46,9 @@ function trackMap(map: any): Obj | undefined {
     if (typeof binding.keyframeOperation === "string" && binding.keyframeOperation !== "SET") o.op = binding.keyframeOperation.toLowerCase();
     const kf = keyframes(binding.keyframes);
     if (kf) o.keyframes = kf;
-    if (Object.keys(o).length) out[field] = o;
+    putNonEmpty(out, field, o);
   }
-  return Object.keys(out).length ? out : undefined;
+  return nonEmpty(out);
 }
 
 // The whole motion surface on a node -> compact { timelines?, manualTracks?, animations?, styles? }.
@@ -68,5 +68,5 @@ export function collectMotion(node: SceneNode): Obj | undefined {
       return o;
     });
   }
-  return Object.keys(out).length ? out : undefined;
+  return nonEmpty(out);
 }

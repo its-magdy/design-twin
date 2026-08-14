@@ -1,7 +1,7 @@
 // TEXT / TEXT_PATH serialization: node-level typographic props + either one `font` or `runs[]`
 // for mixed text. Reads defensively so TEXT_PATH (which shares most of the surface) degrades safely.
 import { Obj, round, solidFromFills } from "./util";
-import { warn } from "./state";
+import { warnKind } from "./state";
 import { styleName, resolveBoundMap } from "./variables";
 
 // A Figma length ({value, unit}) -> the emitted descriptor. The PERCENT -> "percent"/"px" mapping is
@@ -142,9 +142,10 @@ export async function serializeText(node: TextNode | TextPathNode): Promise<Obj>
   // the type is approximate (and can warn or pin a webfont) rather than trusting the name blindly.
   if (t.hasMissingFont === true) {
     out.missingFont = true;
-    warn("missing font on text '" + node.name + "' — Figma is substituting a fallback; recorded family may differ from render");
+    // Kinded: a real file has one of these per text node using the font — 80 identical sentences.
+    warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", node.name + " (" + node.id + ")");
   }
   // Zero-width text thread is a data smell (a collapsed/broken node) — surface it.
-  if (node.width === 0) warn("zero-width text node (possible collapsed thread): " + node.name);
+  if (node.width === 0) warnKind("zero-width text node (possible collapsed thread)", node.name + " (" + node.id + ")");
   return out;
 }

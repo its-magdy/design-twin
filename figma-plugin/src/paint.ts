@@ -1,5 +1,5 @@
 // Fills & strokes. Type-discriminated on Paint's `type` union.
-import { Obj, round, solidHex, rgbaToHex, numProp, xy, nonEmpty } from "./util";
+import { Obj, round, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty } from "./util";
 import { resolveBoundMap } from "./variables";
 import { collectSourceImage } from "./assets";
 
@@ -127,7 +127,7 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
       const v = numProp(node, k);
       if (v != null) sides[s] = v;
     });
-    if (Object.keys(sides).length) out.weights = sides;
+    putNonEmpty(out, "weights", sides);
   }
   const n = node as any;
   if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
@@ -136,5 +136,14 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
   if ("strokeCap" in node && n.strokeCap && n.strokeCap !== figma.mixed && n.strokeCap !== "NONE") out.cap = String(n.strokeCap).toLowerCase();
   if ("strokeJoin" in node && n.strokeJoin && n.strokeJoin !== figma.mixed && n.strokeJoin !== "MITER") out.join = String(n.strokeJoin).toLowerCase();
   if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
+  // Tapered/variable-width strokes (illustration-style hand-drawn lines) — no flat CSS equivalent, but
+  // record the profile so a consumer can at least render it as an SVG path with a width gradient.
+  const vw = n.variableWidthStrokeProperties;
+  if (vw && Array.isArray(vw.strokeWeightProfile?.mapping) && vw.strokeWeightProfile.mapping.length) {
+    out.variableWidth = {
+      profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
+      points: vw.strokeWeightProfile.mapping.map((p: any) => ({ pos: round(p.position), weight: round(p.value) })),
+    };
+  }
   return out;
 }

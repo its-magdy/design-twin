@@ -4,16 +4,34 @@
 // care about is on the INPUT (Figma API reads), so outputs stay intentionally loose.
 export type Obj = Record<string, any>;
 
+// The filesystem-boundary sanitiser lives in pages-layout.js, which names the page dirs and layer
+// files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
+// already imports it), so re-export rather than keeping a byte-identical second copy that could
+// desynchronise asset paths from page/layer paths.
+export { safe } from "../../bridge/pages-layout.js";
+
+// The timestamp every emitted doc carries. One place to change the format for all of them.
+export const exportedAt = (): string => new Date().toISOString();
+
 export const round = (n: unknown): number | unknown => (typeof n === "number" ? Math.round(n * 100) / 100 : n);
-export const safe = (id: string): string => id.replace(/[^a-zA-Z0-9]/g, "_");
 export const propName = (k: string): string => k.split("#")[0]; // strip Figma's "#nnn:nn" suffix
 
-// Thrown value -> message string. The extractor's "never silent" discipline means every catch reports
-// something, so this coercion is the single most repeated expression in the codebase — name it once.
-export const errMsg = (e: unknown): string => String((e && (e as any).message) || e);
+// Thrown value -> message string. Same reasoning as `safe` above: one definition in a dependency-free
+// CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
+export { errMsg } from "../../bridge/errmsg.js";
 
 // The extractor's compaction rule: emit nothing rather than an empty object. One place to change it.
 export const nonEmpty = (o: Obj): Obj | undefined => (Object.keys(o).length ? o : undefined);
+
+// The same compaction rule applied as an ASSIGNMENT rather than a return: set `key` only when the bag
+// has something in it. Callers used to inline `if (Object.keys(x).length) o.k = x`, which put the rule
+// in eight places and quietly diverged from `nonEmpty`; going through here keeps it at one. Assigning
+// `nonEmpty(x)` directly is NOT equivalent — that leaves an undefined-valued key on the in-memory
+// object (invisible after JSON.stringify, visible to anything that walks Object.keys).
+export function putNonEmpty(o: Obj, key: string, v: Obj | null | undefined): void {
+  const kept = v && nonEmpty(v);
+  if (kept) o[key] = kept;
+}
 
 // A Figma Vector -> a compact rounded pair. `round`'s precision is meant to be the single knob on
 // emitted-geometry size, so every {x,y} in the output goes through here.

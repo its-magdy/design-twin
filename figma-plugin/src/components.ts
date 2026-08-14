@@ -1,7 +1,7 @@
 // Components / instances: main-component name, prop references, overrides, and the whole-file
 // design-system catalog (variables + styles + component/variant catalog + hygiene).
-import { Obj, propName, errMsg, nonEmpty } from "./util";
-import { warn } from "./state";
+import { Obj, propName, errMsg, nonEmpty, exportedAt } from "./util";
+import { warn, loadAllPages } from "./state";
 import { simplifyFills } from "./paint";
 import { simplifyEffects } from "./effects";
 import { simplifyGrid } from "./layout";
@@ -75,7 +75,7 @@ async function collectComponentCatalog(hygiene: string[]): Promise<Obj[]> {
       }
       for (const n of nodes as any[]) {
         if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") continue; // it's a variant
-        const entry: Obj = { name: n.name, id: n.id, type: n.type, page: page.name };
+        const entry: Obj = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
         if (n.description) entry.description = n.description; // free intent annotation (Code Connect stand-in)
         if (n.remote) entry.remote = true; // consumed library component vs a local one
         if (n.key) entry.key = n.key; // publish key — resolves INSTANCE_SWAP preferredValues keys back to this catalog
@@ -85,7 +85,13 @@ async function collectComponentCatalog(hygiene: string[]): Promise<Obj[]> {
           if (defs && Object.keys(defs).length) {
             entry.props = {};
             let variantCombos = 1;
-            for (const k of Object.keys(defs)) {
+            // The per-definition binding lookups are independent of each other, so fan them out ONCE
+            // instead of awaiting inside the page->component->property loop: awaited in place, a
+            // design-system file paid one serialized round trip per property definition in the file.
+            const keys = Object.keys(defs);
+            const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
+            for (let i = 0; i < keys.length; i++) {
+              const k = keys[i];
               const d = defs[k];
               // Keep the REAL #uid key + type + default (needed to address TEXT/BOOL/SWAP/SLOT props).
               const p: Obj = { key: k, type: d.type };
@@ -97,7 +103,7 @@ async function collectComponentCatalog(hygiene: string[]): Promise<Obj[]> {
               }
               if (d.description) p.description = d.description;
               // A BOOLEAN/TEXT prop whose DEFAULT is driven by a variable at the definition level.
-              const dbv = await resolveBoundMap(d.boundVariables);
+              const dbv = boundPerKey[i];
               if (dbv) p.tokens = dbv;
               entry.props[propName(k)] = p;
             }
@@ -134,9 +140,7 @@ export async function buildDesignSystem(): Promise<Obj> {
 
   const hygiene: string[] = [];
   // Component + variant catalog across every page (a feature's states live here).
-  if (figma.loadAllPagesAsync) {
-    try { await figma.loadAllPagesAsync(); } catch (e) { warn("loadAllPagesAsync failed (component catalog may be incomplete): " + errMsg(e)); }
-  }
+  await loadAllPages("component catalog may be incomplete");
   const components = await collectComponentCatalog(hygiene);
 
   let colorProfile: string | undefined;
@@ -183,7 +187,7 @@ export async function buildDesignSystem(): Promise<Obj> {
   const vars = await dumpVariables();
 
   return {
-    exportedAt: new Date().toISOString(),
+    exportedAt: exportedAt(),
     file: (figma.root && figma.root.name) || undefined,
     colorProfile, // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
     collections: vars.collections,

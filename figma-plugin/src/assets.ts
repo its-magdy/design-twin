@@ -1,7 +1,7 @@
 // Rendering nodes to assets: vector/icon -> SVG, image-fill -> PNG, whole-frame reference PNG,
 // and Dev-Mode resource links.
-import { Obj, safe, toBase64, errMsg } from "./util";
-import { assets, stats, warn, imageSizeCache } from "./state";
+import { Obj, safe, toBase64, errMsg, round } from "./util";
+import { assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
 // tree, and stores the identical basename on the asset record — so figma-pull / the UI download write
@@ -63,11 +63,57 @@ async function readSourceImage(f: any, hash: string): Promise<{ w: number; h: nu
   return size;
 }
 
-const VECTOR_TYPES = ["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"];
-const ICON_CONTAINER_TYPES = ["FRAME", "INSTANCE", "GROUP", "COMPONENT"];
+// Sets, not arrays: both are tested once per serialized node, so the membership test runs thousands
+// of times per export.
+const VECTOR_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+const ICON_CONTAINER_TYPES = new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
 
-export async function collectAsset(node: SceneNode): Promise<string | undefined> {
-  const isVector = VECTOR_TYPES.includes(node.type);
+// Four outcomes, four shapes — NOT a magic string smuggled through the path channel: `undefined`
+// (this node renders no asset), a path, `geometry` (the export failed but the node's own vector paths
+// were recovered), or `skipped` when --no-assets suppressed a render that WOULD have happened
+// (serialize.ts keeps the node a leaf — see the note on assetSkipped there). A caller that treats the
+// result as a path can't accidentally write the sentinel into the exported tree.
+export type AssetResult = { path: string } | { geometry: Obj } | { skipped: true } | undefined;
+
+// Does this node paint ANYTHING? A live export reported 807 "failed" asset exports; the overwhelming
+// majority were vector nodes with every fill and stroke invisible (or emptied), which Figma refuses to
+// rasterize because there is genuinely nothing there. Those are not failures and must not be warned —
+// warning on them buried the handful of real ones. `fills` can be figma.mixed, hence the Array guard.
+function paints(v: unknown): ReadonlyArray<Paint> | null {
+  return Array.isArray(v) ? (v as ReadonlyArray<Paint>) : null;
+}
+// `fills` is passed in rather than re-read: collectAsset already paid for that getter (see the note
+// there — every read crosses the sandbox bridge and materializes fresh paint wrappers).
+function hasVisiblePaint(n: any, fills: ReadonlyArray<Paint> | null): boolean {
+  if (fills && fills.some((p) => p.visible !== false)) return true;
+  const s = paints(n.strokes);
+  return !!s && s.some((p) => p.visible !== false);
+}
+function hasArea(n: any): boolean {
+  if (typeof n.width !== "number" || typeof n.height !== "number") return true; // unknown -> don't skip
+  return n.width > 0 && n.height > 0;
+}
+
+// Last-resort icon recovery when exportAsync genuinely fails on a node that DOES paint something.
+// `fillGeometry`/`strokeGeometry` are the RESOLVED outlines Figma renders (VectorNetwork-derived);
+// `vectorPaths` is documented as "simple, but incomplete", so it is deliberately not used here. The
+// node's own w/h come along so a consumer can drop the `d` strings straight into an inline
+// <svg viewBox="0 0 w h"> — otherwise the paths have no coordinate space to be interpreted in.
+function geometryOf(n: any): Obj | undefined {
+  const ds = (g: unknown): string[] =>
+    Array.isArray(g) ? g.map((p: any) => p && p.data).filter((d: unknown): d is string => typeof d === "string" && !!d) : [];
+  const fills = ds(n.fillGeometry);
+  const strokes = ds(n.strokeGeometry);
+  if (!fills.length && !strokes.length) return undefined;
+  const out: Obj = {};
+  if (fills.length) out.fills = fills;
+  if (strokes.length) out.strokes = strokes;
+  if (typeof n.width === "number") { out.w = round(n.width); out.h = round(n.height); }
+  return out;
+}
+
+export async function collectAsset(node: SceneNode): Promise<AssetResult> {
+  const isVector = VECTOR_TYPES.has(node.type);
   const n = node as any;
   // node.fills / node.children are Plugin-API GETTERS — each read crosses the sandbox bridge and
   // materializes a fresh array of paint/node wrappers. Read each once per node, not three times.
@@ -83,7 +129,7 @@ export async function collectAsset(node: SceneNode): Promise<string | undefined>
   // when it's genuinely graphic: name matches AND it's icon-sized AND has no text descendant.
   let iconLike = false;
   if (
-    ICON_CONTAINER_TYPES.includes(node.type) &&
+    ICON_CONTAINER_TYPES.has(node.type) &&
     node.name &&
     /icon|logo|illustration|avatar/i.test(node.name) &&
     "width" in node &&
@@ -95,30 +141,69 @@ export async function collectAsset(node: SceneNode): Promise<string | undefined>
       iconLike = false; // when unsure, keep the structure rather than flatten it
     }
   }
-  try {
-    if (isVector || iconLike) {
-      const svg = await (node as any).exportAsync({ format: "SVG_STRING" });
-      if (!svg || svg.indexOf("<svg") === -1) {
-        warn("asset export empty/invalid: " + node.name);
-        stats.assetsFailed++;
-        return undefined;
-      }
-      return register({ id: node.id, name: node.name, format: "svg", text: svg });
+  // Figma's own asset heuristic (icon or raster image) — a free cross-check alongside the name/size
+  // rule above, for containers our regex misses (unconventional names) as long as there's no text to lose.
+  if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+    try {
+      iconLike = !n.findOne((x: SceneNode) => x.type === "TEXT");
+    } catch (e) {
+      iconLike = false;
     }
+  }
+  // --no-assets: bail out HERE — after the full export decision (isVector / iconLike / hasImage) is
+  // known, but before any exportAsync. Deciding earlier, off a hand-rolled copy of the predicate, got
+  // both halves wrong: it missed `iconLike` containers, so the count undercounted the real exports,
+  // and returning `undefined` for them let serialize recurse into an icon's vector guts instead of
+  // stopping at the leaf the normal run produces. That expanded the tree (measured 4.3x larger and
+  // 41 -> 161 nodes on a 40-icon sheet), breaking this flag's documented promise that structure is
+  // unaffected — and inflating the very payload it exists to shrink. One decision, both paths.
+  if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
+    stats.assetsSkipped++;
+    return { skipped: true };
+  }
+  if (isVector || iconLike) {
+    // The paint pre-check is for VECTOR-ish LEAVES only: an icon CONTAINER paints nothing itself —
+    // its children do — so asking it the same question would skip every real icon frame.
+    if (!hasArea(n) || (isVector && !hasVisiblePaint(n, fills))) {
+      stats.assetsSkippedInvisible++;
+      return undefined; // silent by design — see RunStats.assetsSkippedInvisible
+    }
+    let svg: string | null = null;
+    let reason = "empty/invalid SVG";
+    try {
+      svg = await (node as any).exportAsync({ format: "SVG_STRING" });
+    } catch (e) {
+      reason = errMsg(e);
+    }
+    if (svg && svg.indexOf("<svg") !== -1) {
+      return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
+    }
+    // The node DOES paint something and still would not render — recover its outlines rather than
+    // emit a node with no graphic at all, which is what left 663 icons unimplementable.
+    const geo = geometryOf(n);
+    if (geo) {
+      stats.assetsGeometry++;
+      return { geometry: geo };
+    }
+    stats.assetsFailed++;
+    warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
+    return undefined;
+  }
+  try {
     if (hasImage) {
       // useAbsoluteBounds:true exports the node's full dimensions rather than the cropped/clipped box,
       // so overhanging content isn't clipped out of the raster. (Verified: developers.figma.com ExportSettings.)
       const bytes = await (node as any).exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
       if (!bytes || !bytes.length) {
-        warn("asset export empty: " + node.name);
         stats.assetsFailed++;
+        warnKind("image asset export empty", node.name + " (" + node.id + ")");
         return undefined;
       }
-      return register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) });
+      return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
     }
   } catch (e) {
-    warn("asset export failed: " + node.name + " (" + errMsg(e) + ")");
     stats.assetsFailed++;
+    warnKind("image asset export failed", node.name + " (" + node.id + "): " + errMsg(e));
   }
   return undefined;
 }

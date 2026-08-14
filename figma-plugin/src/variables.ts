@@ -1,6 +1,6 @@
 // Variables (design tokens) + Figma style references. Resolves opaque ids/aliases to the
 // human/agent-readable token names — the key win over the REST export.
-import { Obj, anyProp, rgbaToHex, nonEmpty } from "./util";
+import { Obj, anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
 
 export async function resolveVar(alias: any): Promise<string | undefined> {
@@ -139,9 +139,36 @@ export async function dumpVariables(): Promise<VariablesDump> {
   // they got into ids()) and kept only .name, so this reuses that object instead of paying a second
   // round trip per id. What remains is a cache read per id rather than the awaited-in-a-loop fetch
   // this replaced, which serialized hundreds of round trips at the end of every library-backed export.
-  const referenced = varName.ids().filter((id) => !localIds.has(id));
-  const remoteVars = ((await Promise.all(referenced.map((id) => varName.obj(id)))) as Array<Variable | null>)
-    .filter(Boolean) as Variable[];
+  // Resolved to a FIXED POINT, because varName.ids() is only a SNAPSHOT of what the run had
+  // referenced by this point — i.e. variables bound to NODES. A variable's own alias target is looked
+  // up later (resolveModeValue, below), so a library primitive referenced ONLY as another variable's
+  // alias was never in this set: its NAME still resolved on demand (so `aliasOf` showed a friendly
+  // name) while the variable itself was dropped from `variables[]`. That produced a dangling
+  // reference downstream — the exact silent-drop this block exists to prevent, just one level further
+  // in — AND a false "broken alias … could not be resolved" hygiene line for a target that resolves
+  // fine. Found on a real library-backed file (4 dangling refs, 0 genuinely broken).
+  // Alias chains can be several levels deep (semantic -> semantic -> primitive), so iterate until no
+  // new ids appear rather than doing one extra pass.
+  const aliasTargets = (v: Variable): string[] => {
+    const out: string[] = [];
+    for (const modeId of Object.keys(v.valuesByMode || {})) {
+      const raw: any = (v.valuesByMode as any)[modeId];
+      if (raw && raw.type === "VARIABLE_ALIAS" && raw.id) out.push(raw.id);
+    }
+    return out;
+  };
+  const remoteVars: Variable[] = [];
+  const seen = new Set<string>(localIds);
+  // Seed with node-referenced ids AND the alias targets of local variables — a local semantic token
+  // pointing at a library primitive is the common case and is not otherwise in ids().
+  let frontier = [...new Set(varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
+  while (frontier.length) {
+    for (const id of frontier) seen.add(id);
+    const fetched = ((await Promise.all(frontier.map((id) => varName.obj(id)))) as Array<Variable | null>)
+      .filter(Boolean) as Variable[];
+    remoteVars.push(...fetched);
+    frontier = [...new Set(([] as string[]).concat(...fetched.map(aliasTargets)))].filter((id) => !seen.has(id));
+  }
 
   // Merge each referenced remote collection so their values key by readable mode names
   // ("Light"/"Dark") rather than opaque mode ids. Independent id lookups — fetch them concurrently.
@@ -168,7 +195,14 @@ export async function dumpVariables(): Promise<VariablesDump> {
   for (const v of localVars.concat(remoteVars)) {
     const values: Obj = {};
     let hasAlias = false;
-    for (const modeId of Object.keys(v.valuesByMode)) {
+    // Mode values resolve independently, so the (async) resolution fans out while the synchronous
+    // alias/hygiene bookkeeping stays a plain loop. Awaited per mode, a 500-variable x 3-mode file
+    // chained ~1500 round trips onto the tail of every export.
+    const modeIds = Object.keys(v.valuesByMode);
+    const resolved = await Promise.all(modeIds.map((modeId) =>
+      resolveModeValue(v.valuesByMode[modeId] as any, v.resolvedType)));
+    for (let i = 0; i < modeIds.length; i++) {
+      const modeId = modeIds[i];
       const raw = v.valuesByMode[modeId] as any;
       if (raw && raw.type === "VARIABLE_ALIAS") {
         hasAlias = true;
@@ -177,7 +211,7 @@ export async function dumpVariables(): Promise<VariablesDump> {
         // with non-issues. Only report an alias whose target we genuinely could not resolve.
         if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' — target " + raw.id + " could not be resolved");
       }
-      values[modeName[modeId] || modeId] = await resolveModeValue(raw, v.resolvedType);
+      values[modeName[modeId] || modeId] = resolved[i];
     }
     const rec: Obj = {
       name: v.name,
@@ -190,7 +224,7 @@ export async function dumpVariables(): Promise<VariablesDump> {
       values,
     };
     if (v.scopes && v.scopes.length) rec.scopes = v.scopes;
-    if (v.codeSyntax && Object.keys(v.codeSyntax).length) rec.codeSyntax = v.codeSyntax; // {WEB,ANDROID,iOS}
+    putNonEmpty(rec, "codeSyntax", v.codeSyntax); // {WEB,ANDROID,iOS}
     if (v.description) rec.description = v.description; // token-intent annotation (Code Connect stand-in)
     if (v.remote) rec.remote = true;
     // Designer-marked private: hidden when publishing the file as a library. The DTCG emitter should

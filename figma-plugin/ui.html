@@ -27,6 +27,7 @@
 <div class="sep"></div>
 <div class="label">Downloads</div>
 <div id="downloads"></div>
+<button id="layers" disabled>Download layers (<span id="lcount">0</span>)</button>
 <button id="assets" disabled>Download assets (<span id="acount">0</span>)</button>
 
 <div class="sep"></div>
@@ -48,12 +49,28 @@
   (function () {
     var BRIDGE_PORT = 8787;
     var assetsState = [];
+    var layerFilesState = [];
+    // A batch runs for items.length * 200ms — 80s for 400 assets — with the button still on screen.
+    // Two clicks used to start two interleaved batches writing the same status line and doubling the
+    // download rate back into the throttle the staggering exists to clear. One at a time.
+    var batchRunning = false;
     var ws = null;
     var bridgeToken = "";
     var busy = false;        // an export is in flight — block a second run (the main thread serializes too)
     var lastSelCount = 0;    // last-known selection count, so we restore run-sel state after a run ends
 
     function $(id) { return document.getElementById(id); }
+    // A batch button is enabled exactly when it has files AND no batch is running. DERIVED from that
+    // state every time, never snapshotted-and-restored: a saved `disabled` flag goes stale the moment
+    // a new export lands mid-batch, and restoring it would re-disable a button that now has files (or
+    // enable one that no longer does). Same reason the manifest derives `skipped` instead of counting.
+    function syncBatchButtons() {
+      var lb = $("layers"); if (lb) lb.disabled = batchRunning || layerFilesState.length === 0;
+      var ab = $("assets"); if (ab) ab.disabled = batchRunning || assetsState.length === 0;
+    }
+    // Thrown value -> message string. Byte-for-byte the body of bridge/errmsg.js, restated here only
+    // because a sandboxed iframe cannot import the bundle — one copy in this file, not one per catch.
+    function errText(e) { return typeof e === "string" ? e : String((e && e.message) || e); }
     function setStatus(text, isErr) {
       var s = $("status");
       if (!s) return;
@@ -135,7 +152,9 @@
         }
         assetsState = m.assets || [];
         var ac = $("acount"); if (ac) ac.textContent = assetsState.length;
-        var ab = $("assets"); if (ab) ab.disabled = assetsState.length === 0;
+        layerFilesState = m.layerFiles || [];
+        var lc = $("lcount"); if (lc) lc.textContent = layerFilesState.length;
+        syncBatchButtons();
         return;
       }
       if (m.type === "token") {
@@ -209,21 +228,67 @@
         // Source images keep their ORIGINAL container format (png/jpg/webp/gif, detected from magic
         // bytes in assets.ts), so the MIME must follow a.format rather than always claiming PNG.
         var MIME = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+        // Chromium (which Figma desktop embeds) throttles programmatic downloads to ~10 PER SECOND —
+        // a rate limit, not a total cap — and silently drops what exceeds it, so a `forEach(dl)` over a
+        // real export's dozens of layers or hundreds of assets delivered the first handful and looked
+        // like it delivered them all. 200ms spacing puts us at 5/s, comfortably under. Stagger them and
+        // report the actual count, so "done" means done. `label` names the batch in the status line;
+        // `make` builds each Blob lazily, one at a time, instead of materialising every asset's bytes
+        // up front.
+        // NOT fixed by pacing: Chrome's per-site "Automatic downloads" permission can block multi-file
+        // downloads outright at any rate. A blocked anchor click does not throw, so `failed` stays empty
+        // and the batch would otherwise announce a full delivery of zero files — the silent truncation
+        // this file refuses everywhere else. We cannot detect it, so the completion line names it.
+        // Re-entry is refused, and BOTH batch buttons go disabled for the duration (syncBatchButtons
+        // reads `batchRunning`) so it is visible why.
+        function dlBatch(items, label, name, make) {
+          if (!items.length) return;
+          if (batchRunning) { setStatus("A download batch is already running — wait for it to finish.", true); return; }
+          batchRunning = true;
+          syncBatchButtons();
+          var done = function () {
+            batchRunning = false;
+            syncBatchButtons();
+          };
+          var i = 0;
+          var failed = [];
+          setStatus("Downloading " + items.length + " " + label + "… 0/" + items.length);
+          (function step() {
+            if (i >= items.length) {
+              done();
+              // Report the WHOLE outcome. Aborting the batch on the first failure — as this did —
+              // threw away every remaining item over one bad blob, and a partial delivery that
+              // announces itself as finished is the silent-truncation this file avoids everywhere
+              // else. One bad asset should cost you that asset, not the other 399.
+              if (!failed.length) setStatus("Downloaded " + items.length + " " + label + " — if fewer arrived, allow “Automatic downloads” for figma.com and retry.");
+              else setStatus("Downloaded " + (items.length - failed.length) + "/" + items.length + " " + label + " — FAILED: " + failed.join(", "), true);
+              return;
+            }
+            var it = items[i++];
+            try { dl(name(it), make(it)); } catch (e) { failed.push(name(it) + " (" + errText(e) + ")"); }
+            setStatus("Downloading " + items.length + " " + label + "… " + i + "/" + items.length + (failed.length ? " (" + failed.length + " failed)" : ""));
+            setTimeout(step, 200); // ~200ms is the spacing that reliably clears Chromium's throttle
+          })();
+        }
+        var lb = $("layers"); if (lb) lb.onclick = function () {
+          dlBatch(layerFilesState, "layer file(s)", function (f) { return f.name; }, function (f) {
+            return new Blob([f.content], { type: "application/json" });
+          });
+        };
         var as = $("assets"); if (as) as.onclick = function () {
-          assetsState.forEach(function (a) {
+          // a.file is the name the plugin already wrote into the tree's `asset` path — use it verbatim
+          // rather than re-deriving the convention (this copy had already drifted: it sanitised the id
+          // but not the format).
+          dlBatch(assetsState, "asset(s)", function (a) { return a.file; }, function (a) {
             var type = MIME[a.format] || "application/octet-stream";
-            var blob = a.text != null ? new Blob([a.text], { type: type }) : new Blob([b64ToBytes(a.base64)], { type: type });
-            // a.file is the name the plugin already wrote into the tree's `asset` path — use it
-            // verbatim rather than re-deriving the convention (this copy had already drifted: it
-            // sanitised the id but not the format).
-            dl(a.file, blob);
+            return a.text != null ? new Blob([a.text], { type: type }) : new Blob([b64ToBytes(a.base64)], { type: type });
           });
         };
         // Ask code.js for the stored token; connect() runs once it replies. Also proves the round-trip.
         parent.postMessage({ pluginMessage: { type: "get-token" } }, "*");
         setStatus("Ready — select a frame, or use the blue button.");
       } catch (e) {
-        setStatus("UI init error: " + (e && e.message ? e.message : e), true);
+        setStatus("UI init error: " + errText(e), true);
       }
     }
 
