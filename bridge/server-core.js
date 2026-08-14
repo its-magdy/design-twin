@@ -21,6 +21,28 @@ const TOKEN_FROM_ENV = !!process.env.FIGMA_BRIDGE_TOKEN;
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+// Per-COMMAND time budgets, in ONE table. The budget is a property of the work, not of the caller, so
+// both front-ends (figma-pull CLI, figma-mcp) read it from here instead of restating the tiers — a
+// fourth caller would otherwise inherit `command` again, which is the 120s default tuned for
+// ping/getSelection and far too small for anything that walks a page.
+//   selection  — one hand-picked selection (small by construction)
+//   list       — cheap RELATIVE to an export, not fast: depth 2 loads EVERY page, which Figma's own
+//                docs call "slow for large documents". The tool you're told to call FIRST must not be
+//                the first to fail on exactly the large files where looking before you pull matters.
+//   export     — one page / one node: found the hard way on a ~1000-node file.
+//   exportAll  — whole file / --all-pages: measured >15 min on a real 25-page file.
+const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, export: 300000, exportAll: 900000 };
+
+// The scope -> tier RULE, not just the table. Hoisting only the numbers still left both front-ends
+// restating which tier an export picks, and they had already drifted (the MCP copy omitted the
+// selection tier). One function so a new tier reaches every caller.
+const exportTimeout = ({ selection, allPages } = {}) =>
+  selection ? TIMEOUTS.selection : allPages ? TIMEOUTS.exportAll : TIMEOUTS.export;
+
+// Thrown value -> message string. Re-exported (not redefined) so both front-ends and the plugin
+// bundle share the one definition in errmsg.js.
+const { errMsg } = require("./errmsg.js");
+
 function safeEqual(a, b) {
   const ba = Buffer.from(String(a));
   const bb = Buffer.from(String(b));
@@ -89,15 +111,34 @@ function createBridge(port = PORT) {
       if (msg.ok) p.resolve(msg.result);
       else p.reject(new Error(msg.error || "plugin error"));
     });
-    ws.on("close", () => {
+    // A socket error is the ONLY place the real cause of a mid-export disconnect shows up (most
+    // importantly 1009 / "max payload size exceeded" when an export outgrows maxPayload). Swallowing
+    // it — as this used to — left the close handler reporting a bare "disconnected", which is a
+    // symptom, not a diagnosis. Keep the last error so close() can name the cause.
+    let lastError = null;
+    ws.on("error", (e) => { lastError = e; });
+    ws.on("close", (code, reasonBuf) => {
       if (socket === ws) {
         socket = null;
+        const reason = reasonBuf && reasonBuf.length ? reasonBuf.toString() : "";
+        let why = `Figma plugin disconnected before replying (close ${code || "?"}${reason ? ": " + reason : ""}).`;
+        if (lastError && lastError.message) why += ` socket error: ${lastError.message}.`;
+        // 1009 is the one a caller can actually act on, and the likeliest failure on a big file:
+        // the export outgrew the frame limit, so name the knob instead of making them find it.
+        if (code === 1009 || /max payload|too large|too big/i.test((lastError && lastError.message) || "")) {
+          why += ` The export exceeded the ${maxPayloadMb} MB frame limit — raise FIGMA_BRIDGE_MAX_PAYLOAD_MB,` +
+                 ` or pull less at once (a single page instead of --all-pages).`;
+        } else if (!lastError) {
+          // No socket error at all => the peer went away on its own: a plugin-side crash/OOM, or the
+          // window was closed. That surfaces in Figma's console, not here — say so.
+          why += ` No socket error was reported, so the plugin itself likely stopped (crash/OOM, or the` +
+                 ` window was closed). Check Plugins → Development → Open Console in Figma.`;
+        }
         // Fail in-flight requests fast instead of hanging until their timeout.
-        for (const p of pending.values()) p.reject(new Error("Figma plugin disconnected before replying."));
+        for (const p of pending.values()) p.reject(new Error(why));
         pending.clear();
       }
     });
-    ws.on("error", () => {});
   });
 
   wss.on("error", (e) => {
@@ -115,7 +156,7 @@ function createBridge(port = PORT) {
     return !!socket && socket.readyState === 1;
   }
 
-  function request(cmd, args, timeoutMs = 120000) {
+  function request(cmd, args, timeoutMs = TIMEOUTS.command) {
     return new Promise((resolve, reject) => {
       if (!isConnected()) {
         return reject(new Error("Figma plugin not connected. Open the file in Figma and run the plugin."));
@@ -124,7 +165,15 @@ function createBridge(port = PORT) {
       const timer = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
-          reject(new Error("timed out waiting for the Figma plugin (is the right file open?)"));
+          // We only get here AFTER isConnected() passed and the command was sent, so the socket is
+          // up and the file IS open — never blame those. The real causes are a slow export (big
+          // file / --all-pages) or a plugin-side throw, which surfaces in the plugin window, not here.
+          reject(new Error(
+            `the Figma plugin connected but did not answer '${cmd}' within ${Math.round(timeoutMs / 1000)}s. ` +
+            `A large file (especially --all-pages) can legitimately take longer — from the figma-pull CLI, ` +
+            `retry with --timeout <seconds>; from MCP, export one page at a time (page:[id]) rather than the whole file. ` +
+            `If it never finishes, check the plugin window for a red error.`
+          ));
         }
       }, timeoutMs);
       // Clear the timer once the request settles, so a resolved/rejected request doesn't
@@ -137,7 +186,7 @@ function createBridge(port = PORT) {
     });
   }
 
-  function waitForConnection(timeoutMs = 120000, pollMs = 400) {
+  function waitForConnection(timeoutMs = TIMEOUTS.command, pollMs = 400) {
     return new Promise((resolve, reject) => {
       const start = Date.now();
       (function poll() {
@@ -148,10 +197,22 @@ function createBridge(port = PORT) {
     });
   }
 
-  return { request, isConnected, waitForConnection, port };
+  // Shut the server down so the process can exit ON ITS OWN. Without this a caller's only way out was
+  // process.exit(), which on a PIPE discards whatever stdout hasn't flushed — Node's stdout is async
+  // for pipes, so a large `--list` payload was silently cut at one 64KB pipe buffer (measured:
+  // 369,799 bytes written, 65,536 delivered). Letting the event loop drain instead is the only fix
+  // that keeps the whole payload; the WS server is what was holding the loop open, so it has to go.
+  function close() {
+    for (const p of pending.values()) p.reject(new Error("bridge closed"));
+    pending.clear();
+    if (socket) { try { socket.close(); } catch { /* already gone */ } socket = null; }
+    try { wss.close(); } catch { /* already closing */ }
+  }
+
+  return { request, isConnected, waitForConnection, close, port };
 }
 
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, safeEqual };
+module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg };

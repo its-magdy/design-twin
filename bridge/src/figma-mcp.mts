@@ -16,13 +16,37 @@ import { createRequire } from "node:module";
 // The bridge core is CJS with no type declarations — pull it in via createRequire (robust ESM->CJS
 // interop) and describe the surface we use.
 interface Bridge {
-  request(cmd: string, args?: unknown): Promise<any>;
+  // `timeoutMs` is server-core's third parameter (default 120s). Exports on a real design-system file
+  // routinely run longer than that — the figma-pull CLI learned this the hard way and now scales its
+  // own default — so the export tools below pass an explicit, larger budget rather than inheriting
+  // a default tuned for small commands like ping/getSelection.
+  request(cmd: string, args?: unknown, timeoutMs?: number): Promise<any>;
   isConnected(): boolean;
   port: number;
 }
 const require = createRequire(import.meta.url);
-const { createBridge } = require("./server-core.js") as { createBridge: () => Bridge };
-const { parseNodeId } = require("./node-id.js") as { parseNodeId: (s?: string) => string | undefined };
+// TIMEOUTS is the per-command budget table shared with the figma-pull CLI. Every EXPORT tool needs a
+// budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
+// node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
+// work and used to inherit the small default, which meant figma_export_url died at 120s on exactly the
+// screen you most wanted. Reading the tiers from server-core is what keeps the two front-ends aligned.
+// `exportTimeout` carries the scope -> tier RULE alongside the table, so this front-end cannot
+// restate (or, as it once did, omit) a tier the CLI has.
+// The ONE registry of read options (shared with the figma-pull CLI and the plugin's runOpts).
+// Types come from its .d.ts; the values via createRequire, same as every other CJS module here.
+import type { ReadOptDef, ReadOptName } from "../read-opts.js";
+const { READ_OPTS } = require("./read-opts.js") as { READ_OPTS: ReadOptDef[] };
+
+const { createBridge, TIMEOUTS, exportTimeout, errMsg } = require("./server-core.js") as {
+  createBridge: () => Bridge;
+  TIMEOUTS: { command: number; selection: number; list: number; export: number; exportAll: number };
+  exportTimeout: (scope?: { selection?: boolean; allPages?: boolean }) => number;
+  errMsg: (e: unknown) => string;
+};
+const { parseNodeId, toNodeId } = require("./node-id.js") as {
+  parseNodeId: (s?: string) => string | undefined;
+  toNodeId: (s?: string) => string;
+};
 
 const bridge = createBridge();
 
@@ -30,11 +54,10 @@ const bridge = createBridge();
 function textResult(obj: unknown) {
   return { content: [{ type: "text" as const, text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
 }
-// Takes the thrown value, not a pre-stringified message: every call site was writing the identical
-// `String((e && e.message) || e)` coercion, so it belongs on this side of the call.
+// Takes the thrown value, not a pre-stringified message: every call site was writing the same
+// coercion, which now lives once in server-core (`errMsg`) for the whole Node side.
 function errorResult(e: unknown) {
-  const message = typeof e === "string" ? e : String((e && (e as any).message) || e);
-  return { content: [{ type: "text" as const, text: message }], isError: true as const };
+  return { content: [{ type: "text" as const, text: errMsg(e) }], isError: true as const };
 }
 
 // Every tool handler needs the same "turn a throw into an isError result" wrapper — a tool that
@@ -50,31 +73,88 @@ const guarded = <A extends unknown[]>(fn: (...a: A) => Promise<any>) => async (.
 function stripAssets(r: any) {
   if (!r || !Array.isArray(r.assets)) return r;
   const light = { ...r, assets: r.assets.map((a: any) => ({ id: a.id, name: a.name, format: a.format, ...(a.kind ? { kind: a.kind } : {}) })) };
-  if (r.assets.length) light.assetsNote = "Asset bytes omitted from context — run the figma-pull CLI to write them to design/assets/.";
+  if (r.assets.length) light.assetsNote = "Asset bytes omitted from context — re-run with writeToDisk:true to write them to <outDir>/assets/.";
   return light;
 }
 
-// ---- read options, shared across the export tools (opt-in; each costs extra Plugin-API work) ----
-const readOptsShape = {
-  css: z.boolean().optional().describe("Include Figma's OWN computed CSS per node (getCSSAsync) — the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."),
-  measurements: z.boolean().optional().describe("Include Dev-Mode measurement redlines (spacing specs the designer placed) for the current page. Dev Mode only."),
-  pluginData: z.boolean().optional().describe("Include own-scope plugin data (getPluginData) stamped on nodes — round-trip metadata. Usually empty unless the write plane wrote it."),
-  motion: z.boolean().optional().describe("Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."),
-  sharedData: z.boolean().optional().describe("Include cross-plugin shared data (getSharedPluginData) — notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."),
+// writeToDisk is the answer to the two things the in-context path cannot do: asset BYTES (stripAssets
+// throws them away by design) and payloads past the MCP result cap (25k tokens by default, so a real
+// page export is truncated). Writing the export and returning the compact index instead is also the
+// cheaper path in context by a wide margin — the agent then Reads/Greps the files at whatever
+// granularity it actually needs. It is opt-in, not the default, because a small selection export is
+// genuinely more useful inline than as a file path.
+//
+// This matters more than it looks: the CLI cannot be used as the disk path WHILE the MCP server is
+// running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
+// and exits (server-core.js). Before this, an MCP-only session had no way to get assets at all.
+const { writeAny, assertInsideCwd } = require("./write-out.js") as {
+  writeAny: (outDir: string | undefined, r: any, log?: (m: string) => void) => any;
+  assertInsideCwd: (outDir?: string) => string;
 };
-const readOpts = (a: { css?: boolean; measurements?: boolean; pluginData?: boolean; motion?: boolean; sharedData?: boolean }) =>
-  ({ css: !!a.css, measurements: !!a.measurements, pluginData: !!a.pluginData, motion: !!a.motion, sharedData: !!a.sharedData });
+
+// stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
+// protocol stream.
+const wlog = (m: string) => console.error("[figma-mcp] " + m);
+
+function exportResult(a: any, r: any) {
+  if (!a || !a.writeToDisk) return textResult(stripAssets(r));
+  // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
+  // guarded() turns the throw into an isError result naming the offending path.
+  assertInsideCwd(a.outDir);
+  const written = writeAny(a.outDir, r, wlog);
+  return textResult({
+    ...written,
+    note: "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
+  });
+}
+
+// Shared by every export tool, so the pair cannot end up declared on some and not others — the exact
+// failure mode the readOptsShape comment below records for skipAssets (Zod strips undeclared keys, so
+// an option a tool forgets to declare is silently dropped before the handler sees it).
+const writeShape = {
+  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes — they are never returned inline — and the right choice for anything large, since inline results are capped and truncated."),
+  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'."),
+};
+
+// ---- read options, shared across the export tools (opt-in; each costs extra Plugin-API work) ----
+// DERIVED from bridge/read-opts.js — the ONE registry the CLI flag table and the plugin's own runOpts
+// come from too — rather than a fifth hand-written list of the same names and help text. A restated
+// literal is how skipAssets went missing on two of the three export tools: the MCP SDK validates args
+// with z.object(inputSchema) and hands the callback `parseResult.data`, and Zod's default object mode
+// STRIPS unknown keys — so an option that readOpts() maps but a tool's schema does not declare is
+// silently dropped before the handler ever sees it. Deriving the schema is what actually makes "every
+// export tool forwards every read option" true, rather than merely intended.
+const readOptsShape = Object.fromEntries(
+  READ_OPTS.map((o) => [o.name, z.boolean().optional().describe(o.describe)]),
+) as Record<ReadOptName, z.ZodOptional<z.ZodBoolean>>;
+
+// Local alias kept so the many call sites below read as before.
+type ReadOpt = ReadOptName;
+const READ_OPT_KEYS = Object.keys(readOptsShape) as ReadOpt[];
+const readOpts = (a: Partial<Record<ReadOpt, boolean>>): Record<ReadOpt, boolean> =>
+  Object.fromEntries(READ_OPT_KEYS.map((k) => [k, !!a[k]])) as Record<ReadOpt, boolean>;
 
 const READ_ONLY = { readOnlyHint: true } as const;
+
+// The design-system.json a figma-pull run left on disk carries its own `exportedAt`/`file` (stamped by
+// the plugin — collect.ts/components.ts, not invented here). figma_status reads it opportunistically so
+// an agent can see how stale its LAST EXPORT is without shelling out — this is snapshot age, distinct
+// from bridge connectivity, so a missing/unreadable file is not an error, just `snapshot: null`.
+// Lives in its own dependency-free CJS module (snapshot-meta.js, same pattern as node-id.js /
+// errmsg.js) so the test suite can read it directly without importing this file — this file's
+// top-level `createBridge()`/`main()` open a real WebSocket server and stdio transport, unsafe to
+// trigger from a test.
+const { readSnapshotInfo } = require("./snapshot-meta.js") as { readSnapshotInfo: (outDir?: string) => any };
 
 const server = new McpServer({ name: "figma-bridge", version: "0.1.0" });
 
 server.registerTool(
   "figma_status",
-  { description: "Check whether the Figma plugin is connected to the bridge, and which page is open.", annotations: READ_ONLY },
+  { description: "Check whether the Figma plugin is connected to the bridge, and which page is open. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot.", annotations: READ_ONLY },
   guarded(async () => {
-    if (!bridge.isConnected()) return textResult({ connected: false, hint: "Open the Figma file and run the plugin." });
-    return textResult({ connected: true, ...(await bridge.request("ping", {})) });
+    const snapshot = readSnapshotInfo();
+    if (!bridge.isConnected()) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
+    return textResult({ connected: true, ...(await bridge.request("ping", {})), snapshot });
   })
 );
 
@@ -84,26 +164,96 @@ server.registerTool(
   guarded(async () => textResult(await bridge.request("getSelection", {})))
 );
 
+// The cheap map. This is the tool an agent should reach for FIRST: every other read here
+// deep-serializes, so without it the only way to learn what a file holds was to export all of it —
+// measured 12+ minutes and tens of MB on a real design system, straight into the context window.
+server.registerTool(
+  "figma_list_pages",
+  {
+    description:
+      "CHEAP structural index of the open file: pages, and (depth 2) their top-level frames with " +
+      "id/name/type/size. No recursion, no assets, no node properties. Call this FIRST to decide WHICH " +
+      "page or frame to export, then pass those ids to figma_export_full({page}) or figma_export_url. " +
+      "depth 1 is near-free (page names only, loads nothing); depth 2 loads every page, which Figma " +
+      "warns can be slow on large files — still far cheaper than an export.",
+    inputSchema: {
+      depth: z.union([z.literal(1), z.literal(2)]).optional().describe("1 = page names only (near-free). 2 = pages + their top-level frames (default)."),
+    },
+    annotations: READ_ONLY,
+  },
+  // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
+  // tier there doesn't need a matching edit here.
+  guarded(async (a: any) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list)))
+);
+
+// The node-scoped twin: listPages depth 2 stops at a page's top-level frames, and peeking INSIDE one
+// otherwise meant a full recursive export of it.
+server.registerTool(
+  "figma_list_children",
+  {
+    description:
+      "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) — no recursion, no " +
+      "assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
+      "export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
+    inputSchema: {
+      nodeId: z.string().describe("A node id like '123:456' / '123-456', or a figma.com design URL containing ?node-id=..."),
+    },
+    annotations: READ_ONLY,
+  },
+  guarded(async (a: any) => {
+    const nodeId = toNodeId(a.nodeId);
+    if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
+    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list));
+  })
+);
+
 server.registerTool(
   "figma_export_full",
   {
     description:
       "Export the design system (component + token catalog — always spans the WHOLE file) plus frame " +
-      "trees. Frames default to the CURRENT page only; pass allPages:true to walk every page. Large — " +
-      "prefer the figma-pull CLI for bulk reads (it writes to disk); use this for quick inspection.",
+      "trees. Frames default to the CURRENT page; pass page:[ids] to export named page(s), or " +
+      "allPages:true to walk every page. Large — call figma_list_pages first to pick a target, and " +
+      "pass writeToDisk:true for anything beyond a quick look: it writes the export to your project " +
+      "and returns a compact index, which is the only way to get asset bytes and avoids the result " +
+      "cap truncating the tree.",
     inputSchema: {
-      allPages: z.boolean().optional().describe("Export frame trees from every page, not just the current one. Can be very large — the figma-pull CLI is better for whole-file pulls."),
+      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) — prefer `page` with ids from figma_list_pages, or the figma-pull CLI."),
+      page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages — passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
       ...readOptsShape,
+      ...writeShape,
     },
     annotations: READ_ONLY,
   },
-  guarded(async (a: any) => textResult(stripAssets(await bridge.request("exportFull", { allPages: !!a.allPages, ...readOpts(a) }))))
+  // The budget follows the SCOPE, exactly as the figma-pull CLI's does: exportAll (15 min) only for
+  // the whole-file walk, export (5 min) for the current page or a bounded page:[ids] pull. Handing
+  // every scope the whole-file budget made the bounded pull — the one this tool's own description
+  // tells you to prefer — wait 15 minutes to report a hang that a 5-minute limit would have caught,
+  // and quietly undid the point of having tiers in the shared TIMEOUTS table at all.
+  // `page` is forwarded only when non-empty — an empty array must not read as a selector (collect.ts
+  // would warn and fall back to the current page).
+  guarded(async (a: any) => {
+    const page = Array.isArray(a.page) && a.page.length ? a.page : undefined;
+    const allPages = !!a.allPages;
+    // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
+    // of the rule here. This path always needs a connected plugin anyway, so there is nothing to
+    // answer faster.
+    return exportResult(a, await bridge.request(
+      "exportFull",
+      { allPages, page, ...readOpts(a) },
+      exportTimeout({ allPages })
+    ));
+  })
 );
 
 server.registerTool(
   "figma_export_selection",
-  { description: "Export the current selection as compacted node JSON + variables + assets.", inputSchema: { ...readOptsShape }, annotations: READ_ONLY },
-  guarded(async (a: any) => textResult(stripAssets(await bridge.request("exportSelection", readOpts(a)))))
+  {
+    description: "Export the current selection as compacted node JSON + variables + assets.",
+    inputSchema: { ...readOptsShape, ...writeShape },
+    annotations: READ_ONLY,
+  },
+  guarded(async (a: any) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }))))
 );
 
 server.registerTool(
@@ -117,13 +267,14 @@ server.registerTool(
     inputSchema: {
       url: z.string().describe("A figma.com design/file URL with ?node-id=..., or a bare node id like '123:456' / '123-456'."),
       ...readOptsShape,
+      ...writeShape,
     },
     annotations: READ_ONLY,
   },
   guarded(async (a: any) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return textResult(stripAssets(await bridge.request("exportNode", { nodeId, ...readOpts(a) })));
+    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export));
   })
 );
 
@@ -174,6 +325,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("[figma-mcp] fatal:", e.message);
+  console.error("[figma-mcp] fatal:", errMsg(e));
   process.exit(1);
 });

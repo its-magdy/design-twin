@@ -5,15 +5,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createRequire } from "node:module";
 const require2 = createRequire(import.meta.url);
-const { createBridge } = require2("./server-core.js");
-const { parseNodeId } = require2("./node-id.js");
+const { READ_OPTS } = require2("./read-opts.js");
+const { createBridge, TIMEOUTS, exportTimeout, errMsg } = require2("./server-core.js");
+const { parseNodeId, toNodeId } = require2("./node-id.js");
 const bridge = createBridge();
 function textResult(obj) {
   return { content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
 }
 function errorResult(e) {
-  const message = typeof e === "string" ? e : String(e && e.message || e);
-  return { content: [{ type: "text", text: message }], isError: true };
+  return { content: [{ type: "text", text: errMsg(e) }], isError: true };
 }
 const guarded = (fn) => async (...a) => {
   try {
@@ -25,25 +25,39 @@ const guarded = (fn) => async (...a) => {
 function stripAssets(r) {
   if (!r || !Array.isArray(r.assets)) return r;
   const light = { ...r, assets: r.assets.map((a) => ({ id: a.id, name: a.name, format: a.format, ...a.kind ? { kind: a.kind } : {} })) };
-  if (r.assets.length) light.assetsNote = "Asset bytes omitted from context \u2014 run the figma-pull CLI to write them to design/assets/.";
+  if (r.assets.length) light.assetsNote = "Asset bytes omitted from context \u2014 re-run with writeToDisk:true to write them to <outDir>/assets/.";
   return light;
 }
-const readOptsShape = {
-  css: z.boolean().optional().describe("Include Figma's OWN computed CSS per node (getCSSAsync) \u2014 the design-to-code oracle. One async call per node, so larger/slower; use for a screen you're implementing."),
-  measurements: z.boolean().optional().describe("Include Dev-Mode measurement redlines (spacing specs the designer placed) for the current page. Dev Mode only."),
-  pluginData: z.boolean().optional().describe("Include own-scope plugin data (getPluginData) stamped on nodes \u2014 round-trip metadata. Usually empty unless the write plane wrote it."),
-  motion: z.boolean().optional().describe("Include motion/animation reads (timelines, manual keyframe tracks, animations, applied animation styles). Free via the Plugin API; useful for Slides/prototype animation. Can be verbose."),
-  sharedData: z.boolean().optional().describe("Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node.")
+const { writeAny, assertInsideCwd } = require2("./write-out.js");
+const wlog = (m) => console.error("[figma-mcp] " + m);
+function exportResult(a, r) {
+  if (!a || !a.writeToDisk) return textResult(stripAssets(r));
+  assertInsideCwd(a.outDir);
+  const written = writeAny(a.outDir, r, wlog);
+  return textResult({
+    ...written,
+    note: "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity."
+  });
+}
+const writeShape = {
+  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes \u2014 they are never returned inline \u2014 and the right choice for anything large, since inline results are capped and truncated."),
+  outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'.")
 };
-const readOpts = (a) => ({ css: !!a.css, measurements: !!a.measurements, pluginData: !!a.pluginData, motion: !!a.motion, sharedData: !!a.sharedData });
+const readOptsShape = Object.fromEntries(
+  READ_OPTS.map((o) => [o.name, z.boolean().optional().describe(o.describe)])
+);
+const READ_OPT_KEYS = Object.keys(readOptsShape);
+const readOpts = (a) => Object.fromEntries(READ_OPT_KEYS.map((k) => [k, !!a[k]]));
 const READ_ONLY = { readOnlyHint: true };
+const { readSnapshotInfo } = require2("./snapshot-meta.js");
 const server = new McpServer({ name: "figma-bridge", version: "0.1.0" });
 server.registerTool(
   "figma_status",
-  { description: "Check whether the Figma plugin is connected to the bridge, and which page is open.", annotations: READ_ONLY },
+  { description: "Check whether the Figma plugin is connected to the bridge, and which page is open. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any \u2014 so an agent can tell whether it's about to read a stale snapshot.", annotations: READ_ONLY },
   guarded(async () => {
-    if (!bridge.isConnected()) return textResult({ connected: false, hint: "Open the Figma file and run the plugin." });
-    return textResult({ connected: true, ...await bridge.request("ping", {}) });
+    const snapshot = readSnapshotInfo();
+    if (!bridge.isConnected()) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
+    return textResult({ connected: true, ...await bridge.request("ping", {}), snapshot });
   })
 );
 server.registerTool(
@@ -52,21 +66,70 @@ server.registerTool(
   guarded(async () => textResult(await bridge.request("getSelection", {})))
 );
 server.registerTool(
-  "figma_export_full",
+  "figma_list_pages",
   {
-    description: "Export the design system (component + token catalog \u2014 always spans the WHOLE file) plus frame trees. Frames default to the CURRENT page only; pass allPages:true to walk every page. Large \u2014 prefer the figma-pull CLI for bulk reads (it writes to disk); use this for quick inspection.",
+    description: "CHEAP structural index of the open file: pages, and (depth 2) their top-level frames with id/name/type/size. No recursion, no assets, no node properties. Call this FIRST to decide WHICH page or frame to export, then pass those ids to figma_export_full({page}) or figma_export_url. depth 1 is near-free (page names only, loads nothing); depth 2 loads every page, which Figma warns can be slow on large files \u2014 still far cheaper than an export.",
     inputSchema: {
-      allPages: z.boolean().optional().describe("Export frame trees from every page, not just the current one. Can be very large \u2014 the figma-pull CLI is better for whole-file pulls."),
-      ...readOptsShape
+      depth: z.union([z.literal(1), z.literal(2)]).optional().describe("1 = page names only (near-free). 2 = pages + their top-level frames (default).")
     },
     annotations: READ_ONLY
   },
-  guarded(async (a) => textResult(stripAssets(await bridge.request("exportFull", { allPages: !!a.allPages, ...readOpts(a) }))))
+  // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
+  // tier there doesn't need a matching edit here.
+  guarded(async (a) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list)))
+);
+server.registerTool(
+  "figma_list_children",
+  {
+    description: "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) \u2014 no recursion, no assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
+    inputSchema: {
+      nodeId: z.string().describe("A node id like '123:456' / '123-456', or a figma.com design URL containing ?node-id=...")
+    },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => {
+    const nodeId = toNodeId(a.nodeId);
+    if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... \u2014 see figma_list_pages.");
+    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list));
+  })
+);
+server.registerTool(
+  "figma_export_full",
+  {
+    description: "Export the design system (component + token catalog \u2014 always spans the WHOLE file) plus frame trees. Frames default to the CURRENT page; pass page:[ids] to export named page(s), or allPages:true to walk every page. Large \u2014 call figma_list_pages first to pick a target, and pass writeToDisk:true for anything beyond a quick look: it writes the export to your project and returns a compact index, which is the only way to get asset bytes and avoids the result cap truncating the tree.",
+    inputSchema: {
+      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) \u2014 prefer `page` with ids from figma_list_pages, or the figma-pull CLI."),
+      page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages \u2014 passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
+      ...readOptsShape,
+      ...writeShape
+    },
+    annotations: READ_ONLY
+  },
+  // The budget follows the SCOPE, exactly as the figma-pull CLI's does: exportAll (15 min) only for
+  // the whole-file walk, export (5 min) for the current page or a bounded page:[ids] pull. Handing
+  // every scope the whole-file budget made the bounded pull — the one this tool's own description
+  // tells you to prefer — wait 15 minutes to report a hang that a 5-minute limit would have caught,
+  // and quietly undid the point of having tiers in the shared TIMEOUTS table at all.
+  // `page` is forwarded only when non-empty — an empty array must not read as a selector (collect.ts
+  // would warn and fall back to the current page).
+  guarded(async (a) => {
+    const page = Array.isArray(a.page) && a.page.length ? a.page : void 0;
+    const allPages = !!a.allPages;
+    return exportResult(a, await bridge.request(
+      "exportFull",
+      { allPages, page, ...readOpts(a) },
+      exportTimeout({ allPages })
+    ));
+  })
 );
 server.registerTool(
   "figma_export_selection",
-  { description: "Export the current selection as compacted node JSON + variables + assets.", inputSchema: { ...readOptsShape }, annotations: READ_ONLY },
-  guarded(async (a) => textResult(stripAssets(await bridge.request("exportSelection", readOpts(a)))))
+  {
+    description: "Export the current selection as compacted node JSON + variables + assets.",
+    inputSchema: { ...readOptsShape, ...writeShape },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }))))
 );
 server.registerTool(
   "figma_export_url",
@@ -74,14 +137,15 @@ server.registerTool(
     description: "Given a Figma design URL (containing ?node-id=...) or a bare node id, select that node in the open file and export it as compacted node JSON + variables + an asset manifest. This is the 'paste a link and ask about it' path. Requires the file the link points to be OPEN in the Figma desktop app with the plugin running (the bridge reads the live file \u2014 it cannot fetch a link cold).",
     inputSchema: {
       url: z.string().describe("A figma.com design/file URL with ?node-id=..., or a bare node id like '123:456' / '123-456'."),
-      ...readOptsShape
+      ...readOptsShape,
+      ...writeShape
     },
     annotations: READ_ONLY
   },
   guarded(async (a) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " \u2014 paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return textResult(stripAssets(await bridge.request("exportNode", { nodeId, ...readOpts(a) })));
+    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export));
   })
 );
 server.registerTool(
@@ -120,6 +184,6 @@ async function main() {
   console.error("[figma-mcp] MCP server up (stdio). Bridge listening on ws://localhost:" + bridge.port + ".");
 }
 main().catch((e) => {
-  console.error("[figma-mcp] fatal:", e.message);
+  console.error("[figma-mcp] fatal:", errMsg(e));
   process.exit(1);
 });
