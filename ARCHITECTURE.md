@@ -24,20 +24,36 @@ Every API and behavior below was verified against official Figma / Claude Code d
   Figma (file open)
     code.js (Plugin API reads) ──postMessage──► ui.html [hidden iframe, WS client]
                                                        │ ws://localhost:PORT
-    figma-pull (CLI)  ── hosts ephemeral WS server, requests export, writes files, exits ──►
-          design/design-system.json · screens.json · assets/
+    figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
+          design/design-system.json · pages/index.json · pages/<page>/index.json +
+          pages/<page>/<name>__<id>.json · assets/
     Claude Code  ── runs `figma-pull` (Bash), then Reads files selectively ──►
 
-                         WRITE plane (code → design)  — optional, later
+    figma-pull --serve (daemon)  ── holds the WS server open; later invocations become thin
+          clients over a unix socket and skip the plugin reconnect ──►
+
+                         WRITE plane (code → design)  — optional
   Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js (writes)
 ```
 
-**Why CLI for read, MCP for write** (verified both are first-class in Claude Code):
-- Read = one big payload, one-shot → **CLI writes to disk, agent reads selectively** (cached, greppable,
-  git-diffable, never bloats context). Claude Code already has Bash + Read — zero new integration.
-- Write = many small dependent steps with handles + feedback → **MCP session/tool-calling** fits; small
-  results *belong* in context. Isolating writes in a separate opt-in server keeps the risky surface off
-  the read path.
+**The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
+Both front-ends speak the *same* 8 plugin commands (`figma-plugin/src/bridge.ts`) over the *same*
+`createBridge()`, and both now write through the *same* `write-out.js`. What differs is the calling
+convention and where the bytes land:
+- **Bulk payloads → disk, always.** The CLI has always done this; the MCP export tools do it too via
+  `writeToDisk: true`, which returns a compact index (counts + paths) instead of the tree. Inline MCP
+  results are capped (25k tokens by default) and asset bytes are never returned inline at all, so for
+  anything real this is not an optimisation but the only correct path.
+- **Small structured reads → context.** `listPages` / `listChildren` / a single node are exactly what
+  belongs inline, and MCP's advantage there is the calling convention: typed schemas, per-tool
+  permission gating (`figma_write` is annotated `destructiveHint`), and no process spawn per call.
+- **Writes → MCP only.** Many small dependent steps with handles and feedback. The CLI has no write
+  surface.
+
+**One bridge at a time.** `figma-pull`, `figma-pull --serve` and `figma-mcp` all bind port 8787;
+whichever starts second exits on `EADDRINUSE` (`server-core.js`). So the CLI cannot be used as the
+disk path *while* the MCP server is running — which is why `writeToDisk` exists, and why `--serve`
+routes ordinary CLI commands through the running daemon instead of opening a second bridge.
 
 ## Verified mechanism details (build to these)
 
@@ -177,9 +193,24 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   `css`/`measurements`/`pluginData`/`motion`/`sharedData`. Deferred within these: the Tokens Studio document-level
   `values`/`themes` blob (lz-string-compressed + chunked — needs a decoder); dedicated a11y namespaces (no public,
   stable namespace to probe).
-- **Still open (lowest value / deferred):** `page.backgrounds`, `ShaderPaint`/`ShaderEffect` property detail
-  (only the opaque program `id` is read), `exportSettings` (designer export presets — self-driven export covers
-  it), `prototypeDevice`, `relativeTransform` skew decomposition.
+- **Audit + fixes (2026-08-08; harness 301/301, tooling 204/204, bridge 109/109):** a 3-agent audit (2 code,
+  1 doc-research) plus a verification pass against official docs closed most of the list above. **Landed:**
+  invisible/zero-area vector nodes are pre-checked and skipped *before* `exportAsync` (counted as
+  `assetsSkippedInvisible`, not `assetsFailed` — a real file produced **807 false failures**); genuine export
+  failures on a painting node fall back to **`geometry {fills,strokes,w,h}`** from `fillGeometry`/`strokeGeometry`
+  (*not* `vectorPaths`, which the docs call "simple, but incomplete") so icons render as inline SVG; **warnings
+  aggregate by kind** (one line + up to 10 example refs, manifest stays a flat `string[]`) instead of ~900 repeats;
+  **`inferredTokens` removed entirely** (was ~20% of payload, matched by value-coincidence, zero consumers);
+  `box.x/y` omitted under auto-layout/grid parents and `layoutSizing*: "FIXED"` treated as a skipped default;
+  **`fixedChildren`** (`numberOfFixedChildren` — sticky headers/footers/FABs), compact **`exportSettings`**,
+  **`skew`** (QR decomposition of `relativeTransform`, degrees, CSS `skewX` convention), **`layersDoc.pageSettings`**
+  (`background`/`prototypeBackground` per page, Figma defaults skipped), and index entries gained **`nodes`/`bytes`**
+  so a consumer knows a layer file's size before opening it (real files reach 5–7 MB).
+- **Still open (lowest value / deferred):** `ShaderPaint`/`ShaderEffect` property detail (only the opaque program
+  `id` is read — note u130 shipped `figma.listAvailableShaders()`/`importShaderById()`, so this is now closable),
+  Motion/animation timelines (u130–u133), `SlotNode` (Slots GA 2026-06). **`prototypeDevice` is not deferred but
+  impossible**: verified absent from the Plugin API and from `@figma/plugin-typings` 1.131.0 — it is a REST-only
+  field, so device/breakpoint context cannot come from the plugin.
 - **Best-practice validation + fixes (2026-07-24; harness 133/133, tooling 126/126):** an adversarial pass
   (official Figma Dev Mode/MCP + variables/modes + OSS AI-codegen practice) confirmed the read plane at/above
   parity but caught **one correctness bug**, now fixed: a container with an **image fill + children** was
@@ -193,6 +224,19 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   bootstrapper). See `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
   ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built + 4-round adversarially
   reviewed (tooling suite 126/126); codegen resolver deferred to a target repo.
+- **Competitor sweep + Plugin API cross-check (2026-08-13; harness 306/306):** researched 10+ Figma-to-code
+  tools (FigmaToCode, Anima, Locofy, Builder.io Visual Copilot, TeleportHQ, Figma's own Dev Mode/Code
+  Connect/official MCP, html.to.design, Codia AI, Superflex, v0, Magic Patterns, Uizard, Galileo, Zeroheight,
+  Supernova, Tokens Studio, Figmagic) plus a direct re-check against `developers.figma.com`'s node property
+  docs — confirmed nothing they read is missing here (descriptions, pluginData, variables, auto-layout,
+  variants, motion, dev resources all already captured). Two genuine, doc-verified gaps closed: **`isAsset`**
+  (Figma's own icon/raster-asset heuristic — docs call it out as "particularly useful for code generation
+  plugins"; now OR'd into the `iconLike` check in `assets.ts` as a cross-check alongside the existing
+  name/size heuristic, for containers the regex misses) and **`variableWidthStrokeProperties`** (tapered/
+  brush-style strokes, 14 node types — now captured in `paint.ts` as `stroke.variableWidth {profile,points}`,
+  no flat CSS equivalent but recorded so a consumer can render it as an SVG path with a width gradient).
+  `guides` (frame ruler guides) and `complexStrokeProperties` were checked and NOT added — the former is a
+  designer authoring aid with no rendered/visual effect, the latter's docs page couldn't be confirmed to exist.
 
 ## Claude Code integration (verified)
 
@@ -230,7 +274,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `figma-to-code` Skill stays th
 
 ## Build order
 
-1. ✅ **Exporter plugin** (done) — full design system + all screens + assets, `allowedDomains:["none"]`,
+1. ✅ **Exporter plugin** (done) — full design system + all layers + assets, `allowedDomains:["none"]`,
    read-only, no network. Manual file handoff. **This is enough to start.** Now authored in
    **TypeScript** (`figma-plugin/src/*.ts`, typed against `@figma/plugin-typings`) and bundled to
    `code.js` via esbuild; the built `code.js` is committed so import stays zero-build. `tsc --noEmit`

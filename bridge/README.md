@@ -53,15 +53,74 @@ Allowlist it in Claude Code so it runs without a prompt (`.claude/settings.json`
 { "permissions": { "allow": ["Bash(node bridge/figma-pull.js:*)"] } }
 ```
 
+### Keep the connection open: `--serve` (daemon)
+Each one-shot run above waits for the plugin to reconnect. For several pulls in a row, hold the bridge
+open and let later invocations reuse it:
+```
+node bridge/figma-pull.js --serve          # holds the bridge open until stopped (Ctrl-C works too)
+node bridge/figma-pull.js --daemon-status  # is one up, and is the plugin connected?
+node bridge/figma-pull.js --stop
+```
+Every ordinary command detects a running daemon and **routes through it automatically** — same
+invocations, no reconnect, no second bridge to collide on 8787.
+
+Why a daemon rather than "a flag that just leaves the connection open": a long-running CLI has no way
+to receive further commands, so it would hold the port while being unreachable — blocking the MCP
+server and every other CLI call. Instead one process (`--serve`) owns the bridge and each later
+invocation is a thin client over a unix socket in `$TMPDIR`.
+
+Behaviour worth knowing:
+- Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
+  per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
+  exactly like a sequence of one-shot runs.
+- `--serve` / `--stop` / `--daemon-status` each own the whole invocation; combining one with a pull or
+  a read option is refused rather than silently dropping the export you typed.
+- A stale socket left by a crashed daemon reads as "no daemon" and is replaced, rather than making
+  every later run fail against a file nobody is listening on.
+- A second `--serve` is **refused**, not allowed to steal the live socket.
+- **Idle shutdown after 120 min** (`FIGMA_DAEMON_IDLE_MIN`, `0` disables). A daemon outlives the
+  terminal that started it, so this reaps abandoned ones instead of leaving port 8787 held by a
+  process you've forgotten. It is deliberately generous, the clock resets on every request, and a
+  request in flight holds it off entirely — a 15-minute `--all-pages` export is never cut short by
+  its own daemon. `--daemon-status` shows how much of the window is used.
+
 ## Write / interactive: figma-mcp (MCP over stdio)
 Registered via `../.mcp.json`. Start Claude Code in the repo; it launches `figma-mcp.mjs` over stdio.
 The server also hosts the bridge WebSocket the plugin connects to. Built on `@modelcontextprotocol/sdk`
 with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, validated per call).
 
-Tools: `figma_status`, `figma_get_selection`, `figma_export_full`, `figma_export_selection`,
-`figma_export_url`, `figma_write` (batch of safe ops — createFrame / createText / setFill /
-setText; **no arbitrary code execution**, unlike some community servers). The export tools accept
-opt-in read flags `css` / `measurements` / `pluginData` / `motion` / `sharedData`.
+Tools: `figma_status`, `figma_get_selection`, `figma_list_pages`, `figma_list_children`,
+`figma_export_full`, `figma_export_selection`, `figma_export_url`, `figma_write` (batch of safe ops —
+createFrame / createText / setFill / setText; **no arbitrary code execution**, unlike some community
+servers). The export tools accept opt-in read flags `css` / `measurements` / `pluginData` / `motion` /
+`sharedData`.
+
+### `writeToDisk` — the export path that doesn't go through the context window
+Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
+the same `write-out.js` the CLI uses — same layout, by construction — and returns a **compact index**
+(counts + file paths) instead of the node payloads. The agent then Reads/Greps those files at whatever
+granularity it needs.
+
+Use it for anything past a quick look. Two things make it not optional:
+- **Asset bytes are never returned inline** (they'd dump megabytes of base64 into context), so
+  `writeToDisk` is the *only* way to get `assets/` out of the MCP path.
+- **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`), so a real page
+  export is silently truncated without it.
+
+`outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
+building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.
+
+> **One bridge at a time.** `figma-pull` and `figma-mcp` both call `createBridge()` and bind port
+> 8787; whichever starts second hits `EADDRINUSE` and exits. So the CLI **cannot** run while the MCP
+> server is up — that's what `writeToDisk` exists to make unnecessary. Set `FIGMA_BRIDGE_PORT` if you
+> genuinely need both.
+
+**Look before you pull.** `figma_list_pages` (and `figma_list_children` to drill into one frame) return
+a cheap structural index — ids, names, types, sizes; no recursion, no assets, no node properties. Every
+other read here deep-serializes, so without them the only way to learn what a file holds was to export
+all of it: measured 12+ minutes and tens of MB straight into the context window on a real design
+system. Use the index to pick a target, then `figma_export_full({ page: ["<id>"] })` — or
+`skipAssets: true`, which is close to free here since asset bytes are stripped from MCP results anyway.
 
 ### "Paste a link and ask about it" (`figma_export_url`)
 Keep Claude Code and the MCP running for the whole session; the plugin stays connected to your

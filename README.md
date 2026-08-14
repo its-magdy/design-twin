@@ -28,8 +28,12 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
   export). It holds two kinds of files:
   - **Generated exports** (regenerable — recreated on every plugin export / `figma-pull` run):
     `<screen>.json`, `variables.json`, `assets/` (icons/images **plus** a full-frame reference PNG
-    per frame, referenced from the JSON's `reference` field), and for full pulls
-    `design-system.json` + `screens.json`.
+    per frame, referenced from the JSON's `reference` field), and for full pulls `design-system.json`
+    + `pages/index.json` + one `pages/<page>/index.json` + `pages/<page>/<name>__<id>.json` per **layer**
+    — split per-page, per-file rather than one combined `screens.json` (a real export can be tens of
+    MB), mirroring Figma's own Page > Frame containment (a page holds many layers, never the reverse).
+    ("Layer" is Figma's own term for any object in a file; "screen" here stays reserved for a single
+    node you deliberately selected — `<screen>.json` above — not everything a full-page walk sweeps up.)
   - **Your config maps** (hand-authored — **not** regenerable, so back them up): `target.json`
     (which stack; auto-detected if absent), `tokens.json` (Figma variable → your code token; styling
     source of truth), `components.json` (Figma component → your code component + import; reuse source
@@ -70,6 +74,15 @@ files. You only author the config maps below.
 
 ## Upgrade path (later, optional)
 If manual export gets tedious, swap the file handoff for a **localhost-only** WebSocket bridge
-(`devAllowedDomains: ["ws://localhost:8787"]` — reaches your machine, never the internet) and drive it via
-MCP. Loopback isn't authentication, so the bridge is gated by a **shared token** you paste into the plugin
-once (see `bridge/README.md`). The Skill and the token/component maps carry over unchanged.
+(`devAllowedDomains: ["ws://localhost:8787"]` — reaches your machine, never the internet). Loopback isn't
+authentication, so the bridge is gated by a **shared token** you paste into the plugin once (see
+`bridge/README.md`). The Skill and the token/component maps carry over unchanged.
+
+Two front-ends sit on that bridge, and they speak the same commands:
+- **`figma-pull` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so
+  later pulls skip the plugin reconnect; `--stop` ends it.
+- **`figma-mcp`** — live tools for "check this, now pull that", plus the small write surface. Pass
+  `writeToDisk: true` on the export tools to write files and get back a compact index instead of the
+  payload — the only way to get asset bytes, and the right choice for anything large.
+
+Only one of them can hold port 8787 at a time; run the one that matches what you're doing.

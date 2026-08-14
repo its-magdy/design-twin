@@ -19,7 +19,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.js
 ```
 
-Expected: **`173/173 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: **`306/306 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -40,19 +40,26 @@ The `tooling/` scripts (DTCG token emitter, map validator, drift-lint, bootstrap
 `tooling/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/tooling.test.js       # expect: 175/175 checks passed, exit 0
+node test/tooling.test.js       # expect: 204/204 checks passed, exit 0
 node --check tooling/tokens.js tooling/map-validate.js tooling/drift-lint.js tooling/map-bootstrap.js
 ```
 
 ### `bridge/` — handshake auth + seed CLI
 
-`test/bridge.test.js` covers the two bridge files the plugin harness can't reach: `server-core.js`'s
-`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host) and the
-`seed-components.js` CLI, driven as a subprocess against a temp directory.
+`test/bridge.test.js` covers the bridge files the plugin harness can't reach: `server-core.js`'s
+`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host), the
+`seed-components.js` CLI driven as a subprocess against a temp directory, `write-out.js` (the one
+writer both front-ends share), and `daemon.js`.
+
+The daemon tests drive a **fake bridge** — no Figma, no WebSocket — so the parts that actually break
+are testable offline: request serialization (the plugin is single-threaded), newline framing across
+chunks for multi-megabyte replies, stale-socket recovery after a crash, and refusing a second
+`--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
+suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 19/19 checks passed, exit 0
-node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js
+node test/bridge.test.js        # expect: 143/143 checks passed, exit 0
+node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
 ```
 
 `verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed
@@ -90,9 +97,14 @@ field, assert both the DTCG output and the CSS output.
    window and re-run it** (or re-import) so Figma reloads from disk.
 3. **`Unrecognized feature: 'local-network-access'` in the console is harmless noise** from Figma's own
    internals — ignore it. It is *not* a plugin error.
-4. **The localhost bridge (figma-pull / MCP) is blocked by modern Chrome** ("Local Network Access"), so
-   the WebSocket path usually won't connect from the plugin iframe. **Use the manual download path below**
-   for testing — it needs no network.
+4. **The localhost bridge DOES work — verified 2026-07-28** in the Figma **desktop app** (v126.7.8):
+   the plugin iframe connected to `ws://localhost:8787` on its own, and reconnects by itself after the
+   bridge restarts. (Earlier revisions of this file claimed Chrome's "Local Network Access" usually
+   blocks it and sent you to the manual path — that was wrong for the desktop app, and it steers you
+   away from the path that actually works. It may still hold for Figma in a *browser* tab; if so, the
+   manual download path below is the fallback, not the default.)
+   *Symptom if it ever does block:* the bridge sits on "Open your Figma file and run…" and no
+   `ESTABLISHED` socket appears in `lsof -nP -iTCP:8787`.
 5. **To see plugin errors:** turn on **Plugins → Development → Use Developer VM**, then
    **Plugins → Development → Open Console**. The main thread logs `[export] code.js loaded` and
    `[export] main thread ready — onmessage registered`; the UI surfaces any error as red text in the
@@ -104,10 +116,40 @@ field, assert both the DTCG output and the CSS output.
 2. Confirm health: status shows **"N selected"** or a select-a-frame hint (not stuck on "Loading…").
 3. **Select a frame**, click **"Export current selection"** → click **Download `<screen>.json`** and
    **Download `variables.json`** (and **Download assets** if a count shows). Files land in `~/Downloads`.
-   - Or **"Export design system + all page frames"** → `design-system.json` + `screens.json` (the fuller test).
+   - Or **"Export design system + all page frames"** → `design-system.json` + click **Download layers
+     (N)** (one file per top-level layer grouped under `pages/<page>/`, plus a root `pages/index.json`
+     and a per-page `pages/<page>/index.json` — see "layers are split per-page, per-file" below) — the
+     fuller test.
 4. Hand the files to the agent: it reads `~/Downloads/<screen>.json` (and `variables.json` /
-   `design-system.json` / `screens.json`) and validates against the checklist below. Move the files into
-   `design/` when you want to actually build from them.
+   `design-system.json` / `pages/index.json` + the per-page `index.json` + the per-layer files) and
+   validates against the checklist below. Move the files into `design/` when you want to actually build
+   from them.
+
+### Layers are split per-page, per-file
+
+`screens.json` used to bundle every exported frame into a single file — a real design-system export
+measured **24MB**, unworkable for an agent that only wants to build one at a time. Splitting to
+one-file-per-node fixed that; grouping those files by Figma PAGE is the next step of the same idea.
+Naming: Figma itself calls every object in a file a **layer** (its own Layers-panel vocabulary; there is
+no "screen" node type in Figma). This tool reserves **"screen"** for a single node a human deliberately
+selected (`collectSelection`/`collectNode`, `design/<screen>.json`) — everything swept up by walking a
+whole page indiscriminately (specimen sections, icon components, real UI frames alike) is a **"layer"**
+instead, which is both the accurate Figma term and avoids implying every one of them is a real app view.
+A page can hold many layers, never the reverse (Figma's own model is File → Page → Frame), so the
+directory structure mirrors that containment instead of dumping every layer from every page into one
+flat folder. Both export paths write `design/pages/index.json` (the run-wide `manifest` + a lean
+`pageDirs[]` of `{page,dir,index,layers}` (`index` is the pointer to that page's own index file — open it verbatim, don't rebuild it from `dir`) — NOT the full layer list, so reading it never means loading every
+layer's metadata) plus, per page, `design/pages/<page>/index.json` (that page's own
+`{name,id,type,page,file}` entries) and one `design/pages/<page>/<name>__<id>.json` per layer (`{name,
+id, page, tree, reference, devResources}`). Read the root index to find the PAGE you want, its own
+index.json to find the LAYER, then read only that file — never a whole directory.
+
+### Peeking inside a frame before a full pull
+
+`--list` (or the manual export) only shows a page's TOP-LEVEL frames — no recursion. To see what's
+*inside* one of those frames before committing to a full recursive pull of it, use the node-scoped
+twin: `node bridge/figma-pull.js --children <id>` lists that one node's direct children only (same
+no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to "pull everything."
 
 ### What the agent verifies in the exported JSON
 
@@ -115,7 +157,8 @@ field, assert both the DTCG output and the CSS output.
 sane count; `truncated`/`assetsFailed` are 0 (or the `warnings[]` explain them). This is the no-silent-
 truncation guarantee — read it first.
 
-**Screen `tree`** (fields appear only when the design contains them):
+**Node `tree`** — same shape for a single-selection `<screen>.json` or a page-walk layer file (fields
+appear only when the design contains them):
 - `reactions` on interactive nodes → `{trigger, actions:[{navigation, destination, transition:{easing,duration}}]}`
 - `runs[]` on mixed-format text (not a single flat `font`); `font.lineHeight`/`letterSpacing` carry a `unit`
 - `layout` flex/grid intent; `layout.inferred:true` where auto-layout was inferred; `clip`/`scroll`;
@@ -141,9 +184,17 @@ clobbering hand-authored fields.
 
 ## Layer C — design-to-code tooling on a REAL export (checklist)
 
-The `tooling/` suite (`test/tooling.test.js`, 175 checks) runs on **mock** data. The tooling has never been
-run on real extractor output, so validate it against a genuine `design-system.json` once (a full export
-from Layer B). Work top-to-bottom; each box is a concrete pass/fail.
+The `tooling/` suite (`test/tooling.test.js`, 204 checks) runs on **mock** data, so validate it against a
+genuine `design-system.json` once (a full export from Layer B) to catch what the mocks can't. Work
+top-to-bottom; each box is a concrete pass/fail.
+
+**Run 2026-07-29** against a real `design-system.json` (222 variables, 65 components, "🎨 Design System"
+page export): every checklist item below passed. One real bug found and fixed — a FLOAT variable scoped
+to `FONT_WEIGHT` *and* length scopes at once (e.g. a "Body 2" type-scale token also scoped to
+`FONT_SIZE`/`LINE_HEIGHT`/`LETTER_SPACING`) was emitted unitless (`--Body-2: 18;`, invalid as a
+font-size) because `numberUnit()` used `.some()` — one unitless scope silenced the length scopes sitting
+next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); regression tests
+`[RD2-mixed]`/`[RD2-pure]` added to `test/tooling.test.js`.
 
 ### Prereq
 - [ ] You have a real `design-system.json` from **"Export design system + all page frames"** (Layer B).
@@ -182,6 +233,12 @@ from Layer B). Work top-to-bottom; each box is a concrete pass/fail.
 - [ ] **unmapped-component (warn)**: delete an entry for a component that still exists → coverage warning.
 - [ ] Re-running bootstrap over your **edited** map PRESERVES your hand-edits (fill in one `code.module`,
       re-run `map-bootstrap … existing`, confirm your value survived).
+- [ ] **Staleness**: a fresh `design-system.json` (just exported) reports no freshness warning; hand-edit
+      its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
+      `unknown-freshness` warning. Override the threshold with `node tooling/drift-lint.js map.json design-system.json --max-age <hours>`
+      (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/figma-pull.js` both surface the
+      same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/design-system.json`
+      (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
 
 ### Reality check on a messy file (optional but recommended)
 - [ ] Run tokens on a file that hardcodes hex instead of using variables → `variables[]` is small/empty and
@@ -197,11 +254,16 @@ from Layer B). Work top-to-bottom; each box is a concrete pass/fail.
 
 | Command | What |
 |---|---|
-| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `173/173` |
+| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `306/306` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `175/175` |
-| `node test/bridge.test.js` | Offline bridge test (server-core handshake auth + seed-components CLI) — expect `19/19` |
+| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `204/204` |
+| `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp) — expect `143/143` |
+| `node bridge/figma-pull.js --list-pages` | Cheap: page names only, no page load (prints to stdout) |
+| `node bridge/figma-pull.js --list` | Cheap: pages + their top-level frames (prints to stdout) |
+| `node bridge/figma-pull.js --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
+| `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
+| `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check tooling/*.js` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
