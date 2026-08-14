@@ -13,7 +13,48 @@
 // "#id" suffix stripped on BOTH sides. Returns { errors, warnings, summary }.
 
 const { TYPE_TO_KIND } = require("./kinds"); // shared vocab — kept in sync with map-bootstrap
+const { snapshotAge } = require("../bridge/snapshot-meta.js"); // ONE definition of the freshness stamp
+const { errMsg } = require("../bridge/errmsg.js"); // ONE thrown-value -> message coercion
 const stripSuffix = (k) => String(k).split("#")[0]; // "Size#12:3" -> "Size"
+
+// ---------------------------------------------------------------- staleness / freshness
+// The catalog (design-system.json) is stamped by the plugin itself — collect.ts/components.ts already
+// emit `exportedAt` (ISO timestamp, ALWAYS present on a real export) and `file` (figma.root.name) at
+// the top level of buildDesignSystem()'s result. No wrapper is invented here — those are the fields
+// the plugin actually sends, read as-is.
+const DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h, overridable (CLI --max-age <hours> / env)
+
+// Never silently pass: a catalog with no exportedAt gets an explicit "freshness unknown" warning
+// rather than being treated as fresh, and one older than maxAgeMs gets a prominent stale warning
+// naming the age. Returns the warning pushed (or undefined when the snapshot is fresh) so callers
+// (the CLI) can also print an extra banner for the stale case without re-deriving the check.
+function checkFreshness(catalog, push, warnings, opts = {}) {
+  const maxAgeMs = opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
+  // Which field and whether it parses is snapshot-meta's rule (figma_status reads the same stamp);
+  // only the threshold, the codes and the wording below are this linter's policy.
+  const { exportedAt, ageMs, problem } = snapshotAge(catalog, opts.now || Date.now());
+  if (problem === "missing") {
+    const w = { code: "unknown-freshness", message: "design-system.json has no `exportedAt` timestamp — freshness cannot be verified. Findings are checked against whatever snapshot is on disk, which may be stale; re-export with the current plugin to get a timestamp." };
+    push(warnings, w.code, w.message, {});
+    return w;
+  }
+  if (problem === "unparseable") {
+    const w = { code: "unknown-freshness", message: `design-system.json's \`exportedAt\` ('${exportedAt}') is not a parseable timestamp — freshness cannot be verified.` };
+    push(warnings, w.code, w.message, { exportedAt });
+    return w;
+  }
+  if (ageMs > maxAgeMs) {
+    const ageH = (ageMs / 3600000).toFixed(1);
+    const maxH = (maxAgeMs / 3600000).toFixed(1);
+    const w = {
+      code: "stale-snapshot",
+      message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file — re-run figma-pull / the export tool before trusting them.`,
+    };
+    push(warnings, w.code, w.message, { exportedAt, ageMs, maxAgeMs });
+    return w;
+  }
+  return undefined;
+}
 
 // Index a props object by base name (Figma's "#id" suffix stripped), warning on — and recording —
 // any two distinct keys that collapse to the same base so callers skip order-dependent errors on it.
@@ -32,9 +73,11 @@ function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
   return { props: out, ambiguous };
 }
 
-function driftLint(map, catalog) {
+function driftLint(map, catalog, opts) {
   const errors = [], warnings = [];
   const push = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
+
+  const freshness = checkFreshness(catalog, push, warnings, opts || {});
 
   const comps = (catalog && catalog.components) || [];
   const byKey = new Map(), byId = new Map(), byName = new Map();
@@ -103,28 +146,77 @@ function driftLint(map, catalog) {
   // Double-mapping: two entries targeting one component is conflicting drift.
   for (const [comp, keys] of compToEntries) if (keys.length > 1) push(errors, "double-mapped", `component '${comp.name}' is mapped by ${keys.length} entries (${keys.join(", ")}) — only one code target may win`, { keys });
 
-  // Coverage: a component is unmapped iff none of its identifiers were matched.
+  // Coverage: a component is unmapped iff none of its identifiers were matched. The denominator is
+  // counted in this same pass — a second filter over `comps` would just re-apply the same predicate.
+  let catalogComponents = 0;
   for (const c of comps) {
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
+    catalogComponents++;
     if ((c.key && mappedIds.has(c.key)) || (c.id && mappedIds.has(c.id))) continue;
     push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished — no key)"} has no map entry`, { key: c.key, name: c.name });
   }
 
-  const catalogComponents = comps.filter((c) => c.type === "COMPONENT" || c.type === "COMPONENT_SET");
-  return { errors, warnings, summary: { entries: Object.keys(entries).length, catalogComponents: catalogComponents.length, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
+  return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
 }
 
-module.exports = { driftLint };
+// Strictly opt-in live check: GET /v1/files/:key/meta (Tier 3, ~10/min even on free files) and compare
+// Figma's own `last_modified` against the snapshot's `exportedAt`. Skipped WITHOUT ERROR whenever a
+// token or file key is absent — this repo deliberately never requires a REST token, so the offline
+// exportedAt/maxAge check above must carry the whole guarantee on its own; this is only a sharper
+// answer when the caller happens to have credentials lying around.
+async function checkLiveFreshness(fileKey, token, exportedAt) {
+  if (!fileKey || !token) return null; // opt-in: nothing configured, nothing attempted
+  const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token } });
+  if (!res.ok) throw new Error(`GET /v1/files/${fileKey}/meta -> ${res.status} ${res.statusText}`);
+  const body = await res.json();
+  const lastModified = body && body.file && body.file.last_modified;
+  if (!lastModified) return { lastModified: undefined, aheadOfSnapshot: undefined };
+  const aheadOfSnapshot = exportedAt ? Date.parse(lastModified) > Date.parse(exportedAt) : undefined;
+  return { lastModified, aheadOfSnapshot };
+}
 
-// CLI: node tooling/drift-lint.js <codeconnect.local.json> <design-system.json>
+module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+
+// CLI: node tooling/drift-lint.js <codeconnect.local.json> <design-system.json> [--max-age <hours>]
 if (require.main === module) {
   const fs = require("fs");
-  const [mapFile, catalogFile] = process.argv.slice(2);
-  if (!mapFile || !catalogFile) { console.error("usage: node tooling/drift-lint.js <map.json> <design-system.json>"); process.exit(2); }
-  const res = driftLint(JSON.parse(fs.readFileSync(mapFile, "utf8")), JSON.parse(fs.readFileSync(catalogFile, "utf8")));
+  const argv = process.argv.slice(2);
+  const maxAgeIdx = argv.indexOf("--max-age");
+  let maxAgeHours;
+  if (maxAgeIdx !== -1) {
+    maxAgeHours = Number(argv[maxAgeIdx + 1]);
+    if (!(maxAgeHours > 0)) { console.error("--max-age expects a positive number of hours"); process.exit(2); }
+    argv.splice(maxAgeIdx, 2);
+  } else if (process.env.DRIFT_MAX_AGE_HOURS) {
+    maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
+    if (!(maxAgeHours > 0)) { console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours"); process.exit(2); }
+  }
+  const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
+
+  const [mapFile, catalogFile] = argv;
+  if (!mapFile || !catalogFile) { console.error("usage: node tooling/drift-lint.js <map.json> <design-system.json> [--max-age <hours>]"); process.exit(2); }
+  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const res = driftLint(JSON.parse(fs.readFileSync(mapFile, "utf8")), catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;
   console.error(`\n${s.mapped}/${s.catalogComponents} components mapped · ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
-  process.exit(res.errors.length ? 1 : 0);
+
+  // Strictly opt-in: only attempted when both are present, and any failure is a warning, never a
+  // crash — this check is a bonus on top of the offline exportedAt/maxAge guarantee above, not a
+  // replacement for it.
+  const fileKey = process.env.FIGMA_FILE_KEY;
+  const token = process.env.FIGMA_TOKEN;
+  const run = async () => {
+    if (fileKey && token) {
+      try {
+        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
+        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) — it is confirmed stale, not just old.`);
+      } catch (e) {
+        console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
+      }
+    }
+    process.exit(res.errors.length ? 1 : 0);
+  };
+  run();
 }

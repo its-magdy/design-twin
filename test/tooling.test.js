@@ -11,6 +11,8 @@ const near = (a, b) => Math.abs(a - b) < 0.001;
 
 // ---------- clean design system (no collisions/danglers) for value assertions ----------
 const ds = {
+  exportedAt: new Date().toISOString(),
+  file: "Test File",
   colorProfile: "srgb",
   collections: [{ name: "Primitives", modes: ["Value"], default: "Value" }, { name: "Semantic", modes: ["Light", "Dark"], default: "Light", theming: true }],
   variables: [
@@ -124,6 +126,31 @@ const clean = driftLint({ version: 1, components: {
 } }, ds);
 check("[B4] complete map is error- AND warning-clean", clean.errors.length === 0 && clean.warnings.length === 0);
 
+console.log("drift — staleness:");
+const { checkFreshness, DEFAULT_MAX_AGE_MS } = require("../tooling/drift-lint");
+const emptyMap = { version: 1, components: {} };
+check("[stale-1] missing exportedAt -> unknown-freshness warning", driftLint(emptyMap, { components: [] }).warnings.some((w) => w.code === "unknown-freshness"));
+check("[stale-2] unparseable exportedAt -> unknown-freshness warning", driftLint(emptyMap, { exportedAt: "not-a-date", components: [] }).warnings.some((w) => w.code === "unknown-freshness"));
+check("[stale-3] fresh export (1h old, default 24h max) -> no staleness warning at all", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }).warnings.every((w) => w.code !== "stale-snapshot" && w.code !== "unknown-freshness"));
+check("[stale-4] export older than default 24h max-age -> stale-snapshot warning", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }).warnings.some((w) => w.code === "stale-snapshot"));
+check("[stale-5] stale-snapshot message names the file and is unmistakably prominent", (() => {
+  const w = driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), file: "My File", components: [] }).warnings.find((w) => w.code === "stale-snapshot");
+  return w && /^STALE SNAPSHOT/.test(w.message) && w.message.includes("My File");
+})());
+check("[stale-6] never silently passes: EVERY driftLint result carries a freshness verdict (warning or explicit pass)", (() => {
+  const fresh = driftLint(emptyMap, { exportedAt: new Date().toISOString(), components: [] });
+  return fresh.freshness === undefined && fresh.warnings.every((w) => w.code !== "stale-snapshot" && w.code !== "unknown-freshness");
+})());
+check("[stale-7] --max-age override via opts.maxAgeMs: a 30h-old export is fine at 48h max", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 30 * 3600000).toISOString(), components: [] }, { maxAgeMs: 48 * 3600000 }).warnings.every((w) => w.code !== "stale-snapshot"));
+check("[stale-8] --max-age override makes a normally-fresh export stale at a tight threshold", driftLint(emptyMap, { exportedAt: new Date(Date.now() - 3600000).toISOString(), components: [] }, { maxAgeMs: 1800000 }).warnings.some((w) => w.code === "stale-snapshot"));
+check("[stale-9] checkFreshness default max-age constant is 24h", DEFAULT_MAX_AGE_MS === 24 * 3600000);
+check("[stale-10] checkFreshness's returned warning matches what it pushed into the array", (() => {
+  const warnings = [];
+  const push = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
+  const w = checkFreshness({ exportedAt: new Date(Date.now() - 30 * 3600000).toISOString() }, push, warnings, {});
+  return w && w.code === "stale-snapshot" && warnings.length === 1 && warnings[0].code === w.code && warnings[0].message === w.message;
+})());
+
 // ---------- bootstrap (A1..A7, M3, M4) ----------
 console.log("bootstrap:");
 const boot = bootstrap(ds);
@@ -201,6 +228,72 @@ check("[T-sn] string-number FLOAT gets px", toCSS({ variables: [{ name: "s/x", t
 check("[T-lh] LINE_HEIGHT-scoped FLOAT stays px (not unitless)", toCSS({ variables: [{ name: "text/lh", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] }).includes("--text-lh: 24px;"));
 // [T-ls] letter-spacing bare number is invalid CSS -> px, not unitless.
 check("[T-ls] LETTER_SPACING-scoped FLOAT stays px (bare number is invalid CSS)", toCSS({ variables: [{ name: "text/ls", type: "FLOAT", scopes: ["LETTER_SPACING"], values: { v: 0.5 } }] }).includes("--text-ls: 0.5px;"));
+// ---------- [RD-*] real-data regressions: names/scopes taken from a live "Design System - NERA"
+// file (Figma starter plan). The mock fixtures above all set NARROW scopes, which hid these: real
+// files leave Figma's default ALL_SCOPES in place, so the scopes-only unit rule emitted invalid CSS.
+check("[RD-fw] ALL_SCOPES font-weight is unitless by NAME (was `500px`, invalid CSS)",
+  toCSS({ variables: [{ name: "Font-Weight/medium", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 500 } }] }).includes("--Font-Weight-medium: 500;"));
+check("[RD-op] ALL_SCOPES opacity is unitless by NAME (was `0.5px`, invalid CSS)",
+  toCSS({ variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] }).includes("--Opacity-disabled: 0.5;"));
+check("[RD-nos] the same holds when `scopes` is absent entirely",
+  toCSS({ variables: [{ name: "font-weight/bold", type: "FLOAT", values: { v: 700 } }] }).includes("--font-weight-bold: 700;"));
+// A font SIZE is a genuine length -> must keep px. Guards the name heuristic against over-reach.
+check("[RD-fs] font-SIZE keeps px (heuristic does not over-match `font`)",
+  toCSS({ variables: [{ name: "Font-Size/Text-sm", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 14 } }] }).includes("--Font-Size-Text-sm: 14px;"));
+// A NARROWED scope stays authoritative — the name must never override an explicit designer signal.
+check("[RD-narrow] explicit LINE_HEIGHT scope beats a name containing 'weight'",
+  toCSS({ variables: [{ name: "weight/line-height", type: "FLOAT", scopes: ["LINE_HEIGHT"], values: { v: 24 } }] }).includes("--weight-line-height: 24px;"));
+// The name heuristic is a GUESS, and every other rewrite in this file announces itself. A silent one
+// is only visible as surprising CSS downstream.
+check("[RD-say] a unit decided by NAME rather than scopes is reported by lintTokens",
+  lintTokens({ variables: [{ name: "Opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] })
+    .some((w) => /Opacity\/disabled/.test(w) && /UNITLESS/.test(w)));
+check("[RD-say] but a token the SCOPES decided is not reported (no noise on an explicit signal)",
+  !lintTokens({ variables: [{ name: "opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] })
+    .some((w) => /UNITLESS/.test(w)));
+// numberUnit short-circuits on opts.unitless BEFORE the name heuristic, so a token the caller named
+// explicitly never reaches the guess. lintTokens has to take the same opts or it warns about a guess
+// that was never made — and tells the caller to go fix it in Figma when they already fixed it here.
+const nameGuessDs = { variables: [{ name: "Opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] };
+const overrideOpts = { unitless: new Set(["Opacity/disabled"]) };
+check("[RD-opts] a token overridden via opts.unitless is NOT reported as a name guess",
+  !lintTokens(nameGuessDs, overrideOpts).some((w) => /UNITLESS/.test(w)));
+check("[RD-opts] the same token IS reported when linted without those opts (the guess really did run)",
+  lintTokens(nameGuessDs).some((w) => /UNITLESS/.test(w)));
+// The override must not swallow the OTHER warnings for that token — it only pre-empts the unit guess.
+check("[RD-opts] opts.unitless does not suppress unrelated warnings",
+  lintTokens({ variables: [{ name: "(Space 3)", resolvedType: "FLOAT", type: "FLOAT", values: { v: 12 } }] }, { unitless: new Set(["(Space 3)"]) })
+    .some((w) => /illegal in a CSS custom property/.test(w)));
+// Emitter and linter must agree about which tokens the heuristic touched — same opts, same verdict.
+check("[RD-opts] emitter agrees: opts.unitless drops the px",
+  toCSS(nameGuessDs, overrideOpts).includes("--Opacity-disabled: 0.5;"));
+// `font[-_ ]?weight` used to be unanchored, so a font-weight SCALE — a multiplier, the one case in the
+// family where the unit matters — also matched.
+check("[RD-bound] 'font-weight-scale' is NOT swept up by the font-weight name rule",
+  toCSS({ variables: [{ name: "font-weight-scale/lg", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 2 } }] }).includes("--font-weight-scale-lg: 2px;"));
+// The matching unit is the `/`-delimited GROUP, so the property may sit in any segment...
+check("[RD-bound] the property may be a trailing segment ('text/font-weight')",
+  toCSS({ variables: [{ name: "text/font-weight", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 600 } }] }).includes("--text-font-weight: 600;"));
+// ...but a segment that merely CONTAINS it names something else.
+check("[RD-bound] 'opacity-curve' is a different property, not an opacity",
+  toCSS({ variables: [{ name: "motion/opacity-curve", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 3 } }] }).includes("--motion-opacity-curve: 3px;"));
+// [RD-fold] "(Space 3)" is a real variable name; parens are illegal in a custom property and were
+// folded to `---Space-3-` SILENTLY, breaking the never-silent guarantee.
+check("[RD-fold] illegal chars in a token name are folded",
+  toCSS({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] }).includes("---Space-3-: 12px;"));
+check("[RD-fold] and the fold is REPORTED by lintTokens",
+  lintTokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] }).some((w) => /illegal in a CSS custom property/.test(w) && /\(Space 3\)/.test(w)));
+// ---------- [RD2-*] real-data regression from a live "🎨 Design System" export (Material 3 typography
+// scale): a "Body 2" FLOAT is scoped to FONT_WEIGHT *and* FONT_SIZE/LINE_HEIGHT/LETTER_SPACING/
+// PARAGRAPH_SPACING/PARAGRAPH_INDENT at once. `.some()` let the single unitless scope win, emitting
+// `--Body-2: 18;` (invalid as a font-size) with no hygiene warning at all.
+check("[RD2-mixed] a scope mix of FONT_WEIGHT + length scopes keeps px (majority-length wins)",
+  toCSS({ variables: [{ name: "Body 2", type: "FLOAT", scopes: ["FONT_WEIGHT", "FONT_SIZE", "LINE_HEIGHT", "LETTER_SPACING", "PARAGRAPH_SPACING", "PARAGRAPH_INDENT"], values: { v: 18 } }] }).includes("--Body-2: 18px;"));
+check("[RD2-pure] a PURE FONT_WEIGHT+OPACITY mix (no length scope) is still unitless",
+  toCSS({ variables: [{ name: "w/x", type: "FLOAT", scopes: ["FONT_WEIGHT", "OPACITY"], values: { v: 500 } }] }).includes("--w-x: 500;"));
+check("[RD-fold] a legal name is NOT reported as folded",
+  !lintTokens({ variables: [{ name: "Neutral/Grey 800", type: "COLOR", values: { v: "#262626" } }] }).some((w) => /illegal in a CSS custom property/.test(w)));
+
 // [T-empty] no emittable vars -> no empty `:root {}` block.
 check("[T-empty] empty variable set emits no `:root` block", toCSS({ variables: [] }) === "" && toCSS({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] }) === "");
 // [T-str-safe] a STRING token cannot break out of its declaration/block: `;` and `}` are CSS-hex-escaped.
