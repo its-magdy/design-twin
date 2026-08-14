@@ -39,4 +39,16 @@ function parseNodeId(input) {
   return normalizeNodeId(s); // bare id
 }
 
-module.exports = { ID, NODE_ID_RE, normalizeNodeId, parseNodeId };
+// The LENIENT twin of parseNodeId, and the form every consumer actually wants: normalize when the
+// token is recognisable, otherwise pass the raw token through untouched so the plugin — not this
+// parser — gets to be the authority on what resolves. Every front-end (plugin collector, CLI, MCP)
+// was spelling `parseNodeId(x) || x` itself, in three slightly different ways; that put half of this
+// module's contract back into three files, which is the exact drift it exists to prevent.
+function toNodeId(raw) {
+  return parseNodeId(raw) || (raw == null ? "" : String(raw));
+}
+
+// NODE_ID_RE/normalizeNodeId stay module-private: exporting them invited a consumer to re-derive
+// half the contract, which is the drift this file exists to prevent. ID is exported only because
+// seed-components.js composes it into its own source-scanning regexes.
+module.exports = { ID, parseNodeId, toNodeId };
