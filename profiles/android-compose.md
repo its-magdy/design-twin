@@ -10,6 +10,26 @@
 - `widthMode:"fill"` → `Modifier.fillMaxWidth()` or `Modifier.weight(1f)`; `"hug"` → `wrapContentWidth()`;
   `"fixed"` → `Modifier.width(N.dp)`.
 
+**Grid (`layout.display:"grid"`) → `LazyVerticalGrid`/`LazyHorizontalGrid`.** `columns`/`columnSizes`
+(per-track `{type:"flex"|"fixed"|"hug", value}`) → `GridCells.Fixed(N)` for a uniform count, or
+`GridCells.Adaptive(minSize)` for hug tracks; `columnGap`/`rowGap` → `horizontalArrangement`/
+`verticalArrangement = Arrangement.spacedBy(N.dp)`. `gridColumnSpan`/`gridRowSpan` → that item's
+`span = { GridItemSpan(N) }`. A small fixed grid can instead be nested `Row`s inside a `Column`.
+
+**Scroll, clip & sticky** — `clip:true` → `Modifier.clip(...)`; `layout.scroll` → `Modifier.verticalScroll`/
+`horizontalScroll(rememberScrollState())`, or `LazyColumn`/`LazyRow` for long content. `fixedChildren`
+**if present** (count of leading children pinned while the rest scrolls) → `LazyColumn` `stickyHeader { }`
+for that many leading children, or keep them outside the scrollable composable as a fixed header/footer.
+
+**Theming (`resolvedModes`/`variableModes`)** — `resolvedModes` (root) names the effective color scheme
+this export represents; if a subtree carries its own `variableModes`, force that scheme explicitly (a
+dedicated `MaterialTheme(colorScheme = darkColorScheme(...))` wrapper) rather than trusting
+`isSystemInDarkTheme()` for that subtree.
+
+**Vector fallback** — a `geometry` field (`fills`/`strokes`: arrays of SVG path `d` strings, plus `w`/`h`)
+appears on a vector node whose SVG export failed. Draw it with `Canvas`/`Path` in a `0 0 w h` coordinate
+space rather than a bitmap — there is no asset file for that node.
+
 **Units** — `.dp` for size/spacing, `.sp` for text.
 
 **Tokens** — the right-hand value in `tokens.json` is a Compose reference (e.g.

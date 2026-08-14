@@ -17,8 +17,18 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
   `{key,type,options,default}` (`options` = a variant's states), and a `hygiene` array of design-system
   smells (unbound values, variant explosion, broken aliases). **Read this early** (after the manifest
   gate below) to learn the system before building.
-- `design/screens.json` — full-page export: `index` (all screen names/ids) + `screens[]` each with a
-  compacted node `tree`. Use `index` to pick the screen; build from its `tree`.
+- `design/pages/index.json` — the root, run-wide manifest + a lean `pageDirs[]` (`{page,pageId,dir,index,layers}`, where `index` points at that page's own index file —
+  NOT the full layer list). `page` is the display name and is **not unique** — Figma allows two pages
+  with the same name, so if a name matches more than one entry, tell them apart by `pageId` (the stable
+  Figma page id) rather than by the disambiguating suffix on `dir`. Use it to find the Figma PAGE you want, then open `design/<index>` for that
+  page (its `layers[]`: names/ids, each with a `file` pointer) to pick the one you want, then read ONLY
+  that file. **Both `index` and `file` are already relative to `design/`**, so the path to open is
+  `design/<pointer>` — do NOT prepend `pages/<dir>/` a second time, and do not reassemble either path
+  from `dir` (that only works on the CLI layout, not the browser-download one). Split
+  per-page, per-file (not bundled into one JSON, and not dumped flat across every page) specifically so
+  you never have to load every OTHER page's — or layer's — data to build one. "Layer" is Figma's own
+  term for any top-level node swept off a page (its Layers-panel vocabulary; a page can hold many);
+  "screen" stays reserved below for a single node YOU deliberately select.
 - **Node `tree` may carry** (all optional): `reactions` (prototype interactions — trigger + navigation
   + transition/easing, incl. `set_variable`/`set_variable_mode`/`conditional` actions → wire real
   navigation + state, not a dead button), `scroll`/`clip` (scroll container vs fixed), `sizeLimits`/`pin`
@@ -35,10 +45,63 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
   may not match the render; pin a webfont or flag it), `css` (Figma's own computed CSS for the node when
   present — a strong hint, but reconcile against tokens rather than pasting verbatim), `devResources`
   (designer's linked Jira/Storybook/GitHub URLs — handoff context).
+  - `layout.display:"grid"` with `columns`/`rows`/`columnGap`/`rowGap`/`columnSizes`/`rowSizes`
+    (per-track `{type,value}`, `type` one of `flex`/`fixed`/`hug`)/`autoFlow`/`autoTracks` on the
+    container, and per-child `gridColumnSpan`/`gridRowSpan`/`gridColumnStart`/`gridRowStart`/
+    `gridJustifySelf`/`gridAlignSelf` (`start`/`center`/`end`) — see the profile's Grid section.
+  - `clip:true` (Figma `clipsContent`) + `layout.scroll` (Figma `overflowDirection`, values
+    `horizontal`/`vertical`/`both`) → overflow handling. `fixedChildren` **if present** (a count of
+    leading children pinned while the rest scrolls — sticky headers/footers/FABs) → `position:sticky`/
+    `fixed` on those children, not plain flow.
+  - `flows` (top-level in the full export: `{page, pageId, nodeId, name}` per prototype entry point —
+    distinct from per-node `reactions`) → candidate
+    top-level routes/screens; a `reactions` entry with `navigation` → route change (SPA nav / deep link),
+    `overlay` → modal/sheet component, `set_variable`/`set_variable_mode` → local state / theme toggle.
+    Ignore purely presentational triggers you can't action (e.g. `mediaHitTime` scrub points) rather than
+    guessing.
+  - `layoutGrids`, `measurements` (Dev-Mode redline `start`/`end`/`offset`/`text`), `devStatus`/
+    `devStatusNote`, `devResources` are **implementation hints for you, the agent** — never render them
+    as UI. `layoutGrids` informs the responsive column structure you choose; `measurements` cross-checks
+    spacing values you already have from `layout`/`box`.
+  - `exposedInstances`, `propRefs`, `overrides`, `detachedFrom` → before writing new markup for an
+    instance's sublayer, check whether it's prop-driven (`propRefs`) or instance-overridden (`overrides`)
+    and map that back onto the **existing** mapped component's props/variants rather than hand-building
+    the divergence. `detachedFrom` (`{key}` or `{componentId}`) means the node used to be an instance —
+    look that component up in `components.json` and reuse it unless the detach was clearly intentional.
+  - `effects[].type` incl. `noise`/`glass`/`texture`/`shader` and `background_blur` (backdrop) vs
+    `layer_blur` (foreground) → CSS `backdrop-filter: blur()` for `background_blur`, `filter: blur()` for
+    `layer_blur`. `noise`/`glass`/`texture`/`shader` have no direct CSS equivalent — approximate simple
+    cases (a subtle `noise` as a repeating SVG/PNG grain overlay) but **rasterize via the exported asset**
+    when the effect is load-bearing to the look; don't invent a shader.
+  - `truncate:true` (Figma `ENDING` truncation) → `text-overflow:ellipsis` + `white-space:nowrap`/
+    `overflow:hidden` (or `-webkit-line-clamp` when paired with `maxLines`); `maxLines:N` → line-clamp to
+    N lines; `autoResize` (`width_and_height`/`height`/`truncate`/`none`) → whether the box should
+    hug/wrap or clip. **Figma's own line breaks are not authoritative** — Figma uses a different text
+    engine than browsers, so don't copy manual `\n` placement as gospel; let the real text wrap and only
+    honor an explicit line break if it looks intentional (e.g. a short heading) against the `.png`.
+  - `intrinsicSize` (on image fills, `{w,h}`) → the image's natural aspect ratio; use it for
+    `aspect-ratio`/placeholder sizing so layout doesn't jump before the asset loads.
+  - `blendMode` (lowercased CSS blend mode name) → `mix-blend-mode`; `rotation` (radians) → `transform:
+    rotate()`; `flipped` (mirrored via a negative-determinant transform) → `transform: scaleX(-1)` (or Y,
+    check which axis via the `.png`); `skew` → `transform: skewX()`, in DEGREES (unlike `rotation`).
+  - A `geometry` field on a vector-shaped node (`fills`/`strokes`: arrays of SVG path `d` strings, plus
+    `w`/`h`) means that node's SVG export failed and there is NO asset file for it — render the paths as
+    an inline SVG (`<svg viewBox="0 0 w h"><path d="..."/></svg>`) rather than recreating the shape in CSS.
+- **Interaction states.** Before shipping any interactive element (button, input, link, row), check
+  `design/design-system.json`'s `components` catalog for that component's variant `options` — hover/
+  focus/disabled/error/selected states are usually modeled as variant values, not separate nodes. Focus
+  states are the most commonly missed and are an accessibility regression (keyboard-only users lose their
+  place) — always implement a visible `:focus-visible` style even when the design only shows hover.
+- **If the export came from the plugin's "Download layers" button instead of the figma-pull CLI**, the
+  same files arrive FLAT with `__` where the CLI writes `/` (`pages__<dir>__<name>__<id>.json`,
+  `pages__<dir>__index.json`, `pages__index.json`) — browsers are required to strip directory
+  information from a download, so the hierarchy is encoded in the filename. Each `file` pointer already
+  matches what landed on disk, so the rule is unchanged: open `design/<file>` verbatim, whichever
+  layout you're looking at. Either re-nest them into `design/pages/…` or just follow the pointers.
 - Every export doc has a **`manifest`** (`nodes`/`skipped`/`truncated`/`assetsFailed`/`warnings`).
   **Read it first** — if anything was truncated or an asset failed, tell the user before building rather
   than shipping a silently-incomplete screen.
-- `design/<screen>.json` — a single screen exported on its own (same tree shape), when not using screens.json.
+- `design/<screen>.json` — a single screen exported on its own (same tree shape), when not using `design/pages/`.
 - `design/<screen>.png` — reference screenshot (visual ground truth). **Always read it** — JSON gives
   exact values, the image tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
@@ -86,6 +149,9 @@ the target's language, framework, component library, and conventions; match the 
      unavoidable**.
    - `layout.mode:"absolute"` means the design had NO auto layout — **infer** a sensible flow layout;
      do NOT translate raw coordinates into absolute positioning.
+   - `layout.display:"grid"` → the profile's Grid section (CSS grid / grid utility classes / native grid
+     construct); don't flatten a real grid down to nested flex rows.
+   - `clip`/`layout.scroll`/`fixedChildren` → the profile's Scroll & sticky section.
 5. **Styling.** Prefer `tokens` (semantic names via `tokens.json`) over raw `fills`/values. Use raw
    values only when a node has no bound token; pick the nearest existing token when one obviously matches.
 6. **Assets.** Import `asset` files from `design/assets/` per the profile (some stacks need conversion).
@@ -111,6 +177,6 @@ the target's language, framework, component library, and conventions; match the 
 - **Convention fallback ladder** when something's ambiguous (naming, which primitive, structure):
   `design-system.json`/IR first → the user's codebase → common patterns only when neither settles it.
   Match what's already there; don't impose new conventions.
-- **Missing screen → STOP.** If the requested screen isn't in `screens.json`'s `index` (or its JSON is
-  missing/empty), ask — don't guess or build from the `.png` alone.
+- **Missing screen → STOP.** If the requested screen/layer isn't in its page's `pages/<dir>/index.json`
+  `layers[]` (or its JSON is missing/empty), ask — don't guess or build from the `.png` alone.
 - Match the surrounding codebase's conventions and the profile's output section.

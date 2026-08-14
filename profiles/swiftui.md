@@ -9,6 +9,27 @@
 - `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`).
 - `widthMode:"fill"` → `.frame(maxWidth: .infinity)`; `"hug"` → natural size; `"fixed"` → `.frame(width: N)`.
 
+**Grid (`layout.display:"grid"`) → `LazyVGrid`/`LazyHGrid`.** `columns`/`columnSizes` (per-track
+`{type:"flex"|"fixed"|"hug", value}`) → a `[GridItem]` array: `flex`→`GridItem(.flexible())`,
+`fixed`→`GridItem(.fixed(value))`, `hug`→`GridItem(.adaptive(minimum:...))`; `columnGap`/`rowGap` →
+`GridItem(spacing:)`/the grid's `spacing:`. `gridColumnSpan`/`gridRowSpan` → wrap that child in
+`.gridCellColumns(N)` (iOS 16+). `gridJustifySelf`/`gridAlignSelf` → the item's `.gridColumnAlignment`/
+frame alignment.
+
+**Scroll, clip & sticky** — `clip:true` → `.clipped()`; `layout.scroll` → `ScrollView` (`.horizontal` when
+`"horizontal"`). `fixedChildren` **if present** (count of leading children pinned while the rest scrolls)
+→ a `LazyVStack(pinnedViews: [.sectionHeaders])` with those children in a `Section(header:)`, or keep them
+outside the `ScrollView` entirely as a fixed header/footer `View`.
+
+**Theming (`resolvedModes`/`variableModes`)** — `resolvedModes` (root) names the effective color scheme
+(Light/Dark) this export represents; if a subtree carries its own `variableModes`, force that scheme on it
+with `.preferredColorScheme(_)` or by reading that mode's asset-catalog variant explicitly, rather than
+trusting the ambient `colorScheme` environment value.
+
+**Vector fallback** — a `geometry` field (`fills`/`strokes`: arrays of SVG path `d` strings, plus `w`/`h`)
+appears on a vector node whose SVG export failed. Render it with SwiftUI `Path { ... }` in a `0 0 w h`
+coordinate space rather than a bitmap `Image` — there is no asset file for that node.
+
 **Units** — `CGFloat` points, no `px`.
 
 **Tokens** — the right-hand value in `tokens.json` is a Swift reference (e.g. `Color("Primary")` from an
