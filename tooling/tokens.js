@@ -402,14 +402,18 @@ function emitTokens(designSystem, opts) {
 
 module.exports = { toDTCG, toCSS, lintTokens, emitTokens, hexToColorValue, cssVarName };
 
-// CLI: node tooling/tokens.js <design-system.json> [outDir]
+// CLI: node tooling/tokens.js <design-system/tokens.json> [outDir]
+// The input is the SPLIT token file — design-system.json is a slim pointer manifest since the split
+// and has no `variables` array (see bridge/design-system-layout.js).
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
+  const { assertNotManifest } = require("./catalog-input.js");
   const input = process.argv[2];
   const outDir = process.argv[3] || ".";
-  if (!input) { console.error("usage: node tooling/tokens.js <design-system.json> [outDir]"); process.exit(1); }
+  if (!input) { console.error("usage: node tooling/tokens.js <design-system/tokens.json> [outDir]"); process.exit(1); }
   const ds = JSON.parse(fs.readFileSync(input, "utf8"));
+  assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
   const { dtcg, css, warnings } = emitTokens(ds); // one pass: emit + lint share the same opts and traversal
   fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));

@@ -5,6 +5,7 @@ const { toDTCG, toCSS, lintTokens, hexToColorValue, cssVarName } = require("../t
 const { validateMap } = require("../tooling/map-validate");
 const { driftLint } = require("../tooling/drift-lint");
 const { bootstrap } = require("../tooling/map-bootstrap");
+const { isManifest } = require("../tooling/catalog-input");
 const { check, report } = require("./assert");
 
 const near = (a, b) => Math.abs(a - b) < 0.001;
@@ -445,5 +446,20 @@ check("[sec-mode-quote] the escaped selector still carries its declarations", qu
 check("[sec-mode-quote] rewrite is reported by lintTokens", lintTokens(modeDs(quoteMode)).some((w) => /escaped in its tokens\.css selector/.test(w)));
 check("[css-legit-mode] an ordinary mode name is NOT escaped", toCSS(modeDs("Dark")).includes('[data-theme="Dark"]'));
 check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("Dark")).some((w) => /escaped in its tokens\.css selector/.test(w)));
+
+// ---------- the design-system split: these CLIs must reject the slim manifest -----------------
+// design/design-system.json no longer carries variables/components. Handing it to tokens.js or
+// drift-lint.js would emit an empty token file / "0/0 mapped" — a silent wrong answer, not an error.
+const manifest = { exportedAt: "2026-08-16T00:00:00.000Z", file: "Demo",
+  files: { tokens: "design-system/tokens.json", componentsLocal: "design-system/components.local.json" },
+  counts: { variables: 12, components: 3 } };
+check("[manifest-guard] the slim manifest is detected when tokens.js wants `variables`", isManifest(manifest, "variables"));
+check("[manifest-guard] and when drift-lint/map-bootstrap want `components`", isManifest(manifest, "components"));
+check("[manifest-guard] a real split token file is NOT flagged", !isManifest({ exportedAt: "x", variables: [], collections: [] }, "variables"));
+check("[manifest-guard] a real split component file is NOT flagged", !isManifest({ exportedAt: "x", components: [] }, "components"));
+check("[manifest-guard] an EMPTY payload array still passes — zero variables is a legitimate export",
+  !isManifest({ files: { tokens: "t" }, variables: [] }, "variables"));
+check("[manifest-guard] junk/undefined input does not throw or false-positive",
+  !isManifest(null, "variables") && !isManifest({ files: ["a"] }, "variables"));
 
 report();

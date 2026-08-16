@@ -30,15 +30,19 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 
 ## How to use it (the workflow)
 ```
-# 1. Export the design system from Figma (existing plugin flow) -> design-system.json
+# 1. Export the design system from Figma (existing plugin flow) -> design-system.json manifest
+#    + design/design-system/{tokens,styles.paint,styles.text,styles.effect,styles.grid,
+#                            components.local,components.library,hygiene}.json
+#    NOTE: pass the SPLIT files below, never design-system.json — that is now a slim pointer
+#    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):
-node tooling/map-bootstrap.js design-system.json > codeconnect.local.json
+node tooling/map-bootstrap.js design/design-system/components.local.json > codeconnect.local.json
 # 3. Validate the map shape:
 node tooling/map-validate.js codeconnect.local.json
 # 4. Check it against the current Figma catalog (run this in CI / pre-commit):
-node tooling/drift-lint.js codeconnect.local.json design-system.json
+node tooling/drift-lint.js codeconnect.local.json design/design-system/components.local.json
 # 5. Emit code tokens:
-node tooling/tokens.js design-system.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
+node tooling/tokens.js design/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
 #    (or feed tokens.dtcg.json to Style Dictionary for Tailwind/SwiftUI/Compose output)
 ```
 Then the codegen step consults `codeconnect.local.json` (a mapped instance → your component; an unmapped
@@ -73,7 +77,7 @@ part of the deferred resolver work (needs a target repo).
 ## Validating on a real file
 `node test/tooling.test.js` (122 checks) runs on **mock** data. Before trusting the tooling on real
 output, walk the **Layer C checklist in `../TESTING.md`** — it runs the token emitter, bootstrap,
-validator, and drift-lint against a genuine `design-system.json` and injects each drift class to confirm
+validator, and drift-lint against a genuine export (`design/design-system/`) and injects each drift class to confirm
 the lint catches it.
 
 ## Status
