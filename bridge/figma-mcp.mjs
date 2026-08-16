@@ -79,6 +79,36 @@ server.registerTool(
   guarded(async (a) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list)))
 );
 server.registerTool(
+  "figma_list_libraries",
+  {
+    description: "CHEAP discovery: which design libraries this file draws on \u2014 the local file's own published assets plus every ENABLED team library \u2014 with each one's variable collections and how many of its components this file uses. Call this BEFORE exporting, then scope the export to what you actually need (figma_list_pages -> figma_export_full({page})). Limits worth knowing: component counts are USAGE-derived (Figma exposes no API to enumerate a library's full contents), and libraries can only be enabled from the Figma UI \u2014 never via API \u2014 so results reflect whatever was enabled at call time. An EMPTY result is a normal outcome (free plan, or no library enabled), not a failure; check `warnings`. Requires a plugin built with the 'teamlibrary' permission \u2014 re-import the plugin in Figma if this returns nothing.",
+    annotations: READ_ONLY
+  },
+  // Compacted here rather than passed through: the plugin's shape is already small, but an agent
+  // reads this tool's result in full, so collapse each library's collections to name+count and keep
+  // `warnings` (the field that explains an empty list) intact. Same spirit as stripAssets.
+  guarded(async () => {
+    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list);
+    const libraries = (r && r.libraries || []).map((l) => ({
+      key: l.key,
+      name: l.name,
+      kind: l.kind,
+      componentCount: l.componentCount,
+      variableCollections: (l.variableCollections || []).map((c) => ({ key: c.key, name: c.name, variableCount: c.variableCount })),
+      ...l.note ? { note: l.note } : {}
+    }));
+    const warnings = r && r.warnings || [];
+    return textResult({
+      libraries,
+      warnings,
+      ...libraries.length ? {} : {
+        note: "No libraries reported \u2014 a NORMAL outcome, not necessarily an error. Check, in order: the plugin in Figma predates the 'teamlibrary' permission (re-import it); no team library is enabled for this file (enable it in the Figma UI \u2014 no API can); free plan (library variable collections are not exposed to plugins)."
+      },
+      countsNote: "componentCount is USAGE-derived \u2014 components of that library used in THIS file. Figma exposes no API to enumerate a library's full contents."
+    });
+  })
+);
+server.registerTool(
   "figma_list_children",
   {
     description: "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) \u2014 no recursion, no assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
@@ -121,6 +151,17 @@ server.registerTool(
       exportTimeout({ allPages })
     ));
   })
+);
+server.registerTool(
+  "figma_export_design_system",
+  {
+    description: "Export ONLY the design system \u2014 variables, styles, local + library components, hygiene report \u2014 with no page/frame walk and therefore no assets (assets are exported per-node during that walk). The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this session, so a bare design-system pull may see fewer of them than a full pull would \u2014 local variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split.",
+    inputSchema: { ...writeShape },
+    annotations: READ_ONLY
+  },
+  // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
+  // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
+  guarded(async (a) => exportResult(a, await bridge.request("exportDesignSystem", {}, TIMEOUTS.export)))
 );
 server.registerTool(
   "figma_export_selection",

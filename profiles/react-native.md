@@ -43,7 +43,7 @@ copy them as literal `\n`s; let `<Text>` wrap.
 **Images** — use `intrinsicSize` to set `aspectRatio: w/h` in the image's style so layout doesn't jump
 before load; always set explicit `width`/`height` or `aspectRatio` (never omit both).
 
-**Interaction states** — check `design/design-system.json` component variant `options` for
+**Interaction states** — check `design/design-system/components.local.json` component variant `options` for
 pressed/disabled/error/selected states; implement pressed via `Pressable`'s `style={({pressed}) => ...}`.
 RN has no hover/focus-visible on touch, but for any web-adjacent RN target (RNW) still add a focus ring.
 

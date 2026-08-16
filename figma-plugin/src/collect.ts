@@ -405,6 +405,30 @@ export async function listChildren(rawId: string): Promise<Obj> {
   };
 }
 
+// Export ONLY the design system (variables, styles, components, hygiene) — no page/frame walk, no
+// assets. This is the cheap sibling of collectFull for callers who want tokens/styles/components and
+// don't need any screen's layer tree: skipping the walk also skips the exportAsync render pass that
+// dominates a full pull's cost. One real gap vs collectFull's designSystem: buildDesignSystem's
+// library-variable dump only emits REMOTE variables referenced by nodes this run actually walked (see
+// dumpVariables in variables.ts) — with no walk, that set is empty, so only LOCAL variable collections
+// come back complete. Local variables/styles/components are unaffected; that limitation is called out
+// via `designSystem.hygiene` — NOT `manifest().warnings` — because hygiene is the one field that
+// survives to disk: buildDesignSystemLayout (bridge/design-system-layout.js) splits designSystem into
+// tokens/styles/components.local/components.library/hygiene.json and a slim root manifest, copying
+// only those five keys + the exportedAt/file/colorProfile stamp. A `manifest` field attached here would
+// be silently dropped by that split, and dropped again by figma_export_design_system's
+// `writeToDisk: true` MCP path — the one place a caller can't fall back to reading the CLI's stderr.
+export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Obj> {
+  resetRun();
+  applyOpts(opts);
+  const designSystem = await buildDesignSystem();
+  designSystem.hygiene = [
+    "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced — pull a page for the full set.",
+    ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
+  ];
+  return { designSystem };
+}
+
 // Export the design system + frame trees. Frame trees default to the CURRENT page; pass
 // { allPages:true } to walk every page (opt-in — a whole multi-page file can be very large).
 export async function collectFull(opts?: CollectOpts): Promise<Obj> {

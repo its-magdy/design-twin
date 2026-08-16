@@ -19,7 +19,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.js
 ```
 
-Expected: **`306/306 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: **`342/342 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -49,7 +49,10 @@ node --check tooling/tokens.js tooling/map-validate.js tooling/drift-lint.js too
 `test/bridge.test.js` covers the bridge files the plugin harness can't reach: `server-core.js`'s
 `verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host), the
 `seed-components.js` CLI driven as a subprocess against a temp directory, `write-out.js` (the one
-writer both front-ends share), and `daemon.js`.
+writer both front-ends share), and `daemon.js`. It also owns `figma-pull.js`'s argument parsing and
+its `--list-libraries` renderer: the CLI/MCP layer is testable without a plugin on the other end
+(arg guards, table/empty-case output, and the built MCP bundle's tool schema), and the plugin-side
+library reads are the harness's job, not this suite's.
 
 The daemon tests drive a **fake bridge** — no Figma, no WebSocket — so the parts that actually break
 are testable offline: request serialization (the plugin is single-threaded), newline framing across
@@ -58,7 +61,7 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 143/143 checks passed, exit 0
+node test/bridge.test.js        # expect: 205/205 checks passed, exit 0
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
 ```
 
@@ -116,12 +119,13 @@ field, assert both the DTCG output and the CSS output.
 2. Confirm health: status shows **"N selected"** or a select-a-frame hint (not stuck on "Loading…").
 3. **Select a frame**, click **"Export current selection"** → click **Download `<screen>.json`** and
    **Download `variables.json`** (and **Download assets** if a count shows). Files land in `~/Downloads`.
-   - Or **"Export design system + all page frames"** → `design-system.json` + click **Download layers
+   - Or **"Export design system + all page frames"** → `design-system.json` + `design-system__*.json` + click **Download layers
      (N)** (one file per top-level layer grouped under `pages/<page>/`, plus a root `pages/index.json`
      and a per-page `pages/<page>/index.json` — see "layers are split per-page, per-file" below) — the
      fuller test.
 4. Hand the files to the agent: it reads `~/Downloads/<screen>.json` (and `variables.json` /
-   `design-system.json` / `pages/index.json` + the per-page `index.json` + the per-layer files) and
+   `design-system.json` + `design-system/` (or `design-system__*.json` from the browser download) /
+   `pages/index.json` + the per-page `index.json` + the per-layer files) and
    validates against the checklist below. Move the files into `design/` when you want to actually build
    from them.
 
@@ -143,6 +147,23 @@ layer's metadata) plus, per page, `design/pages/<page>/index.json` (that page's 
 `{name,id,type,page,file}` entries) and one `design/pages/<page>/<name>__<id>.json` per layer (`{name,
 id, page, tree, reference, devResources}`). Read the root index to find the PAGE you want, its own
 index.json to find the LAYER, then read only that file — never a whole directory.
+
+### Discovering which libraries a file uses (do this first)
+
+Before any pull, run `node bridge/figma-pull.js --list-libraries` (MCP twin: `figma_list_libraries`).
+It prints the local file's published assets plus every **enabled** team library, each with its variable
+collections and a component count, then you scope the pull with `--list` → `--page <id>`.
+
+What to check in the output, and what NOT to read into it:
+- Component counts are **usage-derived** — Figma has no API to enumerate a library's contents, so the
+  number is components of that library used in *this* file. A low count is not a small library.
+- Only libraries **enabled in the Figma UI** can appear; nothing can enable one via API. If a library
+  you expect is missing, enable it in Figma (Assets → Libraries) and re-run — the export was scoped to
+  what was enabled at the time, silently.
+- **An empty list is a valid result** (free plan, or nothing enabled) and the command says so in words.
+  But rule out a **stale plugin first**: library reads require `"permissions": ["teamlibrary"]` in
+  `figma-plugin/manifest.json`, and a plugin imported before that returns nothing at all with no error.
+  Re-import the manifest, then re-run.
 
 ### Peeking inside a frame before a full pull
 
@@ -167,11 +188,18 @@ appear only when the design contains them):
   type-discriminated (`background_blur` has no offset); `rotation`/`blendMode`/`mask`
 - `tokens` (bound-variable names), `component` (instance→main name), `asset` (path into `assets/`)
 
-**`design-system.json`**:
-- `variables[]` with `tier` (primitive/semantic), `scopes`, `codeSyntax {WEB,ANDROID,iOS}` (when set), and
+**`design-system.json`** is a slim manifest (`exportedAt`/`file`/`colorProfile`, `files` pointers,
+`counts`); the catalog itself is split under `design-system/` along Figma's own taxonomy —
+`tokens.json` (collections → modes → variables), one file per style type — `styles.paint.json`/
+`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate Paint/Text/Effect/Grid
+style system), `components.local.json` / `components.library.json`, `hygiene.json`:
+- `design-system/tokens.json` → `collections[]` + `variables[]` with `tier` (primitive/semantic), `scopes`, `codeSyntax {WEB,ANDROID,iOS}` (when set), and
   alias values re-keyed by mode name; COLOR values as hex (alpha preserved)
-- `components[]` with `id`, `description`, and props as `{key,type,options,default}` (real `#uid` key kept)
-- `hygiene[]` — design-system smells (ALL_SCOPES, semantic-holds-raw, broken alias, variant>30, unnamed/dupe)
+- `design-system/components.local.json` → `components[]` with `id`, `page`/`pageId`, `description`, and
+  props as `{key,type,options,default}` (real `#uid` key kept). `components.library.json` holds the
+  `remote: true` entries — library mains recovered from instances, so no `id`/`page` and possibly
+  INFERRED props
+- `design-system/hygiene.json` → `hygiene[]` — design-system smells (ALL_SCOPES, semantic-holds-raw, broken alias, variant>30, unnamed/dupe)
 
 ### Component-map seeding (optional, tested separately)
 
@@ -197,10 +225,12 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 `[RD2-mixed]`/`[RD2-pure]` added to `test/tooling.test.js`.
 
 ### Prereq
-- [ ] You have a real `design-system.json` from **"Export design system + all page frames"** (Layer B).
-      It should contain a non-empty `variables[]` and `components[]`.
+- [ ] You have a real export from **"Export design system + all page frames"** (Layer B): a
+      `design-system.json` manifest plus `design-system/` with a non-empty `tokens.json` `variables[]`
+      and `components.local.json` `components[]`. Every split file repeats the `exportedAt` stamp, so
+      the tooling below is pointed at the part it actually consumes.
 
-### Tokens (`node tooling/tokens.js design-system.json ./out`)
+### Tokens (`node tooling/tokens.js design/design-system/tokens.json ./out`)
 - [ ] Command prints `wrote tokens.dtcg.json + tokens.css (N variables)` with N matching your variable count.
 - [ ] **References preserved** in `out/tokens.dtcg.json`: a semantic token's `$value` is a `"{group.token}"`
       string, NOT a flattened hex. (A flattened hex here = the themeability bug.)
@@ -213,7 +243,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 - [ ] **Never-silent**: any warning the CLI prints (`warn …`) is a REAL issue in your file (a dangling
       alias, a name collision, a token with no value) — investigate each; there should be none on a clean file.
 
-### Bootstrap → validate (`node tooling/map-bootstrap.js design-system.json > codeconnect.local.json`)
+### Bootstrap → validate (`node tooling/map-bootstrap.js design/design-system/components.local.json > codeconnect.local.json`)
 - [ ] Every **published** component appears, keyed by its publish key; unpublished ones are keyed by node
       id with `figma.unstable: true`.
 - [ ] Each entry has `status: "needs-review"`, a `code.export` that reads like a component name, and props
@@ -221,24 +251,24 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       INSTANCE_SWAP→`instance` slot).
 - [ ] `node tooling/map-validate.js codeconnect.local.json` prints **`map valid`** (exit 0).
 
-### Drift-lint — clean, then inject each drift class (`node tooling/drift-lint.js codeconnect.local.json design-system.json`)
+### Drift-lint — clean, then inject each drift class (`node tooling/drift-lint.js codeconnect.local.json design/design-system/components.local.json`)
 - [ ] On the fresh bootstrap it reports **0 errors and 0 warnings** (`N/N components mapped`) — bootstrap
       covers every component and every variant option, so a clean file is clean. (No tool flags the
       `TODO: import path` placeholders — they're markers for you to fill in, then confirm the entry.)
 - [ ] **orphaned-entry (ERROR)**: add a bogus entry `"ZZZ": {figma:{key:"ZZZ",name:"Gone"}, code:{module:"x",export:"X"}}` → lint errors, exit 1.
-- [ ] **stale-name (warn)**: change one component's `name` in `design-system.json` (keep its key) → `stale-name` warning, still 0 errors.
+- [ ] **stale-name (warn)**: change one component's `name` in `components.local.json` (keep its key) → `stale-name` warning, still 0 errors.
 - [ ] **stale-prop (ERROR)**: add a made-up prop to a map entry → `stale-prop` error.
 - [ ] **unknown-variant-value (ERROR)**: in an enum's `values`, add an option that isn't in the component → error.
 - [ ] **kind-mismatch (ERROR)**: change a map prop's `kind` to the wrong type → error.
 - [ ] **unmapped-component (warn)**: delete an entry for a component that still exists → coverage warning.
 - [ ] Re-running bootstrap over your **edited** map PRESERVES your hand-edits (fill in one `code.module`,
       re-run `map-bootstrap … existing`, confirm your value survived).
-- [ ] **Staleness**: a fresh `design-system.json` (just exported) reports no freshness warning; hand-edit
+- [ ] **Staleness**: a fresh `components.local.json` (just exported) reports no freshness warning; hand-edit
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
-      `unknown-freshness` warning. Override the threshold with `node tooling/drift-lint.js map.json design-system.json --max-age <hours>`
+      `unknown-freshness` warning. Override the threshold with `node tooling/drift-lint.js map.json components.local.json --max-age <hours>`
       (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/figma-pull.js` both surface the
       same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/design-system.json`
-      (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
+      manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
 
 ### Reality check on a messy file (optional but recommended)
 - [ ] Run tokens on a file that hardcodes hex instead of using variables → `variables[]` is small/empty and
@@ -254,19 +284,22 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 
 | Command | What |
 |---|---|
-| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `306/306` |
+| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `342/342` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
 | `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `204/204` |
-| `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp) — expect `143/143` |
+| `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
+and the `figma_list_libraries` tool schema) — expect `205/205` |
+| `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
 | `node bridge/figma-pull.js --list-pages` | Cheap: page names only, no page load (prints to stdout) |
 | `node bridge/figma-pull.js --list` | Cheap: pages + their top-level frames (prints to stdout) |
 | `node bridge/figma-pull.js --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
 | `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
+| `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check tooling/*.js` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
-| `node tooling/map-bootstrap.js design-system.json` | Scaffold codeconnect.local.json from the Figma catalog |
-| `node tooling/drift-lint.js codeconnect.local.json design-system.json` | Fail on map↔Figma drift (CI/pre-commit) |
-| `node tooling/tokens.js design-system.json ./out` | Emit tokens.dtcg.json + tokens.css |
+| `node tooling/map-bootstrap.js design/design-system/components.local.json` | Scaffold codeconnect.local.json from the Figma catalog |
+| `node tooling/drift-lint.js codeconnect.local.json design/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
+| `node tooling/tokens.js design/design-system/tokens.json ./out` | Emit tokens.dtcg.json + tokens.css |

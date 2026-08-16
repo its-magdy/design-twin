@@ -31,9 +31,9 @@
     mod
   ));
 
-  // ../bridge/pages-layout.js
+  // bridge/pages-layout.js
   var require_pages_layout = __commonJS({
-    "../bridge/pages-layout.js"(exports, module) {
+    "bridge/pages-layout.js"(exports, module) {
       "use strict";
       function safe2(id) {
         return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -81,18 +81,104 @@
     }
   });
 
-  // ../bridge/errmsg.js
+  // bridge/errmsg.js
   var require_errmsg = __commonJS({
-    "../bridge/errmsg.js"(exports, module) {
+    "bridge/errmsg.js"(exports, module) {
       "use strict";
       var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
       module.exports = { errMsg: errMsg2 };
     }
   });
 
-  // ../bridge/read-opts.js
+  // bridge/design-system-layout.js
+  var require_design_system_layout = __commonJS({
+    "bridge/design-system-layout.js"(exports, module) {
+      "use strict";
+      var DIR = "design-system";
+      var TOKENS = "tokens.json";
+      var STYLES_PAINT = "styles.paint.json";
+      var STYLES_TEXT = "styles.text.json";
+      var STYLES_EFFECT = "styles.effect.json";
+      var STYLES_GRID = "styles.grid.json";
+      var COMPONENTS_LOCAL = "components.local.json";
+      var COMPONENTS_LIBRARY = "components.library.json";
+      var HYGIENE = "hygiene.json";
+      var MANIFEST = "design-system.json";
+      function isLibraryEntry(c) {
+        return !!(c && c.remote === true);
+      }
+      function buildDesignSystemLayout2(ds, sep) {
+        const d = ds || {};
+        const join = (name) => DIR + (sep || "/") + name;
+        const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
+        const components = Array.isArray(d.components) ? d.components : [];
+        const local = components.filter((c) => !isLibraryEntry(c));
+        const library = components.filter(isLibraryEntry);
+        const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
+        const styles = d.styles || {};
+        const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
+        const stylesText = Array.isArray(styles.text) ? styles.text : [];
+        const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
+        const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
+        const files = [
+          { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
+          { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
+          { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
+          { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
+          { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
+          { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
+          { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
+          { path: join(HYGIENE), data: { ...stamp, hygiene } }
+        ];
+        const counts = {
+          collections: (d.collections || []).length,
+          variables: (d.variables || []).length,
+          stylesPaint: stylesPaint.length,
+          stylesText: stylesText.length,
+          stylesEffect: stylesEffect.length,
+          stylesGrid: stylesGrid.length,
+          components: local.length,
+          libraryComponents: library.length,
+          hygiene: hygiene.length
+        };
+        const manifest2 = {
+          ...stamp,
+          files: {
+            tokens: join(TOKENS),
+            stylesPaint: join(STYLES_PAINT),
+            stylesText: join(STYLES_TEXT),
+            stylesEffect: join(STYLES_EFFECT),
+            stylesGrid: join(STYLES_GRID),
+            componentsLocal: join(COMPONENTS_LOCAL),
+            componentsLibrary: join(COMPONENTS_LIBRARY),
+            hygiene: join(HYGIENE)
+          },
+          counts
+        };
+        files.push({ path: MANIFEST, data: manifest2 });
+        return { files, manifest: manifest2, counts, dir: DIR };
+      }
+      module.exports = {
+        buildDesignSystemLayout: buildDesignSystemLayout2,
+        isLibraryEntry,
+        DESIGN_SYSTEM_FILES: {
+          TOKENS,
+          STYLES_PAINT,
+          STYLES_TEXT,
+          STYLES_EFFECT,
+          STYLES_GRID,
+          COMPONENTS_LOCAL,
+          COMPONENTS_LIBRARY,
+          HYGIENE,
+          MANIFEST
+        }
+      };
+    }
+  });
+
+  // bridge/read-opts.js
   var require_read_opts = __commonJS({
-    "../bridge/read-opts.js"(exports, module) {
+    "bridge/read-opts.js"(exports, module) {
       "use strict";
       var READ_OPTS = [
         {
@@ -143,9 +229,9 @@
     }
   });
 
-  // ../bridge/node-id.js
+  // bridge/node-id.js
   var require_node_id = __commonJS({
-    "../bridge/node-id.js"(exports, module) {
+    "bridge/node-id.js"(exports, module) {
       "use strict";
       var ID = "[A-Za-z0-9%:;_-]+";
       var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
@@ -180,7 +266,7 @@
     }
   });
 
-  // src/util.ts
+  // figma-plugin/src/util.ts
   var import_pages_layout = __toESM(require_pages_layout());
   var import_errmsg = __toESM(require_errmsg());
   var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
@@ -236,10 +322,11 @@
     return out + chunk;
   }
 
-  // src/main.ts
+  // figma-plugin/src/main.ts
   var import_pages_layout2 = __toESM(require_pages_layout());
+  var import_design_system_layout = __toESM(require_design_system_layout());
 
-  // src/state.ts
+  // figma-plugin/src/state.ts
   var import_read_opts = __toESM(require_read_opts());
   var assets = [];
   var runOpts = (0, import_read_opts.readOptDefaults)();
@@ -338,10 +425,10 @@
     imageSizeCache.clear();
   }
 
-  // src/collect.ts
+  // figma-plugin/src/collect.ts
   var import_node_id = __toESM(require_node_id());
 
-  // src/layout.ts
+  // figma-plugin/src/layout.ts
   var ALIGN = {
     MIN: "flex-start",
     CENTER: "center",
@@ -412,7 +499,7 @@
     return l;
   }
 
-  // src/variables.ts
+  // figma-plugin/src/variables.ts
   async function resolveVar(alias) {
     if (!alias || alias.type !== "VARIABLE_ALIAS") return void 0;
     return varName(alias.id);
@@ -585,7 +672,7 @@
     };
   }
 
-  // src/assets.ts
+  // figma-plugin/src/assets.ts
   var ASSET_DIR = "assets/";
   function register(a) {
     const file = (0, import_pages_layout.safe)(a.id) + "." + (0, import_pages_layout.safe)(a.format);
@@ -759,7 +846,7 @@
     }
   }
 
-  // src/paint.ts
+  // figma-plugin/src/paint.ts
   var FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
   function imageFilters(f) {
     if (!f.filters || typeof f.filters !== "object") return void 0;
@@ -878,7 +965,7 @@
     return out;
   }
 
-  // src/effects.ts
+  // figma-plugin/src/effects.ts
   var GLASS_FIELDS = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
   async function simplifyEffects(effects) {
     if (!Array.isArray(effects)) return void 0;
@@ -933,7 +1020,7 @@
     return out.length ? out : void 0;
   }
 
-  // src/text.ts
+  // figma-plugin/src/text.ts
   var lenUnit = (v) => ({ value: round(v.value), unit: v.unit === "PERCENT" ? "percent" : "px" });
   function lineH(v) {
     if (!v || v === figma.mixed) return void 0;
@@ -1048,6 +1135,10 @@
     if (typeof t.listSpacing === "number" && t.listSpacing) out.font.listSpacing = t.listSpacing;
     if (t.leadingTrim && t.leadingTrim !== figma.mixed && t.leadingTrim !== "NONE") out.font.leadingTrim = t.leadingTrim.toLowerCase();
     if (t.textAlignVertical && t.textAlignVertical !== "TOP") out.font.valign = t.textAlignVertical.toLowerCase();
+    {
+      const tw = t.textWrapStyle;
+      if (typeof tw === "string" && tw && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+    }
     if (t.hangingList === true) out.font.hangingList = true;
     if (t.hangingPunctuation === true) out.font.hangingPunctuation = true;
     if (t.textAutoResize && t.textAutoResize !== "NONE") out.autoResize = t.textAutoResize.toLowerCase();
@@ -1061,7 +1152,7 @@
     return out;
   }
 
-  // src/prototype.ts
+  // figma-plugin/src/prototype.ts
   function simplifyTransition(tr) {
     const t = { type: tr.type ? tr.type.toLowerCase() : void 0 };
     if (tr.direction) t.direction = tr.direction.toLowerCase();
@@ -1146,7 +1237,247 @@
     return out.length ? out : void 0;
   }
 
-  // src/components.ts
+  // figma-plugin/src/libraries.ts
+  var UNKNOWN_LIBRARY = "unknown-library";
+  function readRegistry(sink) {
+    try {
+      const raw = figma.root.getPluginData && figma.root.getPluginData("libraryRegistry");
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      const out = {};
+      for (const k of Object.keys(parsed)) if (typeof parsed[k] === "string" && parsed[k]) out[k] = parsed[k];
+      return out;
+    } catch (e) {
+      sink("library registry (document pluginData 'libraryRegistry') is unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 remote components stay unattributed");
+      return {};
+    }
+  }
+  async function allInstances(sink) {
+    await loadAllPages("library component scan may be incomplete");
+    const out = [];
+    const prevSkip = figma.skipInvisibleInstanceChildren;
+    try {
+      try {
+        figma.skipInvisibleInstanceChildren = true;
+      } catch (e) {
+      }
+      for (const page of figma.root.children) {
+        try {
+          out.push(...page.findAllWithCriteria({ types: ["INSTANCE"] }));
+        } catch (e) {
+          sink("library scan: page '" + page.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its library components are missing");
+        }
+      }
+    } finally {
+      try {
+        figma.skipInvisibleInstanceChildren = prevSkip;
+      } catch (e) {
+      }
+    }
+    return out;
+  }
+  async function mainOf(inst) {
+    try {
+      return await inst.getMainComponentAsync();
+    } catch (e) {
+      return null;
+    }
+  }
+  function mainNames(main) {
+    const parent = main.parent || null;
+    if (parent && parent.type === "COMPONENT_SET") return { name: parent.name, variantOf: main.name };
+    return { name: main.name };
+  }
+  function tryDefinitions(main) {
+    try {
+      const defs = main.componentPropertyDefinitions;
+      if (!defs || !Object.keys(defs).length) return void 0;
+      const props = {};
+      for (const k of Object.keys(defs)) {
+        const d = defs[k];
+        const p = { key: k, type: d.type };
+        if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
+        if (d.defaultValue !== void 0) p.default = d.defaultValue;
+        if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
+          p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
+        }
+        if (d.description) p.description = d.description;
+        props[propName(k)] = p;
+      }
+      return nonEmpty(props);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  function aggregateFromInstances(instances) {
+    const props = {};
+    for (const inst of instances) {
+      let cp;
+      try {
+        cp = inst.componentProperties;
+      } catch (e) {
+        continue;
+      }
+      if (!cp) continue;
+      for (const k of Object.keys(cp)) {
+        const v = cp[k];
+        if (!v) continue;
+        const name = propName(k);
+        const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] });
+        if (v.value !== void 0 && p.observed.indexOf(v.value) === -1) p.observed.push(v.value);
+      }
+    }
+    return nonEmpty(props);
+  }
+  async function collectLibraryComponents(sinkIn) {
+    const sink = sinkIn || warn;
+    const registry = readRegistry(sink);
+    const instances = await allInstances(sink);
+    const mains = await Promise.all(instances.map((i) => mainOf(i)));
+    const byKey = /* @__PURE__ */ new Map();
+    let unkeyed = 0;
+    for (let i = 0; i < instances.length; i++) {
+      const main = mains[i];
+      if (!main) continue;
+      if (!main.remote) continue;
+      const key = main.key;
+      if (!key) {
+        unkeyed++;
+        continue;
+      }
+      const bucket = byKey.get(key);
+      if (bucket) bucket.instances.push(instances[i]);
+      else byKey.set(key, { main, instances: [instances[i]] });
+    }
+    if (unkeyed) sink(unkeyed + " remote component instance(s) have a main component with no publish key \u2014 omitted from the library catalog");
+    const out = [];
+    for (const [key, bucket] of byKey) {
+      const names = mainNames(bucket.main);
+      const entry = {
+        name: names.name,
+        key,
+        type: "COMPONENT",
+        remote: true,
+        source: registry[key] || UNKNOWN_LIBRARY,
+        uses: bucket.instances.length
+        // how many instances of it are in THIS file
+      };
+      if (names.variantOf) entry.variant = names.variantOf;
+      if (bucket.main.description) entry.description = bucket.main.description;
+      const defs = tryDefinitions(bucket.main);
+      if (defs) {
+        entry.props = defs;
+        entry.derivedFrom = "definitions";
+      } else {
+        const observed = aggregateFromInstances(bucket.instances);
+        if (observed) entry.props = observed;
+        entry.derivedFrom = "instances";
+      }
+      out.push(entry);
+    }
+    return out;
+  }
+  async function libraryVariableCollections(sink) {
+    const byLibrary = /* @__PURE__ */ new Map();
+    let collections = [];
+    try {
+      collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    } catch (e) {
+      sink(
+        "team-library variables unavailable (" + (0, import_errmsg.errMsg)(e) + ') \u2014 needs manifest permissions:["teamlibrary"] and a plan with shared libraries; library COMPONENTS below are unaffected'
+      );
+      return byLibrary;
+    }
+    if (!collections || !collections.length) {
+      sink("no team libraries are enabled for this file \u2014 enable them in Figma (Assets > Libraries); an empty list here is normal, not a failure");
+      return byLibrary;
+    }
+    const counts = await Promise.all(
+      collections.map(async (c) => {
+        try {
+          const vars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key);
+          return vars ? vars.length : 0;
+        } catch (e) {
+          sink("library collection '" + c.name + "': variables could not be listed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 count omitted");
+          return void 0;
+        }
+      })
+    );
+    for (let i = 0; i < collections.length; i++) {
+      const c = collections[i];
+      const lib = c.libraryName || UNKNOWN_LIBRARY;
+      const entry = { key: c.key, name: c.name };
+      if (counts[i] !== void 0) entry.variableCount = counts[i];
+      const list = byLibrary.get(lib);
+      if (list) list.push(entry);
+      else byLibrary.set(lib, [entry]);
+    }
+    return byLibrary;
+  }
+  async function listLibraries() {
+    const warnings2 = [];
+    const sink = (m) => warnings2.push(m);
+    const [varsByLibrary, components] = await Promise.all([
+      libraryVariableCollections(sink),
+      collectLibraryComponents(sink).catch((e) => {
+        sink("library component scan failed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 component counts are missing, variable collections below are unaffected");
+        return [];
+      })
+    ]);
+    const compBySource = /* @__PURE__ */ new Map();
+    for (const c of components) compBySource.set(c.source, (compBySource.get(c.source) || 0) + 1);
+    const libraries = [];
+    const localCollections = [];
+    try {
+      const [colls, vars] = await Promise.all([
+        figma.variables.getLocalVariableCollectionsAsync(),
+        figma.variables.getLocalVariablesAsync()
+      ]);
+      const perColl = /* @__PURE__ */ new Map();
+      for (const v of vars) perColl.set(v.variableCollectionId, (perColl.get(v.variableCollectionId) || 0) + 1);
+      for (const c of colls) localCollections.push({ key: c.key || c.id, name: c.name, variableCount: perColl.get(c.id) || 0 });
+    } catch (e) {
+      sink("local variable collections could not be listed (" + (0, import_errmsg.errMsg)(e) + ")");
+    }
+    libraries.push({
+      key: figma.fileKey || "local",
+      name: figma.root && figma.root.name || "(this file)",
+      kind: "local",
+      variableCollections: localCollections,
+      componentCount: void 0,
+      // local components are enumerated properly by the design-system catalog
+      note: "this file \u2014 its local components are listed in full by the design-system export, not counted here"
+    });
+    const seenSources = /* @__PURE__ */ new Set();
+    for (const [libName, collections] of varsByLibrary) {
+      seenSources.add(libName);
+      const componentCount = compBySource.get(libName);
+      libraries.push({
+        key: collections.length ? collections[0].key : libName,
+        // libraries themselves have no key — a collection key is the closest stable handle
+        name: libName,
+        kind: "library",
+        variableCollections: collections,
+        componentCount,
+        note: componentCount === void 0 ? "variable collections are complete; component attribution is impossible via the API \u2014 any components from this library are counted under '" + UNKNOWN_LIBRARY + "'" : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers \u2014 library components cannot be enumerated"
+      });
+    }
+    for (const [source, count] of compBySource) {
+      if (seenSources.has(source)) continue;
+      libraries.push({
+        key: source,
+        name: source,
+        kind: "library",
+        variableCollections: [],
+        componentCount: count,
+        note: source === UNKNOWN_LIBRARY ? "components consumed from published libraries that the API cannot attribute to a source (only VARIABLES carry a libraryName). componentCount counts DISTINCT components USED IN THIS FILE, not what any library offers." : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers"
+      });
+    }
+    return { exportedAt: exportedAt(), file: figma.root && figma.root.name || void 0, libraries, warnings: warnings2 };
+  }
+
+  // figma-plugin/src/components.ts
   async function instanceComponent(node) {
     if (node.type !== "INSTANCE") return void 0;
     try {
@@ -1264,6 +1595,24 @@
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete");
     const components = await collectComponentCatalog(hygiene);
+    try {
+      const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
+      const remote = await collectLibraryComponents((m) => warn(m));
+      let added = 0;
+      for (const entry of remote) {
+        if (seenKeys.has(entry.key)) continue;
+        seenKeys.add(entry.key);
+        components.push(entry);
+        added++;
+      }
+      if (added) {
+        hygiene.push(
+          added + ' component(s) in this catalog come from a published LIBRARY, not this file \u2014 flagged remote:true. Entries with derivedFrom:"instances" have props INFERRED from the instances present here (a sample, not the complete set).'
+        );
+      }
+    } catch (e) {
+      warn("library component catalog failed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 components consumed from published libraries are missing from the catalog");
+    }
     let colorProfile;
     try {
       if (figma.root && figma.root.documentColorProfile) colorProfile = String(figma.root.documentColorProfile).toLowerCase();
@@ -1314,7 +1663,7 @@
     };
   }
 
-  // src/motion.ts
+  // figma-plugin/src/motion.ts
   function keyframeValue(kv) {
     if (!kv || typeof kv !== "object") return kv;
     switch (kv.type) {
@@ -1379,7 +1728,7 @@
     return nonEmpty(out);
   }
 
-  // src/serialize.ts
+  // figma-plugin/src/serialize.ts
   var MAX_DEPTH = 60;
   var LOWER_ENUMS = [
     ["layoutAlign", "alignSelf", "INHERIT"],
@@ -1705,7 +2054,7 @@
     return out;
   }
 
-  // src/collect.ts
+  // figma-plugin/src/collect.ts
   async function serializeWithRefs(node) {
     const tree = await serialize(node, 0);
     if (!tree) return { tree: null };
@@ -1968,6 +2317,16 @@
       manifest: { children: children.length, warnings: localWarnings }
     };
   }
+  async function collectDesignSystemOnly(opts) {
+    resetRun();
+    applyOpts(opts);
+    const designSystem = await buildDesignSystem();
+    designSystem.hygiene = [
+      "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
+      ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
+    ];
+    return { designSystem };
+  }
   async function collectFull(opts) {
     resetRun();
     applyOpts(opts);
@@ -2045,7 +2404,7 @@
     return { designSystem, layersDoc, assets: assets.slice() };
   }
 
-  // src/writes.ts
+  // figma-plugin/src/writes.ts
   function parseHex(hex) {
     let h = (hex || "#000000").replace(/^#/, "").trim();
     if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
@@ -2148,7 +2507,7 @@
     return { ok: true, applied };
   }
 
-  // src/bridge.ts
+  // figma-plugin/src/bridge.ts
   async function handleBridge(cmd, args) {
     switch (cmd) {
       case "ping": {
@@ -2164,6 +2523,10 @@
       // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
       case "exportFull":
         return await serializeRun(() => collectFull(args));
+      // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
+      // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
+      case "exportDesignSystem":
+        return await serializeRun(() => collectDesignSystemOnly(args));
       case "exportSelection":
         return await serializeRun(() => collectSelection(args));
       case "exportNode":
@@ -2178,6 +2541,13 @@
         return await listPages(args || {});
       case "listChildren":
         return await listChildren(args && args.nodeId);
+      // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
+      // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
+      // behind a long export would defeat the point of asking. Its document walk is one
+      // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
+      // listPages depth 2, not that of an export.
+      case "listLibraries":
+        return await listLibraries();
       case "write":
         return await serializeRun(() => applyWrites(args && args.ops));
       default:
@@ -2185,8 +2555,8 @@
     }
   }
 
-  // src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, listPages, listChildren, buildDesignSystem, applyWrites };
+  // figma-plugin/src/main.ts
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
   figma.showUI(__html__, { width: 360, height: 380 });
   console.log("[export] main.ts loaded (main thread)");
   async function runExport(collect, toFiles) {
@@ -2211,10 +2581,12 @@
   var SEP = "__";
   var runFull = () => runExport(collectFull, (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = (0, import_pages_layout2.buildPageLayout)(r.layersDoc, SEP);
-    const batch = [...layerFiles, ...indexFiles].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
+    const ds = (0, import_design_system_layout.buildDesignSystemLayout)(r.designSystem, SEP);
+    const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
+    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
     return {
       files: [
-        { name: "design-system.json", content: JSON.stringify(r.designSystem, null, 2) },
+        { name: "design-system.json", content: JSON.stringify(ds.manifest, null, 2) },
         { name: rootIndex, content: JSON.stringify(meta, null, 2) }
       ],
       layerFiles: batch,

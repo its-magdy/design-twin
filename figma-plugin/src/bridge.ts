@@ -1,6 +1,7 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
-import { collectFull, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
+import { collectFull, collectDesignSystemOnly, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
 import { applyWrites } from "./writes";
+import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
 
 export async function handleBridge(cmd: string, args: any): Promise<any> {
@@ -15,6 +16,10 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
     case "exportFull":
       return await serializeRun(() => collectFull(args as CollectOpts));
+    // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
+    // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
+    case "exportDesignSystem":
+      return await serializeRun(() => collectDesignSystemOnly(args as CollectOpts));
     case "exportSelection":
       return await serializeRun(() => collectSelection(args as CollectOpts));
     case "exportNode":
@@ -29,6 +34,13 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
       return await listPages(args || {});
     case "listChildren":
       return await listChildren(args && args.nodeId);
+    // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
+    // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
+    // behind a long export would defeat the point of asking. Its document walk is one
+    // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
+    // listPages depth 2, not that of an export.
+    case "listLibraries":
+      return await listLibraries();
     case "write":
       return await serializeRun(() => applyWrites(args && args.ops));
     default:

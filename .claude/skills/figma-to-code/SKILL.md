@@ -11,12 +11,23 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
 (IR)**; this skill translates it into the project's actual framework via a target *profile*.
 
 ## Inputs (in the repo)
-- `design/design-system.json` — whole-file context: `variables` (each with `tier`
-  primitive/semantic, `scopes`, and `codeSyntax` `{WEB,ANDROID,iOS}` when the designer set it — prefer
-  that platform string over hand-mapping), `styles`, a `components` catalog where each prop is
-  `{key,type,options,default}` (`options` = a variant's states), and a `hygiene` array of design-system
-  smells (unbound values, variant explosion, broken aliases). **Read this early** (after the manifest
-  gate below) to learn the system before building.
+- `design/design-system.json` — a slim MANIFEST (`exportedAt`/`file`/`colorProfile`, a `files` pointer
+  map, `counts`). The catalog itself is split under `design/design-system/`, one file per Figma
+  concept, so you load only the part you need. **Read the part(s) you need early** (after the manifest
+  gate below) to learn the system before building:
+  - `design-system/tokens.json` — `collections` (Figma's variable collections, each with its `modes`)
+    + `variables` (each with `tier` primitive/semantic, `scopes`, and `codeSyntax` `{WEB,ANDROID,iOS}`
+    when the designer set it — prefer that platform string over hand-mapping).
+  - `design-system/styles.paint.json` / `styles.text.json` / `styles.effect.json` / `styles.grid.json`
+    — one file per style type, each holding its `styles` array. Figma's style system is SEPARATE from
+    variables; a style can bind variables into its fields, but it is its own object.
+  - `design-system/components.local.json` — the `components` catalog for components that really live
+    in this file, each prop `{key,type,options,default}` (`options` = a variant's states).
+  - `design-system/components.library.json` — the same shape for components consumed from a published
+    LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a SAMPLE of
+    what this file uses, not the component's full API — don't treat an absent prop as nonexistent.
+  - `design-system/hygiene.json` — `hygiene`, design-system smells (unbound values, variant explosion,
+    broken aliases).
 - `design/pages/index.json` — the root, run-wide manifest + a lean `pageDirs[]` (`{page,pageId,dir,index,layers}`, where `index` points at that page's own index file —
   NOT the full layer list). `page` is the display name and is **not unique** — Figma allows two pages
   with the same name, so if a name matches more than one entry, tell them apart by `pageId` (the stable
@@ -88,7 +99,8 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
     `w`/`h`) means that node's SVG export failed and there is NO asset file for it — render the paths as
     an inline SVG (`<svg viewBox="0 0 w h"><path d="..."/></svg>`) rather than recreating the shape in CSS.
 - **Interaction states.** Before shipping any interactive element (button, input, link, row), check
-  `design/design-system.json`'s `components` catalog for that component's variant `options` — hover/
+  `design/design-system/components.local.json`'s (or `components.library.json`'s) `components` catalog
+  for that component's variant `options` — hover/
   focus/disabled/error/selected states are usually modeled as variant values, not separate nodes. Focus
   states are the most commonly missed and are an accessibility regression (keyboard-only users lose their
   place) — always implement a visible `:focus-visible` style even when the design only shows hover.
@@ -175,7 +187,7 @@ the target's language, framework, component library, and conventions; match the 
 - **Reuse, don't regenerate.** Re-implementing a mapped component is a bug.
 - **Don't invent icons.** Use the exported asset; never inline your own `<svg>`.
 - **Convention fallback ladder** when something's ambiguous (naming, which primitive, structure):
-  `design-system.json`/IR first → the user's codebase → common patterns only when neither settles it.
+  `design-system/`/IR first → the user's codebase → common patterns only when neither settles it.
   Match what's already there; don't impose new conventions.
 - **Missing screen → STOP.** If the requested screen/layer isn't in its page's `pages/<dir>/index.json`
   `layers[]` (or its JSON is missing/empty), ask — don't guess or build from the `.png` alone.

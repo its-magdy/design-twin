@@ -25,7 +25,9 @@ Every API and behavior below was verified against official Figma / Claude Code d
     code.js (Plugin API reads) ──postMessage──► ui.html [hidden iframe, WS client]
                                                        │ ws://localhost:PORT
     figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
-          design/design-system.json · pages/index.json · pages/<page>/index.json +
+          design/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
+          styles.effect,styles.grid,components.local,components.library,hygiene}.json ·
+          pages/index.json · pages/<page>/index.json +
           pages/<page>/<name>__<id>.json · assets/
     Claude Code  ── runs `figma-pull` (Bash), then Reads files selectively ──►
 
@@ -37,13 +39,24 @@ Every API and behavior below was verified against official Figma / Claude Code d
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
-Both front-ends speak the *same* 8 plugin commands (`figma-plugin/src/bridge.ts`) over the *same*
+Both front-ends speak the *same* plugin commands (`figma-plugin/src/bridge.ts`) over the *same*
 `createBridge()`, and both now write through the *same* `write-out.js`. What differs is the calling
 convention and where the bytes land:
 - **Bulk payloads → disk, always.** The CLI has always done this; the MCP export tools do it too via
   `writeToDisk: true`, which returns a compact index (counts + paths) instead of the tree. Inline MCP
   results are capped (25k tokens by default) and asset bytes are never returned inline at all, so for
   anything real this is not an optimisation but the only correct path.
+- **Discovery reads → context, always.** `listLibraries` (which design libraries the file draws on) and
+  `listPages` are the two questions you ask *before* paying for anything, and both are bounded by
+  construction. The intended order is `listLibraries` → `listPages` → a scoped export
+  (`--page <id>` / `figma_export_full({page:[…]})`), which is also what Figma's own agent guidance
+  recommends: discover, then scope by library. Two limits are inherent, not implementation gaps —
+  Figma exposes **no API to enumerate a library's contents** (so component counts are usage-derived
+  from *this* file), and libraries can be enabled **only through the Figma UI**, never via API (so
+  every export is silently scoped to whatever was enabled when it ran). Both are reported in the
+  result rather than left to look like failures; an empty library list is a normal outcome on a free
+  plan or a file with nothing enabled. Reading libraries at all requires the manifest's
+  `"permissions": ["teamlibrary"]`, so a plugin imported before that was added returns nothing.
 - **Small structured reads → context.** `listPages` / `listChildren` / a single node are exactly what
   belongs inline, and MCP's advantage there is the calling convention: typed schemas, per-tool
   permission gating (`figma_write` is annotated `destructiveHint`), and no process spawn per call.

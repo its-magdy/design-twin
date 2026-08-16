@@ -247,6 +247,21 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("paint style carries color value", ds.styles.paint[0] && ds.styles.paint[0].paints && ds.styles.paint[0].paints[0].color === "#1a4de6");
   ok("grid style exported", ds.styles.grid && ds.styles.grid[0] && Array.isArray(ds.styles.grid[0].grids) && ds.styles.grid[0].grids[0].count === 12);
 
+  // collectDesignSystemOnly — the --design-system / figma_export_design_system path: no page/frame
+  // walk, no assets, just { designSystem }. Exercises the actual collector (not just buildDesignSystem
+  // directly), since collectDesignSystemOnly is a resetRun()+applyOpts() wrapper around it.
+  const dsOnly = await sandbox.collectDesignSystemOnly();
+  ok("collectDesignSystemOnly returns ONLY a designSystem (no layersDoc/assets keys)",
+    dsOnly.designSystem && dsOnly.layersDoc === undefined && dsOnly.assets === undefined);
+  ok("collectDesignSystemOnly's designSystem carries the same variable/style/component data as buildDesignSystem",
+    dsOnly.designSystem.variables.some((v) => v.name === "color/primary") &&
+    Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
+  // The one documented gap (see collect.ts): with no page walk, the note lands in `hygiene` — the ONE
+  // field buildDesignSystemLayout's split actually persists to disk (hygiene.json) and forwards
+  // through the MCP writeToDisk path, unlike a `manifest.warnings` field the split would drop.
+  ok("collectDesignSystemOnly notes the library-variable limitation in hygiene (the field that survives to disk)",
+    dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
+
   // --- new READ additions (Tier 1: variable modes, prop-driven wiring, reference render, token bindings) ---
   ok("variable mode pin resolved to names", tree.variableModes && tree.variableModes.Semantic === "Dark");
   // Effective/inherited theme at the export root (resolvedVariableModes) — the fix for ancestor/page
@@ -1156,6 +1171,119 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // Figma's own default carries no designer intent — emitting it would put a line on every page.
   ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p) => p.pageId === "p:plain"));
   sandbox.figma.root.children = prevKids2;
+
+  // ---- [LIB] team libraries: the half of the design system that lives in another file ----
+  // Every assertion here covers a shape the Plugin API really produces and that a naive implementation
+  // crashes on or lies about: a remote main whose `.parent` is NULL, a `componentPropertyDefinitions`
+  // getter that THROWS on a variant, and a teamLibrary that is absent (no permission) or empty
+  // (no library enabled — a NORMAL state, since libraries can only be turned on from the Figma UI).
+  // Optional fields are exercised at their DEFAULT, which is where the real bugs have always been.
+  const remoteVariantMain = {
+    type: "COMPONENT", name: "Size=md, State=default", key: "libkey_btn", remote: true,
+    parent: null, // documented shape for a remote main (plugin-api.d.ts:6092) — NOT a test convenience
+    get componentPropertyDefinitions() {
+      throw new Error("Can only get component property definitions of a component set or non-variant component");
+    },
+  };
+  const remoteSetMain = {
+    type: "COMPONENT", name: "Card", key: "libkey_card", remote: true, description: "Library card",
+    parent: { type: "COMPONENT_SET", name: "CardSet" },
+    componentPropertyDefinitions: { "Elevated#3:0": { type: "BOOLEAN", defaultValue: false }, "Tone": { type: "VARIANT", defaultValue: "a", variantOptions: ["a", "b"] } },
+  };
+  const localMain = { type: "COMPONENT", name: "LocalOnly", key: "compkey123", remote: false, parent: null, componentPropertyDefinitions: {} };
+  const libInst = (main, props) => ({ type: "INSTANCE", name: "i", visible: true, componentProperties: props, getMainComponentAsync: async () => main });
+  const libInstances = [
+    libInst(remoteVariantMain, { "Size": { type: "VARIANT", value: "md" }, "Label#1:0": { type: "TEXT", value: "Go" } }),
+    libInst(remoteVariantMain, { "Size": { type: "VARIANT", value: "lg" }, "Label#1:0": { type: "TEXT", value: "Stop" } }),
+    libInst(remoteVariantMain, { "Size": { type: "VARIANT", value: "md" } }), // duplicate value must not duplicate the option
+    libInst(remoteSetMain, { "Tone": { type: "VARIANT", value: "a" } }),
+    libInst(localMain, { }),
+    { type: "INSTANCE", name: "broken", visible: true, getMainComponentAsync: async () => { throw new Error("detached"); } },
+  ];
+  const libPage = { name: "Lib Page", id: "p:lib", loadAsync: async () => {}, children: [],
+    // The catalog and the library scan ask for DIFFERENT types off the same page — answer each one
+    // honestly so the merge below is exercised against a real local walk, not an empty one.
+    findAllWithCriteria: ({ types }) => (types.indexOf("INSTANCE") !== -1 ? libInstances : [buttonComponent]) };
+  const prevKids3 = sandbox.figma.root.children;
+  sandbox.figma.root.children = [libPage];
+
+  const libComps = await sandbox.collectLibraryComponents(() => {});
+  ok("[LIB] library components recovered by walking instances (mains cannot be enumerated)", libComps.length === 2);
+  const btnLib = libComps.find((c) => c.key === "libkey_btn");
+  const cardLib = libComps.find((c) => c.key === "libkey_card");
+  ok("[LIB] a LOCAL main is not duplicated into the library catalog", !libComps.some((c) => c.key === "compkey123"));
+  ok("[LIB] an instance whose main cannot be resolved does not abort the scan", !!btnLib && !!cardLib);
+  // Dedupe is by KEY, never by name: two libraries can both ship a "Button".
+  ok("[LIB] deduped by publish key", !!btnLib && libComps.filter((c) => c.key === "libkey_btn").length === 1);
+  ok("[LIB] and the instance count survives the dedupe", btnLib.uses === 3);
+  // parent === null is the documented remote shape — reading .parent.name would have thrown here.
+  ok("[LIB] a NULL parent on a remote main is survivable, and its own name is used", btnLib.name === "Size=md, State=default" && btnLib.variant === undefined);
+  ok("[LIB] a COMPONENT_SET parent gives the useful name, with the variant kept", cardLib.name === "CardSet" && cardLib.variant === "Card");
+  // The getter THROWS on a variant — the fallback must engage, and must SAY it did.
+  ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLib.derivedFrom === "instances");
+  ok("[LIB] observed variant values aggregated across instances", btnLib.props.Size.observed.indexOf("md") !== -1 && btnLib.props.Size.observed.indexOf("lg") !== -1);
+  ok("[LIB] repeated values are uniqued, not appended per instance", btnLib.props.Size.observed.length === 2);
+  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnLib.props.Label && btnLib.props.Label.key === "Label#1:0");
+  // The whole point of derivedFrom: an inferred sample must never be mistaken for a complete enum.
+  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLib.derivedFrom === "definitions" && cardLib.props.Tone.options.length === 2);
+  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnLib.props.Size.options === undefined && cardLib.props.Tone.observed === undefined);
+  ok("[LIB] every entry is flagged remote", libComps.every((c) => c.remote === true));
+  // There is NO API mapping a component key to its library — unattributed must read as unknown.
+  ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c) => c.source === "unknown-library"));
+
+  // A user-maintained registry is the ONLY honest attribution route.
+  sandbox.figma.root.getPluginData = (k) => (k === "libraryRegistry" ? JSON.stringify({ libkey_btn: "Acme DS" }) : "");
+  const attributed = await sandbox.collectLibraryComponents(() => {});
+  ok("[LIB] the registry attributes a component to its library", attributed.find((c) => c.key === "libkey_btn").source === "Acme DS");
+  ok("[LIB] and unregistered ones stay unknown", attributed.find((c) => c.key === "libkey_card").source === "unknown-library");
+  sandbox.figma.root.getPluginData = (k) => "!!not json!!";
+  const badReg = await sandbox.collectLibraryComponents(() => {});
+  ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
+  delete sandbox.figma.root.getPluginData;
+
+  // --- listLibraries: the cheap discovery map ---
+  // DEFAULT state first: no figma.teamLibrary at all (permission missing / older host).
+  const noPerm = await sandbox.listLibraries();
+  ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
+  ok("[LIB] and the component half still reports without it", noPerm.libraries.some((l) => l.componentCount === 2));
+  ok("[LIB] the local file is listed as kind:local", noPerm.libraries.some((l) => l.kind === "local" && l.name === "My File"));
+  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local").variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 2));
+  ok("[LIB] the unknown-library bucket says counts are USED-IN-THIS-FILE, not what the library offers",
+    /USED IN THIS FILE/.test(noPerm.libraries.find((l) => l.name === "unknown-library").note));
+
+  // Enabled-but-empty: a fresh file with no library turned on. NORMAL, and must say so.
+  sandbox.figma.teamLibrary = { getAvailableLibraryVariableCollectionsAsync: async () => [], getVariablesInLibraryCollectionAsync: async () => [] };
+  const empty = await sandbox.listLibraries();
+  ok("[LIB] an empty team-library result reads as normal, not as a failure", empty.warnings.some((w) => /normal/.test(w) && /enable them in Figma/.test(w)));
+  ok("[LIB] and it is not reported as an error", empty.libraries.length > 0);
+
+  sandbox.figma.teamLibrary = {
+    getAvailableLibraryVariableCollectionsAsync: async () => ([
+      { name: "Semantic", key: "lc_sem", libraryName: "Acme DS" },
+      { name: "Primitives", key: "lc_prim", libraryName: "Acme DS" },
+      { name: "Broken", key: "lc_bad", libraryName: "Acme DS" },
+    ]),
+    getVariablesInLibraryCollectionAsync: async (k) => {
+      if (k === "lc_bad") throw new Error("no access");
+      return k === "lc_sem" ? [{ name: "a", key: "1", resolvedType: "COLOR" }, { name: "b", key: "2", resolvedType: "FLOAT" }] : [{ name: "c", key: "3", resolvedType: "COLOR" }];
+    },
+  };
+  const libs = await sandbox.listLibraries();
+  const acme = libs.libraries.find((l) => l.name === "Acme DS");
+  ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections.length === 3);
+  ok("[LIB] each collection carries its variable count", acme.variableCollections.find((c) => c.name === "Semantic").variableCount === 2);
+  ok("[LIB] one unreadable collection omits only its own count", acme.variableCollections.find((c) => c.name === "Broken").variableCount === undefined
+    && libs.warnings.some((w) => /'Broken'/.test(w)));
+  ok("[LIB] a library with no attributable components carries no invented count", acme.componentCount === undefined && /cannot be enumerated|impossible/.test(acme.note));
+
+  // --- the merge into the design-system catalog ---
+  const dsLib = await sandbox.buildDesignSystem();
+  ok("[LIB] library components are merged into the design-system catalog", dsLib.components.some((c) => c.key === "libkey_btn" && c.remote === true));
+  ok("[LIB] the local catalog walk still works alongside them", dsLib.components.some((c) => c.key === "compkey123" && !c.remote));
+  ok("[LIB] a library main already present locally is not double-listed", dsLib.components.filter((c) => c.key === "compkey123").length === 1);
+  ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h) => /published LIBRARY/.test(h) && /sample/.test(h)));
+  delete sandbox.figma.teamLibrary;
+  sandbox.figma.root.children = prevKids3;
 
   report();
 })().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });

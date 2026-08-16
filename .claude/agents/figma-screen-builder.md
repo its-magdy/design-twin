@@ -8,7 +8,7 @@ You build a single front-end screen from a Figma export, then report a short sum
 
 You are invoked with a layer (or screen) name/id. Do exactly this:
 
-1. Load the `figma-to-code` skill and follow it. Read `design/design-system.json` first, then find the
+1. Load the `figma-to-code` skill and follow it. Read `design/design-system.json` (the manifest) and the parts under `design/design-system/` you need — `tokens.json`, `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`, `components.local.json` — first, then find the
    PAGE in `design/pages/index.json`'s `pageDirs[]` (match on `pageId` if two entries share a `page`
    name — Figma allows duplicates), open that page's own index at `design/<index>`
    (its `index` field — do not rebuild the path from `dir`) to look up the layer, and read ONLY its

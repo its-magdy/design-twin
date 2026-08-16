@@ -76,7 +76,7 @@ the already-mapped component (from `components.json`), not new markup. `detached
 **Images** — use `intrinsicSize` (`{w,h}`) to set `aspect-[w/h]` so layout doesn't jump before the image
 loads; always set explicit width+height on the container (see the base skill's asset-sizing rule).
 
-**Interaction states** — look up the component in `design/design-system.json`'s `components` catalog and
+**Interaction states** — look up the component in `design/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `focus-visible:` style even if the Figma design only shows a hover state — it's the most commonly
 missed a11y requirement.

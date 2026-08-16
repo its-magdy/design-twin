@@ -13,17 +13,19 @@ import { errMsg } from "./util";
 // The pages/ layout is defined ONCE, in a dependency-free CJS module the Node CLI requires and
 // esbuild inlines here — see bridge/pages-layout.js.
 import { buildPageLayout } from "../../bridge/pages-layout.js";
+import { buildDesignSystemLayout } from "../../bridge/design-system-layout.js";
 import { releaseAssets, serializeRun } from "./state";
-import { collectSelection, collectFull, collectNode, listPages, listChildren } from "./collect";
+import { collectSelection, collectFull, collectDesignSystemOnly, collectNode, listPages, listChildren } from "./collect";
 import { serialize } from "./serialize";
 import { buildDesignSystem } from "./components";
+import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.js) can drive them. Harmless in
 // the isolated plugin realm; not referenced by the UI or bridge.
-(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectFull, listPages, listChildren, buildDesignSystem, applyWrites };
+(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
 
 figma.showUI(__html__, { width: 360, height: 380 });
 console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > Development > Use Developer VM
@@ -72,10 +74,16 @@ const runFull = (): Promise<void> =>
     // Per-page index.json files ride in `layerFiles` (the batch bucket), NOT `files` — `files` gets
     // one download BUTTON per entry, and 19+ pages would mean 19+ buttons, the exact non-scaling this
     // split was meant to avoid. Only the two whole-run docs get their own button.
-    const batch = [...layerFiles, ...indexFiles].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
+    // Same for the design-system split (tokens/styles/components.local/components.library/hygiene):
+    // built by the same module the disk writer uses, and the five parts ride in the batch bucket while
+    // only the slim design-system.json manifest — the file a consumer opens FIRST to find the rest —
+    // gets its own button.
+    const ds = buildDesignSystemLayout(r.designSystem, SEP);
+    const dsParts = ds.files.filter((f: any) => f.path !== "design-system.json");
+    const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
     return {
       files: [
-        { name: "design-system.json", content: JSON.stringify(r.designSystem, null, 2) },
+        { name: "design-system.json", content: JSON.stringify(ds.manifest, null, 2) },
         { name: rootIndex, content: JSON.stringify(meta, null, 2) },
       ],
       layerFiles: batch,

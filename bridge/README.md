@@ -12,6 +12,12 @@ npm install        # ws + @modelcontextprotocol/sdk (+ zod, and build deps for t
 The plugin manifest already allows the bridge in dev (`devAllowedDomains: ws://localhost:8787`),
 so re-import the plugin in Figma after pulling these changes.
 
+> **Re-import the plugin — required for library reads.** The manifest now declares
+> `"permissions": ["teamlibrary"]`, without which Figma denies the team-library APIs. A plugin
+> imported before this change keeps running happily and simply returns **no libraries** — a silent
+> empty result, not an error. If `--list-libraries` / `figma_list_libraries` shows nothing, re-import
+> `figma-plugin/manifest.json` (Plugins → Development → Import plugin from manifest…) first.
+
 **Languages:** `figma-pull.js` (read CLI) and `server-core.js` (WS core) are plain CommonJS Node.
 `figma-mcp` is **TypeScript** (`src/figma-mcp.mts`) built to **`figma-mcp.mjs`** (ESM, required by the
 ESM-only MCP SDK). `figma-mcp.mjs` is committed, so it runs with **zero build**; only rebuild when you
@@ -35,16 +41,65 @@ export FIGMA_BRIDGE_TOKEN="$(openssl rand -hex 24)"   # add to your shell profil
 ```
 
 ## Read: figma-pull (CLI) — recommended for bulk extraction
+
+A full pull writes `design/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
+`files` pointers, `counts`) over the catalog split under `design/design-system/`, one file per Figma
+concept: `tokens.json` (variable collections → modes → variables), one file per style type —
+`styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate
+Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
+file), `components.library.json` (`remote: true` — consumed from a published library, recovered from
+instances, props possibly inferred) and `hygiene.json` (the lint report). Every part repeats the
+`exportedAt` stamp, so `tooling/` reads freshness off whichever part it is handed. The split files sit
+in a subdirectory because `design/tokens.json` and `design/components.json` at the export root are your
+hand-authored, non-regenerable config maps.
+
 ```
 # from the repo root, with the Figma file open + plugin running:
-node bridge/figma-pull.js design             # design-system.json + CURRENT-page frames + assets/
-node bridge/figma-pull.js design --all-pages # like above, but frame trees from EVERY page
-node bridge/figma-pull.js design --selection # just the current selection
+node bridge/figma-pull.js design                  # design-system.json + design-system/ + CURRENT-page frames + assets/
+node bridge/figma-pull.js design --all-pages      # like above, but frame trees from EVERY page
+node bridge/figma-pull.js design --selection      # just the current selection
+node bridge/figma-pull.js design --design-system  # ONLY design-system.json + design-system/ — no page
+                                                   # walk, no assets/ (the cheap "tokens only" pull)
 ```
+**Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
+cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
+(discover first, then scope by library):
+```
+node bridge/figma-pull.js --list-libraries      # 1. WHICH libraries does this file draw on?
+node bridge/figma-pull.js --list                # 2. WHERE is what — pages + top-level frames (ids)
+node bridge/figma-pull.js --children <id>       # 3. (optional) peek inside one frame
+node bridge/figma-pull.js design --page <id>    # 4. pull only what you need
+```
+
+### `--list-libraries` — the library discovery step
+```
+node bridge/figma-pull.js --list-libraries
+```
+Prints an aligned table of the libraries this file uses — the local file's own published assets plus
+every **enabled** team library — with each one's variable collections (and variable counts) and how
+many of its components this file uses. It's the library-scoped sibling of `--list`: same cost tier
+(no recursion, no node properties, no assets), same `--timeout`, prints to stdout and writes nothing.
+
+Three honest limits, because they change what the numbers mean:
+- **Component counts are usage-derived.** Figma exposes **no API to enumerate a library's contents**,
+  so the count is "components of that library used in *this* file", not the library's size.
+- **Libraries can only be enabled from the Figma UI** (Assets panel → Libraries) — no API can enable
+  one. An export is therefore silently scoped to whatever was enabled at export time; if a component
+  looks unresolved, an unenabled library is the first thing to check.
+- **An empty result is normal**, not a failure: free plans don't expose library variable collections,
+  and a file with no library enabled genuinely has none. The output says so rather than printing an
+  empty table. It is also what a **stale plugin** looks like — see the re-import callout above.
+
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
 file. **Frame trees** default to the current page; `--all-pages` walks every page (each screen is
 tagged with its `page` name). All-pages can be large — the CLI is the right tool for it because it
-streams to disk, not into the context window.
+streams to disk, not into the context window. `--design-system` narrows the OTHER way: it skips the
+frame walk (and therefore the assets a walk would export) and writes only `design-system.json` +
+`design-system/` — tokens, styles, local + library components, hygiene. One honest limit: library
+(remote) *variables* are recovered from nodes/styles actually walked, so a run with no page walk sees
+fewer of them than a full pull would; local variables, styles and components are unaffected. It shares
+`--selection`/`--all-pages`/`--page`'s scope slot (pass only one) and, like `--list`/`--list-libraries`,
+refuses the read-option flags (`--css`/`--measurements`/…) since there is no node walk for them to apply to.
 It waits for the plugin to connect, pulls, writes files to `design/`, and exits. The agent then
 Reads those files — big payloads live on disk, not in the context window.
 
@@ -89,11 +144,12 @@ Registered via `../.mcp.json`. Start Claude Code in the repo; it launches `figma
 The server also hosts the bridge WebSocket the plugin connects to. Built on `@modelcontextprotocol/sdk`
 with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, validated per call).
 
-Tools: `figma_status`, `figma_get_selection`, `figma_list_pages`, `figma_list_children`,
-`figma_export_full`, `figma_export_selection`, `figma_export_url`, `figma_write` (batch of safe ops —
-createFrame / createText / setFill / setText; **no arbitrary code execution**, unlike some community
-servers). The export tools accept opt-in read flags `css` / `measurements` / `pluginData` / `motion` /
-`sharedData`.
+Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_list_pages`, `figma_list_children`,
+`figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
+`figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
+execution**, unlike some community servers). The frame-walking export tools accept opt-in read flags
+`css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
+take them — it never walks a node (see below).
 
 ### `writeToDisk` — the export path that doesn't go through the context window
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
@@ -121,6 +177,20 @@ other read here deep-serializes, so without them the only way to learn what a fi
 all of it: measured 12+ minutes and tens of MB straight into the context window on a real design
 system. Use the index to pick a target, then `figma_export_full({ page: ["<id>"] })` — or
 `skipAssets: true`, which is close to free here since asset bytes are stripped from MCP results anyway.
+
+`figma_list_libraries` (no arguments) is the step *before* that: it answers **which design libraries**
+the file draws on, so an export can be scoped to the one you care about. Its result is deliberately
+compact — libraries, their variable collections, and usage-derived component counts — because a
+discovery call that costs context defeats its own purpose. The same three limits apply as for the CLI
+flag above (usage-derived counts, UI-only library enablement, empty-is-normal), and the tool reports
+them in-result rather than leaving an empty list ambiguous. Recommended order:
+`figma_list_libraries` → `figma_list_pages` → `figma_export_full({ page: [...] })`.
+
+**Only want the design system?** `figma_export_design_system` skips the page/frame walk (and the
+assets that walk would produce) and returns just variables/styles/components/hygiene — the MCP twin of
+the CLI's `--design-system` flag. Same `writeToDisk`/`outDir` contract as the other export tools; same
+one honest gap, too: library (remote) variable completeness depends on nodes/styles actually walked in
+this session, so a bare design-system pull may see fewer of them than a full pull would.
 
 ### "Paste a link and ask about it" (`figma_export_url`)
 Keep Claude Code and the MCP running for the whole session; the plugin stays connected to your

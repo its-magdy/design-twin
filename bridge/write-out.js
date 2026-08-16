@@ -13,6 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildPageLayout, safe } = require("./pages-layout.js");
+const { buildDesignSystemLayout } = require("./design-system-layout.js");
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
@@ -62,6 +63,17 @@ function writePages(dir, layersDoc, log) {
   return { meta, layerFiles: layerFiles.length, pageDirs: meta.pageDirs.length, rootIndex };
 }
 
+// The design-system twin of writePages: the SPLIT (which keys land in which file, the local/library
+// component partition, the slim manifest) lives in design-system-layout.js, which the plugin's
+// browser-download path builds from too, so the two writers cannot drift. This only writes bytes.
+function writeDesignSystem(dir, designSystem, log) {
+  const built = buildDesignSystemLayout(designSystem, "/");
+  fs.mkdirSync(path.join(dir, built.dir), { recursive: true });
+  for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
+  const counts = built.counts;
+  return counts;
+}
+
 function writeAssets(dir, assets, log) {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, "assets");
@@ -86,13 +98,14 @@ function writeAssets(dir, assets, log) {
 function writeExport(outDir, r, log) {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
-  if (r.designSystem) writeJson(dir, "design-system.json", r.designSystem, false, log);
+  const ds = r.designSystem ? writeDesignSystem(dir, r.designSystem, log) : null;
   const pages = r.layersDoc ? writePages(dir, r.layersDoc, log) : null;
   const assets = writeAssets(dir, r.assets, log);
   return {
     outDir: dir,
     wrote: {
       designSystem: !!r.designSystem,
+      designSystemCounts: ds || undefined,
       layerFiles: pages ? pages.layerFiles : 0,
       pageDirs: pages ? pages.pageDirs : 0,
       assets,
@@ -126,4 +139,4 @@ function writeAny(outDir, r, log) {
   return r && r.screen ? writeScreen(outDir, r, log) : writeExport(outDir, r, log);
 }
 
-module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeAssets, writeExport, writeScreen, writeAny };
+module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeAssets, writeExport, writeScreen, writeAny };

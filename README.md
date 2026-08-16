@@ -29,6 +29,13 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
   - **Generated exports** (regenerable — recreated on every plugin export / `figma-pull` run):
     `<screen>.json`, `variables.json`, `assets/` (icons/images **plus** a full-frame reference PNG
     per frame, referenced from the JSON's `reference` field), and for full pulls `design-system.json`
+    — a slim manifest (`exportedAt`/`file`/`colorProfile` + pointers + counts) over the catalog split
+    under `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections →
+    modes → variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`
+    (the separate, older style system, one file per style type),
+    `components.local.json` (component sets/variants that are real nodes in this file),
+    `components.library.json` (entries flagged `remote: true` — consumed from a published library,
+    recovered from instances, **not** nodes here) and `hygiene.json` (the lint report)
     + `pages/index.json` + one `pages/<page>/index.json` + `pages/<page>/<name>__<id>.json` per **layer**
     — split per-page, per-file rather than one combined `screens.json` (a real export can be tens of
     MB), mirroring Figma's own Page > Frame containment (a page holds many layers, never the reverse).
@@ -81,8 +88,26 @@ authentication, so the bridge is gated by a **shared token** you paste into the 
 Two front-ends sit on that bridge, and they speak the same commands:
 - **`figma-pull` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so
   later pulls skip the plugin reconnect; `--stop` ends it.
+  Start with the cheap discovery steps: `--list-libraries` (which design libraries this file draws on)
+  then `--list` (pages + frame ids), and only then `--page <id>` to pull what you actually need.
+  Only want the tokens/styles/components/hygiene catalog, no screens? `--design-system` skips the
+  page/frame walk entirely (and the assets that walk would export).
 - **`figma-mcp`** — live tools for "check this, now pull that", plus the small write surface. Pass
   `writeToDisk: true` on the export tools to write files and get back a compact index instead of the
   payload — the only way to get asset bytes, and the right choice for anything large.
 
 Only one of them can hold port 8787 at a time; run the one that matches what you're doing.
+
+**Discover before you pull.** Both front-ends expose a library-discovery step —
+`node bridge/figma-pull.js --list-libraries` and the `figma_list_libraries` MCP tool — that reports
+which design libraries the open file draws on, their variable collections, and how many of their
+components this file uses. Consult it first, then scope the export (`--list` → `--page <id>`), the
+same way Figma's own agent guidance says to discover first and scope by library. Two limits to keep in
+mind: Figma has **no API to enumerate a library's contents**, so component counts are *usage-derived*
+(what this file uses, not what the library holds); and libraries can only be **enabled from the Figma
+UI**, never via API, so any export is silently scoped to whatever was enabled when it ran.
+
+> **Re-import the plugin after updating.** Library reads require `"permissions": ["teamlibrary"]` in
+> `figma-plugin/manifest.json`. A plugin imported before that was added keeps working but returns **no
+> libraries at all**, silently. If library discovery comes back empty, re-import the manifest in Figma
+> (Plugins → Development → Import plugin from manifest…) before assuming your file has none.

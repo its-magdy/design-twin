@@ -9,6 +9,9 @@
 //   node figma-pull.js [outDir] --all-pages  # like full, but frame trees from EVERY page
 //   node figma-pull.js [outDir] --selection  # just the current selection
 //   node figma-pull.js [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
+//   node figma-pull.js [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
+//                                                   # walk, no assets (the cheap "just the design
+//                                                   # system" pull)
 //   node figma-pull.js [outDir] --timeout N  # seconds to wait for the export (default: 300,
 //                                            # 900 with --all-pages, 120 for --selection); also
 //                                            # raises the list commands' own 300s budget
@@ -30,7 +33,21 @@
 //   node figma-pull.js --list-pages   # page names only (near-free: does not load any page)
 //   node figma-pull.js --children <id>  # ONE node's direct children only (peek inside a frame from
 //                                        # --list before committing to a full recursive --page pull)
-//   These three take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
+//   node figma-pull.js --list-libraries  # which design libraries this file draws on (local + enabled
+//                                        # team libraries), their variable collections, and how many
+//                                        # of their components this file USES. The discovery step
+//                                        # before a pull, exactly as --list is before --page.
+//                                        # Honest limits: Figma exposes NO API to enumerate a
+//                                        # library's full contents, so component counts are
+//                                        # USAGE-derived; and libraries can only be enabled in the
+//                                        # Figma UI (never via API), so an export is silently scoped
+//                                        # to whatever was enabled at export time. Empty results are
+//                                        # a NORMAL outcome (free plan / no library enabled), not a
+//                                        # failure — they are reported as such.
+//                                        # Requires the plugin manifest's "teamlibrary" permission:
+//                                        # RE-IMPORT/reload the plugin in Figma after updating, or a
+//                                        # stale plugin silently returns nothing.
+//   These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
 //   --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
 //   --timeout DOES apply to them.
 //
@@ -71,6 +88,9 @@ const { safe } = require("./pages-layout.js");
 const OUT = require("./write-out.js");
 const plog = (m) => console.error("[figma-pull] " + m);
 const writeJson = (dir, name, obj, quiet) => OUT.writeJson(dir, name, obj, quiet, plog);
+// No longer called by main() (the full-export path now goes through OUT.writeExport, which calls
+// OUT.writePages itself) — kept as an export because test/bridge.test.js drives the pages/ LAYOUT
+// through this exact entry point.
 const writePages = (dir, layersDoc) => OUT.writePages(dir, layersDoc, plog);
 const writeAssets = (dir, assets) => OUT.writeAssets(dir, assets, plog);
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
@@ -89,6 +109,11 @@ class UsageError extends Error {}
 function parseArgs(args) {
 const selection = args.includes("--selection");
 const allPages = args.includes("--all-pages");
+// --design-system: tokens/styles/components/hygiene, no page/frame walk and therefore no
+// assets either (assets are exported per-node during that walk). The cheap sibling of a full pull
+// for "just give me the design system" — see collect.ts's collectDesignSystemOnly for the one
+// tradeoff (library-variable completeness depends on nodes actually being walked).
+const designSystemOnly = args.includes("--design-system");
 // Daemon lifecycle. These are COMMANDS, not modifiers: each one owns the whole invocation, so they
 // are refused in combination with each other and with any pull below. --serve holds the bridge open
 // until stopped; every ordinary command then routes through it automatically (see daemon.js).
@@ -119,9 +144,17 @@ for (const [flag, opt] of Object.entries(READ_OPT_FLAGS)) {
 // paying for a deep export. --list-pages is depth 1: page names only, which needs no page load at all.
 // One name for the structural-index command, decided once: every message and guard below asks for
 // the flag the user actually typed, instead of re-deriving it from two booleans at each site.
+// Exact `includes` matches, so "--list-libraries" is NOT swallowed by the "--list" branch — the same
+// prefix trap takeValues() guards against below, one line earlier.
 const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
 const listOnly = listCmd !== null;
 const listDepth = listCmd === "--list-pages" ? 1 : 2;
+// --list-libraries: the LIBRARY-scoped member of the same cheap-index family. Same cost model as
+// --list (no recursion, no node properties, no assets — it reads the file's library usage), same
+// budget tier (TIMEOUTS.list), same "prints and exits before any export runs" shape, and therefore
+// the same guards below. It is a discovery step: find out which libraries a file draws on, THEN pull
+// only what you need — the library analogue of --list -> --page.
+const listLibraries = args.includes("--list-libraries");
 
 // Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
 // mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
@@ -201,17 +234,26 @@ const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) |
 // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
 // export of the WRONG scope — the failure you don't notice. Now that parsing is a pure function,
 // refusing costs two lines and a test.
-const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page"].filter(Boolean);
+const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system"].filter(Boolean);
 if (scopes.length > 1) {
   throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
 }
+// The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
+// "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
+// added and then silently omitted from one of the three guards (the --timeout class of bug: the
+// flag is accepted, and then quietly does nothing).
+const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries"].filter(Boolean);
+const indexCmd = indexCmds[0] || null;
+
 // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
 // export flag combined with one of them is a no-op the user has no way to see.
-if ((listOnly || childrenId) && (selection || allPages || pageSel.length)) {
-  throw new UsageError(`${listCmd || "--children"} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`);
+if (indexCmd && scopes.length) {
+  throw new UsageError(`${indexCmd} only prints a structural index — it cannot be combined with ${scopes.join(" / ")}. Run the list first, then pull with the ids it prints.`);
 }
-if (listOnly && childrenId) {
-  throw new UsageError("--list and --children are different queries — pass only one.");
+// Two index commands at once is the same silent loss one step over: only one of them would run and
+// print, and the other would vanish without a word.
+if (indexCmds.length > 1) {
+  throw new UsageError(`${indexCmds.join(" and ")} are different queries — pass only one.`);
 }
 // Read options are the SAME silent loss, one step further in. The list ops emit only structural
 // fields (id/name/type/size) — they never serialize a node, never call getCSSAsync, never read
@@ -220,13 +262,26 @@ if (listOnly && childrenId) {
 // this path), and exempting it would put the caller back to guessing WHICH flags survive a list,
 // which is the ambiguity the guard exists to remove. `--timeout` is deliberately NOT in this set —
 // it genuinely applies (listTimeoutMs).
-if ((listOnly || childrenId) && readOptFlagsGiven.length) {
-  const cmd = listCmd || "--children";
+// --list-libraries is in the same boat and joins the guard through indexCmd: it reports library
+// identity/usage, never a serialized node, so a read option there would be discarded just as silently.
+if (indexCmd && readOptFlagsGiven.length) {
+  const cmd = indexCmd;
+  // What the command DOES emit, so the refusal explains itself instead of asserting a shape that is
+  // wrong for one member of the family.
+  const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses" : "only prints a structural index (id/name/type/size)";
   // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
   // edit to a 400-character single expression with six branch points.
   const many = readOptFlagsGiven.length > 1;
   const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} only prints a structural index (id/name/type/size), so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`);
+  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for an EXPORT — ${cmd} ${emits}, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to the --page pull afterwards.`);
+}
+// --design-system never walks a page or node, so every read option (css/measurements/
+// plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
+// silent-loss class, same refusal.
+if (designSystemOnly && readOptFlagsGiven.length) {
+  const many = readOptFlagsGiven.length > 1;
+  const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
+  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a node/page walk — --design-system skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
 }
 
 // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
@@ -234,8 +289,8 @@ if ((listOnly || childrenId) && readOptFlagsGiven.length) {
 // export the user typed, with nothing said about it.
 if (daemonCmd) {
   const others = [
-    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page",
-    listCmd, childrenId && "--children", ...readOptFlagsGiven,
+    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system",
+    ...indexCmds, ...readOptFlagsGiven,
   ].filter(Boolean);
   if (others.length) {
     throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
@@ -245,7 +300,67 @@ if (daemonCmd) {
   }
 }
 
-return { selection, allPages, readOpts, listOnly, listDepth, childrenId, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+return { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+}
+
+// --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
+// payload is a handful of rows, and an aligned table is the difference between "I can see at a glance
+// which library this file draws on" and "here is 80 lines of JSON to parse by eye". --list stays JSON
+// because its payload is an id catalogue you copy from; this one is a decision aid you READ.
+// Pure string-in/string-out so the test suite can drive the empty case (the one that must not look
+// like a failure) without a plugin on the other end.
+function formatLibraries(r) {
+  const libs = (r && r.libraries) || [];
+  const lines = [];
+  if (!libs.length) {
+    // The empty result is a NORMAL outcome, and saying so is the whole job here. Figma's team-library
+    // reads return nothing when no library is enabled for the file, and library VARIABLE data is
+    // unavailable on a free plan — both look exactly like a broken bridge unless the output says
+    // otherwise. A stale plugin (imported before the manifest gained "teamlibrary") also lands here,
+    // which is why it is named as the FIRST thing to check.
+    lines.push("No libraries reported for this file.");
+    lines.push("");
+    lines.push("This is a normal outcome, not necessarily an error. In order of likelihood:");
+    lines.push('  1. The plugin in Figma predates the "teamlibrary" permission — re-import/reload');
+    lines.push("     \"Design Export for AI\" in Figma, then run this again.");
+    lines.push("  2. No team library is ENABLED for this file. Libraries can only be enabled from the");
+    lines.push("     Figma UI (Assets panel -> Libraries) — no API can enable one.");
+    lines.push("  3. Free plan: library variable collections are not exposed to plugins.");
+    return lines.join("\n");
+  }
+  // Column widths from the data, so a long library name doesn't shear the table apart.
+  const rows = libs.map((l) => {
+    const cols = (l.variableCollections || []);
+    return {
+      kind: String(l.kind || "?"),
+      name: String(l.name || "(unnamed)"),
+      collections: String(cols.length),
+      variables: String(cols.reduce((n, c) => n + (Number(c.variableCount) || 0), 0)),
+      components: String(Number(l.componentCount) || 0),
+      cols,
+      note: l.note,
+    };
+  });
+  const head = { kind: "KIND", name: "NAME", collections: "COLLECTIONS", variables: "VARIABLES", components: "COMPONENTS (used here)" };
+  const w = (k) => Math.max(head[k].length, ...rows.map((x) => x[k].length));
+  const wk = w("kind"), wn = w("name"), wc = w("collections"), wv = w("variables");
+  const line = (x) => `  ${x.kind.padEnd(wk)}  ${x.name.padEnd(wn)}  ${x.collections.padStart(wc)}  ${x.variables.padStart(wv)}  ${x.components}`;
+  lines.push(`LIBRARIES (${libs.length})`);
+  lines.push("");
+  lines.push(line(head));
+  for (const x of rows) {
+    lines.push(line(x));
+    // Collections are the thing you actually scope a token pull by, so they're worth the indent.
+    for (const c of x.cols) lines.push(`      · ${c.name} (${Number(c.variableCount) || 0} variables)${c.key ? "  key=" + c.key : ""}`);
+    if (x.note) lines.push(`      note: ${x.note}`);
+  }
+  lines.push("");
+  // The two limits that make a number here mean something other than what it looks like. Printed
+  // every time, because the counts are the part a reader is most likely to over-trust.
+  lines.push("Component counts are USAGE-derived (components from that library actually used in this");
+  lines.push("file) — Figma exposes no API to enumerate a library's full contents.");
+  lines.push("Only libraries ENABLED for this file (in the Figma UI) can appear at all.");
+  return lines.join("\n");
 }
 
 // CLI entry: parse once, turning a UsageError back into the message + exit 1 it replaced. When this
@@ -259,7 +374,7 @@ try {
   console.error("[figma-pull] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, readOpts, listOnly, listDepth, childrenId, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
+const { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
 
 async function main() {
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
@@ -298,7 +413,7 @@ async function main() {
 
   // Only the export paths write to outDir; --list/--children print to stdout and are explicitly "a
   // decision aid, not a build input", so they must not leave an empty design/ behind as a side effect.
-  if (!listOnly && !childrenId) fs.mkdirSync(outDir, { recursive: true });
+  if (!listOnly && !childrenId && !listLibraries) fs.mkdirSync(outDir, { recursive: true });
 
   let bridge = null;
   let send;
@@ -317,6 +432,20 @@ async function main() {
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to
   // close, and closing the DAEMON's would be wrong — one helper so no call site has to know which.
   const finish = () => { if (bridge) bridge.close(); };
+
+  // The library discovery command. Same cost/budget tier as the two below (cheap relative to an
+  // export) and the same "print, never write outDir" contract — but its own branch, because it
+  // prints a TABLE rather than the JSON id-catalogue those two exist to hand you.
+  if (listLibraries) {
+    console.error("[figma-pull] plugin connected — listing libraries…");
+    const r = await send("listLibraries", {}, listTimeoutMs);
+    // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
+    // mistaken for part of the table.
+    for (const w of (r && r.warnings) || []) console.error("[figma-pull] warn  " + w);
+    console.log(formatLibraries(r));
+    console.error("[figma-pull] next: node bridge/figma-pull.js --list   then   --page <id>   (pull only the pages you need)");
+    return finish(); // see the close()-not-exit note below
+  }
 
   // The two cheap index commands. --list is the file-wide map (consult it to pick a target, THEN
   // deep-pull just that one); --children <id> is its node-scoped twin, for peeking inside a frame
@@ -354,7 +483,7 @@ async function main() {
     return finish();
   }
 
-  const mode = selection ? "selection" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
+  const mode = selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
@@ -369,11 +498,21 @@ async function main() {
     writeJson(outDir, safe(r.screenName || "screen") + ".json", r.screen);
     writeJson(outDir, "variables.json", r.variables);
     writeAssets(outDir, r.assets);
+  } else if (designSystemOnly) {
+    const r = await send("exportDesignSystem", {}, exportTimeoutMs);
+    // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
+    // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
+    // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
+    // writeDesignSystem persists to hygiene.json — not a `manifest.warnings` field that would be
+    // silently dropped by the split, both here and via the MCP writeToDisk path.
+    OUT.writeExport(outDir, r, plog);
   } else {
     const r = await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs);
-    writeJson(outDir, "design-system.json", r.designSystem);
-    writePages(outDir, r.layersDoc);
-    writeAssets(outDir, r.assets);
+    // Route through the SAME split writer the MCP export tools use (write-out.js's writeExport), so a
+    // CLI pull and an MCP pull land in identical shape. The CLI used to write r.designSystem flat to
+    // design-system.json here — undocumented drift from the split described in this file's own header
+    // comment and from what the harness's write-out tests actually assert.
+    OUT.writeExport(outDir, r, plog);
   }
 
   console.error("[figma-pull] done.");
@@ -393,4 +532,7 @@ if (require.main === module) {
 // actually lands on disk, and the freshness stamp (`exportedAt`/`file`, stamped by the plugin itself —
 // see collect.ts/components.ts) must survive that write byte-for-byte. figma-pull never adds, strips,
 // or re-derives the stamp; it only writes what the plugin sent.
-module.exports = { parseArgs, writePages, writeJson, UsageError };
+// formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
+// failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
+// needs a live plugin, so the renderer is driven directly.
+module.exports = { parseArgs, writePages, writeJson, formatLibraries, UsageError };

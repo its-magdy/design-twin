@@ -7,6 +7,7 @@ import { simplifyEffects } from "./effects";
 import { simplifyGrid } from "./layout";
 import { lineH, letterS } from "./text";
 import { dumpVariables, resolveBoundMap } from "./variables";
+import { collectLibraryComponents } from "./libraries";
 
 // INSTANCE main-component name (the referenced library component), or undefined.
 export async function instanceComponent(node: SceneNode): Promise<string | undefined> {
@@ -142,6 +143,33 @@ export async function buildDesignSystem(): Promise<Obj> {
   // Component + variant catalog across every page (a feature's states live here).
   await loadAllPages("component catalog may be incomplete");
   const components = await collectComponentCatalog(hygiene);
+
+  // LIBRARY components. findAllWithCriteria({types:["COMPONENT",...]}) above only ever finds mains
+  // that live IN this document, so a file whose entire design system is a consumed library produced a
+  // catalog of zero components while every screen was full of instances of them — the component-side
+  // twin of the missing-library-variables bug variables.ts already fixes. Library mains cannot be
+  // enumerated (there is no getAvailableLibraryComponentsAsync), so they are recovered by walking
+  // instances; see libraries.ts for why their props may be inferred rather than defined.
+  // Wrapped: this is an ADDITION to the catalog, and it must never be able to take the catalog with it.
+  try {
+    const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
+    const remote = await collectLibraryComponents((m) => warn(m));
+    let added = 0;
+    for (const entry of remote) {
+      if (seenKeys.has(entry.key)) continue; // already catalogued locally (a library main present in-file)
+      seenKeys.add(entry.key);
+      components.push(entry);
+      added++;
+    }
+    if (added) {
+      hygiene.push(
+        added + " component(s) in this catalog come from a published LIBRARY, not this file — flagged remote:true. " +
+          "Entries with derivedFrom:\"instances\" have props INFERRED from the instances present here (a sample, not the complete set)."
+      );
+    }
+  } catch (e) {
+    warn("library component catalog failed (" + errMsg(e) + ") — components consumed from published libraries are missing from the catalog");
+  }
 
   let colorProfile: string | undefined;
   try { if (figma.root && (figma.root as any).documentColorProfile) colorProfile = String((figma.root as any).documentColorProfile).toLowerCase(); } catch (e) {}

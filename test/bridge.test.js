@@ -247,6 +247,17 @@ async function disconnectErr(code, reason) {
   ok("[args] each scope flag ALONE is still fine", (() => {
     return parse(["--selection"]).selection && parse(["--all-pages"]).allPages && parse(["--page", "1:2"]).pageSel.length === 1;
   })());
+
+  // --design-system: the "just the design system, no page walk" scope. Same exclusivity family as
+  // --selection/--all-pages/--page, and — like the list commands — no read options apply, since it
+  // never walks a node.
+  ok("[args] --design-system alone parses and sets the flag", parse(["--design-system"]).designSystemOnly === true);
+  ok("[args] --design-system + --all-pages is an ERROR", /different scopes/.test(usage(["--design-system", "--all-pages"]) || ""));
+  ok("[args] --design-system + --selection is an ERROR", /different scopes/.test(usage(["--design-system", "--selection"]) || ""));
+  ok("[args] --design-system + --page is an ERROR", /different scopes/.test(usage(["--design-system", "--page", "1:2"]) || ""));
+  ok("[args] --design-system + a read option is an ERROR (no node walk to apply it to)",
+    /node\/page walk/.test(usage(["--design-system", "--css"]) || ""));
+  ok("[args] --design-system + --serve is an ERROR", /manages the background bridge/.test(usage(["--serve", "--design-system"]) || ""));
   // --list/--children print a structural index and exit(0) before any export runs, so an export flag
   // combined with one of them is a no-op the caller has no way to observe.
   ok("[args] --list + --page is an ERROR", /structural index/.test(usage(["--list", "--page", "1:2"]) || ""));
@@ -282,6 +293,106 @@ async function disconnectErr(code, reason) {
     return r.listOnly === true && r.listTimeoutMs === 600000;
   })());
   ok("[args] a bare --list is of course still fine", parse(["--list"]).listOnly === true);
+
+  // ---------------------------------------------------------------- figma-pull: --list-libraries
+  // The library-discovery member of the cheap-index family. It must join EVERY guard the other two
+  // are in — a new index command that gets added to the parser but forgotten by one guard is the
+  // silent-loss bug this whole section exists to prevent, just wearing a new flag.
+  console.log("\nfigma-pull — --list-libraries:");
+  ok("[lib] --list-libraries parses as its own command", (() => {
+    const r = parse(["--list-libraries"]);
+    return r.listLibraries === true && r.listOnly === false && r.childrenId === null;
+  })());
+  // The prefix trap: `--list` is matched by exact includes(), so --list-libraries must NOT also read
+  // as --list (which would run listPages and print the wrong thing entirely).
+  ok("[lib] --list-libraries is NOT swallowed by --list", parse(["--list-libraries"]).listOnly === false);
+  ok("[lib] it takes the LIST timeout tier, and --timeout raises it", (() => {
+    const d = parse(["--list-libraries"]), t = parse(["--list-libraries", "--timeout", "600"]);
+    return d.listTimeoutMs === 300000 && t.listTimeoutMs === 600000;
+  })());
+  // Like --list/--children it prints and exits before any export runs, so a scope flag alongside it
+  // is a no-op the caller cannot observe.
+  ok("[lib] --list-libraries + --page is an ERROR", /structural index/.test(usage(["--list-libraries", "--page", "1:2"]) || ""));
+  ok("[lib] --list-libraries + --all-pages is an ERROR", /structural index/.test(usage(["--list-libraries", "--all-pages"]) || ""));
+  ok("[lib] --list-libraries + --selection is an ERROR", /structural index/.test(usage(["--list-libraries", "--selection"]) || ""));
+  ok("[lib] the refusal names --list-libraries, not another index command",
+    /--list-libraries/.test(usage(["--list-libraries", "--all-pages"]) || ""));
+  // Two index commands: only one would ever run and print; the other would vanish silently.
+  ok("[lib] --list-libraries + --list is an ERROR", /only one/.test(usage(["--list-libraries", "--list"]) || ""));
+  ok("[lib] --list-libraries + --children is an ERROR", /only one/.test(usage(["--list-libraries", "--children", "1:2"]) || ""));
+  // Read options are equally inert here — it reports library identity/usage, never a serialized node.
+  ok("[lib] every read option is refused on --list-libraries, none silently survives", (() => {
+    const flags = ["--css", "--measurements", "--plugin-data", "--motion", "--shared-data", "--no-assets"];
+    return flags.every((f) => /silently ignored/.test(usage(["--list-libraries", f]) || ""));
+  })());
+  ok("[lib] and the refusal names both the flag and this command",
+    (() => { const m = usage(["--list-libraries", "--css"]) || ""; return /--css/.test(m) && /--list-libraries/.test(m); })());
+  // --timeout genuinely applies (it is the list budget), so it must keep composing.
+  ok("[lib] --timeout still composes with --list-libraries", parse(["--list-libraries", "--timeout", "60"]).listTimeoutMs === 60000);
+  ok("[lib] a daemon command alongside it is refused",
+    /cannot be combined with --list-libraries/.test(usage(["--serve", "--list-libraries"]) || ""));
+
+  // Output rendering. The EMPTY case is the one that matters most: zero libraries is a NORMAL result
+  // (free plan, or no library enabled in the Figma UI, or a plugin imported before the manifest
+  // gained "teamlibrary") and must read as an explanation, not as a failure or an empty table.
+  const emptyOut = pull.formatLibraries({ libraries: [], warnings: [] });
+  ok("[lib] the empty case says so in words, not as a blank table", /No libraries reported/.test(emptyOut));
+  ok("[lib] and states it is a normal outcome", /normal outcome/i.test(emptyOut));
+  ok("[lib] and names the stale-plugin cause first (a reload is the usual fix)",
+    /teamlibrary/.test(emptyOut) && /re-import/i.test(emptyOut) &&
+    emptyOut.indexOf("teamlibrary") < emptyOut.search(/free plan/i));
+  ok("[lib] and that libraries are enabled only in the Figma UI", /Figma UI/.test(emptyOut));
+  ok("[lib] a missing libraries field is treated as empty, not a crash",
+    /No libraries reported/.test(pull.formatLibraries({})));
+
+  const libOut = pull.formatLibraries({
+    libraries: [
+      { key: "k1", name: "This file", kind: "local", componentCount: 3, variableCollections: [{ key: "c1", name: "Primitives", variableCount: 40 }] },
+      { key: "k2", name: "NERA Design System", kind: "library", componentCount: 12,
+        variableCollections: [{ key: "c2", name: "Semantic", variableCount: 120 }, { key: "c3", name: "Brand", variableCount: 8 }],
+        note: "variable collections unavailable on this plan" },
+    ],
+    warnings: [],
+  });
+  ok("[lib] it prints a table, not raw JSON", !/^\s*[{[]/.test(libOut) && /LIBRARIES \(2\)/.test(libOut));
+  ok("[lib] every library name appears", /This file/.test(libOut) && /NERA Design System/.test(libOut));
+  ok("[lib] local vs library kind is shown", /\blocal\b/.test(libOut) && /\blibrary\b/.test(libOut));
+  ok("[lib] variable counts are summed per library", /\b128\b/.test(libOut) && /\b40\b/.test(libOut));
+  ok("[lib] each collection is listed with its own count", /Primitives \(40 variables\)/.test(libOut) && /Brand \(8 variables\)/.test(libOut));
+  ok("[lib] a per-library note is surfaced rather than dropped", /note: variable collections unavailable/.test(libOut));
+  // The counts are the part a reader will over-trust, so the caveat ships with every render.
+  ok("[lib] component counts are labelled usage-derived", /USAGE-derived/.test(libOut));
+  ok("[lib] and the no-enumeration limit is stated", /no API to enumerate/.test(libOut));
+  // Alignment: the columns must line up, or it is JSON with extra steps.
+  ok("[lib] the table columns are aligned across rows", (() => {
+    // The header and both data rows must start their NAME column at the same offset — the one thing
+    // that makes this a table rather than JSON with extra steps.
+    const rows = libOut.split("\n").filter((l) => /^ {2}(KIND|local|library) /.test(l));
+    const nameAt = rows.map((l) => ["This file", "NERA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
+    return rows.length === 3 && new Set(nameAt).size === 1 && nameAt[0] > 0;
+  })());
+
+  // The MCP twin. Checked against the BUILT bundle for the same reason writeToDisk is: the source
+  // compiling is not evidence the tool shipped — and Zod silently strips anything undeclared.
+  // Read here rather than reusing the `mcpSrc` below: this section runs first, and a const declared
+  // further down is in its temporal dead zone.
+  const libMcpSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "figma-mcp.mjs"), "utf8");
+  ok("[lib] figma_list_libraries is registered in the built MCP bundle", /"figma_list_libraries"/.test(libMcpSrc));
+  ok("[lib] it sends the listLibraries bridge command", /"listLibraries"/.test(libMcpSrc));
+  (() => {
+    const body = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_libraries"'), libMcpSrc.indexOf('"figma_list_children"'));
+    ok("[lib] it is annotated read-only", /READ_ONLY/.test(body));
+    // It is a DISCOVERY call: no arguments to get wrong, and the cheap budget tier, not an export's.
+    ok("[lib] it declares no inputSchema — nothing to pass", !/inputSchema/.test(body));
+    ok("[lib] it uses the shared cheap list timeout tier, not an export budget",
+      /TIMEOUTS\.list/.test(body) && !/exportTimeout/.test(body));
+    // Compactness is the contract for a discovery call — it must not hand back an unbounded payload.
+    ok("[lib] the result is compacted to the documented fields", /variableCollections/.test(body) && /componentCount/.test(body));
+    ok("[lib] warnings survive the compaction (they explain an empty list)", /warnings/.test(body));
+    ok("[lib] the usage-derived caveat travels with the result", /USAGE-derived/.test(body));
+    ok("[lib] the empty case is explained in-result, not left ambiguous", /NORMAL outcome/.test(body));
+    ok("[lib] and the stale-plugin/teamlibrary cause is named", /teamlibrary/.test(body));
+  })();
 
   // ---------------------------------------------------------------- figma-pull: writePages layout
   // safe() folds every non-alphanumeric to "_", so DISTINCT page names collide. Sharing one directory
@@ -484,7 +595,19 @@ async function disconnectErr(code, reason) {
   const wdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-out-"));
 
   const full = OUT.writeAny(path.join(wdir, "design"), {
-    designSystem: { file: "Demo", exportedAt: "2026-08-12T00:00:00.000Z" },
+    designSystem: {
+      file: "Demo",
+      exportedAt: "2026-08-12T00:00:00.000Z",
+      colorProfile: "srgb",
+      collections: [{ id: "VariableCollectionId:1:1", name: "Core", modes: ["Light"] }],
+      variables: [{ name: "color/bg", type: "COLOR" }],
+      styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [] },
+      components: [
+        { key: "k1", name: "Button", id: "2:1", page: "Home", pageId: "1:0" },
+        { key: "k2", name: "Card", remote: true, derivedFrom: "instances" },
+      ],
+      hygiene: ["variant explosion: 'Button'"],
+    },
     layersDoc: {
       index: [{ id: "1:2", name: "Hero", type: "FRAME", pageId: "1:0", page: "Home" }],
       layers: [{ id: "1:2", name: "Hero", type: "FRAME" }],
@@ -514,6 +637,58 @@ async function disconnectErr(code, reason) {
   ok("[write-out] the freshness stamp survives the write byte-for-byte",
     JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).exportedAt ===
       "2026-08-12T00:00:00.000Z");
+
+  // --- the design-system split (bridge/design-system-layout.js) -------------------------------
+  // The catalog is no longer one flat object: Figma's own model has three separate systems
+  // (VariableCollections+Variables / Paint|Text|Effect|GridStyle / Components), and library
+  // components are not nodes in this file at all.
+  // The eight parts land in design-system/ — design/tokens.json and design/components.json at the
+  // export ROOT are the user's hand-authored, non-regenerable config maps and must not be clobbered.
+  const readDS = (n) => JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", n), "utf8"));
+  ok("[ds-split] tokens.json carries the collections + variables, and nothing else's payload",
+    (() => { const t = readDS("tokens.json");
+      return t.collections.length === 1 && t.variables.length === 1 && !t.styles && !t.components; })());
+  ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid",
+    (() => { const p = readDS("styles.paint.json").styles, t = readDS("styles.text.json").styles,
+        e = readDS("styles.effect.json").styles, g = readDS("styles.grid.json").styles;
+      return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g); })());
+  ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
+    (() => { const c = readDS("components.local.json").components;
+      return c.length === 1 && c[0].key === "k1" && !!c[0].id && !!c[0].pageId; })());
+  ok("[ds-split] components.library.json holds only remote:true entries — inferred from instances, not nodes here",
+    (() => { const c = readDS("components.library.json").components;
+      return c.length === 1 && c[0].key === "k2" && c[0].remote === true && c[0].id === undefined; })());
+  ok("[ds-split] hygiene.json is the lint report on its own", readDS("hygiene.json").hygiene.length === 1);
+  ok("[ds-split] every split file repeats the freshness stamp, so drift-lint/figma_status work off any of them",
+    ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json",
+     "components.local.json", "components.library.json", "hygiene.json"]
+      .every((n) => readDS(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS(n).file === "Demo"));
+  ok("[ds-split] design-system.json is now a slim manifest: stamp + pointers, no bulk data",
+    (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8"));
+      return m.file === "Demo" && m.colorProfile === "srgb" && m.files.tokens === "design-system/tokens.json" &&
+        m.files.componentsLibrary === "design-system/components.library.json" && !m.variables && !m.components && !m.styles; })());
+  ok("[ds-split] the manifest counts local and library components, and each style bucket, separately",
+    (() => { const c = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).counts;
+      return c.variables === 1 && c.components === 1 && c.libraryComponents === 1 && c.hygiene === 1 &&
+        c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0; })());
+
+  // --- the --design-system / figma_export_design_system result shape: { designSystem } only, no
+  // layersDoc/assets. This is what OUT.writeExport receives on that path (figma-pull.js's
+  // designSystemOnly branch and figma-mcp.mts's exportResult both call writeAny -> writeExport with
+  // exactly this shape) — must degrade cleanly with no pages/ and no assets/ written.
+  const dsOnlyDir = path.join(wdir, "ds-only");
+  const dsOnlyResult = OUT.writeExport(dsOnlyDir, {
+    designSystem: { exportedAt: "2026-08-16T00:00:00.000Z", file: "Demo", colorProfile: "srgb",
+      collections: [], variables: [], styles: { paint: [], text: [], effect: [], grid: [] }, components: [], hygiene: [] },
+  });
+  ok("[ds-only] writeExport with no layersDoc/assets still writes the design-system split",
+    fs.existsSync(path.join(dsOnlyDir, "design-system.json")) && fs.existsSync(path.join(dsOnlyDir, "design-system", "tokens.json")));
+  ok("[ds-only] and writes NO pages/ or assets/ directory",
+    !fs.existsSync(path.join(dsOnlyDir, "pages")) && !fs.existsSync(path.join(dsOnlyDir, "assets")));
+  ok("[ds-only] wrote.layerFiles/pageDirs/assets all report zero, not a crash",
+    dsOnlyResult.wrote.layerFiles === 0 && dsOnlyResult.wrote.pageDirs === 0 && dsOnlyResult.wrote.assets === 0);
+  ok("[ds-split] and the write result reports the same counts back to the MCP caller",
+    full.wrote.designSystemCounts && full.wrote.designSystemCounts.libraryComponents === 1);
 
   // A manifest-only asset (no bytes — e.g. one the plugin skipped) must not be counted as written.
   const skipped = OUT.writeAny(path.join(wdir, "skip"), {

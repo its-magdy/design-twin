@@ -42,7 +42,7 @@ Once files are in `design/`, building code is identical for all three: **`/figma
    - `design/components.json` — Figma component → your code component + import (reuse source of truth).
      **Auto-seed it** from Code Connect files in the repo: `node bridge/seed-components.js` (scans
      `*.figma.tsx` / `figma.connect(...)` / `@FigmaConnect`, fills `component`/`source`/`nodeId`; you add
-     `import`/`props`). Export `design-system.json` first so node-ids resolve to real component names.
+     `import`/`props`). Export the design system first (`design/design-system/components.local.json`) so node-ids resolve to real component names.
    Shapes are in the root `README.md` "One-time setup".
 3. **(Only for paths B/C)** `cd bridge && npm install`, then set a stable bridge token:
    `export FIGMA_BRIDGE_TOKEN="$(openssl rand -hex 24)"` (add to your shell profile) and paste it into
@@ -52,7 +52,12 @@ Once files are in `design/`, building code is identical for all three: **`/figma
 1. In Figma, select the frame → **Plugins → Development → Design Export for AI**.
 2. Click one of:
    - **Export current selection** → produces `<screen>.json` + `variables.json` (+ assets).
-   - **Export design system + all page frames** → produces `design-system.json` + `pages/index.json`
+   - **Export design system + all page frames** → produces the `design-system.json` manifest + its
+     parts (`design-system__tokens.json`, `…__styles.paint.json`/`…__styles.text.json`/
+     `…__styles.effect.json`/`…__styles.grid.json`, `…__components.local.json`,
+     `…__components.library.json`, `…__hygiene.json` — a browser download can't make directories, so
+     the `design-system/` folder is encoded in the name; move them into `design/design-system/`)
+     + `pages/index.json`
      (+ assets); click **Download layers (N)** to save one file per top-level layer, grouped per Figma
      page, into `design/pages/<page>/`.
 3. In the plugin's **Downloads** list, save every `Download <name>` link into `design/`, and click
@@ -64,17 +69,38 @@ Once files are in `design/`, building code is identical for all three: **`/figma
 ## Path B — figma-pull CLI (automated read)
 ```
 # repo root, Figma file open + plugin running:
-node bridge/figma-pull.js design             # full: design-system.json + pages/<page>/ (one file per layer) + assets/
+node bridge/figma-pull.js design             # full: design-system.json + design-system/ + pages/<page>/ (one file per layer) + assets/
 node bridge/figma-pull.js design --selection # just the current selection
+node bridge/figma-pull.js --list-libraries   # cheap: which design libraries this file draws on
 node bridge/figma-pull.js --list-pages       # cheap: page names only (prints to stdout, writes nothing)
 node bridge/figma-pull.js --list             # cheap: pages + their top-level frames
 node bridge/figma-pull.js --children <id>    # cheap: one node's direct children (peek before a full pull)
 node bridge/figma-pull.js design --page <id> # deep-pull one or more named pages (repeatable --page)
+node bridge/figma-pull.js design --design-system # ONLY tokens/styles/components/hygiene — no page
+                                              # walk, no assets/ (the "just the design system" pull)
 ```
-The three cheap commands print structural fields only (id/name/type/size), so they take **no read
-options** — `--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--no-assets`
-are refused there rather than silently ignored. Pass those to the `--page` pull instead. `--timeout`
-does apply to them.
+**Recommended order — discover, then scope:** `--list-libraries` (which libraries) → `--list` (which
+pages/frames, with ids) → `--children <id>` if you need to peek → `design --page <id>`. Never open with
+a whole-file pull.
+
+The cheap commands print structural/discovery fields only, so they take **no read options** — `--css` /
+`--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--no-assets` are refused there
+rather than silently ignored, and two of them at once is refused too. Pass read options to the
+`--page` pull instead. `--timeout` does apply to all of them.
+
+`--list-libraries` prints a table of the local file's published assets plus every **enabled** team
+library, with variable collections and per-library component counts. Three things to tell users:
+- component counts are **usage-derived** — Figma exposes no API to enumerate a library's contents, so
+  the number is "components of that library used in *this* file";
+- libraries are enabled **only in the Figma UI** (Assets → Libraries), never via API, so any export is
+  silently scoped to whatever was enabled at the time;
+- **empty is a normal result** (free plan, or nothing enabled) — but check the plugin first, below.
+
+> **Library reads need a re-imported plugin.** The manifest now declares
+> `"permissions": ["teamlibrary"]`. A plugin imported before that change still runs and returns **zero
+> libraries, silently**. If `--list-libraries` / `figma_list_libraries` is empty, re-import
+> `figma-plugin/manifest.json` (Plugins → Development → Import plugin from manifest…) before
+> concluding the file has no libraries.
 It prints `listening on ws://localhost:8787`, waits for the plugin to connect, writes files, and exits.
 Then `/figma-to-code <screen>`. Allowlist it to skip the prompt: add
 `"Bash(node bridge/figma-pull.js:*)"` to `.claude/settings.json` → `permissions.allow`.
@@ -103,12 +129,17 @@ holds it off, so a long `--all-pages` pull is never cut short.
 The MCP is registered in `.mcp.json` but **disabled** in `.claude/settings.local.json`
 (`disabledMcpjsonServers: ["figma"]`). To use it: run `/mcp` and enable **figma** (or remove it from
 that array), then restart Claude Code. Pre-approve tools with `"mcp__figma__*"` in `permissions.allow`.
-Tools: `figma_status`, `figma_get_selection`, `figma_list_pages`, `figma_list_children`,
-`figma_export_full`, `figma_export_selection`, `figma_export_url`,
-`figma_write` (a small fixed set of safe ops — createFrame / createText / setFill / setText; **no
-arbitrary code execution**). Call `figma_list_pages` FIRST — it is the cheap index (pages + top-level
-frames, no recursion, no assets) you use to pick a target for `figma_export_full({page:[id]})`, instead
-of exporting the whole file into context. For code→design authoring, prefer the Figma MCP server's own
+Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_list_pages`,
+`figma_list_children`, `figma_export_full`, `figma_export_design_system`, `figma_export_selection`,
+`figma_export_url`, `figma_write` (a small fixed set of safe ops — createFrame / createText / setFill /
+setText; **no arbitrary code execution**). Discover before you pull: `figma_list_libraries` (no
+arguments — which design libraries the file draws on, with variable collections and usage-derived
+component counts), then `figma_list_pages` — the cheap index (pages + top-level frames, no recursion,
+no assets) you use to pick a target for `figma_export_full({page:[id]})`, instead of exporting the
+whole file into context. Only want the design system itself, no screens? `figma_export_design_system`
+skips the page walk (and its assets) entirely — the MCP twin of `--design-system` below. The same
+three limits apply as for `--list-libraries` above (usage-derived counts, UI-only library enablement,
+empty-is-normal + re-import the plugin). For code→design authoring, prefer the Figma MCP server's own
 `/figma-generate-design` / `/figma-use` skills.
 
 **Pass `writeToDisk: true` for anything past a quick look.** Every export tool takes it (plus an
@@ -134,6 +165,13 @@ To use the bridge from another project, add a `.mcp.json` there pointing at an *
   stop anything — this error means something *else* holds the port (usually the MCP server, or a
   stale `node`). If the MCP is the holder and you wanted files, use `writeToDisk: true` rather than
   killing it.
+- **`--list-libraries` / `figma_list_libraries` returns nothing** → in this order: (1) the plugin in
+  Figma predates the manifest's `"permissions": ["teamlibrary"]` — **re-import it**; (2) no team
+  library is enabled for the file (enable it in the Figma UI, Assets → Libraries; no API can do this);
+  (3) free plan — library variable collections aren't exposed to plugins. All three are normal, not
+  broken bridges, and the command's own output says so.
+- **A component in an export has no library/main component** → the library it came from probably
+  wasn't enabled when the export ran. Enable it in Figma, then re-pull; there is no API to enable it.
 - **MCP is running and I need `assets/`** → asset bytes are never returned inline, and the CLI can't
   run alongside the MCP. Re-run the export with `writeToDisk: true`.
 - **`--serve` says a daemon is already running** → one is up; `--stop` it. A socket file left by a
