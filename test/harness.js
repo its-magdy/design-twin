@@ -102,6 +102,7 @@ const scrollFrame = {
 const buttonComponent = {
   type: "COMPONENT", name: "Button", id: "5:0", description: "Primary action button", parent: null,
   key: "compkey123", documentationLinks: [{ uri: "https://docs.example.com/button" }],
+  getPublishStatusAsync: async () => "CURRENT",
   componentPropertyDefinitions: {
     "Label#1:0": { type: "TEXT", defaultValue: "Button", description: "Visible label" },
     "Icon#2:0": { type: "INSTANCE_SWAP", defaultValue: "icon:home", preferredValues: [{ type: "COMPONENT", key: "abc" }, { type: "COMPONENT", key: "def" }] },
@@ -121,13 +122,14 @@ const figma = {
     // Dev-Mode measurement redlines — SYNCHRONOUS API (getMeasurements, not *Async).
     getMeasurements: () => [{ start: { node: { id: "1:0" }, side: "LEFT" }, end: { node: { id: "1:1" }, side: "RIGHT" }, offset: { type: "OUTER", fixed: 16 }, freeText: "16" }],
   },
+  fileKey: "FILEKEY1234567",
   root: { name: "My File", documentColorProfile: "DISPLAY_P3", children: [{ name: "Page 1", children: [scrollFrame], findAllWithCriteria: () => [buttonComponent] }] },
   loadAllPagesAsync: async () => {},
   // Source-image resolution: intrinsic pixel size + original uploaded bytes, keyed by image hash.
   getImageByHash: (hash) => (hash === "abc123" ? { getSizeAsync: async () => ({ width: 800, height: 600 }), getBytesAsync: async () => new Uint8Array([1, 2, 3, 4]) } : null),
   getNodeByIdAsync: async (id) => (id === "frame_2" ? { name: "Details" } : null),
   getStyleByIdAsync: async (id) => ({ s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" } }[id] || null),
-  getLocalPaintStylesAsync: async () => [{ name: "Brand/Primary", paints: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], description: "" }],
+  getLocalPaintStylesAsync: async () => [{ name: "Brand/Primary", id: "s_brand", key: "paintkey123", paints: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], boundVariables: { paints: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, documentationLinks: [{ uri: "https://docs.example.com/brand" }], description: "", getPublishStatusAsync: async () => "CHANGED" }],
   getLocalTextStylesAsync: async () => [{ name: "Body/Regular", fontSize: 16, fontName: { family: "Inter", style: "Regular" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 8, paragraphIndent: 4, leadingTrim: "CAP_HEIGHT", listSpacing: 6, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, description: "" }],
   getLocalEffectStylesAsync: async () => [],
   getLocalGridStylesAsync: async () => [{ name: "Grid/12col", layoutGrids: [{ pattern: "COLUMNS", count: 12, gutterSize: 20, sectionSize: 60 }], description: "" }],
@@ -1284,6 +1286,42 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h) => /published LIBRARY/.test(h) && /sample/.test(h)));
   delete sandbox.figma.teamLibrary;
   sandbox.figma.root.children = prevKids3;
+
+  // ---------- [LIB-FILE] the library-file export (--as-library) ----------
+  // Run INSIDE the library file, everything is local, so the ordinary local reads return the COMPLETE
+  // catalog — that is the whole reason this mode exists instead of importVariableByKeyAsync.
+  {
+    const lib = await sandbox.collectLibraryFile({ asLibrary: "NERA" });
+    const d = lib.designSystem;
+
+    ok("[LIB-FILE] stamps source.role=library", d.source && d.source.role === "library");
+    ok("[LIB-FILE] carries the library name the user typed", d.source.libraryName === "NERA");
+    ok("[LIB-FILE] records fileKey as the durable directory identity", d.source.fileKey === "FILEKEY1234567");
+    ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(d.source.collectionKeys));
+    // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
+    ok("[LIB-FILE] keeps the freshness stamp intact", typeof d.exportedAt === "string" && d.file === "My File");
+
+    // Publish status: gated to library mode because Figma answers UNPUBLISHED for everything when
+    // asked from a consuming file or a branch.
+    const btn = d.components.find((c) => c.name === "Button");
+    ok("[LIB-FILE] component carries publish status", btn && btn.publish === "current");
+    const paint = d.styles.paint[0];
+    ok("[LIB-FILE] style carries publish status", paint && paint.publish === "changed");
+    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
+    ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
+    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /prior\/no page walk referenced/.test(h)));
+
+    // The style fixes, which apply on BOTH paths — `key` is what makes a library style joinable at all.
+    ok("[LIB-FILE] paint style carries its cross-file key", paint.key === "paintkey123");
+    ok("[LIB-FILE] paint style carries bound variables (tokens)", paint.tokens && Object.keys(paint.tokens).length > 0);
+    ok("[LIB-FILE] paint style carries documentationLinks", Array.isArray(paint.docs) && paint.docs.length === 1);
+
+    // The default path must NOT gain a publish field: it would read as authoritative and be wrong.
+    const dsPlain = (await sandbox.collectDesignSystemOnly({})).designSystem;
+    ok("[LIB-FILE] default design-system pull emits NO publish status", !dsPlain.components.some((c) => c.publish) && !dsPlain.styles.paint.some((s) => s.publish));
+    ok("[LIB-FILE] default design-system pull emits NO source block", dsPlain.source === undefined);
+    ok("[LIB-FILE] but the style key fix applies there too", dsPlain.styles.paint[0].key === "paintkey123");
+  }
 
   report();
 })().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });

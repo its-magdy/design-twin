@@ -28,6 +28,19 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
     what this file uses, not the component's full API — don't treat an absent prop as nonexistent.
   - `design-system/hygiene.json` — `hygiene`, design-system smells (unbound values, variant explosion,
     broken aliases).
+- `design/libraries/index.json` — **optional, present only if a LIBRARY file was pulled separately**
+  (`figma-pull --as-library`). Each row points at `libraries/<slug>-<fileKey8>/index.json`, whose
+  `tokens.json` / `styles.*.json` / `components.json` have the SAME shape as their `design-system/`
+  twins. Use it as a **secondary lookup, never as the codegen source**:
+  - **Generate from `design-system/`.** It holds the subset this design file actually references.
+    Emitting from a library catalog ships every unused primitive in the library.
+  - **Consult the library catalog to resolve gaps.** It is the authority on what a token family really
+    contains and on a component's REAL props — `components.library.json` above only samples the props
+    the instances in this file happen to use, and the library catalog has the full definitions.
+  - **Join on `key`, never on names.** `key` is durable cross-file identity; collection and variable
+    names collide across libraries.
+  - Each entry carries `publish: current | changed | unpublished`. Prefer `current`; treat
+    `unpublished` as a draft that consumers cannot use yet, and say so rather than silently building on it.
 - `design/pages/index.json` — the root, run-wide manifest + a lean `pageDirs[]` (`{page,pageId,dir,index,layers}`, where `index` points at that page's own index file —
   NOT the full layer list). `page` is the display name and is **not unique** — Figma allows two pages
   with the same name, so if a name matches more than one entry, tell them apart by `pageId` (the stable

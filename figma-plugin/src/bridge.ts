@@ -1,5 +1,5 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
-import { collectFull, collectDesignSystemOnly, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
+import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
 import { applyWrites } from "./writes";
 import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
@@ -59,6 +59,10 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
     case "exportDesignSystem":
       return await serializeRun(() => collectDesignSystemOnly(args as CollectOpts));
+    // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
+    // the full catalog build and mutates the same per-run state they do.
+    case "exportLibrary":
+      return await serializeRun(() => collectLibraryFile(args as CollectOpts & { asLibrary?: string }));
     case "exportSelection":
       return await serializeRun(() => collectSelection(args as CollectOpts));
     case "exportNode":

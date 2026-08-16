@@ -228,6 +228,16 @@ async function disconnectErr(code, reason) {
   const usage = (argv) => { try { parse(argv); return null; } catch (e) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + e.message; } };
 
   console.log("\nfigma-pull — argument parsing:");
+  // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
+  // like --design-system, walks no page (making every read option inert and therefore refused).
+  ok("[as-library] parses and carries the library name", parse(["--as-library", "NERA"]).asLibrary === "NERA");
+  ok("[as-library] requires a name rather than defaulting silently", /library name/.test(usage(["--as-library"]) || ""));
+  ok("[as-library] is refused alongside --design-system", /select different scopes/.test(usage(["--as-library", "NERA", "--design-system"]) || ""));
+  ok("[as-library] is refused alongside --page", /select different scopes/.test(usage(["--as-library", "NERA", "--page", "1:2"]) || ""));
+  ok("[as-library] is refused alongside a list command", /cannot be combined/.test(usage(["--as-library", "NERA", "--list-libraries"]) || ""));
+  ok("[as-library] refuses read options, which would be silently ignored", /silently ignored/.test(usage(["--as-library", "NERA", "--css"]) || ""));
+  ok("[as-library] is refused alongside a daemon command", /cannot be combined/.test(usage(["--as-library", "NERA", "--serve"]) || ""));
+
   // The regression: `--timeout` with no value fell into the validator's own `!== undefined` exemption,
   // so it was silently IGNORED and the default applied — invisible until the export died at a limit
   // the caller believed they had raised. A flag that cannot be honoured must fail, never default.
@@ -663,6 +673,79 @@ async function disconnectErr(code, reason) {
   // a compact index — counts and paths, never node payloads.
   const OUT = require("../bridge/write-out.js");
   const wdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-out-"));
+
+  // ---------- library-file export layout (--as-library) ----------
+  // The library catalog must land in a tree that CANNOT collide with design-system/, because the two
+  // describe different Figma files and answer different questions.
+  {
+    const libDoc = {
+      file: "NERA DS",
+      exportedAt: "2026-08-16T00:00:00.000Z",
+      colorProfile: "srgb",
+      source: { role: "library", libraryName: "NERA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
+      collections: [{ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" }],
+      variables: [{ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" }],
+      styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [] },
+      // A main consumed from ANOTHER library: not this library's to claim.
+      components: [{ name: "Button", key: "ck1", publish: "current" }, { name: "Foreign", key: "ck2", remote: true }],
+      hygiene: [],
+    };
+    const ldir = fs.mkdtempSync(path.join(os.tmpdir(), "write-lib-"));
+    const res = OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
+    const base = path.join(ldir, "design");
+    const dirName = "nera-ABCDEFGH".slice(0, 4) + "-ABCDEFGH"; // slug("NERA") + first 8 of fileKey
+    ok("[lib-layout] lands under libraries/<slug>-<fileKey8>/", res.wrote.library === "libraries/" + dirName);
+    ok("[lib-layout] directory identity uses fileKey, which survives a rename", /-ABCDEFGH$/.test(res.wrote.library));
+    ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
+    ok("[lib-layout] tokens.json exists", fs.existsSync(path.join(base, "libraries", dirName, "tokens.json")));
+    const tok = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "tokens.json"), "utf8"));
+    // The shape contract: a top-level `variables` array is what keeps tooling/catalog-input.js from
+    // rejecting this as the slim manifest, and what lets tooling/tokens.js run on it unchanged.
+    ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
+    ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
+    ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
+    ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source.role === "library");
+
+    const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8"));
+    ok("[lib-layout] a component from ANOTHER library is not claimed by this one", comps.components.length === 1 && comps.components[0].name === "Button");
+    const hyg = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "hygiene.json"), "utf8"));
+    ok("[lib-layout] and the drop is reported, not silent", hyg.hygiene.some((h) => /ANOTHER library were dropped/.test(h)));
+
+    const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8"));
+    ok("[lib-layout] the directory self-describes via index.json", idx.files && idx.files.tokens && idx.counts.variables === 1);
+    ok("[lib-layout] index summarises publish status", idx.publish && idx.publish.current >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
+
+    const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0].libraryName === "NERA");
+    // A second library must not erase the first: each is a separate plugin run in a separate file.
+    const second = JSON.parse(JSON.stringify(libDoc));
+    second.file = "Icons"; second.source.libraryName = "Icons"; second.source.fileKey = "ZZZZZZZZ999";
+    OUT.writeExport(path.join(ldir, "design"), { designSystem: second }, () => {});
+    const root2 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    ok("[lib-layout] a second library is ADDED, not substituted", root2.libraries.length === 2);
+    // Re-exporting the SAME library replaces its own row only.
+    OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
+    const root3 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    ok("[lib-layout] re-exporting the same library does not duplicate its row", root3.libraries.length === 2);
+
+    // Orphan reporting: a file the previous export produced and this one did not is REPORTED, never
+    // deleted — a read command must not remove files it did not create.
+    const stale = path.join(base, "libraries", dirName, "styles.text.json");
+    ok("[lib-layout] a previously written split file is still on disk", fs.existsSync(stale));
+    let logged = [];
+    const shrunk = JSON.parse(JSON.stringify(libDoc));
+    // Simulate a build that no longer emits text styles by rewriting the index to claim an extra file.
+    const idxPath = path.join(base, "libraries", dirName, "index.json");
+    const idxDoc = JSON.parse(fs.readFileSync(idxPath, "utf8"));
+    idxDoc.files.ghost = "libraries/" + dirName + "/ghost.json";
+    fs.writeFileSync(idxPath, JSON.stringify(idxDoc));
+    fs.writeFileSync(path.join(base, "libraries", dirName, "ghost.json"), "{}");
+    const res2 = OUT.writeExport(path.join(ldir, "design"), { designSystem: shrunk }, (m) => logged.push(m));
+    ok("[lib-layout] an orphaned file is reported", res2.wrote.orphans.some((o) => /ghost\.json$/.test(o)));
+    ok("[lib-layout] and it is NOT deleted", fs.existsSync(path.join(base, "libraries", dirName, "ghost.json")));
+    ok("[lib-layout] the orphan warning reaches the user", logged.some((m) => /STALE:/.test(m)));
+  }
+
 
   const full = OUT.writeAny(path.join(wdir, "design"), {
     designSystem: {

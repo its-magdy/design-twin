@@ -12,6 +12,12 @@
 //   node figma-pull.js [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
 //                                                   # walk, no assets (the cheap "just the design
 //                                                   # system" pull)
+//   node figma-pull.js [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
+//                                                   # every variable with full per-mode values, every
+//                                                   # style, every component. Run it with the LIBRARY
+//                                                   # file open, not the design file that consumes it.
+//                                                   # Writes design/libraries/<slug>-<fileKey8>/ and
+//                                                   # never touches design-system/.
 //   node figma-pull.js [outDir] --timeout N  # seconds to wait for the export (default: 300,
 //                                            # 900 with --all-pages, 120 for --selection); also
 //                                            # raises the list commands' own 300s budget
@@ -216,6 +222,13 @@ if (childrenId) childrenId = toNodeId(childrenId);
 // of pages. Accepts `--page=x` and `--page x`. Ambiguous/unknown selectors fail loudly plugin-side
 // with the available pages listed — never a silent pick, since nothing here is interactive.
 const pageSel = takeValues(args, "--page", "--page needs an id or name (see --list)");
+// --as-library <name>: the LIBRARY-FILE pull. A scope, not a read option — it selects WHAT is
+// exported, and like --design-system it walks no page, so the read-option guard below refuses those
+// flags for it too. The name is required rather than defaulted from figma.root.name, because it is
+// what the output directory is named after and a silent default is a directory the user did not
+// choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
+const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"NERA\"")[0] || null;
+
 
 // A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
 // with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
@@ -247,7 +260,7 @@ const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) |
 // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
 // export of the WRONG scope — the failure you don't notice. Now that parsing is a pure function,
 // refusing costs two lines and a test.
-const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system"].filter(Boolean);
+const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library"].filter(Boolean);
 if (scopes.length > 1) {
   throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
 }
@@ -293,10 +306,10 @@ if (indexCmd && readOptFlagsGiven.length) {
 // --design-system never walks a page or node, so every read option (css/measurements/
 // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
 // silent-loss class, same refusal.
-if (designSystemOnly && readOptFlagsGiven.length) {
+if ((designSystemOnly || asLibrary) && readOptFlagsGiven.length) {
   const many = readOptFlagsGiven.length > 1;
   const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a node/page walk — --design-system skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
+  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
 }
 
 // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
@@ -304,7 +317,7 @@ if (designSystemOnly && readOptFlagsGiven.length) {
 // export the user typed, with nothing said about it.
 if (daemonCmd) {
   const others = [
-    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system",
+    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library",
     ...indexCmds, ...readOptFlagsGiven,
   ].filter(Boolean);
   if (others.length) {
@@ -315,7 +328,7 @@ if (daemonCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -389,7 +402,7 @@ try {
   console.error("[figma-pull] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
 
 async function main() {
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
@@ -526,7 +539,7 @@ async function main() {
     return finish();
   }
 
-  const mode = selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
+  const mode = asLibrary ? `library "${asLibrary}"` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
@@ -541,6 +554,11 @@ async function main() {
     writeJson(outDir, safe(r.screenName || "screen") + ".json", r.screen);
     writeJson(outDir, "variables.json", r.variables);
     writeAssets(outDir, r.assets);
+  } else if (asLibrary) {
+    // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
+    // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
+    const r = await send("exportLibrary", { asLibrary }, exportTimeoutMs);
+    OUT.writeExport(outDir, r, plog);
   } else if (designSystemOnly) {
     const r = await send("exportDesignSystem", {}, exportTimeoutMs);
     // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,

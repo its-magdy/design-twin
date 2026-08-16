@@ -114,7 +114,23 @@ export interface VariablesDump {
   hygiene: string[];
 }
 
-export async function dumpVariables(): Promise<VariablesDump> {
+// asLibrary: emit per-variable/per-collection publish status. Gated because Figma returns
+// "UNPUBLISHED" for every object when asked from a consuming file or a branch — see components.ts's
+// publishOf. https://developers.figma.com/docs/plugins/api/PublishStatus/
+export async function dumpVariables(opts?: { asLibrary?: string }): Promise<VariablesDump> {
+  const asLibrary = !!(opts && opts.asLibrary);
+  // Filled during the variable loop, resolved in ONE fan-out afterwards (one round trip per variable,
+  // awaited in place, would serialize the whole dump).
+  const pendingPublish: { rec: Obj; obj: any }[] = [];
+  const publishOf = async (o: any): Promise<string | undefined> => {
+    try {
+      if (!asLibrary || !o || typeof o.getPublishStatusAsync !== "function") return undefined;
+      const s = await o.getPublishStatusAsync();
+      return s ? String(s).toLowerCase() : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  };
   const [collections, localVars] = await Promise.all([
     figma.variables.getLocalVariableCollectionsAsync(),
     figma.variables.getLocalVariablesAsync(),
@@ -234,6 +250,7 @@ export async function dumpVariables(): Promise<VariablesDump> {
     // Durable cross-file identity (importVariableByKeyAsync) — rename-proof anchor for the tooling/ map +
     // drift-lint. Mirrors the component `key` precedent; present on local and published variables.
     if (v.key) rec.key = v.key;
+    if (asLibrary) pendingPublish.push({ rec, obj: v });
     variables.push(rec);
 
     // Hygiene (all computable from what we already read):
@@ -243,6 +260,18 @@ export async function dumpVariables(): Promise<VariablesDump> {
       hygiene.push("semantic color '" + v.name + "' holds a raw value in a multi-mode collection (breaks theming)");
     }
   }
+  // Publish status, fanned out once: variables first, then collections (a collection carries its own
+  // status — a variable can be CURRENT inside a collection that has never been published).
+  if (pendingPublish.length) {
+    const st = await Promise.all(pendingPublish.map((p) => publishOf(p.obj)));
+    for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
+  }
+  const collPublish: Obj = {};
+  if (asLibrary) {
+    const st = await Promise.all(allCollections.map((c) => publishOf(c)));
+    for (let i = 0; i < allCollections.length; i++) if (st[i]) collPublish[allCollections[i].id] = st[i];
+  }
+
   return {
     // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
     // token emitters need each collection's default mode to pick the `:root` value.
@@ -258,6 +287,7 @@ export async function dumpVariables(): Promise<VariablesDump> {
       extended: (c as any).isExtension === true ? true : undefined,
       hiddenFromPublishing: (c as any).hiddenFromPublishing === true ? true : undefined,
       key: (c as any).key || undefined, // durable cross-file collection identity
+      publish: collPublish[c.id] || undefined, // library mode only
     })),
     variables,
     hygiene,

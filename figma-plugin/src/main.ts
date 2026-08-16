@@ -15,7 +15,7 @@ import { errMsg } from "./util";
 import { buildPageLayout } from "../../bridge/pages-layout.js";
 import { buildDesignSystemLayout } from "../../bridge/design-system-layout.js";
 import { releaseAssets, serializeRun } from "./state";
-import { collectSelection, collectFull, collectDesignSystemOnly, collectNode, listPages, listChildren } from "./collect";
+import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, listPages, listChildren } from "./collect";
 import { serialize } from "./serialize";
 import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
@@ -25,7 +25,7 @@ import { applyWrites } from "./writes";
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.js) can drive them. Harmless in
 // the isolated plugin realm; not referenced by the UI or bridge.
-(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
+(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
 
 figma.showUI(__html__, { width: 360, height: 380 });
 console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > Development > Use Developer VM

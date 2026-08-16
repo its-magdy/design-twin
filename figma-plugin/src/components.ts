@@ -54,8 +54,9 @@ export function instanceOverrides(node: SceneNode): Obj[] | undefined {
 // The component + variant catalog across every page (a feature's states live here).
 // Pushes naming/variant-explosion notes into `hygiene`; per-page and per-component failures are
 // WARNED, never swallowed — an empty catalog must be distinguishable from "this page has none".
-async function collectComponentCatalog(hygiene: string[]): Promise<Obj[]> {
+async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean): Promise<Obj[]> {
   const components: Obj[] = [];
+  const pendingPublish: { entry: Obj; node: any }[] = [];
   const seenNames = new Set<string>();
   // findAllWithCriteria is the extractor's one full-document traversal, and the Plugin API docs call
   // out invisible instance children as its main cost ("several times faster in large documents").
@@ -119,16 +120,43 @@ async function collectComponentCatalog(hygiene: string[]): Promise<Obj[]> {
         if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
         if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
         seenNames.add(n.name);
+        // Collected, not awaited: one getPublishStatusAsync per component inside the page->component
+        // loop would serialize a round trip per component. Fanned out once, after the walk.
+        if (asLibrary) pendingPublish.push({ entry, node: n });
         components.push(entry);
       }
     }
   } finally {
     try { (figma as any).skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
   }
+  if (pendingPublish.length) {
+    const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
+    for (let i = 0; i < pendingPublish.length; i++) {
+      if (statuses[i]) pendingPublish[i].entry.publish = statuses[i];
+    }
+  }
   return components;
 }
 
-export async function buildDesignSystem(): Promise<Obj> {
+// PublishStatus is only meaningful INSIDE the library file: Figma returns "UNPUBLISHED" for every
+// object when queried from a consuming file or a branch, so emitting it on the normal path would be a
+// plausible-looking lie rather than a missing field. Gated on library mode for exactly that reason.
+// https://developers.figma.com/docs/plugins/api/PublishStatus/
+// CURRENT = published and in sync | CHANGED = published with local edits | UNPUBLISHED = never published.
+// Per-object and async (N round trips), so callers fan it out; a rejection yields undefined ("unknown"),
+// never a guessed "UNPUBLISHED".
+async function publishOf(o: any): Promise<string | undefined> {
+  try {
+    if (!o || typeof o.getPublishStatusAsync !== "function") return undefined;
+    const s = await o.getPublishStatusAsync();
+    return s ? String(s).toLowerCase() : undefined;
+  } catch (e) {
+    return undefined;
+  }
+}
+
+export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<Obj> {
+  const asLibrary = !!(opts && opts.asLibrary);
   // getLocal*StylesAsync can throw on some file states — default to [] rather than aborting the build.
   const safeList = async <T>(fn: () => Promise<T[]>): Promise<T[]> => { try { return await fn(); } catch (e) { return []; } };
   // Four independent style-list reads — fetch them concurrently rather than one after another.
@@ -142,7 +170,7 @@ export async function buildDesignSystem(): Promise<Obj> {
   const hygiene: string[] = [];
   // Component + variant catalog across every page (a feature's states live here).
   await loadAllPages("component catalog may be incomplete");
-  const components = await collectComponentCatalog(hygiene);
+  const components = await collectComponentCatalog(hygiene, asLibrary);
 
   // LIBRARY components. findAllWithCriteria({types:["COMPONENT",...]}) above only ever finds mains
   // that live IN this document, so a file whose entire design system is a consumed library produced a
@@ -151,7 +179,17 @@ export async function buildDesignSystem(): Promise<Obj> {
   // enumerated (there is no getAvailableLibraryComponentsAsync), so they are recovered by walking
   // instances; see libraries.ts for why their props may be inferred rather than defined.
   // Wrapped: this is an ADDITION to the catalog, and it must never be able to take the catalog with it.
-  try {
+  // In LIBRARY mode this walk is skipped entirely: inside the library file the components ARE local
+  // (findAllWithCriteria above already found every one of them), so the instance walk — the most
+  // expensive traversal in the module — would recover almost nothing while paying full cost. Any
+  // remote main it did find belongs to a DIFFERENT library and is that library's export to make.
+  if (asLibrary) {
+    hygiene.push(
+      "library mode: this catalog is the COMPLETE set of components defined in this library file. " +
+        "Publish status is per-object (publish: current | changed | unpublished); Figma exposes no way to list what the " +
+        "last PUBLISHED snapshot contained, so a component deleted here but still live in the library is not visible."
+    );
+  } else try {
     const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
     const remote = await collectLibraryComponents((m) => warn(m));
     let added = 0;
@@ -179,9 +217,31 @@ export async function buildDesignSystem(): Promise<Obj> {
   // getLocalVariablesAsync can't see. Resolving them after the dump would leave those tokens undefined.
   // The three async style mappings are independent of one another — resolve them concurrently instead
   // of awaiting three separate Promise.all batches in sequence inside the object literal.
+  // The catalog fields every style shares, regardless of kind. `key` is the durable cross-file
+  // identity — the exact analogue of the component `key` above and the variable `key` in variables.ts.
+  // Without it a consuming file's styleId (which resolves to a NAME only) cannot be joined back to the
+  // library catalog this style came from, which is the whole point of a library export.
+  // https://developers.figma.com/docs/plugins/api/PaintStyle/
+  const styleMeta = async (s: any): Promise<Obj> => {
+    const m: Obj = {};
+    if (s.key) m.key = s.key;
+    if (s.id) m.id = s.id;
+    if (s.remote) m.remote = true;
+    if (Array.isArray(s.documentationLinks) && s.documentationLinks.length) {
+      m.docs = s.documentationLinks.map((d: any) => d.uri).filter(Boolean);
+    }
+    if (asLibrary) {
+      const p = await publishOf(s);
+      if (p) m.publish = p;
+    }
+    return m;
+  };
+
   const [paintStyles, textStyles, effectStyles] = await Promise.all([
     // Paint styles carry their ACTUAL colors, not just a name.
-    Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), description: s.description || undefined }))),
+    // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
+    // variable silently lost that link — the binding is what makes it a token rather than a hex.
+    Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap((s as any).boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
     Promise.all(
       text.map(async (s) => ({
           name: s.name,
@@ -203,25 +263,54 @@ export async function buildDesignSystem(): Promise<Obj> {
             ? String((s as any).textWrapStyle).toLowerCase() : undefined,
         tokens: await resolveBoundMap((s as any).boundVariables),
         description: s.description || undefined,
+        ...(await styleMeta(s)),
       }))
     ),
-    Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), description: s.description || undefined }))),
+    Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap((s as any).boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
   ]);
   const styles = {
     paint: paintStyles,
     text: textStyles,
     effect: effectStyles,
-    // Layout-grid styles (column/row grids) — the responsive grid tokens. Sync, so no await needed.
-    grid: grid.map((s) => ({ name: s.name, grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : undefined, description: s.description || undefined })),
+    // Layout-grid styles (column/row grids) — the responsive grid tokens. The grid VALUES are sync;
+    // the shared catalog meta (key/publish) is not, so the map is fanned out like its three siblings.
+    grid: await Promise.all(
+      grid.map(async (s) => ({
+        name: s.name,
+        grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : undefined,
+        tokens: await resolveBoundMap((s as any).boundVariables),
+        description: s.description || undefined,
+        ...(await styleMeta(s)),
+      }))
+    ),
   };
 
   // LAST: the referenced-variable record is only complete once nodes, component props and styles have
   // all resolved, and dumpVariables uses it to include library variables this file merely consumes.
-  const vars = await dumpVariables();
+  const vars = await dumpVariables(opts);
+
+  // PROVENANCE. `exportedAt`/`file` stay top-level — snapshot-meta.js and drift-lint.js read them
+  // off whatever catalog they are handed, and `file` must keep answering "which ONE Figma file is
+  // this?". `source` is purely additive: role tells a consumer whether it is holding the design file's
+  // own catalog or a library's, and collectionKeys is the join back to --list-libraries, which reports
+  // collection keys but no library fileKey (libraries.ts: libraries themselves have no key).
+  let source: Obj | undefined;
+  if (asLibrary) {
+    let fileKey: string | undefined;
+    try { if (typeof (figma as any).fileKey !== "undefined") fileKey = (figma as any).fileKey || undefined; } catch (e) {}
+    if (!fileKey) hygiene.push("figma.fileKey unavailable — the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
+    source = {
+      role: "library",
+      libraryName: (opts && opts.asLibrary) || (figma.root && figma.root.name) || undefined,
+      fileKey,
+      collectionKeys: vars.collections.map((c: any) => c.key).filter(Boolean),
+    };
+  }
 
   return {
     exportedAt: exportedAt(),
     file: (figma.root && figma.root.name) || undefined,
+    source,
     colorProfile, // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
     collections: vars.collections,
     variables: vars.variables,

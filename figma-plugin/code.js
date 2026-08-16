@@ -31,9 +31,9 @@
     mod
   ));
 
-  // bridge/pages-layout.js
+  // ../bridge/pages-layout.js
   var require_pages_layout = __commonJS({
-    "bridge/pages-layout.js"(exports, module) {
+    "../bridge/pages-layout.js"(exports, module) {
       "use strict";
       function safe2(id) {
         return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -81,18 +81,18 @@
     }
   });
 
-  // bridge/errmsg.js
+  // ../bridge/errmsg.js
   var require_errmsg = __commonJS({
-    "bridge/errmsg.js"(exports, module) {
+    "../bridge/errmsg.js"(exports, module) {
       "use strict";
       var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
       module.exports = { errMsg: errMsg2 };
     }
   });
 
-  // bridge/design-system-layout.js
+  // ../bridge/design-system-layout.js
   var require_design_system_layout = __commonJS({
-    "bridge/design-system-layout.js"(exports, module) {
+    "../bridge/design-system-layout.js"(exports, module) {
       "use strict";
       var DIR = "design-system";
       var TOKENS = "tokens.json";
@@ -176,9 +176,9 @@
     }
   });
 
-  // bridge/read-opts.js
+  // ../bridge/read-opts.js
   var require_read_opts = __commonJS({
-    "bridge/read-opts.js"(exports, module) {
+    "../bridge/read-opts.js"(exports, module) {
       "use strict";
       var READ_OPTS = [
         {
@@ -229,9 +229,9 @@
     }
   });
 
-  // bridge/node-id.js
+  // ../bridge/node-id.js
   var require_node_id = __commonJS({
-    "bridge/node-id.js"(exports, module) {
+    "../bridge/node-id.js"(exports, module) {
       "use strict";
       var ID = "[A-Za-z0-9%:;_-]+";
       var NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
@@ -266,7 +266,7 @@
     }
   });
 
-  // figma-plugin/src/util.ts
+  // src/util.ts
   var import_pages_layout = __toESM(require_pages_layout());
   var import_errmsg = __toESM(require_errmsg());
   var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
@@ -322,11 +322,11 @@
     return out + chunk;
   }
 
-  // figma-plugin/src/main.ts
+  // src/main.ts
   var import_pages_layout2 = __toESM(require_pages_layout());
   var import_design_system_layout = __toESM(require_design_system_layout());
 
-  // figma-plugin/src/state.ts
+  // src/state.ts
   var import_read_opts = __toESM(require_read_opts());
   var assets = [];
   var runOpts = (0, import_read_opts.readOptDefaults)();
@@ -425,10 +425,10 @@
     imageSizeCache.clear();
   }
 
-  // figma-plugin/src/collect.ts
+  // src/collect.ts
   var import_node_id = __toESM(require_node_id());
 
-  // figma-plugin/src/layout.ts
+  // src/layout.ts
   var ALIGN = {
     MIN: "flex-start",
     CENTER: "center",
@@ -499,7 +499,7 @@
     return l;
   }
 
-  // figma-plugin/src/variables.ts
+  // src/variables.ts
   async function resolveVar(alias) {
     if (!alias || alias.type !== "VARIABLE_ALIAS") return void 0;
     return varName(alias.id);
@@ -572,7 +572,18 @@
     if (resolvedType === "COLOR" && val && typeof val.r === "number") return rgbaToHex(val);
     return v;
   }
-  async function dumpVariables() {
+  async function dumpVariables(opts) {
+    const asLibrary = !!(opts && opts.asLibrary);
+    const pendingPublish = [];
+    const publishOf2 = async (o) => {
+      try {
+        if (!asLibrary || !o || typeof o.getPublishStatusAsync !== "function") return void 0;
+        const s = await o.getPublishStatusAsync();
+        return s ? String(s).toLowerCase() : void 0;
+      } catch (e) {
+        return void 0;
+      }
+    };
     const [collections, localVars] = await Promise.all([
       figma.variables.getLocalVariableCollectionsAsync(),
       figma.variables.getLocalVariablesAsync()
@@ -643,12 +654,22 @@
       if (v.remote) rec.remote = true;
       if (v.hiddenFromPublishing) rec.hiddenFromPublishing = true;
       if (v.key) rec.key = v.key;
+      if (asLibrary) pendingPublish.push({ rec, obj: v });
       variables.push(rec);
       if (v.scopes && v.scopes.indexOf("ALL_SCOPES") !== -1) hygiene.push("ALL_SCOPES on '" + v.name + "' (pollutes every picker)");
       const modeCount = (collOf(v.variableCollectionId) || { modes: [] }).modes.length || 1;
       if (!hasAlias && v.resolvedType === "COLOR" && modeCount > 1) {
         hygiene.push("semantic color '" + v.name + "' holds a raw value in a multi-mode collection (breaks theming)");
       }
+    }
+    if (pendingPublish.length) {
+      const st = await Promise.all(pendingPublish.map((p) => publishOf2(p.obj)));
+      for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
+    }
+    const collPublish = {};
+    if (asLibrary) {
+      const st = await Promise.all(allCollections.map((c) => publishOf2(c)));
+      for (let i = 0; i < allCollections.length; i++) if (st[i]) collPublish[allCollections[i].id] = st[i];
     }
     return {
       // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
@@ -664,15 +685,17 @@
         // resolution (mode.parentModeId -> root mode) is deferred.
         extended: c.isExtension === true ? true : void 0,
         hiddenFromPublishing: c.hiddenFromPublishing === true ? true : void 0,
-        key: c.key || void 0
+        key: c.key || void 0,
         // durable cross-file collection identity
+        publish: collPublish[c.id] || void 0
+        // library mode only
       })),
       variables,
       hygiene
     };
   }
 
-  // figma-plugin/src/assets.ts
+  // src/assets.ts
   var ASSET_DIR = "assets/";
   function register(a) {
     const file = (0, import_pages_layout.safe)(a.id) + "." + (0, import_pages_layout.safe)(a.format);
@@ -846,7 +869,7 @@
     }
   }
 
-  // figma-plugin/src/paint.ts
+  // src/paint.ts
   var FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
   function imageFilters(f) {
     if (!f.filters || typeof f.filters !== "object") return void 0;
@@ -965,7 +988,7 @@
     return out;
   }
 
-  // figma-plugin/src/effects.ts
+  // src/effects.ts
   var GLASS_FIELDS = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
   async function simplifyEffects(effects) {
     if (!Array.isArray(effects)) return void 0;
@@ -1020,7 +1043,7 @@
     return out.length ? out : void 0;
   }
 
-  // figma-plugin/src/text.ts
+  // src/text.ts
   var lenUnit = (v) => ({ value: round(v.value), unit: v.unit === "PERCENT" ? "percent" : "px" });
   function lineH(v) {
     if (!v || v === figma.mixed) return void 0;
@@ -1152,7 +1175,7 @@
     return out;
   }
 
-  // figma-plugin/src/prototype.ts
+  // src/prototype.ts
   function simplifyTransition(tr) {
     const t = { type: tr.type ? tr.type.toLowerCase() : void 0 };
     if (tr.direction) t.direction = tr.direction.toLowerCase();
@@ -1237,7 +1260,7 @@
     return out.length ? out : void 0;
   }
 
-  // figma-plugin/src/libraries.ts
+  // src/libraries.ts
   var UNKNOWN_LIBRARY = "unknown-library";
   function readRegistry(sink) {
     try {
@@ -1477,7 +1500,7 @@
     return { exportedAt: exportedAt(), file: figma.root && figma.root.name || void 0, libraries, warnings: warnings2 };
   }
 
-  // figma-plugin/src/components.ts
+  // src/components.ts
   async function instanceComponent(node) {
     if (node.type !== "INSTANCE") return void 0;
     try {
@@ -1511,8 +1534,9 @@
     }
     return list;
   }
-  async function collectComponentCatalog(hygiene) {
+  async function collectComponentCatalog(hygiene, asLibrary) {
     const components = [];
+    const pendingPublish = [];
     const seenNames = /* @__PURE__ */ new Set();
     const prevSkip = figma.skipInvisibleInstanceChildren;
     try {
@@ -1567,6 +1591,7 @@
           if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
           seenNames.add(n.name);
+          if (asLibrary) pendingPublish.push({ entry, node: n });
           components.push(entry);
         }
       }
@@ -1576,9 +1601,25 @@
       } catch (e) {
       }
     }
+    if (pendingPublish.length) {
+      const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
+      for (let i = 0; i < pendingPublish.length; i++) {
+        if (statuses[i]) pendingPublish[i].entry.publish = statuses[i];
+      }
+    }
     return components;
   }
-  async function buildDesignSystem() {
+  async function publishOf(o) {
+    try {
+      if (!o || typeof o.getPublishStatusAsync !== "function") return void 0;
+      const s = await o.getPublishStatusAsync();
+      return s ? String(s).toLowerCase() : void 0;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  async function buildDesignSystem(opts) {
+    const asLibrary = !!(opts && opts.asLibrary);
     const safeList = async (fn) => {
       try {
         return await fn();
@@ -1594,8 +1635,12 @@
     ]);
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete");
-    const components = await collectComponentCatalog(hygiene);
-    try {
+    const components = await collectComponentCatalog(hygiene, asLibrary);
+    if (asLibrary) {
+      hygiene.push(
+        "library mode: this catalog is the COMPLETE set of components defined in this library file. Publish status is per-object (publish: current | changed | unpublished); Figma exposes no way to list what the last PUBLISHED snapshot contained, so a component deleted here but still live in the library is not visible."
+      );
+    } else try {
       const seenKeys = new Set(components.map((c) => c.key).filter(Boolean));
       const remote = await collectLibraryComponents((m) => warn(m));
       let added = 0;
@@ -1618,9 +1663,25 @@
       if (figma.root && figma.root.documentColorProfile) colorProfile = String(figma.root.documentColorProfile).toLowerCase();
     } catch (e) {
     }
+    const styleMeta = async (s) => {
+      const m = {};
+      if (s.key) m.key = s.key;
+      if (s.id) m.id = s.id;
+      if (s.remote) m.remote = true;
+      if (Array.isArray(s.documentationLinks) && s.documentationLinks.length) {
+        m.docs = s.documentationLinks.map((d) => d.uri).filter(Boolean);
+      }
+      if (asLibrary) {
+        const p = await publishOf(s);
+        if (p) m.publish = p;
+      }
+      return m;
+    };
     const [paintStyles, textStyles, effectStyles] = await Promise.all([
       // Paint styles carry their ACTUAL colors, not just a name.
-      Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), description: s.description || void 0 }))),
+      // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
+      // variable silently lost that link — the binding is what makes it a token rather than a hex.
+      Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) }))),
       Promise.all(
         text.map(async (s) => ({
           name: s.name,
@@ -1640,22 +1701,48 @@
           // one, minus the mixed guard: a TextStyle is uniform by definition.
           textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0,
           tokens: await resolveBoundMap(s.boundVariables),
-          description: s.description || void 0
+          description: s.description || void 0,
+          ...await styleMeta(s)
         }))
       ),
-      Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), description: s.description || void 0 })))
+      Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) })))
     ]);
     const styles = {
       paint: paintStyles,
       text: textStyles,
       effect: effectStyles,
-      // Layout-grid styles (column/row grids) — the responsive grid tokens. Sync, so no await needed.
-      grid: grid.map((s) => ({ name: s.name, grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : void 0, description: s.description || void 0 }))
+      // Layout-grid styles (column/row grids) — the responsive grid tokens. The grid VALUES are sync;
+      // the shared catalog meta (key/publish) is not, so the map is fanned out like its three siblings.
+      grid: await Promise.all(
+        grid.map(async (s) => ({
+          name: s.name,
+          grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : void 0,
+          tokens: await resolveBoundMap(s.boundVariables),
+          description: s.description || void 0,
+          ...await styleMeta(s)
+        }))
+      )
     };
-    const vars = await dumpVariables();
+    const vars = await dumpVariables(opts);
+    let source;
+    if (asLibrary) {
+      let fileKey;
+      try {
+        if (typeof figma.fileKey !== "undefined") fileKey = figma.fileKey || void 0;
+      } catch (e) {
+      }
+      if (!fileKey) hygiene.push("figma.fileKey unavailable \u2014 the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
+      source = {
+        role: "library",
+        libraryName: opts && opts.asLibrary || figma.root && figma.root.name || void 0,
+        fileKey,
+        collectionKeys: vars.collections.map((c) => c.key).filter(Boolean)
+      };
+    }
     return {
       exportedAt: exportedAt(),
       file: figma.root && figma.root.name || void 0,
+      source,
       colorProfile,
       // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
       collections: vars.collections,
@@ -1667,7 +1754,7 @@
     };
   }
 
-  // figma-plugin/src/motion.ts
+  // src/motion.ts
   function keyframeValue(kv) {
     if (!kv || typeof kv !== "object") return kv;
     switch (kv.type) {
@@ -1732,7 +1819,7 @@
     return nonEmpty(out);
   }
 
-  // figma-plugin/src/serialize.ts
+  // src/serialize.ts
   var MAX_DEPTH = 60;
   var LOWER_ENUMS = [
     ["layoutAlign", "alignSelf", "INHERIT"],
@@ -2058,7 +2145,7 @@
     return out;
   }
 
-  // figma-plugin/src/collect.ts
+  // src/collect.ts
   async function serializeWithRefs(node) {
     const tree = await serialize(node, 0);
     if (!tree) return { tree: null };
@@ -2331,6 +2418,17 @@
     ];
     return { designSystem };
   }
+  async function collectLibraryFile(opts) {
+    resetRun();
+    applyOpts(opts);
+    const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
+    const designSystem = await buildDesignSystem({ asLibrary });
+    designSystem.hygiene = [
+      "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
+      ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
+    ];
+    return { designSystem };
+  }
   async function collectFull(opts) {
     resetRun();
     applyOpts(opts);
@@ -2408,7 +2506,7 @@
     return { designSystem, layersDoc, assets: assets.slice() };
   }
 
-  // figma-plugin/src/writes.ts
+  // src/writes.ts
   function parseHex(hex) {
     let h = (hex || "#000000").replace(/^#/, "").trim();
     if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
@@ -2511,9 +2609,41 @@
     return { ok: true, applied };
   }
 
-  // figma-plugin/src/bridge.ts
+  // src/bridge.ts
+  var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  var INSTANCE_STARTED_AT = Date.now();
   async function handleBridge(cmd, args) {
     switch (cmd) {
+      // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
+      // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
+      // since "is the other file's connection still alive while this one works?" is half of what it
+      // exists to measure.
+      //
+      // It answers four things in one call:
+      //   instanceId / startedAt / uptimeMs — two distinct ids => two instances really do coexist; a
+      //     CHANGED id on a later call => Figma tore the plugin runtime down and re-ran it (the
+      //     southleft/figma-console-mcp#67 failure), which a reconnect alone would not reveal.
+      //   fileKey                          — undefined => `enablePrivatePluginApi` is not in effect for
+      //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
+      //   file / page                      — human labels for a connection listing, never routing keys.
+      case "whoami": {
+        const r = {
+          instanceId: INSTANCE_ID,
+          startedAt: INSTANCE_STARTED_AT,
+          uptimeMs: Date.now() - INSTANCE_STARTED_AT,
+          file: figma.root.name,
+          page: figma.currentPage.name,
+          pageId: figma.currentPage.id,
+          editorType: figma.editorType
+        };
+        try {
+          r.fileKey = typeof figma.fileKey !== "undefined" ? figma.fileKey : null;
+        } catch (e) {
+          r.fileKey = null;
+        }
+        r.fileKeyAvailable = typeof r.fileKey === "string" && r.fileKey.length > 0;
+        return r;
+      }
       case "ping": {
         const r = { pong: true, page: figma.currentPage.name, file: figma.root.name };
         try {
@@ -2531,6 +2661,10 @@
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
       case "exportDesignSystem":
         return await serializeRun(() => collectDesignSystemOnly(args));
+      // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
+      // the full catalog build and mutates the same per-run state they do.
+      case "exportLibrary":
+        return await serializeRun(() => collectLibraryFile(args));
       case "exportSelection":
         return await serializeRun(() => collectSelection(args));
       case "exportNode":
@@ -2559,8 +2693,8 @@
     }
   }
 
-  // figma-plugin/src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
+  // src/main.ts
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
   figma.showUI(__html__, { width: 360, height: 380 });
   console.log("[export] main.ts loaded (main thread)");
   async function runExport(collect, toFiles) {

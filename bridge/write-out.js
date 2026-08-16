@@ -14,6 +14,7 @@ const fs = require("fs");
 const path = require("path");
 const { buildPageLayout, safe } = require("./pages-layout.js");
 const { buildDesignSystemLayout } = require("./design-system-layout.js");
+const { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } = require("./library-layout.js");
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
@@ -74,6 +75,45 @@ function writeDesignSystem(dir, designSystem, log) {
   return counts;
 }
 
+// The library twin of writeDesignSystem. Writes into libraries/<slug>-<fileKey8>/ — a tree that by
+// construction never intersects design-system/ or pages/, so a library pull cannot overwrite the design
+// file's own catalog (they are separate Figma files answering separate questions; see library-layout.js).
+//
+// Re-export is idempotent — every file is rewritten in place with a fresh stamp — but writeJson only
+// ever WRITES, so a file a previous export produced and this one did not stays on disk, stale yet
+// carrying a believable old timestamp. Rather than delete files a read command did not create, we diff
+// this run's pointer map against the previous index and REPORT what is now orphaned. The user decides.
+function writeLibrary(dir, designSystem, log) {
+  const built = buildLibraryLayout(designSystem, "/");
+  const ldir = path.join(dir, built.dir);
+
+  let prevIndexDoc = null;
+  try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")); } catch (e) {} // absent/corrupt = first export
+
+  fs.mkdirSync(ldir, { recursive: true });
+  for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
+
+  const orphans = [];
+  if (prevIndexDoc && prevIndexDoc.files) {
+    const now = new Set(built.files.map((f) => f.path));
+    for (const p of Object.values(prevIndexDoc.files)) {
+      if (typeof p === "string" && !now.has(p) && fs.existsSync(path.join(dir, p))) orphans.push(p);
+    }
+  }
+  if (orphans.length && log) {
+    log("STALE: " + orphans.length + " file(s) from a previous export are no longer produced and were NOT deleted: " + orphans.join(", "));
+  }
+
+  // Merge, never overwrite: each library is its own plugin run in its own file, so exporting library B
+  // must not erase library A's row.
+  const rootIndex = path.join(dir, ROOT, INDEX);
+  let prevRoot = null;
+  try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")); } catch (e) {}
+  writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log);
+
+  return { dir: built.dir, counts: built.counts, publish: built.manifest.publish, orphans };
+}
+
 function writeAssets(dir, assets, log) {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, "assets");
@@ -98,6 +138,14 @@ function writeAssets(dir, assets, log) {
 function writeExport(outDir, r, log) {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
+  // A library catalog is routed by the PRODUCER's own flag (`source.role`), not by a CLI-side guess:
+  // the plugin is the only thing that knows which file it ran in, and misrouting would overwrite the
+  // design file's catalog with a library's.
+  const isLib = !!(r.designSystem && r.designSystem.source && r.designSystem.source.role === "library");
+  if (isLib) {
+    const lib = writeLibrary(dir, r.designSystem, log);
+    return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans } };
+  }
   const ds = r.designSystem ? writeDesignSystem(dir, r.designSystem, log) : null;
   const pages = r.layersDoc ? writePages(dir, r.layersDoc, log) : null;
   const assets = writeAssets(dir, r.assets, log);
@@ -139,4 +187,4 @@ function writeAny(outDir, r, log) {
   return r && r.screen ? writeScreen(outDir, r, log) : writeExport(outDir, r, log);
 }
 
-module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeAssets, writeExport, writeScreen, writeAny };
+module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeExport, writeScreen, writeAny };

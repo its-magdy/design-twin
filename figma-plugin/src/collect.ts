@@ -429,6 +429,33 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Obj> 
   return { designSystem };
 }
 
+// LIBRARY-FILE export. The same catalog build as collectDesignSystemOnly, run INSIDE the library file
+// itself rather than in a file that consumes it — which is what makes it complete. In a consuming file
+// the Plugin API can only ever report the library variables some node happens to reference and the
+// library components some INSTANCE happens to point at (there is no getAvailableLibraryComponentsAsync,
+// and getVariablesInLibraryCollectionAsync returns name/key/resolvedType with NO values). Inside the
+// library every one of those objects is LOCAL, so the ordinary local reads return the whole thing.
+//
+// Deliberately NOT done here: figma.variables.importVariableByKeyAsync. It would resolve library values
+// from a consuming file, but the import* family MATERIALIZES into the current document (the typings say
+// exactly that of its sibling importShaderAsync), i.e. it would make a read-plane command mutate the
+// user's file — hundreds of subscribed variables, undoable but real. This path reads and writes nothing.
+export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<Obj> {
+  resetRun();
+  applyOpts(opts);
+  const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
+  const designSystem = await buildDesignSystem({ asLibrary });
+  // Replaces collectDesignSystemOnly's caveat, which is FALSE here: nothing is limited to what a walk
+  // referenced, because nothing in this file is remote.
+  designSystem.hygiene = [
+    "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' — variables, styles and components, " +
+      "with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what " +
+      "consumers see: `publish` reports each object's own status (current | changed | unpublished).",
+    ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
+  ];
+  return { designSystem };
+}
+
 // Export the design system + frame trees. Frame trees default to the CURRENT page; pass
 // { allPages:true } to walk every page (opt-in — a whole multi-page file can be very large).
 export async function collectFull(opts?: CollectOpts): Promise<Obj> {
