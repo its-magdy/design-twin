@@ -61,7 +61,7 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 231/231 checks passed, exit 0
+node test/bridge.test.js        # expect: 250/250 checks passed, exit 0
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
 ```
 
