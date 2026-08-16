@@ -67,6 +67,9 @@ the already-mapped component (from `components.json`), not new markup. `detached
 
 **Text overflow**
 - `truncate:true` → `truncate` (single line) or, combined with `maxLines:N`, `line-clamp-{N}`.
+- `font.textWrap` mirrors Figma's `textWrapStyle` and is 1:1 with CSS `text-wrap-style`:
+  `"balance"` → `text-balance` (evened-out line lengths — headings/short blocks), `"pretty"` →
+  `text-pretty` (fewer orphans — body copy). Absent means Figma's default (`AUTO`), so emit nothing.
 - `autoResize` tells you whether the text box should hug (`width_and_height`/`height`) or clip
   (`truncate`/`none`) — pick `w-fit`/`h-fit` vs a fixed box accordingly.
 - Figma's manual line breaks are **not authoritative** (different text engine than browsers) — let text

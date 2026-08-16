@@ -1635,6 +1635,10 @@
           paragraphIndent: s.paragraphIndent || void 0,
           leadingTrim: s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0,
           listSpacing: s.listSpacing || void 0,
+          // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
+          // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
+          // one, minus the mixed guard: a TextStyle is uniform by definition.
+          textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0,
           tokens: await resolveBoundMap(s.boundVariables),
           description: s.description || void 0
         }))

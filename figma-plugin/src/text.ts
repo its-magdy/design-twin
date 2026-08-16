@@ -130,6 +130,14 @@ export async function serializeText(node: TextNode | TextPathNode): Promise<Obj>
   if (typeof t.listSpacing === "number" && t.listSpacing) out.font.listSpacing = t.listSpacing; // gap between list items
   if (t.leadingTrim && t.leadingTrim !== figma.mixed && t.leadingTrim !== "NONE") out.font.leadingTrim = t.leadingTrim.toLowerCase();
   if (t.textAlignVertical && t.textAlignVertical !== "TOP") out.font.valign = t.textAlignVertical.toLowerCase();
+  // Line-breaking strategy (Plugin API update 2026-08-14; TextWrapStyle = AUTO | BALANCE | PRETTY).
+  // AUTO is the default and says nothing; BALANCE (even line lengths) and PRETTY (fewer orphans) map
+  // 1:1 onto CSS `text-wrap: balance|pretty`. The typeof-string test is also the figma.mixed guard —
+  // mixed is a Symbol, and per-paragraph wrap styles make this genuinely mixable.
+  {
+    const tw = (t as any).textWrapStyle;
+    if (typeof tw === "string" && tw && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+  }
   // List rendering: markers hanging in the margin vs. inline, and hanging punctuation into the margin.
   if (t.hangingList === true) out.font.hangingList = true;
   if (t.hangingPunctuation === true) out.font.hangingPunctuation = true;

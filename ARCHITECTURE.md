@@ -139,7 +139,8 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   per-corner `radius` (mixed fallback), `rotation`, `blendMode`, `isMask`.
 - **Text:** mixed runs via `getStyledTextSegments` → `runs[]` (no more flattening); unit-aware
   `lineHeight`/`letterSpacing` (`percent`/`px`/`auto`); `fontName.style` verbatim; `paragraphSpacing`,
-  `leadingTrim`, per-run `href`/`list`.
+  `leadingTrim`, `textWrap` (Figma's `textWrapStyle`: `BALANCE`/`PRETTY` → CSS `text-wrap: balance|pretty`;
+  the `AUTO` default is skipped), per-run `href`/`list`.
 - **Effects:** full ordered `effects[]`, type-discriminated (`BACKGROUND_BLUR`≠`LAYER_BLUR`≠shadows), with
   `visible`/`blendMode`/`behindNode`.
 - **Variables:** `tier` (primitive/semantic from alias+scopes), `scopes`, `codeSyntax {WEB,ANDROID,iOS}`

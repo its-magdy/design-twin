@@ -196,6 +196,11 @@ export async function buildDesignSystem(): Promise<Obj> {
           paragraphIndent: s.paragraphIndent || undefined,
           leadingTrim: s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : undefined,
           listSpacing: s.listSpacing || undefined,
+          // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
+          // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
+          // one, minus the mixed guard: a TextStyle is uniform by definition.
+          textWrap: (s as any).textWrapStyle && (s as any).textWrapStyle !== "AUTO"
+            ? String((s as any).textWrapStyle).toLowerCase() : undefined,
         tokens: await resolveBoundMap((s as any).boundVariables),
         description: s.description || undefined,
       }))
