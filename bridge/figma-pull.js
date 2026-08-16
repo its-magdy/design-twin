@@ -47,6 +47,12 @@
 //                                        # Requires the plugin manifest's "teamlibrary" permission:
 //                                        # RE-IMPORT/reload the plugin in Figma after updating, or a
 //                                        # stale plugin silently returns nothing.
+//   node figma-pull.js --whoami       # who is connected: plugin instance id, file name, whether
+//                                     # figma.fileKey is available, socket uptime, and how many times
+//                                     # a new connection displaced an earlier one. The probe for
+//                                     # "can two Figma files use the bridge at once?" — run it from
+//                                     # each open file and compare instanceId. Costs nothing (no page
+//                                     # load, no node walk, no assets) and writes no files.
 //   These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
 //   --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
 //   --timeout DOES apply to them.
@@ -156,6 +162,13 @@ const listDepth = listCmd === "--list-pages" ? 1 : 2;
 // only what you need — the library analogue of --list -> --page.
 const listLibraries = args.includes("--list-libraries");
 
+// --whoami: the identity/liveness probe. Cheapest command there is (no page load, no node walk, no
+// assets) and it PRINTS rather than writing outDir, so it joins the index-command family below and
+// inherits its guards. It exists to answer, with evidence rather than inference, the three questions
+// the docs do not: whether two Figma files can run the plugin at once, whether `figma.fileKey` is
+// available to a locally-imported plugin, and whether a connection survives being left idle.
+const whoami = args.includes("--whoami");
+
 // Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
 // mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
 // outDir detection can skip them, not just skip tokens that literally start with "--".
@@ -242,7 +255,7 @@ if (scopes.length > 1) {
 // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
 // added and then silently omitted from one of the three guards (the --timeout class of bug: the
 // flag is accepted, and then quietly does nothing).
-const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries"].filter(Boolean);
+const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami"].filter(Boolean);
 const indexCmd = indexCmds[0] || null;
 
 // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
@@ -268,7 +281,9 @@ if (indexCmd && readOptFlagsGiven.length) {
   const cmd = indexCmd;
   // What the command DOES emit, so the refusal explains itself instead of asserting a shape that is
   // wrong for one member of the family.
-  const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses" : "only prints a structural index (id/name/type/size)";
+  const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses"
+    : cmd === "--whoami" ? "only prints connection/plugin identity"
+    : "only prints a structural index (id/name/type/size)";
   // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
   // edit to a 400-character single expression with six branch points.
   const many = readOptFlagsGiven.length > 1;
@@ -300,7 +315,7 @@ if (daemonCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+return { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -374,7 +389,7 @@ try {
   console.error("[figma-pull] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
+const { selection, allPages, designSystemOnly, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
 
 async function main() {
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
@@ -413,7 +428,7 @@ async function main() {
 
   // Only the export paths write to outDir; --list/--children print to stdout and are explicitly "a
   // decision aid, not a build input", so they must not leave an empty design/ behind as a side effect.
-  if (!listOnly && !childrenId && !listLibraries) fs.mkdirSync(outDir, { recursive: true });
+  if (!listOnly && !childrenId && !listLibraries && !whoami) fs.mkdirSync(outDir, { recursive: true });
 
   let bridge = null;
   let send;
@@ -436,6 +451,34 @@ async function main() {
   // The library discovery command. Same cost/budget tier as the two below (cheap relative to an
   // export) and the same "print, never write outDir" contract — but its own branch, because it
   // prints a TABLE rather than the JSON id-catalogue those two exist to hand you.
+  // The identity/liveness probe. Prints BOTH halves: what the plugin says it is, and what the socket
+  // did. Run it in each of two open files (a second terminal, or twice in a row after switching the
+  // focused file) and compare — the interpretation notes below are printed with the result so the
+  // reading does not depend on remembering what each field means.
+  if (whoami) {
+    const r = await send("whoami", {}, TIMEOUTS.command);
+    // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
+    // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
+    const conn = bridge ? bridge.connectionInfo() : null;
+    console.log(JSON.stringify({ plugin: r, connection: conn }, null, 2));
+    console.error("[figma-pull] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
+      ", up " + Math.round((r.uptimeMs || 0) / 1000) + "s.");
+    console.error("[figma-pull] fileKey: " + (r.fileKeyAvailable
+      ? r.fileKey + " (available — usable as a stable routing key)"
+      : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));
+    if (conn) {
+      console.error("[figma-pull] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
+        "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
+        (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : "."));
+    } else {
+      console.error("[figma-pull] (socket stats live in the daemon — run --daemon-status for its view.)");
+    }
+    console.error("[figma-pull] reading it: run this from BOTH open files. Two different instanceIds => " +
+      "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +
+      "takeovers > 0 => the bridge's one-connection limit is what disconnected the other file, not Figma.");
+    return finish();
+  }
+
   if (listLibraries) {
     console.error("[figma-pull] plugin connected — listing libraries…");
     const r = await send("listLibraries", {}, listTimeoutMs);

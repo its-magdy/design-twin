@@ -87,6 +87,16 @@ function createBridge(port = PORT) {
   let socket = null;
   const pending = new Map();
   let seq = 0;
+  // Connection bookkeeping for the whoami probe. The bridge still keeps exactly ONE socket (see the
+  // takeover below) — these only DESCRIBE what happened, so the multi-file question can be answered
+  // from evidence instead of inference: `takeovers` > 0 proves a second plugin instance really did
+  // connect and displace the first, which is the single-client limit being hit rather than Figma
+  // refusing to run the plugin twice. Those are indistinguishable from the plugin window alone.
+  let connSeq = 0;
+  let connId = null;
+  let connectedAt = 0;
+  let takeovers = 0;
+  let lastTakeoverAt = 0;
 
   wss.on("connection", (ws) => {
     // Keep only the most recent plugin connection. Reassign `socket` FIRST so the stale socket's
@@ -94,7 +104,23 @@ function createBridge(port = PORT) {
     // then terminate the stale one so it doesn't leak.
     const stale = socket;
     socket = ws;
-    if (stale && stale !== ws) { try { stale.terminate(); } catch (e) {} }
+    ws._connId = "c" + ++connSeq;
+    connId = ws._connId;
+    connectedAt = Date.now();
+    if (stale && stale !== ws) {
+      takeovers++;
+      lastTakeoverAt = Date.now();
+      // Say it out loud. This is the exact moment a second Figma file steals the bridge, and it used
+      // to be silent — the first file simply stopped answering, which reads as a Figma bug from the
+      // plugin window. Naming it here is what turns "two files don't work" into "the bridge allows
+      // one, and here is when the second took over".
+      console.error(
+        `[bridge] connection ${ws._connId} took over from ${stale._connId || "?"} — the bridge holds ONE ` +
+          `plugin connection, so the previous file (likely another open Figma file running the plugin) ` +
+          `is now disconnected. Takeovers this run: ${takeovers}.`
+      );
+      try { stale.terminate(); } catch (e) {}
+    }
     ws.on("message", (buf) => {
       let msg;
       try {
@@ -120,6 +146,7 @@ function createBridge(port = PORT) {
     ws.on("close", (code, reasonBuf) => {
       if (socket === ws) {
         socket = null;
+        connId = null;
         const reason = reasonBuf && reasonBuf.length ? reasonBuf.toString() : "";
         let why = `Figma plugin disconnected before replying (close ${code || "?"}${reason ? ": " + reason : ""}).`;
         if (lastError && lastError.message) why += ` socket error: ${lastError.message}.`;
@@ -154,6 +181,23 @@ function createBridge(port = PORT) {
 
   function isConnected() {
     return !!socket && socket.readyState === 1;
+  }
+
+  // Server-side half of the whoami probe. The plugin reports who IT is (instanceId, file, fileKey);
+  // this reports what the SOCKET did — how long the current connection has been up, and whether any
+  // earlier one was displaced. Pairing them is what distinguishes the two failure modes that look
+  // identical from Figma: a plugin runtime that Figma tore down and re-ran (instanceId changes,
+  // takeovers stays put) versus a second file stealing the bridge (takeovers increments).
+  function connectionInfo() {
+    return {
+      connId,
+      connected: isConnected(),
+      connectedAt: connectedAt || null,
+      connectionUptimeMs: connectedAt && isConnected() ? Date.now() - connectedAt : 0,
+      connectionsThisRun: connSeq,
+      takeovers,
+      lastTakeoverAt: lastTakeoverAt || null,
+    };
   }
 
   function request(cmd, args, timeoutMs = TIMEOUTS.command) {
@@ -209,7 +253,7 @@ function createBridge(port = PORT) {
     try { wss.close(); } catch { /* already closing */ }
   }
 
-  return { request, isConnected, waitForConnection, close, port };
+  return { request, isConnected, waitForConnection, connectionInfo, close, port };
 }
 
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's

@@ -170,6 +170,55 @@ async function disconnectErr(code, reason) {
     !!pErr && /Open Console/i.test(pErr.message));
   ok("[dc-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
 
+  // ------------------------------------------ server-core: the ONE-connection rule, made observable
+  // The bridge keeps a single plugin socket and terminates the previous one — the behaviour that
+  // decides whether two open Figma files can use it at once. It had no direct coverage: the live
+  // handshake helper above existed, but nothing ever opened a SECOND client against the same bridge,
+  // so the takeover path (and the bookkeeping the --whoami probe reports) ran only in production.
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(port);
+    const open = () => new Promise((res, rej) => {
+      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+      c.on("open", () => res(c));
+      c.on("error", rej);
+    });
+
+    const first = await open();
+    const infoOne = bridge.connectionInfo();
+    // A request in flight on the FIRST connection when the second arrives: the caller must be told,
+    // not left hanging until its timeout. This is the exact experience of running the plugin in a
+    // second file mid-export.
+    let stolenErr;
+    const inflight = bridge.request("exportFull", {}, 20000).catch((e) => { stolenErr = e; });
+    await new Promise((r) => setTimeout(r, 60));
+
+    const second = await open();
+    await new Promise((r) => setTimeout(r, 120)); // let the terminate + close handler land
+    const infoTwo = bridge.connectionInfo();
+    await inflight;
+
+    console.log("\nserver-core — single-connection takeover (the two-files question):");
+    ok("[takeover] the first connection is reported with an id", !!infoOne.connId && infoOne.connected === true);
+    ok("[takeover] no takeover is recorded for a lone connection", infoOne.takeovers === 0);
+    ok("[takeover] a second connection is counted", infoTwo.connectionsThisRun === 2);
+    ok("[takeover] and IS recorded as a takeover", infoTwo.takeovers === 1);
+    ok("[takeover] the surviving connection is the NEWER one", infoTwo.connId !== infoOne.connId);
+    ok("[takeover] the bridge stays connected (the new socket serves)", infoTwo.connected === true);
+    ok("[takeover] lastTakeoverAt is stamped", typeof infoTwo.lastTakeoverAt === "number" && infoTwo.lastTakeoverAt > 0);
+    // The displaced caller must fail fast rather than wait out its 20s budget.
+    ok("[takeover] an in-flight request on the displaced socket rejects promptly", !!stolenErr);
+
+    try { first.terminate(); } catch (e) {}
+    try { second.close(); } catch (e) {}
+    bridge.close();
+
+    // After everything closes, the probe must report disconnected rather than a stale live socket.
+    const infoClosed = bridge.connectionInfo();
+    ok("[takeover] connectionInfo reports disconnected once closed", infoClosed.connected === false);
+    ok("[takeover] and zeroes the uptime instead of growing forever", infoClosed.connectionUptimeMs === 0);
+  }
+
   // ---------------------------------------------------------------- figma-pull: argument parsing
   // Untested until now, and it was the fiddliest code in the CLI: value-taking flags, an `=` form,
   // a repeatable flag, and a positional [outDir] that must not swallow any of their values.
@@ -331,6 +380,27 @@ async function disconnectErr(code, reason) {
   ok("[lib] --timeout still composes with --list-libraries", parse(["--list-libraries", "--timeout", "60"]).listTimeoutMs === 60000);
   ok("[lib] a daemon command alongside it is refused",
     /cannot be combined with --list-libraries/.test(usage(["--serve", "--list-libraries"]) || ""));
+
+  // ------------------------------------------------------------------------ figma-pull: --whoami
+  // The identity/liveness probe joins the index-command family, so it must inherit every guard that
+  // family has — the point of routing it through indexCmds rather than giving it a private branch.
+  console.log("\nfigma-pull — --whoami:");
+  ok("[whoami] parses as its own command", parse(["--whoami"]).whoami === true);
+  ok("[whoami] is off by default", parse(["design"]).whoami === false);
+  ok("[whoami] writes no outDir (it prints, like the other index commands)",
+    parse(["--whoami"]).listOnly === false && parse(["--whoami"]).whoami === true);
+  ok("[whoami] + an export scope is an ERROR", /cannot be combined/.test(usage(["--whoami", "--all-pages"]) || ""));
+  ok("[whoami] + --list is an ERROR (two index commands)", /only one/.test(usage(["--whoami", "--list"]) || ""));
+  ok("[whoami] + --list-libraries is an ERROR", /only one/.test(usage(["--whoami", "--list-libraries"]) || ""));
+  ok("[whoami] every read option is refused, none silently survives", (() => {
+    const flags = ["--css", "--measurements", "--plugin-data", "--motion", "--shared-data", "--no-assets"];
+    return flags.every((f) => /silently ignored/.test(usage(["--whoami", f]) || ""));
+  })());
+  // The refusal must describe what --whoami actually emits, not claim it prints a structural index.
+  ok("[whoami] the refusal describes what it DOES emit",
+    /connection\/plugin identity/.test(usage(["--whoami", "--css"]) || ""));
+  ok("[whoami] a daemon command alongside it is refused",
+    /cannot be combined with --whoami/.test(usage(["--serve", "--whoami"]) || ""));
 
   // Output rendering. The EMPTY case is the one that matters most: zero libraries is a NORMAL result
   // (free plan, or no library enabled in the Figma UI, or a plugin imported before the manifest

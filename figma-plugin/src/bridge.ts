@@ -4,8 +4,47 @@ import { applyWrites } from "./writes";
 import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
 
+// Identity of THIS plugin run, minted once when the bundle is first evaluated. It is the only way to
+// tell two simultaneously-running instances apart from the bridge side: `fileKey` is gated to private
+// plugins (see whoami below) and `figma.root.name` is a human-editable string that duplicated files
+// share. Deliberately NOT crypto.randomUUID — the Figma sandbox has no `crypto`.
+const INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+const INSTANCE_STARTED_AT = Date.now();
+
 export async function handleBridge(cmd: string, args: any): Promise<any> {
   switch (cmd) {
+    // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
+    // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
+    // since "is the other file's connection still alive while this one works?" is half of what it
+    // exists to measure.
+    //
+    // It answers four things in one call:
+    //   instanceId / startedAt / uptimeMs — two distinct ids => two instances really do coexist; a
+    //     CHANGED id on a later call => Figma tore the plugin runtime down and re-ran it (the
+    //     southleft/figma-console-mcp#67 failure), which a reconnect alone would not reveal.
+    //   fileKey                          — undefined => `enablePrivatePluginApi` is not in effect for
+    //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
+    //   file / page                      — human labels for a connection listing, never routing keys.
+    case "whoami": {
+      const r: any = {
+        instanceId: INSTANCE_ID,
+        startedAt: INSTANCE_STARTED_AT,
+        uptimeMs: Date.now() - INSTANCE_STARTED_AT,
+        file: figma.root.name,
+        page: figma.currentPage.name,
+        pageId: figma.currentPage.id,
+        editorType: figma.editorType,
+      };
+      // Same guarded read as `ping`: `fileKey` is typed `string | undefined` and only populated for
+      // private plugins, but touching it must never throw the probe that exists to test for it.
+      try {
+        r.fileKey = typeof (figma as any).fileKey !== "undefined" ? (figma as any).fileKey : null;
+      } catch (e) {
+        r.fileKey = null;
+      }
+      r.fileKeyAvailable = typeof r.fileKey === "string" && r.fileKey.length > 0;
+      return r;
+    }
     case "ping": {
       const r: any = { pong: true, page: figma.currentPage.name, file: figma.root.name };
       try { if (typeof (figma as any).fileKey !== "undefined") r.fileKey = (figma as any).fileKey; } catch (e) {}

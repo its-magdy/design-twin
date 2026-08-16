@@ -61,6 +61,14 @@ server.registerTool(
   })
 );
 server.registerTool(
+  "figma_whoami",
+  {
+    description: "Identity and liveness of the CONNECTED plugin: a per-run instanceId, the file/page name, whether figma.fileKey is available, plus how long the socket has been up and how many times a newer connection displaced an older one (takeovers). The bridge holds exactly ONE plugin connection, so if two Figma files both run the plugin the second one silently displaces the first — a non-zero `takeovers`, or an instanceId that differs from a previous call, is how you detect that. A CHANGED instanceId across two calls from the same file means Figma tore down and re-ran the plugin runtime, not that you switched files. Costs nothing (no page load, no node walk, no assets).",
+    annotations: READ_ONLY
+  },
+  guarded(async () => textResult({ plugin: await bridge.request("whoami", {}), connection: bridge.connectionInfo() }))
+);
+server.registerTool(
   "figma_get_selection",
   { description: "List the currently selected nodes (id, name, type) in the open Figma file.", annotations: READ_ONLY },
   guarded(async () => textResult(await bridge.request("getSelection", {})))
