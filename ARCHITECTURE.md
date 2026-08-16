@@ -68,9 +68,34 @@ whichever starts second exits on `EADDRINUSE` (`server-core.js`). So the CLI can
 disk path *while* the MCP server is running — which is why `writeToDisk` exists, and why `--serve`
 routes ordinary CLI commands through the running daemon instead of opening a second bridge.
 
+**One PLUGIN at a time, too — a separate limit.** Even with a single bridge process, `server-core.js`
+keeps exactly one plugin socket: a new connection displaces the previous one (`takeovers` in
+`connectionInfo()`, logged when it happens). Two open Figma files — a design file and its library —
+each run their own plugin instance and both will connect, so the second silently steals the bridge.
+This is **our** constraint, not Figma's. Making it work needs multi-client routing:
+
+- **Routing key.** `figma.fileKey` would be ideal (stable, unique) but is gated to private plugins
+  with `enablePrivatePluginApi` — the manifest docs say local development plugins *do* get these APIs,
+  so it may be available here; `--whoami` reports whether it actually is. Fall back to a
+  server-minted connection id. **Never** key on `figma.root.name`: human-editable, and duplicated
+  files collide.
+- **Addressing.** Discovery + server-assigned id (the Chrome DevTools Protocol
+  `Target.getTargets` → `sessionId` shape), *not* user-typed channel names. Channel strings have no
+  server-side uniqueness, which is where the misroute/typo failures in comparable projects come from.
+- **Not two ports.** `devAllowedDomains` pins each port literally — the only wildcard syntax is for
+  subdomains (`*.example.com`) or fully-open `*`, never ports. A second port costs a manifest edit
+  plus a plugin re-import, i.e. all the friction of the real fix with none of the benefit.
+- **Output.** Already safe: `write-out.js` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`,
+  so two clients can write to separate directories without colliding.
+
 ## Verified mechanism details (build to these)
 
-- **Hidden UI:** `figma.showUI(__html__, { visible: false })` — iframe runs (and holds a socket) without a window.
+- **UI iframe holds the socket.** `figma.showUI(__html__, { width: 360, height: 380 })` (`main.ts`) — a
+  VISIBLE window, because the manual export buttons and the bridge-token field live in it. The
+  API also supports `{ visible: false }` for a headless plugin (the iframe still runs and still holds
+  a socket without a window), and `figma.ui.show()` reveals one started hidden — but this plugin does
+  not use either. A visible window is what makes bridge state (and any control that needs a click)
+  reachable at all; `figma.notify()` is the headless alternative if that ever changes.
 - **Messaging:** main→UI `figma.ui.postMessage(msg)` / UI receives `onmessage → e.data.pluginMessage`;
   UI→main `parent.postMessage({ pluginMessage }, '*')` / main receives `figma.ui.onmessage`.
   Payloads must be serializable (objects, strings, `Uint8Array` ok; no functions).

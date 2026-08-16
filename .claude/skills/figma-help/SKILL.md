@@ -71,6 +71,7 @@ Once files are in `design/`, building code is identical for all three: **`/figma
 # repo root, Figma file open + plugin running:
 node bridge/figma-pull.js design             # full: design-system.json + design-system/ + pages/<page>/ (one file per layer) + assets/
 node bridge/figma-pull.js design --selection # just the current selection
+node bridge/figma-pull.js --whoami           # cheap: WHICH file is connected + can two files connect at once?
 node bridge/figma-pull.js --list-libraries   # cheap: which design libraries this file draws on
 node bridge/figma-pull.js --list-pages       # cheap: page names only (prints to stdout, writes nothing)
 node bridge/figma-pull.js --list             # cheap: pages + their top-level frames
@@ -181,6 +182,18 @@ To use the bridge from another project, add a `.mcp.json` there pointing at an *
   library is enabled for the file (enable it in the Figma UI, Assets → Libraries; no API can do this);
   (3) free plan — library variable collections aren't exposed to plugins. All three are normal, not
   broken bridges, and the command's own output says so.
+- **I opened the plugin in a SECOND Figma file and the first one stopped responding** → expected, and
+  it is this bridge's limit rather than Figma's. The bridge keeps exactly **one** plugin connection;
+  a new connect displaces the old one (the server now logs the takeover by name). Both files really
+  are running their own plugin instance — confirm with `node bridge/figma-pull.js --whoami` from each:
+  two different `instanceId`s means both are alive, and `takeovers > 0` means the one-connection rule
+  is what disconnected the other. Working on a base file **and** its library at the same time needs
+  multi-client routing, which is not built yet. Two ports is *not* a workaround: `devAllowedDomains`
+  in `manifest.json` pins each port literally (no wildcards), so a second port needs a manifest edit
+  and a plugin re-import anyway.
+- **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
+  runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); merely occluded
+  is fine. See `bridge/README.md` → `--whoami`.
 - **A component in an export has no library/main component** → the library it came from probably
   wasn't enabled when the export ran. Enable it in Figma, then re-pull; there is no API to enable it.
 - **MCP is running and I need `assets/`** → asset bytes are never returned inline, and the CLI can't

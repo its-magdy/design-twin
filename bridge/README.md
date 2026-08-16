@@ -67,11 +67,43 @@ node bridge/figma-pull.js design --as-library NERA # the COMPLETE catalog of a L
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
 (discover first, then scope by library):
 ```
+node bridge/figma-pull.js --whoami              # 0. (optional) which file am I actually connected to?
 node bridge/figma-pull.js --list-libraries      # 1. WHICH libraries does this file draw on?
+node bridge/figma-pull.js --list-pages          # 1b. page NAMES only (near-free — loads no page)
 node bridge/figma-pull.js --list                # 2. WHERE is what — pages + top-level frames (ids)
 node bridge/figma-pull.js --children <id>       # 3. (optional) peek inside one frame
 node bridge/figma-pull.js design --page <id>    # 4. pull only what you need
 ```
+
+### `--whoami` — who is connected (and can two files connect at once?)
+```
+node bridge/figma-pull.js --whoami
+```
+Prints both halves of the connection: what the **plugin** says it is (`instanceId` minted per plugin
+run, `file`, `page`, and whether `figma.fileKey` is available) and what the **socket** did
+(`connId`, uptime, `connectionsThisRun`, `takeovers`).
+
+**The bridge holds exactly ONE plugin connection.** If you run the plugin in a second Figma file, the
+new connection *displaces* the first — the older file silently stops answering. That is a limit of
+this bridge, not of Figma: two files each get their own plugin instance, and both will happily
+connect. `--whoami` is how you tell the two apart, because from the plugin window they look identical:
+
+| What you see | What it means |
+| --- | --- |
+| Two different `instanceId`s from two files | Two plugin instances really are running side by side |
+| `takeovers` > 0 | A second connection displaced an earlier one — the one-connection limit, not a Figma failure |
+| `instanceId` **changed** between two calls from the *same* file | Figma tore down and re-ran the plugin runtime (see the runtime-teardown note below) |
+| `fileKeyAvailable: false` | `figma.fileKey` is gated to private plugins — routing must fall back to the server-minted `connId` |
+
+> **Runtime teardown.** At least one comparable project ([`southleft/figma-console-mcp#67`](https://github.com/southleft/figma-console-mcp/issues/67))
+> reports Figma destroying the plugin's JS execution context every 1–3 minutes regardless of focus.
+> This repo's own live runs contradict that (a 25-page `--all-pages` export ran >15 min to
+> completion — hence `TIMEOUTS.exportAll`), so it may be setup-specific. If you plan to leave a
+> connection **idle** while working in another file, check it with `--whoami` first: a changed
+> `instanceId` is the symptom. Related and better attested: an *occluded* Figma window is fine, a
+> **minimized** one gets its renderer suspended.
+
+MCP twin: `figma_whoami`.
 
 ### `--list-libraries` — the library discovery step
 ```

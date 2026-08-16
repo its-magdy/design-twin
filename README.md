@@ -102,6 +102,13 @@ Two front-ends sit on that bridge, and they speak the same commands:
 
 Only one of them can hold port 8787 at a time; run the one that matches what you're doing.
 
+**And only one Figma FILE at a time.** The bridge keeps a single plugin connection, so running the
+plugin in a second file (your library file alongside the design file that consumes it) displaces the
+first — the older file quietly stops answering. Both instances are genuinely alive; it's the bridge
+that holds one socket. Run `node bridge/figma-pull.js --whoami` (MCP twin: `figma_whoami`) to see
+which file is connected, whether `figma.fileKey` is available, and whether a takeover happened.
+Working with two files at once needs multi-client routing — see ARCHITECTURE.md.
+
 **Discover before you pull.** Both front-ends expose a library-discovery step —
 `node bridge/figma-pull.js --list-libraries` and the `figma_list_libraries` MCP tool — that reports
 which design libraries the open file draws on, their variable collections, and how many of their

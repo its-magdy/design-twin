@@ -19,7 +19,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.js
 ```
 
-Expected: **`342/342 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: **`358/358 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -40,7 +40,7 @@ The `tooling/` scripts (DTCG token emitter, map validator, drift-lint, bootstrap
 `tooling/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/tooling.test.js       # expect: 204/204 checks passed, exit 0
+node test/tooling.test.js       # expect: 210/210 checks passed, exit 0
 node --check tooling/tokens.js tooling/map-validate.js tooling/drift-lint.js tooling/map-bootstrap.js
 ```
 
@@ -61,7 +61,7 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 205/205 checks passed, exit 0
+node test/bridge.test.js        # expect: 231/231 checks passed, exit 0
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
 ```
 
@@ -284,12 +284,13 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 
 | Command | What |
 |---|---|
-| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `342/342` |
+| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `358/358` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `204/204` |
+| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `210/210` |
 | `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema) — expect `205/205` |
+and the `figma_list_libraries` tool schema + single-connection takeover + `--whoami` parsing) — expect `250/250` |
+| `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
 | `node bridge/figma-pull.js --list-pages` | Cheap: page names only, no page load (prints to stdout) |
 | `node bridge/figma-pull.js --list` | Cheap: pages + their top-level frames (prints to stdout) |
@@ -297,6 +298,7 @@ and the `figma_list_libraries` tool schema) — expect `205/205` |
 | `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
 | `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets |
+| `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check tooling/*.js` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
