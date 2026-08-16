@@ -88,6 +88,27 @@ routes ordinary CLI commands through the running daemon instead of opening a sec
   Under dynamic-page **all reads are async** — use `getMainComponentAsync`, `getLocalPaintStylesAsync`,
   `getStyleByIdAsync`, `getVariableByIdAsync`, etc. (sync forms throw).
 
+- **Library data from a CONSUMING file is descriptors only:** `figma.teamLibrary
+  .getAvailableLibraryVariableCollectionsAsync()` returns collections (with `libraryName`), and
+  `getVariablesInLibraryCollectionAsync(key)` returns `name`/`key`/`resolvedType` — **no values, no
+  modes**. There is no team-library API for components or styles at all. This is why `--list-libraries`
+  can only report counts, and why component counts there are usage-derived.
+- **Full library values come from running INSIDE the library file** (`--as-library`): every object is
+  then local, so `getLocalVariablesAsync` / `getLocal*StylesAsync` / a `COMPONENT|COMPONENT_SET` walk
+  return the complete catalog with full per-mode values — no extra permission, no paid plan, no import.
+- **`importVariableByKeyAsync` is a WRITE and is deliberately unused.** It would resolve library values
+  from a consuming file, but the `import*ByKeyAsync` family **materialises into the current document**
+  (the typings state exactly that of its sibling `importShaderAsync`, "mirrors `importComponentByKeyAsync`"),
+  which is why those calls fail in read-only/Dev Mode. Using it in the read plane would subscribe the
+  user's file to hundreds of variables as a side effect of a "pull". It also reports
+  `scopes: ['ALL_SCOPES']` regardless of real scope (known, unfixed Figma bug) and returns the *local*
+  variable when called inside the library file itself. The library-file path avoids all three.
+- **`getPublishStatusAsync()` → `UNPUBLISHED | CURRENT | CHANGED`** on components, styles, variables and
+  variable collections. Only meaningful **inside the library file**: from a consuming file or a branch
+  Figma answers `UNPUBLISHED` for everything, so the field is emitted in `--as-library` mode only rather
+  than shipped as a confident wrong answer. There is no API to list what the last *published snapshot*
+  contained, so it describes local objects' relationship to the library, never a diff of what consumers see.
+
 ## Verified extraction API surface (what the plugin reads)
 
 - **Variables/tokens:** `getLocalVariablesAsync`, `getLocalVariableCollectionsAsync`,

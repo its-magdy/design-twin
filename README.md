@@ -36,6 +36,10 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
     `components.local.json` (component sets/variants that are real nodes in this file),
     `components.library.json` (entries flagged `remote: true` — consumed from a published library,
     recovered from instances, **not** nodes here) and `hygiene.json` (the lint report)
+    and, when you pull a LIBRARY file with `--as-library`, `libraries/index.json` + one
+    `libraries/<slug>-<fileKey8>/` per library (same taxonomy as `design-system/`, plus `index.json`
+    and a `source` block naming the library; a library catalog is the COMPLETE contents of that library
+    file, whereas `design-system/` is the design file's own — the two join on `key`, never on names)
     + `pages/index.json` + one `pages/<page>/index.json` + `pages/<page>/<name>__<id>.json` per **layer**
     — split per-page, per-file rather than one combined `screens.json` (a real export can be tens of
     MB), mirroring Figma's own Page > Frame containment (a page holds many layers, never the reverse).

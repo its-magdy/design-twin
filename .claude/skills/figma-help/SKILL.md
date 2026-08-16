@@ -76,9 +76,20 @@ node bridge/figma-pull.js --list-pages       # cheap: page names only (prints to
 node bridge/figma-pull.js --list             # cheap: pages + their top-level frames
 node bridge/figma-pull.js --children <id>    # cheap: one node's direct children (peek before a full pull)
 node bridge/figma-pull.js design --page <id> # deep-pull one or more named pages (repeatable --page)
+node bridge/figma-pull.js design --as-library "NERA" # COMPLETE catalog of a LIBRARY file (run with the
+                                                #   LIBRARY open, not the file that consumes it)
 node bridge/figma-pull.js design --design-system # ONLY tokens/styles/components/hygiene — no page
                                               # walk, no assets/ (the "just the design system" pull)
 ```
+**Need a library's actual VALUES?** `--list-libraries` only counts them — from a consuming file the
+Plugin API has no values to give (`getVariablesInLibraryCollectionAsync` returns names/keys/types
+only, and library components cannot be enumerated at all). Open the **library file itself** and run
+`--as-library "<name>"`: inside it everything is local, so one ordinary pull returns every variable
+with full per-mode values, every style, and every component with its real property definitions. It
+writes `design/libraries/<slug>-<fileKey8>/`, never touching `design-system/`, and each object carries
+`publish: current | changed | unpublished`. Emit code from `design-system/` (what your screens use) and
+use the library catalog for lookup — the two join on `key`, never on names.
+
 **Recommended order — discover, then scope:** `--list-libraries` (which libraries) → `--list` (which
 pages/frames, with ids) → `--children <id>` if you need to peek → `design --page <id>`. Never open with
 a whole-file pull.

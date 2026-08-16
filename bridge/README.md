@@ -60,6 +60,8 @@ node bridge/figma-pull.js design --all-pages      # like above, but frame trees 
 node bridge/figma-pull.js design --selection      # just the current selection
 node bridge/figma-pull.js design --design-system  # ONLY design-system.json + design-system/ — no page
                                                    # walk, no assets/ (the cheap "tokens only" pull)
+node bridge/figma-pull.js design --as-library NERA # the COMPLETE catalog of a LIBRARY file — run this
+                                                   # with the LIBRARY open, not the file that uses it
 ```
 **Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
@@ -90,6 +92,74 @@ Three honest limits, because they change what the numbers mean:
   and a file with no library enabled genuinely has none. The output says so rather than printing an
   empty table. It is also what a **stale plugin** looks like — see the re-import callout above.
 
+### `--as-library <name>` — the COMPLETE catalog of one library
+
+```
+# open the LIBRARY file in Figma (not the design file that consumes it), then:
+node bridge/figma-pull.js design --as-library "NERA"
+```
+
+`--list-libraries` tells you a library exists and how many variables its collections hold.
+`--as-library` gets you the **values**: every variable with its full per-mode values, every paint /
+text / effect / grid style, and every component with its **real** property definitions. Output lands
+in `design/libraries/<slug>-<fileKey8>/` and **never touches `design-system/`** — the two catalogs
+describe different Figma files and answer different questions.
+
+**Why it must run inside the library file.** From a consuming file the Plugin API simply does not have
+this data: `getVariablesInLibraryCollectionAsync` returns `name`/`key`/`resolvedType` with **no
+values**, and there is no API to enumerate a library's components at all. Inside the library every one
+of those objects is *local*, so the ordinary local reads return the whole thing — no extra permissions,
+no paid plan, no import step.
+
+> **Deliberately not used: `importVariableByKeyAsync`.** It *would* resolve library values from a
+> consuming file, and it is the obvious-looking answer. It is also a **write**: the `import*ByKeyAsync`
+> family materialises into the current document (the plugin typings say exactly that of its sibling
+> `importShaderAsync`), which is why those calls fail in read-only/Dev Mode. Using it here would make a
+> read-plane command subscribe your file to hundreds of variables. This path reads and writes nothing.
+
+**Four honest limits**, because they change what the output means:
+1. **`publish` is per-object, and only meaningful here.** Each variable/style/component carries
+   `publish: current | changed | unpublished` (`current` = published and in sync, `changed` =
+   published but edited since, `unpublished` = never published). Figma answers `UNPUBLISHED` for
+   *everything* when asked from a consuming file or a branch, so the normal `--design-system` pull
+   deliberately omits the field rather than emit a confident wrong answer.
+2. **What the last publish contained cannot be listed.** `publish` describes each *local* object's
+   relationship to the library. A component deleted here but still live in the published library is
+   invisible to any API — so this is the library file's **current state**, not a diff of what
+   consumers see.
+3. **Nothing is filtered for you.** Unpublished drafts are exported and *labelled*, never dropped:
+   `hiddenFromPublishing` is forward-looking publish config, not publish state, so filtering on it
+   would be wrong in both directions.
+4. **One library per run.** A library is a file, so exporting several means running this once per
+   library file. Rows accumulate in `design/libraries/index.json` — a second library is added, never
+   substituted. A variable that aliases into a *different* library stays an unresolved reference until
+   that library is exported too.
+
+**Re-running is safe.** Every file is rewritten in place with a fresh stamp, and the directory is keyed
+on `fileKey` (which survives a rename) so a renamed library keeps its directory instead of forking.
+Files a previous export produced and this one did not are **reported as `STALE:`, never deleted** — a
+read command does not remove files it did not create.
+
+**How the two catalogs fit together.** They stay separate and join on `key` (durable cross-file
+identity, present on variables, collections, styles and components — names collide across libraries):
+
+| | `design/design-system/` | `design/libraries/<lib>/` |
+|---|---|---|
+| Which file | the design file you build screens from | one library file |
+| Variables | the subset your screens reference | **all**, full per-mode values |
+| Components | usage-derived; props *inferred* from instances present | **all**, real property definitions |
+| Styles | local only | **all**, with `key` |
+| Use it for | **codegen** — emit only what is used | **lookup/enrichment** — resolve what exists |
+
+Emit CSS from the design file's catalog, not the library's, or you ship every unused primitive in the
+library. The library catalog is what you consult to answer "what else does this token family offer?"
+and "what props does this component *really* take?".
+
+Because the layout matches `design-system/`, existing tooling runs on it unchanged:
+```
+node tooling/tokens.js design/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+```
+
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
 file. **Frame trees** default to the current page; `--all-pages` walks every page (each screen is
 tagged with its `page` name). All-pages can be large — the CLI is the right tool for it because it
@@ -98,7 +168,7 @@ frame walk (and therefore the assets a walk would export) and writes only `desig
 `design-system/` — tokens, styles, local + library components, hygiene. One honest limit: library
 (remote) *variables* are recovered from nodes/styles actually walked, so a run with no page walk sees
 fewer of them than a full pull would; local variables, styles and components are unaffected. It shares
-`--selection`/`--all-pages`/`--page`'s scope slot (pass only one) and, like `--list`/`--list-libraries`,
+`--selection`/`--all-pages`/`--page`/`--as-library`'s scope slot (pass only one) and, like `--list`/`--list-libraries`,
 refuses the read-option flags (`--css`/`--measurements`/…) since there is no node walk for them to apply to.
 It waits for the plugin to connect, pulls, writes files to `design/`, and exits. The agent then
 Reads those files — big payloads live on disk, not in the context window.
