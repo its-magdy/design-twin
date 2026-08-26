@@ -9,15 +9,15 @@ The **extraction half is identical for every target** — the plugin and its JSO
 intermediate representation (Auto Layout expressed as flex intent, which maps equally to flexbox,
 SwiftUI stacks, and Compose Row/Column). Only the **translation half** is stack-specific, and it lives
 in three small places: `design/target.json` (which stack), `profiles/<profile>.md` (how to translate,
-in `skills/figma-to-code/profiles/` — a project can override with its own root-level `profiles/`),
+in `plugin/skills/figma-to-code/profiles/` — a project can override with its own root-level `profiles/`),
 and the right-hand values in `tokens.json`/`components.json`. One plugin, any framework.
 
 ## Pieces
 - `figma-plugin/` — a self-authored Figma plugin (`allowedDomains: ["none"]` → cannot phone home).
   Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
-- `skills/figma-to-code/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
+- `plugin/skills/figma-to-code/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
   Invoke with `/figma-to-code <screen>`.
-- `skills/figma-help/SKILL.md` — orientation/help: the three export paths, setup, and
+- `plugin/skills/figma-help/SKILL.md` — orientation/help: the three export paths, setup, and
   troubleshooting. Invoke with `/figma-help` when unsure how to use this or something isn't working.
 - `tooling/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
   DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
@@ -25,7 +25,7 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
   to the real node trees). This is
   the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
   `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
-- `skills/figma-to-code/profiles/<profile>.md` — IR→stack translation rules, shipped with the
+- `plugin/skills/figma-to-code/profiles/<profile>.md` — IR→stack translation rules, shipped with the
   skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`; add
   your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
   overrides the skill's bundled set).
@@ -63,7 +63,7 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
 files. You only author the config maps below.
 1. Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so no build is needed to use it. To edit the extractor, see `figma-plugin/README.md` — TypeScript source lives in `figma-plugin/src/`, `npm run build` regenerates `code.js`.)
 2. Create `design/target.json` for your stack (or let the skill auto-detect from the repo on first run
-   and offer to write it). If your stack isn't in `skills/figma-to-code/profiles/`, copy its
+   and offer to write it). If your stack isn't in `plugin/skills/figma-to-code/profiles/`, copy its
    `_template.md` to a root-level `profiles/<name>.md` in your project and fill it in — it overrides
    the skill's bundled profiles.
 3. Create `design/tokens.json` and `design/components.json` for your project. Shapes:
@@ -124,10 +124,19 @@ node bridge/figma-pull.js design/lib --client "NERA" --as-library "NERA"
 MCP twins: `figma_list_clients`, and a `client` argument on every tool.
 
 ## Sharing this as a plugin
-This repo *is* a Claude Code plugin (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`,
-`skills/` at the root) — that's why the skills moved out of `.claude/`. It deliberately ships **no**
-`.mcp.json`: the MCP server is for the project you point it at, not for this repo.
-To try it locally: `claude --plugin-dir /path/to/this/repo`. To hand it to a teammate: they run
+This repo holds **three separate products**, deliberately kept apart:
+
+| | What it is | How it ships |
+|---|---|---|
+| `plugin/` | The Claude Code plugin — skills + profiles, **markdown only, zero dependencies** | `claude plugin install` |
+| `bridge/` | The `figma-pull` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm (`npm i -g` / `npx`) |
+| `figma-plugin/` | The Figma-side plugin | imported into Figma from its manifest |
+
+The Claude Code plugin has no dependencies because the CLI is **not** inside it — installing the
+plugin never needs an `npm install`, and users get only `plugin/` in their cache. It also ships no
+`.mcp.json`: the MCP server is registered in the project you point it at, not here.
+
+To try it locally: `claude --plugin-dir /path/to/this/repo/plugin`. To hand it to a teammate: they run
 `claude plugin marketplace add <you>/Figma` then `claude plugin install figma-to-code@figma-to-code-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
 for auto-load). Skills load under the `figma-to-code:` namespace. `claude plugin validate .`

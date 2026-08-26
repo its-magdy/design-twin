@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "figma-to-code",
-      "source": "./",
+      "source": "./plugin",
       "description": "Free-plan Figma→code workflow: extract a design via the Figma Plugin API, then build any-stack screens with token/component reuse and drift checking."
     }
   ]

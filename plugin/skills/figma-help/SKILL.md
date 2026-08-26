@@ -21,7 +21,7 @@ next step, and point at the one doc that covers it. Route — do not re-explain 
 | `bridge/README.md` | **The full CLI + MCP surface** — install, token, every `figma-pull` flag, `--list-clients`/`--whoami`/`--list-libraries`/`--as-library`, the `--serve` daemon, MCP tools, `writeToDisk`, limits |
 | `ARCHITECTURE.md` | The two-plane design, plugin two-context model, full API surface, security |
 | `figma-plugin/README.md` | The Figma-side plugin: import, UI buttons, what each export produces |
-| `skills/figma-to-code/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
+| `plugin/skills/figma-to-code/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
 
 ## Step 1 — which of the three paths?
 
@@ -116,7 +116,7 @@ Then: **`/figma-to-code <screen>`**.
 - **`design/` is empty / `/figma-to-code` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `skills/figma-to-code/profiles/_template.md`) — it overrides the bundled profiles.
+  root (copy `plugin/skills/figma-to-code/profiles/_template.md`) — it overrides the bundled profiles.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
