@@ -1,15 +1,32 @@
 #!/usr/bin/env node
+// `dtwin mcp` — route to the MCP server (figma-mcp.mjs) before anything else in this file runs.
+// This is the officially-supported registration shape (`npx -y designtwin mcp`), and it must not
+// disturb any existing invocation: the branch is taken ONLY when this file is the process entry AND
+// argv[2] is exactly "mcp", so `dtwin …` and requiring this module from the test
+// suites are untouched, and `node bridge/figma-mcp.mjs` still works when invoked directly.
+// CJS cannot `import` an ESM file statically, so this is a dynamic import(); the top-level `return`
+// is legal here because a CommonJS module body is a function body — it stops the rest of the CLI
+// (arg parsing, bridge setup) from ever loading in MCP mode.
+if (require.main === module && process.argv[2] === "mcp") {
+  // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.mjs` run.
+  process.argv.splice(2, 1);
+  import("./figma-mcp.mjs").catch((e) => {
+    console.error("[dtwin mcp] failed to start the MCP server: " + (e && e.message ? e.message : String(e)));
+    process.exit(1);
+  });
+  return;
+}
 // figma-pull — READ plane CLI.
 // Connects to the running Figma plugin over the localhost bridge, pulls the full
 // design system + all page frames (or the current selection), and writes them to
 // disk. The agent then Reads those files selectively (context-economical).
 //
 // Usage:
-//   node figma-pull.js [outDir]              # full: design-system.json + current-page frames + assets
-//   node figma-pull.js [outDir] --all-pages  # like full, but frame trees from EVERY page
-//   node figma-pull.js [outDir] --selection  # just the current selection
-//   node figma-pull.js [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
-//   node figma-pull.js [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
+//   dtwin [outDir]              # full: design-system.json + current-page frames + assets
+//   dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
+//   dtwin [outDir] --selection  # just the current selection
+//   dtwin [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
+//   dtwin [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
 //                                                   # walk, no assets (the cheap "just the design
 //                                                   # system" pull). Each catalogued component/variant
 //                                                   # carries its OWN fills/strokes/effects/cornerRadius/
@@ -24,13 +41,13 @@
 //                                                   # Add --variant-visuals for the SET's own variants'
 //                                                   # real paint too (see below) — the one read option
 //                                                   # this mode accepts.
-//   node figma-pull.js [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
+//   dtwin [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
 //                                                   # every variable with full per-mode values, every
 //                                                   # style, every component. Run it with the LIBRARY
 //                                                   # file open, not the design file that consumes it.
 //                                                   # Writes design/libraries/<slug>-<fileKey8>/ and
 //                                                   # never touches design-system/.
-//   node figma-pull.js [outDir] --timeout N  # seconds to wait for the export (default: 300,
+//   dtwin [outDir] --timeout N  # seconds to wait for the export (default: 300,
 //                                            # 900 with --all-pages, 120 for --selection); also
 //                                            # raises the list commands' own 300s budget
 //
@@ -49,14 +66,14 @@
 //
 // Look before you pull (cheap RELATIVE to an export — no recursion, no assets, no node properties;
 // prints JSON to stdout):
-//   node figma-pull.js --list         # pages + their top-level frames (ids to deep-pull next).
+//   dtwin --list         # pages + their top-level frames (ids to deep-pull next).
 //                                     # Loads each page (Figma warns loading pages is slow on large
 //                                     # files) — cheap next to an export, not free. Use --list-pages
 //                                     # if you only need the page names.
-//   node figma-pull.js --list-pages   # page names only (near-free: does not load any page)
-//   node figma-pull.js --children <id>  # ONE node's direct children only (peek inside a frame from
+//   dtwin --list-pages   # page names only (near-free: does not load any page)
+//   dtwin --children <id>  # ONE node's direct children only (peek inside a frame from
 //                                        # --list before committing to a full recursive --page pull)
-//   node figma-pull.js --list-libraries  # which design libraries this file draws on (local + enabled
+//   dtwin --list-libraries  # which design libraries this file draws on (local + enabled
 //                                        # team libraries), their variable collections, and how many
 //                                        # of their components this file USES. The discovery step
 //                                        # before a pull, exactly as --list is before --page.
@@ -70,7 +87,7 @@
 //                                        # Requires the plugin manifest's "teamlibrary" permission:
 //                                        # RE-IMPORT/reload the plugin in Figma after updating, or a
 //                                        # stale plugin silently returns nothing.
-//   node figma-pull.js --whoami       # who is connected: plugin instance id, file name, whether
+//   dtwin --whoami       # who is connected: plugin instance id, file name, whether
 //                                     # figma.fileKey is available, socket uptime, and how many times
 //                                     # a new connection displaced an earlier one. The probe for
 //                                     # "can two Figma files use the bridge at once?" — run it from
@@ -85,10 +102,10 @@
 //                    # Structure + tokens are unaffected; the manifest reports how many were skipped.
 //
 // Keep the connection open (daemon):
-//   node figma-pull.js --serve          # hold the bridge open until stopped. Every command above then
+//   dtwin --serve          # hold the bridge open until stopped. Every command above then
 //                                       # routes through it automatically and skips the reconnect.
-//   node figma-pull.js --stop           # stop it
-//   node figma-pull.js --daemon-status  # is one running, and is the plugin connected?
+//   node dtwin --stop           # stop it
+//   dtwin --daemon-status  # is one running, and is the plugin connected?
 //   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
 //   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
 //
@@ -115,7 +132,7 @@ const { safe } = require("./pages-layout.js");
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 const OUT = require("./write-out.js");
-const plog = (m) => console.error("[figma-pull] " + m);
+const plog = (m) => console.error("[dtwin] " + m);
 const writeJson = (dir, name, obj, quiet) => OUT.writeJson(dir, name, obj, quiet, plog);
 // No longer called by main() (the full-export path now goes through OUT.writeExport, which calls
 // OUT.writePages itself) — kept as an export because test/bridge.test.js drives the pages/ LAYOUT
@@ -472,7 +489,7 @@ try {
   parsed = parseArgs(require.main === module ? process.argv.slice(2) : []);
 } catch (e) {
   if (!(e instanceof UsageError)) throw e;
-  console.error("[figma-pull] error: " + errMsg(e));
+  console.error("[dtwin] error: " + errMsg(e));
   process.exit(1);
 }
 const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
@@ -481,13 +498,13 @@ async function main() {
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
   if (daemonCmd === "--stop") {
     const stopped = await daemon.stop();
-    console.error("[figma-pull] " + (stopped ? "daemon stopped." : "no daemon is running."));
+    console.error("[dtwin] " + (stopped ? "daemon stopped." : "no daemon is running."));
     return;
   }
   if (daemonCmd === "--daemon-status") {
     const st = await daemon.status();
     console.log(JSON.stringify(st || { daemon: false }, null, 2));
-    console.error("[figma-pull] " + (st
+    console.error("[dtwin] " + (st
       ? `daemon up (pid ${st.pid}, port ${st.port}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
         (st.idleMs ? `, idle ${Math.round(st.idleForMs / 60000)}/${Math.round(st.idleMs / 60000)} min before auto-shutdown.` : ", no idle shutdown.")
       : "no daemon is running — start one with --serve."));
@@ -495,12 +512,12 @@ async function main() {
   }
   if (daemonCmd === "--serve") {
     const bridge = createBridge();
-    const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[figma-pull] " + m) });
-    console.error("[figma-pull] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
-    console.error('[figma-pull] Open your Figma file and run "Design Twin" (it auto-connects).');
-    console.error("[figma-pull] The connection stays open until you run --stop (or Ctrl-C here).");
+    const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
+    console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
+    console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects).');
+    console.error("[dtwin] The connection stays open until you run --stop (or Ctrl-C here).");
     const idleMin = Number(process.env.FIGMA_DAEMON_IDLE_MIN ?? 120);
-    console.error("[figma-pull] " + (idleMin > 0
+    console.error("[dtwin] " + (idleMin > 0
       ? `It also shuts down after ${idleMin} min idle, so an abandoned daemon can't hold port 8787 forever (FIGMA_DAEMON_IDLE_MIN=0 disables).`
       : "Idle shutdown is DISABLED — remember to --stop it, or it holds port 8787 until you do."));
     return; // the socket + WS server keep the event loop alive; no close() here, by design
@@ -510,7 +527,7 @@ async function main() {
   // bridge (and port 8787), so opening our own here would hit EADDRINUSE and exit. When there is no
   // daemon this is exactly the one-shot path it always was.
   const d = await daemon.connect();
-  if (d) console.error("[figma-pull] using the running daemon (" + d.sock + ") — no reconnect needed.");
+  if (d) console.error("[dtwin] using the running daemon (" + d.sock + ") — no reconnect needed.");
 
   // Only the export paths write to outDir; --list/--children print to stdout and are explicitly "a
   // decision aid, not a build input", so they must not leave an empty design/ behind as a side effect.
@@ -524,9 +541,9 @@ async function main() {
     send = (cmd, args, timeoutMs) => d.request({ cmd, args, timeoutMs, client, waitForConnection: 600000 }, timeoutMs + 30000);
   } else {
     bridge = createBridge();
-    console.error("[figma-pull] listening on ws://localhost:" + bridge.port);
-    console.error('[figma-pull] Open your Figma file and run "Design Twin" (it auto-connects)…');
-    console.error("[figma-pull] tip: --serve keeps this connection open so later pulls skip the reconnect.");
+    console.error("[dtwin] listening on ws://localhost:" + bridge.port);
+    console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
+    console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
     // --list-clients is the one command that is MEANINGFUL with nothing connected ("which files can I
     // talk to?" → "none, open one"), so it must not sit in the 10-minute connect wait that exists for
     // commands which genuinely need a plugin on the other end.
@@ -548,7 +565,7 @@ async function main() {
     const rows = bridge ? bridge.listClients() : ((await daemon.status()) || {}).clients || [];
     console.log(formatClients(rows));
     if (rows.length > 1) {
-      console.error("[figma-pull] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
+      console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
         "to pick one, or commands that need a target will refuse rather than guess.");
     }
     return finish();
@@ -564,32 +581,32 @@ async function main() {
     // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
     const conn = bridge ? bridge.connectionInfo() : null;
     console.log(JSON.stringify({ plugin: r, connection: conn }, null, 2));
-    console.error("[figma-pull] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
+    console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
       ", up " + Math.round((r.uptimeMs || 0) / 1000) + "s.");
-    console.error("[figma-pull] fileKey: " + (r.fileKeyAvailable
+    console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
       ? r.fileKey + " (available — usable as a stable routing key)"
       : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));
     if (conn) {
-      console.error("[figma-pull] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
+      console.error("[dtwin] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
         "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
         (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : "."));
     } else {
-      console.error("[figma-pull] (socket stats live in the daemon — run --daemon-status for its view.)");
+      console.error("[dtwin] (socket stats live in the daemon — run --daemon-status for its view.)");
     }
-    console.error("[figma-pull] reading it: run this from BOTH open files. Two different instanceIds => " +
+    console.error("[dtwin] reading it: run this from BOTH open files. Two different instanceIds => " +
       "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +
       "takeovers > 0 => the bridge's one-connection limit is what disconnected the other file, not Figma.");
     return finish();
   }
 
   if (listLibraries) {
-    console.error("[figma-pull] plugin connected — listing libraries…");
+    console.error("[dtwin] plugin connected — listing libraries…");
     const r = await send("listLibraries", {}, listTimeoutMs);
     // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
     // mistaken for part of the table.
-    for (const w of (r && r.warnings) || []) console.error("[figma-pull] warn  " + w);
+    for (const w of (r && r.warnings) || []) console.error("[dtwin] warn  " + w);
     console.log(formatLibraries(r));
-    console.error("[figma-pull] next: node bridge/figma-pull.js --list   then   --page <id>   (pull only the pages you need)");
+    console.error("[dtwin] next: dtwin --list   then   --page <id>   (pull only the pages you need)");
     return finish(); // see the close()-not-exit note below
   }
 
@@ -614,14 +631,14 @@ async function main() {
             return `${r.manifest.pages} page(s)${fr === undefined ? "" : `, ${fr} top-level frame(s)`} in "${r.file}".`;
           },
         };
-    console.error("[figma-pull] plugin connected — " + q.note + "…");
+    console.error("[dtwin] plugin connected — " + q.note + "…");
     const r = await send(q.cmd, q.args, listTimeoutMs);
-    for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[figma-pull] warn  " + w);
+    for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
     console.log(JSON.stringify(r, null, 2));
-    console.error("[figma-pull] " + q.summary(r));
+    console.error("[dtwin] " + q.summary(r));
     // Point at a flag that actually EXISTS. This previously suggested `--node <id>`, which was never
     // wired up — an instruction the CLI could not honour is worse than no instruction.
-    console.error("[figma-pull] next: node bridge/figma-pull.js design --page <id>   (repeatable; add --no-assets to skip the render pass)");
+    console.error("[dtwin] next: dtwin design --page <id>   (repeatable; add --no-assets to skip the render pass)");
     // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
     // forever after printing (found live: still resident and holding port 8787 a minute later,
     // blocking every subsequent pull). close() rather than process.exit(0) — same effect on the hang,
@@ -634,10 +651,10 @@ async function main() {
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
   if (allPages) {
-    console.error("[figma-pull] note: --all-pages deep-serializes EVERY frame on EVERY page and can exceed 15 min on a large file.");
-    console.error("[figma-pull]       prefer: --list  then  --page <id>   (repeatable, e.g. --page 1:2 --page 3:4)");
+    console.error("[dtwin] note: --all-pages deep-serializes EVERY frame on EVERY page and can exceed 15 min on a large file.");
+    console.error("[dtwin]       prefer: --list  then  --page <id>   (repeatable, e.g. --page 1:2 --page 3:4)");
   }
-  console.error(`[figma-pull] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
+  console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
 
   if (selection) {
     const r = await send("exportSelection", { ...readOpts }, exportTimeoutMs);
@@ -669,7 +686,7 @@ async function main() {
     printHygiene(r);
   }
 
-  console.error("[figma-pull] done.");
+  console.error("[dtwin] done.");
   finish(); // NOT process.exit — see close() in server-core.js (a daemon-routed run has nothing to close)
 }
 
@@ -677,7 +694,7 @@ async function main() {
 // writePages directly) must not open a WebSocket server and sit there waiting for Figma.
 if (require.main === module) {
   main().catch((e) => {
-    console.error("[figma-pull] error:", errMsg(e));
+    console.error("[dtwin] error:", errMsg(e));
     process.exit(1);
   });
 }

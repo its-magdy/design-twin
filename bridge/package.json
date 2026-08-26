@@ -1,12 +1,50 @@
 {
   "name": "designtwin",
   "version": "0.1.0",
-  "private": true,
   "description": "Design Twin bridge: local CLI + MCP server between Claude Code and the Design Twin Figma plugin. Reads a design on the free Figma plan, fully offline.",
+  "license": "MIT",
+  "author": "Mohamed Magdy Omar",
+  "keywords": [
+    "figma",
+    "mcp",
+    "model-context-protocol",
+    "design-to-code",
+    "design-system",
+    "design-tokens",
+    "claude-code",
+    "figma-plugin",
+    "cli"
+  ],
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "dtwin": "./figma-pull.js"
   },
+  "files": [
+    "figma-pull.js",
+    "figma-mcp.mjs",
+    "daemon.js",
+    "design-system-layout.js",
+    "errmsg.js",
+    "library-layout.js",
+    "node-id.js",
+    "pages-layout.js",
+    "read-opts.js",
+    "seed-components.js",
+    "server-core.js",
+    "snapshot-meta.js",
+    "write-out.js",
+    "design-system-layout.d.ts",
+    "errmsg.d.ts",
+    "library-layout.d.ts",
+    "node-id.d.ts",
+    "pages-layout.d.ts",
+    "read-opts.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "pull": "node figma-pull.js",
     "pull:selection": "node figma-pull.js design --selection",

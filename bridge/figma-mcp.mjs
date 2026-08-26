@@ -57,7 +57,7 @@ const server = new McpServer({ name: "designtwin", version: "0.1.0" });
 server.registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) \u2014 the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any \u2014 so an agent can tell whether it's about to read a stale snapshot.",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) \u2014 the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any \u2014 so an agent can tell whether it's about to read a stale snapshot.",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY
   },
@@ -186,14 +186,14 @@ server.registerTool(
     description: "Export the design system (component + token catalog \u2014 always spans the WHOLE file) plus frame trees. Frames default to the CURRENT page; pass page:[ids] to export named page(s), or allPages:true to walk every page. Large \u2014 call figma_list_pages first to pick a target, and pass writeToDisk:true for anything beyond a quick look: it writes the export to your project and returns a compact index, which is the only way to get asset bytes and avoids the result cap truncating the tree.",
     inputSchema: {
       ...clientShape,
-      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) \u2014 prefer `page` with ids from figma_list_pages, or the figma-pull CLI."),
+      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) \u2014 prefer `page` with ids from figma_list_pages, or the dtwin CLI."),
       page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages \u2014 passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
       ...readOptsShape,
       ...writeShape
     },
     annotations: READ_ONLY
   },
-  // The budget follows the SCOPE, exactly as the figma-pull CLI's does: exportAll (15 min) only for
+  // The budget follows the SCOPE, exactly as the dtwin CLI's does: exportAll (15 min) only for
   // the whole-file walk, export (5 min) for the current page or a bounded page:[ids] pull. Handing
   // every scope the whole-file budget made the bounded pull — the one this tool's own description
   // tells you to prefer — wait 15 minutes to report a hang that a 5-minute limit would have caught,
@@ -214,7 +214,7 @@ server.registerTool(
 server.registerTool(
   "figma_export_design_system",
   {
-    description: "Export ONLY the design system \u2014 variables, styles, local + library components, hygiene report \u2014 with no page/frame walk and therefore no assets (assets are exported per-node during that walk). The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this session, so a bare design-system pull may see fewer of them than a full pull would \u2014 local variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode (componentsLocal[].visuals) \u2014 components DEFINED in this file only, not ones consumed from a published library (pull figma-pull --as-library on the source library file for those). Pass variantVisuals:true to also attach each COMPONENT_SET's variants' REAL layout/fills/radius/tokens (componentsLocal[].variants) \u2014 the master-component source of truth, not the set wrapper's own selection-chrome visuals. It is the ONE read option this tool accepts (the others need a node/page walk this tool skips); one extra node walk per variant, so it is slower on a large design system.",
+    description: "Export ONLY the design system \u2014 variables, styles, local + library components, hygiene report \u2014 with no page/frame walk and therefore no assets (assets are exported per-node during that walk). The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this session, so a bare design-system pull may see fewer of them than a full pull would \u2014 local variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode (componentsLocal[].visuals) \u2014 components DEFINED in this file only, not ones consumed from a published library (pull dtwin --as-library on the source library file for those). Pass variantVisuals:true to also attach each COMPONENT_SET's variants' REAL layout/fills/radius/tokens (componentsLocal[].variants) \u2014 the master-component source of truth, not the set wrapper's own selection-chrome visuals. It is the ONE read option this tool accepts (the others need a node/page walk this tool skips); one extra node walk per variant, so it is slower on a large design system.",
     inputSchema: { ...clientShape, variantVisuals: readOptsShape.variantVisuals, ...writeShape },
     annotations: READ_ONLY
   },

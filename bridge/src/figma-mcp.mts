@@ -1,13 +1,13 @@
 // figma-mcp — WRITE plane (also exposes read tools).
 // Exposes an MCP server to Claude Code over STDIO, and internally hosts the localhost WebSocket
 // bridge the Figma plugin connects to. Use for code -> design (interactive authoring). For bulk
-// reads prefer the figma-pull CLI (files on disk).
+// reads prefer the dtwin CLI (files on disk).
 //
 // Run via .mcp.json: { "mcpServers": { "figma": { "type":"stdio",
 //   "command":"node", "args":["./bridge/figma-mcp.mjs"] } } }
 //
 // TypeScript source; built to figma-mcp.mjs (ESM, required by the ESM-only MCP SDK). The bridge core
-// (server-core.js) and the figma-pull CLI stay plain CJS — only this entry is ESM.
+// (server-core.js) and the dtwin CLI stay plain CJS — only this entry is ESM.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 // interop) and describe the surface we use.
 interface Bridge {
   // `timeoutMs` is server-core's third parameter (default 120s). Exports on a real design-system file
-  // routinely run longer than that — the figma-pull CLI learned this the hard way and now scales its
+  // routinely run longer than that — the dtwin CLI learned this the hard way and now scales its
   // own default — so the export tools below pass an explicit, larger budget rather than inheriting
   // a default tuned for small commands like ping/getSelection.
   // `target` (4th) selects WHICH connected Figma file the command goes to — a connId, a fileKey, or
@@ -30,14 +30,14 @@ interface Bridge {
   port: number;
 }
 const require = createRequire(import.meta.url);
-// TIMEOUTS is the per-command budget table shared with the figma-pull CLI. Every EXPORT tool needs a
+// TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
 // work and used to inherit the small default, which meant figma_export_url died at 120s on exactly the
 // screen you most wanted. Reading the tiers from server-core is what keeps the two front-ends aligned.
 // `exportTimeout` carries the scope -> tier RULE alongside the table, so this front-end cannot
 // restate (or, as it once did, omit) a tier the CLI has.
-// The ONE registry of read options (shared with the figma-pull CLI and the plugin's runOpts).
+// The ONE registry of read options (shared with the dtwin CLI and the plugin's runOpts).
 // Types come from its .d.ts; the values via createRequire, same as every other CJS module here.
 import type { ReadOptDef, ReadOptName } from "../read-opts.js";
 const { READ_OPTS } = require("./read-opts.js") as { READ_OPTS: ReadOptDef[] };
@@ -164,7 +164,7 @@ const server = new McpServer({ name: "designtwin", version: "0.1.0" });
 server.registerTool(
   "figma_status",
   {
-    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot.",
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) — the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last dtwin export on disk (design-system.json's exportedAt), if any — so an agent can tell whether it's about to read a stale snapshot.",
     inputSchema: { ...clientShape },
     annotations: READ_ONLY,
   },
@@ -360,14 +360,14 @@ server.registerTool(
       "cap truncating the tree.",
     inputSchema: {
       ...clientShape,
-      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) — prefer `page` with ids from figma_list_pages, or the figma-pull CLI."),
+      allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) — prefer `page` with ids from figma_list_pages, or the dtwin CLI."),
       page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages — passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
       ...readOptsShape,
       ...writeShape,
     },
     annotations: READ_ONLY,
   },
-  // The budget follows the SCOPE, exactly as the figma-pull CLI's does: exportAll (15 min) only for
+  // The budget follows the SCOPE, exactly as the dtwin CLI's does: exportAll (15 min) only for
   // the whole-file walk, export (5 min) for the current page or a bounded page:[ids] pull. Handing
   // every scope the whole-file budget made the bounded pull — the one this tool's own description
   // tells you to prefer — wait 15 minutes to report a hang that a 5-minute limit would have caught,
@@ -401,7 +401,7 @@ server.registerTool(
       "variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. " +
       "Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode " +
       "(componentsLocal[].visuals) — components DEFINED in this file only, not ones consumed from a published " +
-      "library (pull figma-pull --as-library on the source library file for those). Pass variantVisuals:true " +
+      "library (pull dtwin --as-library on the source library file for those). Pass variantVisuals:true " +
       "to also attach each COMPONENT_SET's variants' REAL layout/fills/radius/tokens (componentsLocal[].variants) " +
       "— the master-component source of truth, not the set wrapper's own selection-chrome visuals. It is the " +
       "ONE read option this tool accepts (the others need a node/page walk this tool skips); one extra node " +

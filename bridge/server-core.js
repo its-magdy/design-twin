@@ -186,7 +186,7 @@ function createBridge(port = PORT) {
   wss.on("error", (e) => {
     if (e && e.code === "EADDRINUSE") {
       console.error(
-        `[bridge] port ${port} is already in use — another figma-pull or figma-mcp bridge is running. ` +
+        `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
           "Stop it first, or set FIGMA_BRIDGE_PORT to a free port."
       );
       process.exit(1);
@@ -297,7 +297,7 @@ function createBridge(port = PORT) {
           // file / --all-pages) or a plugin-side throw, which surfaces in the plugin window, not here.
           reject(new Error(
             `the Figma plugin connected but did not answer '${cmd}' within ${Math.round(timeoutMs / 1000)}s. ` +
-            `A large file (especially --all-pages) can legitimately take longer — from the figma-pull CLI, ` +
+            `A large file (especially --all-pages) can legitimately take longer — from the dtwin CLI, ` +
             `retry with --timeout <seconds>; from MCP, export one page at a time (page:[id]) rather than the whole file. ` +
             `If it never finishes, check the plugin window for a red error.`
           ));

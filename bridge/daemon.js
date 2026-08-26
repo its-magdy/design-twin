@@ -53,7 +53,7 @@ function serve(bridge, { port, log } = {}) {
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
   return probe(sock).then((alive) => {
-    if (alive) throw new Error(`a figma-pull daemon is already running on ${sock} — stop it with --stop`);
+    if (alive) throw new Error(`a dtwin daemon is already running on ${sock} — stop it with --stop`);
     try { fs.unlinkSync(sock); } catch (e) { /* nothing to clean up */ }
 
     // Idle shutdown. A daemon outlives the terminal that started it, so without this an orphan holds
@@ -149,7 +149,7 @@ function serve(bridge, { port, log } = {}) {
     return new Promise((resolve, reject) => {
       server.once("error", reject);
       server.listen(sock, () => {
-        if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: figma-pull.js --stop`);
+        if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: dtwin --stop`);
         resolve({ sock, shutdown });
       });
     });

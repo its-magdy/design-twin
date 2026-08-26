@@ -59,29 +59,29 @@ hand-authored, non-regenerable config maps.
 
 ```
 # from the repo root, with the Figma file open + plugin running:
-node bridge/figma-pull.js design                  # design-system.json + design-system/ + CURRENT-page frames + assets/
-node bridge/figma-pull.js design --all-pages      # like above, but frame trees from EVERY page
-node bridge/figma-pull.js design --selection      # just the current selection
-node bridge/figma-pull.js design --design-system  # ONLY design-system.json + design-system/ — no page
+dtwin design                  # design-system.json + design-system/ + CURRENT-page frames + assets/
+dtwin design --all-pages      # like above, but frame trees from EVERY page
+dtwin design --selection      # just the current selection
+dtwin design --design-system  # ONLY design-system.json + design-system/ — no page
                                                    # walk, no assets/ (the cheap "tokens only" pull)
-node bridge/figma-pull.js design --as-library NERA # the COMPLETE catalog of a LIBRARY file — run this
+dtwin design --as-library NERA # the COMPLETE catalog of a LIBRARY file — run this
                                                    # with the LIBRARY open, not the file that uses it
 ```
 **Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
 (discover first, then scope by library):
 ```
-node bridge/figma-pull.js --whoami              # 0. (optional) which file am I actually connected to?
-node bridge/figma-pull.js --list-libraries      # 1. WHICH libraries does this file draw on?
-node bridge/figma-pull.js --list-pages          # 1b. page NAMES only (near-free — loads no page)
-node bridge/figma-pull.js --list                # 2. WHERE is what — pages + top-level frames (ids)
-node bridge/figma-pull.js --children <id>       # 3. (optional) peek inside one frame
-node bridge/figma-pull.js design --page <id>    # 4. pull only what you need
+dtwin --whoami              # 0. (optional) which file am I actually connected to?
+dtwin --list-libraries      # 1. WHICH libraries does this file draw on?
+dtwin --list-pages          # 1b. page NAMES only (near-free — loads no page)
+dtwin --list                # 2. WHERE is what — pages + top-level frames (ids)
+dtwin --children <id>       # 3. (optional) peek inside one frame
+dtwin design --page <id>    # 4. pull only what you need
 ```
 
 ### `--list-clients` / `--client` — working with two Figma files at once
 ```
-node bridge/figma-pull.js --list-clients
+dtwin --list-clients
 ```
 The bridge accepts **one connection per open Figma file**, so a design file and the library it draws
 on can both be connected. Each plugin announces itself on connect (and on every reconnect), so the
@@ -100,8 +100,8 @@ Address one with --client <connId | fileKey | part of the file name>, e.g. --cli
 
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
-node bridge/figma-pull.js design/base --client c1 --page 12:34
-node bridge/figma-pull.js design/lib  --client "NERA" --as-library "NERA"
+dtwin design/base --client c1 --page 12:34
+dtwin design/lib  --client "NERA" --as-library "NERA"
 ```
 Give each file its own output directory, as above, and their exports never collide.
 
@@ -124,7 +124,7 @@ roster instead of failing when several are connected.
 
 ### `--whoami` — who is connected (and can two files connect at once?)
 ```
-node bridge/figma-pull.js --whoami
+dtwin --whoami
 ```
 Prints both halves of the connection: what the **plugin** says it is (`instanceId` minted per plugin
 run, `file`, `page`, and whether `figma.fileKey` is available) and what the **socket** did
@@ -151,7 +151,7 @@ MCP twin: `figma_whoami`.
 
 ### `--list-libraries` — the library discovery step
 ```
-node bridge/figma-pull.js --list-libraries
+dtwin --list-libraries
 ```
 Prints an aligned table of the libraries this file uses — the local file's own published assets plus
 every **enabled** team library — with each one's variable collections (and variable counts) and how
@@ -172,7 +172,7 @@ Three honest limits, because they change what the numbers mean:
 
 ```
 # open the LIBRARY file in Figma (not the design file that consumes it), then:
-node bridge/figma-pull.js design --as-library "NERA"
+dtwin design --as-library "NERA"
 ```
 
 `--list-libraries` tells you a library exists and how many variables its collections hold.
@@ -284,16 +284,16 @@ in `hygiene`. `--design-system`/full pulls now echo `hygiene` to stderr as soon 
 
 Allowlist it in Claude Code so it runs without a prompt (`.claude/settings.json`):
 ```
-{ "permissions": { "allow": ["Bash(node bridge/figma-pull.js:*)"] } }
+{ "permissions": { "allow": ["Bash(dtwin:*)"] } }
 ```
 
 ### Keep the connection open: `--serve` (daemon)
 Each one-shot run above waits for the plugin to reconnect. For several pulls in a row, hold the bridge
 open and let later invocations reuse it:
 ```
-node bridge/figma-pull.js --serve          # holds the bridge open until stopped (Ctrl-C works too)
-node bridge/figma-pull.js --daemon-status  # is one up, and is the plugin connected?
-node bridge/figma-pull.js --stop
+dtwin --serve          # holds the bridge open until stopped (Ctrl-C works too)
+dtwin --daemon-status  # is one up, and is the plugin connected?
+node bridge/dtwin --stop
 ```
 Every ordinary command detects a running daemon and **routes through it automatically** — same
 invocations, no reconnect, no second bridge to collide on 8787.
