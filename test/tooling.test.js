@@ -6,7 +6,12 @@ const { validateMap } = require("../tooling/map-validate");
 const { driftLint } = require("../tooling/drift-lint");
 const { bootstrap } = require("../tooling/map-bootstrap");
 const { isManifest } = require("../tooling/catalog-input");
+const { getComponent, findComponent, resolveVariantsFile } = require("../tooling/get-component");
+const { buildDesignSystemLayout } = require("../bridge/design-system-layout");
 const { check, report } = require("./assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const near = (a, b) => Math.abs(a - b) < 0.001;
 
@@ -461,5 +466,56 @@ check("[manifest-guard] an EMPTY payload array still passes — zero variables i
   !isManifest({ files: { tokens: "t" }, variables: [] }, "variables"));
 check("[manifest-guard] junk/undefined input does not throw or false-positive",
   !isManifest(null, "variables") && !isManifest({ files: ["a"] }, "variables"));
+
+// ---------- get-component.js: resolve a catalog entry -> its variantsFile detail -----------------
+(() => {
+  const gcDs = {
+    exportedAt: "2026-08-18T00:00:00.000Z", file: "Demo", colorProfile: "srgb",
+    collections: [], variables: [], styles: { paint: [], text: [], effect: [], grid: [] }, hygiene: [],
+    components: [
+      { key: "kset", name: "Badge", type: "COMPONENT_SET", id: "9:1", page: "P", pageId: "1:0",
+        variants: [{ id: "9:2", name: "Size=Sm", key: "vk", values: { Size: "Sm" }, node: { type: "COMPONENT", name: "Size=Sm" } }] },
+      { key: "kflat", name: "Icon", type: "COMPONENT_SET", id: "9:3", page: "P", pageId: "1:0",
+        variants: [{ id: "9:4", name: "State=Default", key: "vk2", values: { State: "Default" } }] }, // no node -> no variantsFile
+      { key: "kdup", name: "Same", id: "9:5", type: "COMPONENT" },
+      { key: "kdup2", name: "Same", id: "9:6", type: "COMPONENT" },
+      { key: "ksolo", name: "IconButton", id: "9:7", type: "COMPONENT", page: "P", pageId: "1:0",
+        node: { type: "COMPONENT", name: "IconButton", fills: [] } }, // standalone COMPONENT, not a variant in a set
+    ],
+  };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "get-component-"));
+  const built = buildDesignSystemLayout(gcDs, "/");
+  fs.mkdirSync(path.join(tmp, built.dir, "components"), { recursive: true });
+  for (const f of built.files) {
+    fs.mkdirSync(path.dirname(path.join(tmp, f.path)), { recursive: true });
+    fs.writeFileSync(path.join(tmp, f.path), JSON.stringify(f.data));
+  }
+  const catalogFile = path.join(tmp, "design-system", "components.local.json");
+  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+
+  check("[get-component] resolves by key", findComponent(catalog, "kset").id === "9:1");
+  check("[get-component] resolves by id", findComponent(catalog, "9:1").key === "kset");
+  check("[get-component] resolves by name when unique", findComponent(catalog, "Icon").key === "kflat");
+  check("[get-component] unresolved handle returns null", findComponent(catalog, "nope") === null);
+  check("[get-component] ambiguous name throws rather than guessing", (() => {
+    try { findComponent(catalog, "Same"); return false; } catch (e) { return e.code === "ambiguous-name"; }
+  })());
+
+  const res = getComponent(catalogFile, "kset");
+  check("[get-component] found + variantsFile followed to the real node tree", res.found && res.detail && res.detail.variants[0].node.type === "COMPONENT");
+  check("[get-component] detail carries setId/setKey/name + the stamp", res.detail.setId === "9:1" && res.detail.setKey === "kset" && res.detail.name === "Badge" && res.detail.exportedAt === "2026-08-18T00:00:00.000Z");
+
+  const noNode = getComponent(catalogFile, "kflat");
+  check("[get-component] a set with no exported node trees has no variantsFile and no detail", noNode.found && !("variantsFile" in noNode.component) && noNode.detail === null);
+
+  check("[get-component] not-found handle reports found:false", getComponent(catalogFile, "nope").found === false);
+
+  const solo = getComponent(catalogFile, "ksolo");
+  check("[get-component] a standalone COMPONENT's slim entry carries nodeFile, not .node", solo.found && !("node" in solo.component) && typeof solo.component.nodeFile === "string");
+  check("[get-component] and nodeFile resolves to the real node tree", solo.detail && solo.detail.node && solo.detail.node.name === "IconButton");
+  check("[get-component] standalone-COMPONENT detail carries id/key/name + the stamp", solo.detail.id === "9:7" && solo.detail.key === "ksolo" && solo.detail.name === "IconButton" && solo.detail.exportedAt === "2026-08-18T00:00:00.000Z");
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
 
 report();

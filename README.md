@@ -19,7 +19,9 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
 - `.claude/skills/figma-help/SKILL.md` — orientation/help: the three export paths, setup, and
   troubleshooting. Invoke with `/figma-help` when unsure how to use this or something isn't working.
 - `tooling/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
-  DTCG token emitter, a schema'd/validated component map, a drift-lint, and a map bootstrapper. This is
+  DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
+  `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
+  to the real node trees). This is
   the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
   `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
 - `profiles/<profile>.md` — IR→stack translation rules. Ships with `web-tailwind`, `web-css-modules`,
@@ -33,7 +35,10 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
     under `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections →
     modes → variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`
     (the separate, older style system, one file per style type),
-    `components.local.json` (component sets/variants that are real nodes in this file),
+    `components.local.json` (component sets/variants that are real nodes in this file — each
+    COMPONENT_SET's own heavy per-variant node tree, or a standalone COMPONENT's own node tree, lives
+    in a sibling `components/<name>__<id>.json`, pointed at by that entry's `variantsFile`/`nodeFile`;
+    `tooling/get-component.js` resolves one and follows it),
     `components.library.json` (entries flagged `remote: true` — consumed from a published library,
     recovered from instances, **not** nodes here) and `hygiene.json` (the lint report)
     and, when you pull a LIBRARY file with `--as-library`, `libraries/index.json` + one
@@ -95,19 +100,29 @@ Two front-ends sit on that bridge, and they speak the same commands:
   Start with the cheap discovery steps: `--list-libraries` (which design libraries this file draws on)
   then `--list` (pages + frame ids), and only then `--page <id>` to pull what you actually need.
   Only want the tokens/styles/components/hygiene catalog, no screens? `--design-system` skips the
-  page/frame walk entirely (and the assets that walk would export).
+  page/frame walk entirely (and the assets that walk would export); each catalogued component still
+  carries its own fills/strokes/effects/radius/opacity/blendMode (see `bridge/README.md`).
 - **`figma-mcp`** — live tools for "check this, now pull that", plus the small write surface. Pass
   `writeToDisk: true` on the export tools to write files and get back a compact index instead of the
   payload — the only way to get asset bytes, and the right choice for anything large.
 
 Only one of them can hold port 8787 at a time; run the one that matches what you're doing.
 
-**And only one Figma FILE at a time.** The bridge keeps a single plugin connection, so running the
-plugin in a second file (your library file alongside the design file that consumes it) displaces the
-first — the older file quietly stops answering. Both instances are genuinely alive; it's the bridge
-that holds one socket. Run `node bridge/figma-pull.js --whoami` (MCP twin: `figma_whoami`) to see
-which file is connected, whether `figma.fileKey` is available, and whether a takeover happened.
-Working with two files at once needs multi-client routing — see ARCHITECTURE.md.
+**Several Figma FILES at once, though.** The bridge accepts one connection per open Figma file, so a
+design file and the library it draws on can both be connected and driven in the same session. Each
+plugin announces which file it is on connect; commands are then addressed:
+
+```
+node bridge/figma-pull.js --list-clients            # which files are connected (connId, name, fileKey)
+node bridge/figma-pull.js design/base --client "App"      # pull one
+node bridge/figma-pull.js design/lib --client "NERA" --as-library "NERA"
+```
+MCP twins: `figma_list_clients`, and a `client` argument on every tool.
+
+With **one** file connected you can omit `--client` entirely — nothing changes from before. With
+**several**, omitting it is an error that lists your choices rather than a guess: an export from the
+wrong file looks exactly like a correct one, so the bridge refuses instead of picking. Give each file
+its own output directory (as above) and their exports never collide.
 
 **Discover before you pull.** Both front-ends expose a library-discovery step —
 `node bridge/figma-pull.js --list-libraries` and the `figma_list_libraries` MCP tool — that reports

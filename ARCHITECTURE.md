@@ -27,6 +27,8 @@ Every API and behavior below was verified against official Figma / Claude Code d
     figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
           design/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
           styles.effect,styles.grid,components.local,components.library,hygiene}.json ·
+          design-system/components/<name>__<id>.json (one per COMPONENT_SET or standalone COMPONENT,
+          holding the node tree(s) stripped out of components.local.json's variantsFile/nodeFile pointer) ·
           pages/index.json · pages/<page>/index.json +
           pages/<page>/<name>__<id>.json · assets/
     Claude Code  ── runs `figma-pull` (Bash), then Reads files selectively ──►
@@ -68,25 +70,40 @@ whichever starts second exits on `EADDRINUSE` (`server-core.js`). So the CLI can
 disk path *while* the MCP server is running — which is why `writeToDisk` exists, and why `--serve`
 routes ordinary CLI commands through the running daemon instead of opening a second bridge.
 
-**One PLUGIN at a time, too — a separate limit.** Even with a single bridge process, `server-core.js`
-keeps exactly one plugin socket: a new connection displaces the previous one (`takeovers` in
-`connectionInfo()`, logged when it happens). Two open Figma files — a design file and its library —
-each run their own plugin instance and both will connect, so the second silently steals the bridge.
-This is **our** constraint, not Figma's. Making it work needs multi-client routing:
+**But MANY plugins at once — one per open Figma file.** `server-core.js` keeps a registry of
+connections (`clients`, keyed by a server-minted `connId`) rather than a single socket, so a design
+file and the library it draws on are both connected and separately addressable. `request()` takes a
+routing target as its optional 4th argument; the CLI passes `--client`, MCP passes `client`.
 
-- **Routing key.** `figma.fileKey` would be ideal (stable, unique) but is gated to private plugins
-  with `enablePrivatePluginApi` — the manifest docs say local development plugins *do* get these APIs,
-  so it may be available here; `--whoami` reports whether it actually is. Fall back to a
-  server-minted connection id. **Never** key on `figma.root.name`: human-editable, and duplicated
-  files collide.
-- **Addressing.** Discovery + server-assigned id (the Chrome DevTools Protocol
-  `Target.getTargets` → `sessionId` shape), *not* user-typed channel names. Channel strings have no
-  server-side uniqueness, which is where the misroute/typo failures in comparable projects come from.
+This replaced a single-socket rule that terminated the incumbent on every new connection. That rule
+did not merely limit you to one file — it was actively unstable: the displaced plugin's 3-second
+auto-reconnect immediately stole the bridge back, and two open files ping-ponged the connection
+indefinitely (observed live, which is how the bug was found). Admitting both connections removes the
+contention rather than arbitrating it.
+
+Design decisions worth not re-litigating:
+
+- **The routing key is ours, not the plugin's.** `figma.fileKey` is gated to private plugins with
+  `enablePrivatePluginApi` (undefined for an ordinary local import — `--whoami` reports which case you
+  are in) and `figma.root.name` is human-editable and shared by duplicated files. Both are *recorded*
+  and usable as an address, but the key is always the server-minted `connId`.
+- **Discovery, not typed channel names.** `--list-clients` / `figma_list_clients` enumerate; you then
+  address by id — the Chrome DevTools Protocol `Target.getTargets` → `sessionId` shape. Other Figma
+  bridges use user-typed channel strings, which have no server-side uniqueness and misroute silently
+  on a typo or a duplicate.
+- **Identity is re-derived, never resumed.** The plugin sends `hello` on connect *and* on every
+  reconnect. There is no session token to persist, so a runtime Figma tore down and re-ran comes back
+  correctly labelled by construction.
+- **Ambiguity is refused, not guessed.** An unaddressed command with several files connected errors
+  and lists them (the `adb` "more than one device" call). A wrong-file export is indistinguishable
+  from a correct one, so guessing is the one unrecoverable failure here.
 - **Not two ports.** `devAllowedDomains` pins each port literally — the only wildcard syntax is for
   subdomains (`*.example.com`) or fully-open `*`, never ports. A second port costs a manifest edit
   plus a plugin re-import, i.e. all the friction of the real fix with none of the benefit.
-- **Output.** Already safe: `write-out.js` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`,
-  so two clients can write to separate directories without colliding.
+- **Output.** `write-out.js` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`, so give each
+  connected file its own directory and their exports never collide.
+- **Isolation.** Pending requests record their `connId`, so one file closing its plugin window fails
+  only its own in-flight work — never a long export running in another file.
 
 ## Verified mechanism details (build to these)
 
@@ -192,7 +209,13 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **Variables:** `tier` (primitive/semantic from alias+scopes), `scopes`, `codeSyntax {WEB,ANDROID,iOS}`
   (free per-platform token names), `remote`; COLOR values folded to hex so **alpha survives**.
 - **Components:** catalog keeps the real `#uid` prop `key` + `type` + `default` + `options` + `description`
-  + node `id` (the last lets `bridge/seed-components.js` map Code Connect node-ids → names).
+  + node `id` (the last lets `bridge/seed-components.js` map Code Connect node-ids → names). Every entry
+  also carries `visuals` — the component/variant NODE's own `fills`/`strokes`/`effects`/`radius`/`opacity`/
+  `blendMode`, the same mixins any other node has. Always on: these are plain synchronous property getters
+  (Figma's Plugin API only suffixes the genuinely expensive calls `Async` — `getCSSAsync`, `exportAsync` —
+  and these six aren't among them), so there's no cost to gate. Covers components DEFINED in this file
+  only; `remote:true` entries (consumed from a library) need `--as-library` on the source file instead —
+  no API exposes a library component's paint from a consuming file.
 - **Diagnostics:** every export doc carries a `manifest` (`nodes`/`skipped`/`truncated`/`assetsFailed`/
   `warnings[]`) — no silent truncation; the design system carries a `hygiene[]` list (ALL_SCOPES,
   semantic-holds-raw, broken alias, variant-explosion>30, unnamed/duplicate components).
@@ -297,6 +320,50 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   no flat CSS equivalent but recorded so a consumer can render it as an SVG path with a width gradient).
   `guides` (frame ruler guides) and `complexStrokeProperties` were checked and NOT added — the former is a
   designer authoring aid with no rendered/visual effect, the latter's docs page couldn't be confirmed to exist.
+- **Instance → main-component join keys + per-variant visual truth (2026-08-18; harness 371/371):** two gaps
+  found by reviewing a real export: (1) an `INSTANCE`'s `component` field carried only the main component's
+  bare `name` (`getMainComponentAsync()` resolved, then everything but `.name` discarded) — unjoinable with
+  the catalog's `{name,id}` entries, and colliding whenever two components share a name. Every `INSTANCE` now
+  also emits **`mainComponent` `{name,id,key,remote,setId,setKey,setName,variant}`** alongside the unchanged
+  `component` string (`.parent` optional-chained — a *remote* main's `.parent` may be `null`, per
+  `plugin-api.d.ts`); `setId`/`setKey` are the join back to `components.local.json`/`components.library.json`.
+  (2) The component catalog's `visuals` for a `COMPONENT_SET` were the **set wrapper's own** fills/radius —
+  Figma's purple dashed *selection chrome*, not a design value — while every variant was skipped outright
+  (`componentPropertyDefinitions` throws on a variant, so the catalog walk routed around them rather than
+  reading their real paint). New opt-in **`--variant-visuals`** flag (registered once in `bridge/read-opts.js`,
+  so the CLI/MCP schema pick it up for free) walks each set's variants — already found by the same
+  `findAllWithCriteria` pass, no second traversal — and attaches **`entry.variants[]`** with each variant's
+  real `layout`/`fills`/`radius`/`tokens`/`css` via the existing node `serialize()` (injected as a parameter
+  into `buildDesignSystem`/`collectComponentCatalog` to dodge the `serialize.ts` ↔ `components.ts` import
+  cycle — no second serializer). Depth-capped (3 levels), forces `skipAssets` (a design-system pull has no
+  asset-manifest path), and per-variant `try/catch` so one bad variant can't drop the catalog. No per-variant
+  `props` — `componentPropertyDefinitions` still throws on a variant, so the set-level `props` map stays the
+  one source of truth for the prop *schema*; `values` (`{Type:"Default",...}`) comes from `variantProperties`
+  or, failing that, is parsed from the variant name Figma guarantees is `"Prop=Val, ..."`. Off by default;
+  flag-off catalog output is byte-identical (regression-tested).
+- **`components.local.json` index/detail split (2026-08-18):** `--variant-visuals` made the catalog huge
+  on a real design-system file — one real export measured `components.local.json` at 4.3MB, almost
+  entirely `variants[].node` trees an agent doesn't need just to see a component's prop table. Neither
+  `tooling/drift-lint.js` nor `tooling/map-bootstrap.js` ever reads `.node` (both key off
+  `name`/`id`/`key`/`type`/`props`), so `bridge/design-system-layout.js` now strips it out of each
+  `COMPONENT_SET` entry into a sibling `design-system/components/<safe(name)>__<safe(id)>.json`, and adds
+  a `variantsFile` pointer on the entry (absent, not null, when the set had no exported node trees — same
+  convention as `pageId`'s absence on pre-pageId exports). Every variant keeps its `id`/`name`/`key`/
+  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `tooling/get-component.js`
+  resolves one entry by key/id/name and follows `variantsFile` to print its full detail — the read path
+  for an agent that DOES want one component's real variant visuals. On that same real export the split
+  took `components.local.json` from 4.3MB to 196KB with drift-lint/map-bootstrap unmodified against it
+  (143/143 mapped, 0 errors). Both writers build off the one shared function, so they cannot drift.
+- **`--variant-visuals` extended to standalone COMPONENTs (2026-08-18; harness 374/374, tooling 222/222):**
+  the flag only ever walked variant children of a `COMPONENT_SET` — a standalone `COMPONENT` (never part
+  of a set) got none of the same treatment, leaving it with only the slim catalog fields and no way to
+  pull its real layout/tokens/css. `collectComponentCatalog` (`figma-plugin/src/components.ts`) now also
+  runs `serializeVariant` on a standalone `COMPONENT` (same depth budget, same forced `skipAssets`) and
+  attaches the result as **`entry.node`** (not `entry.variants[]` — there is no set to enumerate variants
+  of). `bridge/design-system-layout.js` splits any local `COMPONENT` entry carrying `.node` into the same
+  `design-system/components/<name>__<id>.json` sibling file, replacing it with a **`nodeFile`** pointer
+  (mirroring `variantsFile`). `tooling/get-component.js` resolves either pointer. Flag-off and
+  `COMPONENT_SET` output are byte-identical (regression-tested).
 
 ## Claude Code integration (verified)
 

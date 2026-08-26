@@ -55,8 +55,12 @@ Once files are in `design/`, building code is identical for all three: **`/figma
    - **Export design system + all page frames** → produces the `design-system.json` manifest + its
      parts (`design-system__tokens.json`, `…__styles.paint.json`/`…__styles.text.json`/
      `…__styles.effect.json`/`…__styles.grid.json`, `…__components.local.json`,
-     `…__components.library.json`, `…__hygiene.json` — a browser download can't make directories, so
-     the `design-system/` folder is encoded in the name; move them into `design/design-system/`)
+     `…__components.library.json`, `…__hygiene.json`, and — with `--variant-visuals` — one
+     `design-system__components__<name>__<id>.json` per `COMPONENT_SET` or standalone `COMPONENT`
+     (the split-out node tree(s)) — a browser download can't make directories, so the `design-system/`
+     (and `design-system/
+     components/`) folders are encoded in the name; move them into `design/design-system/` and
+     `design/design-system/components/` respectively)
      + `pages/index.json`
      (+ assets); click **Download layers (N)** to save one file per top-level layer, grouped per Figma
      page, into `design/pages/<page>/`.
@@ -71,7 +75,9 @@ Once files are in `design/`, building code is identical for all three: **`/figma
 # repo root, Figma file open + plugin running:
 node bridge/figma-pull.js design             # full: design-system.json + design-system/ + pages/<page>/ (one file per layer) + assets/
 node bridge/figma-pull.js design --selection # just the current selection
-node bridge/figma-pull.js --whoami           # cheap: WHICH file is connected + can two files connect at once?
+node bridge/figma-pull.js --list-clients     # cheap: WHICH Figma files are connected (connId + name)
+node bridge/figma-pull.js --whoami           # cheap: identity/liveness of one connection
+node bridge/figma-pull.js design/lib --client "NERA"  # address ONE connected file (id | fileKey | name)
 node bridge/figma-pull.js --list-libraries   # cheap: which design libraries this file draws on
 node bridge/figma-pull.js --list-pages       # cheap: page names only (prints to stdout, writes nothing)
 node bridge/figma-pull.js --list             # cheap: pages + their top-level frames
@@ -80,8 +86,29 @@ node bridge/figma-pull.js design --page <id> # deep-pull one or more named pages
 node bridge/figma-pull.js design --as-library "NERA" # COMPLETE catalog of a LIBRARY file (run with the
                                                 #   LIBRARY open, not the file that consumes it)
 node bridge/figma-pull.js design --design-system # ONLY tokens/styles/components/hygiene — no page
-                                              # walk, no assets/ (the "just the design system" pull)
+                                              # walk, no assets/ (the "just the design system" pull).
+                                              # Add --variant-visuals for per-variant paint (below).
 ```
+**Component `visuals`.** Every catalogued component in `components.local.json` carries a `visuals`
+field: `{ fills, strokes, effects, radius, opacity, blendMode }` — the component/variant NODE's own
+paint, the same as any other node has. Always included, not a flag: these are plain synchronous
+property reads (no `Async` round-trip, unlike `getCSSAsync`/`exportAsync`), so there's no cost to
+gate. For a `COMPONENT_SET` this is the SET wrapper's own paint (Figma's purple dashed selection
+chrome), not any one variant's — add `--variant-visuals` to also walk each variant and attach its
+REAL layout/fills/radius/tokens under `entry.variants[]` (one extra node walk per variant, so opt-in).
+A standalone `COMPONENT` (not inside a set) gets the same walk, attached as `entry.node` instead.
+The real node tree per variant/component is NOT inlined in `components.local.json` — it lives in a
+sibling `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets)
+or `nodeFile` (standalone components) — absent when nothing was exported for that entry. Fetch it with
+`node tooling/get-component.js design/design-system/components.local.json <key|id|name>`.
+Two things `visuals`/`variants` do NOT give you: a specific instance's overrides elsewhere in the
+file, and components consumed from a published library (`remote:true` entries) — those need
+`--as-library` run on the source library file, since the Plugin API has no way to read a library
+component's paint from a consuming file.
+**Instance → component join.** Every `INSTANCE` node also carries `mainComponent`
+(`{name,id,key,remote,setId,setKey,setName,variant}`) alongside the plain `component` name string —
+`setId`/`setKey` are what actually joins an instance back to `components.local.json`/
+`components.library.json` (the bare name collides whenever two components share it). Always on, no flag.
 **Need a library's actual VALUES?** `--list-libraries` only counts them — from a consuming file the
 Plugin API has no values to give (`getVariablesInLibraryCollectionAsync` returns names/keys/types
 only, and library components cannot be enumerated at all). Open the **library file itself** and run
@@ -96,9 +123,11 @@ pages/frames, with ids) → `--children <id>` if you need to peek → `design --
 a whole-file pull.
 
 The cheap commands print structural/discovery fields only, so they take **no read options** — `--css` /
-`--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--no-assets` are refused there
-rather than silently ignored, and two of them at once is refused too. Pass read options to the
-`--page` pull instead. `--timeout` does apply to all of them.
+`--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--variant-visuals` / `--no-assets`
+are refused there rather than silently ignored, and two of them at once is refused too. Pass read
+options to the `--page` pull instead. `--timeout` does apply to all of them. (`--design-system` /
+`--as-library` are the one exception: they DO accept `--variant-visuals`, since it enriches the
+component catalog those two build — see the design-system section above.)
 
 `--list-libraries` prints a table of the local file's published assets plus every **enabled** team
 library, with variable collections and per-library component counts. Three things to tell users:
@@ -182,15 +211,20 @@ To use the bridge from another project, add a `.mcp.json` there pointing at an *
   library is enabled for the file (enable it in the Figma UI, Assets → Libraries; no API can do this);
   (3) free plan — library variable collections aren't exposed to plugins. All three are normal, not
   broken bridges, and the command's own output says so.
-- **I opened the plugin in a SECOND Figma file and the first one stopped responding** → expected, and
-  it is this bridge's limit rather than Figma's. The bridge keeps exactly **one** plugin connection;
-  a new connect displaces the old one (the server now logs the takeover by name). Both files really
-  are running their own plugin instance — confirm with `node bridge/figma-pull.js --whoami` from each:
-  two different `instanceId`s means both are alive, and `takeovers > 0` means the one-connection rule
-  is what disconnected the other. Working on a base file **and** its library at the same time needs
-  multi-client routing, which is not built yet. Two ports is *not* a workaround: `devAllowedDomains`
-  in `manifest.json` pins each port literally (no wildcards), so a second port needs a manifest edit
-  and a plugin re-import anyway.
+- **I want to work on a design file AND its library at the same time** → supported. Open the plugin in
+  both; each announces itself and both stay connected. `node bridge/figma-pull.js --list-clients` shows
+  them, then address one per command: `--client "NERA"` (a connId, a fileKey, or part of the file
+  name). Give each its own output dir (`design/base`, `design/lib`) so exports don't overwrite each
+  other. MCP: `figma_list_clients`, plus `client` on every tool.
+- **"N Figma files are connected to the bridge — say which one to use"** → you have several files
+  connected and the command didn't say which to use. Pass `--client` (CLI) or `client` (MCP). This is
+  refused rather than guessed on purpose: an export from the wrong file looks exactly like a correct
+  one. `--list-clients` shows the valid names.
+- **Two files thrashing / the plugin flickers between connected and busy** → that was the OLD
+  single-connection bridge, where the displaced plugin's 3s auto-reconnect stole the socket back in a
+  loop. Rebuild the plugin (`cd figma-plugin && npm run build`) and **re-import it in Figma** — a
+  plugin build predating multi-client support never sends its `hello`, so it shows as
+  `(unidentified)` in `--list-clients` and can only be addressed by connId.
 - **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); merely occluded
   is fine. See `bridge/README.md` → `--whoami`.

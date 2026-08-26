@@ -51,6 +51,12 @@ const READ_OPTS = [
       "Include cross-plugin shared data (getSharedPluginData) — notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node.",
   },
   {
+    name: "variantVisuals",
+    flag: "--variant-visuals",
+    describe:
+      "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css — the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems.",
+  },
+  {
     // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
     // real render round-trip — SVG per vector, 2x PNG per image) PER NODE, run sequentially, and
     // unlike getCSSAsync it was never gated despite being the same O(nodes) shape and far more

@@ -6,7 +6,7 @@
 // its own. It is the ONE place the names are typed — CollectOpts and runOpts both derive from it, so
 // adding an option is still a row in read-opts.js plus this union, and TypeScript then fails loudly
 // at every site that must handle it rather than letting one drift silently.
-export type ReadOptName = "css" | "measurements" | "pluginData" | "motion" | "sharedData" | "skipAssets";
+export type ReadOptName = "css" | "measurements" | "pluginData" | "motion" | "sharedData" | "variantVisuals" | "skipAssets";
 
 export interface ReadOptDef {
   /** The option key on the wire / in CollectOpts. */

@@ -104,6 +104,18 @@ figma.ui.onmessage = async (msg: any) => {
     figma.ui.postMessage({ type: "token", token: token || "" });
   } else if (msg.type === "set-token") {
     await figma.clientStorage.setAsync("bridgeToken", msg.token || "");
+  } else if (msg.type === "get-identity") {
+    // Who is this file? The UI iframe asks on every socket open so it can announce itself to the
+    // bridge, which routes commands per file. It has to ask US because `figma.*` exists only on the
+    // main thread — the iframe has no access to the document at all. Reuses the `whoami` handler so
+    // the announcement and the --whoami probe can never report different identities.
+    let identity: any = {};
+    try {
+      identity = await handleBridge("whoami", {});
+    } catch (e) {
+      identity = { error: errMsg(e) };
+    }
+    figma.ui.postMessage({ type: "identity", identity });
   } else if (msg.type === "run-selection") {
     await runSelection();
   } else if (msg.type === "run-full") {

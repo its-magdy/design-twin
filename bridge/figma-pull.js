@@ -11,7 +11,19 @@
 //   node figma-pull.js [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
 //   node figma-pull.js [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
 //                                                   # walk, no assets (the cheap "just the design
-//                                                   # system" pull)
+//                                                   # system" pull). Each catalogued component/variant
+//                                                   # carries its OWN fills/strokes/effects/cornerRadius/
+//                                                   # opacity/blendMode (`visuals`) — plain synchronous
+//                                                   # property reads, not the async cost this mode
+//                                                   # exists to avoid. NOTE: this is the component
+//                                                   # NODE's own paint (its default/base variant look),
+//                                                   # not per-instance overrides elsewhere in the file —
+//                                                   # and components consumed from a published library
+//                                                   # (not defined in this file) are NOT covered: pull
+//                                                   # --as-library on the source library file for those.
+//                                                   # Add --variant-visuals for the SET's own variants'
+//                                                   # real paint too (see below) — the one read option
+//                                                   # this mode accepts.
 //   node figma-pull.js [outDir] --as-library <name>  # the COMPLETE catalog of a LIBRARY file —
 //                                                   # every variable with full per-mode values, every
 //                                                   # style, every component. Run it with the LIBRARY
@@ -29,6 +41,11 @@
 //   --plugin-data    # own-scope plugin data stamped on nodes
 //   --motion         # motion/animation reads (timelines, keyframe tracks, animations, styles)
 //   --shared-data    # cross-plugin shared data (Tokens Studio applied tokens via getSharedPluginData)
+//   --variant-visuals  # walk each COMPONENT_SET's variants and attach their REAL layout/fills/radius/
+//                      # tokens (not the set wrapper's own selection-chrome visuals). One node walk
+//                      # per variant, so slower on large systems. The ONE read option --design-system
+//                      # and --as-library both accept (see below) — it enriches the component catalog
+//                      # they build, unlike the others which need a page/node walk neither does.
 //
 // Look before you pull (cheap RELATIVE to an export — no recursion, no assets, no node properties;
 // prints JSON to stdout):
@@ -105,6 +122,16 @@ const writeJson = (dir, name, obj, quiet) => OUT.writeJson(dir, name, obj, quiet
 // through this exact entry point.
 const writePages = (dir, layersDoc) => OUT.writePages(dir, layersDoc, plog);
 const writeAssets = (dir, assets) => OUT.writeAssets(dir, assets, plog);
+// hygiene.json persists every warning (see design-system-layout.js), but writeJson's own log line is
+// just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
+// COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
+// here so hygiene surfaces the same run it was produced in, not only on a later manual diff.
+function printHygiene(r) {
+  const hygiene = r && r.designSystem && Array.isArray(r.designSystem.hygiene) ? r.designSystem.hygiene : [];
+  if (!hygiene.length) return;
+  plog(`hygiene (${hygiene.length}):`);
+  for (const h of hygiene) console.error("  - " + h);
+}
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 const { READ_OPTS } = require("./read-opts.js");
 // daemon.js holds the bridge open across invocations. Every ordinary command below asks it for a
@@ -175,6 +202,11 @@ const listLibraries = args.includes("--list-libraries");
 // available to a locally-imported plugin, and whether a connection survives being left idle.
 const whoami = args.includes("--whoami");
 
+// --list-clients: which Figma FILES are connected right now. The bridge accepts one connection per
+// open file, so this is the "which of my open files can I talk to?" index — the discovery step before
+// --client, exactly as --list is before --page.
+const listClients = args.includes("--list-clients");
+
 // Value-taking flags (space form: `--flag value`) consume the NEXT token — that token must never be
 // mistaken for the positional [outDir] below. `consumedIdx` tracks every such value's index so
 // outDir detection can skip them, not just skip tokens that literally start with "--".
@@ -229,6 +261,13 @@ const pageSel = takeValues(args, "--page", "--page needs an id or name (see --li
 // choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
 const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"NERA\"")[0] || null;
 
+// --client: WHICH connected Figma file this command talks to. Unlike every other flag here it is not
+// a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
+// bridge uses the only connected file; with several connected it refuses and lists them rather than
+// guessing, so an export can never silently come from the wrong file. Accepts a connId (from
+// --list-clients), a fileKey, or part of the file's name.
+const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)")[0] || null;
+
 
 // A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
 // with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
@@ -268,7 +307,7 @@ if (scopes.length > 1) {
 // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
 // added and then silently omitted from one of the three guards (the --timeout class of bug: the
 // flag is accepted, and then quietly does nothing).
-const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami"].filter(Boolean);
+const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami", listClients && "--list-clients"].filter(Boolean);
 const indexCmd = indexCmds[0] || null;
 
 // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
@@ -296,6 +335,7 @@ if (indexCmd && readOptFlagsGiven.length) {
   // wrong for one member of the family.
   const emits = cmd === "--list-libraries" ? "only prints the libraries this file uses"
     : cmd === "--whoami" ? "only prints connection/plugin identity"
+    : cmd === "--list-clients" ? "only prints which Figma files are connected"
     : "only prints a structural index (id/name/type/size)";
   // Decide plurality ONCE. Six inline ternaries in one template literal meant any wording edit was an
   // edit to a 400-character single expression with six branch points.
@@ -305,11 +345,15 @@ if (indexCmd && readOptFlagsGiven.length) {
 }
 // --design-system never walks a page or node, so every read option (css/measurements/
 // plugin-data/motion/shared-data/no-assets) is just as inert here as it is on a list command — same
-// silent-loss class, same refusal.
-if ((designSystemOnly || asLibrary) && readOptFlagsGiven.length) {
-  const many = readOptFlagsGiven.length > 1;
+// silent-loss class, same refusal. --variant-visuals is the ONE exception: it enriches the
+// component catalog itself (findAllWithCriteria for COMPONENT_SET/COMPONENT), which --design-system
+// and --as-library both build, so it is genuinely live here — excluded from the guard below and
+// forwarded explicitly a few lines down.
+const dsGuardFlags = readOptFlagsGiven.filter((f) => f !== "--variant-visuals");
+if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
+  const many = dsGuardFlags.length > 1;
   const [are, they, them] = many ? ["are read options", "they", "them"] : ["is a read option", "it", "it"];
-  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
+  throw new UsageError(`${dsGuardFlags.join(" / ")} ${are} for a node/page walk — ${asLibrary ? "--as-library" : "--design-system"} skips that walk entirely, so ${they} would be silently ignored. Drop ${them} here, and pass ${them} to a --page pull afterwards.`);
 }
 
 // A daemon command owns the invocation. Combining it with a pull or a list is the same silent-loss
@@ -328,7 +372,7 @@ if (daemonCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -337,6 +381,35 @@ return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, l
 // because its payload is an id catalogue you copy from; this one is a decision aid you READ.
 // Pure string-in/string-out so the test suite can drive the empty case (the one that must not look
 // like a failure) without a plugin on the other end.
+// The connected-files table. Same contract as formatLibraries below: prints for a HUMAN (and an agent
+// skimming a terminal), and the EMPTY case is the one that has to explain itself — "no files
+// connected" is the normal state before you open the plugin, not a broken bridge.
+function formatClients(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    return "No Figma files are connected to the bridge.\n" +
+      "  Open a file in Figma and run \"Design Export for AI\" (Plugins → Development). The plugin\n" +
+      "  auto-connects and announces itself. You can open it in SEVERAL files at once — each one\n" +
+      "  becomes a separate row here, addressable with --client.";
+  }
+  const lines = [list.length + " Figma file" + (list.length === 1 ? "" : "s") + " connected:", ""];
+  for (const c of list) {
+    const mins = Math.round((c.uptimeMs || 0) / 60000);
+    // An unidentified row is a real state, not a bug: the socket is up but the plugin has not sent its
+    // `hello` yet (or is an older build that never does), so say what it IS addressable by.
+    lines.push("  " + (c.connId || "?").padEnd(5) + " " + (c.file ? JSON.stringify(c.file) : "(unidentified — address it by connId)"));
+    const bits = [];
+    if (c.page) bits.push("page " + JSON.stringify(c.page));
+    bits.push(c.fileKey ? "fileKey " + c.fileKey : "no fileKey (private-plugin API not in effect)");
+    bits.push("up " + (mins >= 1 ? mins + "m" : Math.round((c.uptimeMs || 0) / 1000) + "s"));
+    lines.push("        " + bits.join(" · "));
+  }
+  lines.push("");
+  lines.push("Address one with --client <connId | fileKey | part of the file name>, e.g. --client " +
+    (list[0].file ? JSON.stringify(list[0].file.split(/\s+/)[0]) : list[0].connId) + ".");
+  return lines.join("\n");
+}
+
 function formatLibraries(r) {
   const libs = (r && r.libraries) || [];
   const lines = [];
@@ -402,7 +475,7 @@ try {
   console.error("[figma-pull] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
 
 async function main() {
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
@@ -441,21 +514,24 @@ async function main() {
 
   // Only the export paths write to outDir; --list/--children print to stdout and are explicitly "a
   // decision aid, not a build input", so they must not leave an empty design/ behind as a side effect.
-  if (!listOnly && !childrenId && !listLibraries && !whoami) fs.mkdirSync(outDir, { recursive: true });
+  if (!listOnly && !childrenId && !listLibraries && !whoami && !listClients) fs.mkdirSync(outDir, { recursive: true });
 
   let bridge = null;
   let send;
   if (d) {
     // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
     // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    send = (cmd, args, timeoutMs) => d.request({ cmd, args, timeoutMs, waitForConnection: 600000 }, timeoutMs + 30000);
+    send = (cmd, args, timeoutMs) => d.request({ cmd, args, timeoutMs, client, waitForConnection: 600000 }, timeoutMs + 30000);
   } else {
     bridge = createBridge();
     console.error("[figma-pull] listening on ws://localhost:" + bridge.port);
     console.error('[figma-pull] Open your Figma file and run "Design Export for AI" (it auto-connects)…');
     console.error("[figma-pull] tip: --serve keeps this connection open so later pulls skip the reconnect.");
-    await bridge.waitForConnection(600000); // 10 min — generous window for an interactive connect
-    send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs);
+    // --list-clients is the one command that is MEANINGFUL with nothing connected ("which files can I
+    // talk to?" → "none, open one"), so it must not sit in the 10-minute connect wait that exists for
+    // commands which genuinely need a plugin on the other end.
+    if (!listClients) await bridge.waitForConnection(600000); // 10 min — generous window for an interactive connect
+    send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs, client);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to
   // close, and closing the DAEMON's would be wrong — one helper so no call site has to know which.
@@ -464,6 +540,20 @@ async function main() {
   // The library discovery command. Same cost/budget tier as the two below (cheap relative to an
   // export) and the same "print, never write outDir" contract — but its own branch, because it
   // prints a TABLE rather than the JSON id-catalogue those two exist to hand you.
+  // Which Figma files are connected right now. Prints a table for a human (and for an agent skimming
+  // a terminal); the connId in the first column is what --client takes. Deliberately does NOT talk to
+  // the plugin at all — the answer lives entirely in the bridge, so this works even while every
+  // connected file is busy with a long export.
+  if (listClients) {
+    const rows = bridge ? bridge.listClients() : ((await daemon.status()) || {}).clients || [];
+    console.log(formatClients(rows));
+    if (rows.length > 1) {
+      console.error("[figma-pull] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
+        "to pick one, or commands that need a target will refuse rather than guess.");
+    }
+    return finish();
+  }
+
   // The identity/liveness probe. Prints BOTH halves: what the plugin says it is, and what the socket
   // did. Run it in each of two open files (a second terminal, or twice in a row after switching the
   // focused file) and compare — the interpretation notes below are printed with the result so the
@@ -557,16 +647,18 @@ async function main() {
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
     // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
-    const r = await send("exportLibrary", { asLibrary }, exportTimeoutMs);
+    const r = await send("exportLibrary", { asLibrary, variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
     OUT.writeExport(outDir, r, plog);
+    printHygiene(r);
   } else if (designSystemOnly) {
-    const r = await send("exportDesignSystem", {}, exportTimeoutMs);
+    const r = await send("exportDesignSystem", { variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
     // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
     // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
     // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
     // writeDesignSystem persists to hygiene.json — not a `manifest.warnings` field that would be
     // silently dropped by the split, both here and via the MCP writeToDisk path.
     OUT.writeExport(outDir, r, plog);
+    printHygiene(r);
   } else {
     const r = await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs);
     // Route through the SAME split writer the MCP export tools use (write-out.js's writeExport), so a
@@ -574,6 +666,7 @@ async function main() {
     // design-system.json here — undocumented drift from the split described in this file's own header
     // comment and from what the harness's write-out tests actually assert.
     OUT.writeExport(outDir, r, plog);
+    printHygiene(r);
   }
 
   console.error("[figma-pull] done.");
@@ -596,4 +689,4 @@ if (require.main === module) {
 // formatLibraries is exported for the same reason parseArgs is: the case that MUST NOT look like a
 // failure (zero libraries — free plan, or none enabled in the UI) is unreachable from a test that
 // needs a live plugin, so the renderer is driven directly.
-module.exports = { parseArgs, writePages, writeJson, formatLibraries, UsageError };
+module.exports = { parseArgs, writePages, writeJson, formatLibraries, formatClients, UsageError };

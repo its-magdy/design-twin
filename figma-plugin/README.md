@@ -54,7 +54,7 @@ After a rebuild, close & reopen the plugin window (a stale window runs stale `co
 
 ## Read options (opt-in)
 
-`collectFull` / `collectSelection` / `collectNode` accept `{ css?, measurements?, pluginData?, motion?, sharedData? }`:
+`collectFull` / `collectSelection` / `collectNode` accept `{ css?, measurements?, pluginData?, motion?, sharedData?, variantVisuals? }`:
 
 - **`css`** — Figma's own computed CSS per node (`getCSSAsync`), the design-to-code oracle. One
   async call **per node**, so it stays opt-in for large/full exports — but it **auto-enables** for a
@@ -65,9 +65,16 @@ After a rebuild, close & reopen the plugin window (a stale window runs stale `co
 - **`motion`** — motion/animation reads (timelines, manual keyframe tracks, animations, applied styles).
 - **`sharedData`** — cross-plugin shared data (`getSharedPluginData`), notably **Tokens Studio** applied
   tokens — the semantic token layer on files without native Figma Variables.
+- **`variantVisuals`** — walks each `COMPONENT_SET`'s variant children (design-system pull only) and
+  attaches `entry.variants[]` with each variant's real `layout`/`fills`/`radius`/`tokens`/`css` — the
+  master-component source of truth, not the set wrapper's own selection-chrome visuals. A standalone
+  `COMPONENT` (not inside a set) gets the same walk and its tree attached as `entry.node` instead. One
+  node walk per variant/component, so it's slower on large systems; off by default.
 
 `inferredVariables` token suggestions (for fields with no explicit binding) are always on. Image
 `intrinsicSize` + original source bytes (`getImageByHash`) and parametric shape reads (ellipse
-`arc`, star/polygon `shape`, `booleanOp`) are always on. Reachable from the bridge: MCP tool args
-(`css`/`measurements`/`pluginData`/`motion`/`sharedData`) and the `figma-pull` CLI flags
-(`--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared-data`).
+`arc`, star/polygon `shape`, `booleanOp`) are always on. Every `INSTANCE` also emits `mainComponent`
+(`{name,id,key,remote,setId,setKey,setName,variant}`) alongside the unchanged `component` name string —
+the join key back to the component catalog — always on, no flag. Reachable from the bridge: MCP tool
+args (`css`/`measurements`/`pluginData`/`motion`/`sharedData`/`variantVisuals`) and the `figma-pull`
+CLI flags (`--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--variant-visuals`).

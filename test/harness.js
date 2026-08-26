@@ -64,7 +64,10 @@ const button = {
     { type: "SET_VARIABLE_MODE", variableCollectionId: "c_sem", variableModeId: "m_dark" },
     { type: "CONDITIONAL", conditionalBlocks: [{ condition: { value: true }, actions: [{ type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2" }] }] },
   ] }],
-  getMainComponentAsync: async () => ({ name: "Button" }),
+  getMainComponentAsync: async () => ({
+    name: "Button", id: "comp:btn1", key: "compkey_btn", remote: false,
+    parent: { type: "COMPONENT_SET", id: "set:btn", key: "setkey_btn", name: "ButtonSet" },
+  }),
 };
 const scrollFrame = {
   type: "FRAME", name: "List", visible: true, layoutMode: "VERTICAL", itemSpacing: 12, id: "1:0",
@@ -227,6 +230,15 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("per-corner radius (mixed fallback)", rect.radius && rect.radius.tl === 8 && rect.radius.bl === undefined);
 
   ok("instance main component name", btn.component === "Button");
+  ok("mainComponent join keys captured (id/key)", btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn");
+  ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent.setId === "set:btn" && btn.mainComponent.setKey === "setkey_btn");
+  ok("mainComponent variant name kept separately from the set name", btn.mainComponent.setName === "ButtonSet" && btn.mainComponent.variant === "Button");
+
+  // A remote main whose `.parent` is NULL (plugin-api.d.ts documented shape) must not throw, and
+  // must emit id/key with NO setId/setKey (there is no set to join to).
+  const remoteInst = { type: "INSTANCE", name: "RemoteBtn", visible: true, getMainComponentAsync: async () => ({ name: "Icon", id: "rc:1", key: "rk:1", remote: true, parent: null }) };
+  const remoteSer = await sandbox.serialize(remoteInst, 0, false);
+  ok("remote main with null parent: id/key captured, no setId/setKey", remoteSer.mainComponent && remoteSer.mainComponent.id === "rc:1" && remoteSer.mainComponent.remote === true && remoteSer.mainComponent.setId === undefined);
   ok("bound token resolved to name", btn.tokens && btn.tokens.fills === "color/primary");
   ok("reactions extracted", Array.isArray(btn.reactions) && btn.reactions.length === 1);
   ok("reaction trigger", btn.reactions[0].trigger === "on_click");
@@ -1232,6 +1244,67 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("[LIB] every entry is flagged remote", libComps.every((c) => c.remote === true));
   // There is NO API mapping a component key to its library — unattributed must read as unknown.
   ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c) => c.source === "unknown-library"));
+
+  // ---- [VARIANTVIS] --variant-visuals: per-variant layout/fills truth, not the set-wrapper's chrome ----
+  const variantA = {
+    type: "COMPONENT", id: "v:a", name: "Type=Default, Status=Default", key: "vkey_a",
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0.6, b: 0 }, opacity: 1 }],
+    cornerRadius: 16, visible: true, children: [],
+  };
+  const variantB = {
+    type: "COMPONENT", id: "v:b", name: "Type=Default, Status=Hover", key: "vkey_b",
+    variantProperties: { Type: "Default", Status: "Hover" },
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0.4, b: 0 }, opacity: 1 }],
+    cornerRadius: 16, visible: true, children: [],
+    // A variant whose own componentPropertyDefinitions getter throws (documented Plugin API shape) —
+    // the walk must still emit this variant's node, just without props (props stay set-level only).
+    get componentPropertyDefinitions() { throw new Error("Can only get component property definitions of a component set or non-variant component"); },
+  };
+  const tagSet = {
+    type: "COMPONENT_SET", id: "set:tag", name: "Tag", key: "setkey_tag",
+    fills: [{ type: "SOLID", visible: true, color: { r: 0.6, g: 0.28, b: 1 }, opacity: 1 }], // Figma's own purple selection chrome — NOT a design value
+    cornerRadius: 5,
+    componentPropertyDefinitions: { Type: { type: "VARIANT", variantOptions: ["Default"] }, Status: { type: "VARIANT", variantOptions: ["Default", "Hover"] } },
+  };
+  variantA.parent = tagSet; variantB.parent = tagSet;
+  // A standalone COMPONENT — no COMPONENT_SET wrapper — must get the SAME serializeVariant treatment
+  // under --variant-visuals, attached as entry.node rather than entry.variants[].node.
+  const standaloneComp = {
+    type: "COMPONENT", id: "c:solo", name: "IconButton", key: "compkey_solo", parent: null,
+    fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 0, b: 0 }, opacity: 1 }],
+    cornerRadius: 8, visible: true, children: [], componentPropertyDefinitions: {},
+  };
+  const variantPage = { name: "Variants", id: "p:variants", loadAsync: async () => {},
+    findAllWithCriteria: ({ types }) => (types.indexOf("COMPONENT_SET") !== -1 ? [tagSet, variantA, variantB, standaloneComp] : []) };
+  const kidsBeforeVariantPage = sandbox.figma.root.children; // = [libPage] — must be restored, not prevKids3, since the [LIB] section below still needs it
+  sandbox.figma.root.children = [variantPage];
+
+  const dsOff = await sandbox.collectDesignSystemOnly();
+  const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
+  const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
+  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", tagOff && tagOff.visuals && tagOff.visuals.fills[0].color === "#9947ff");
+  ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", tagOff && tagOff.variants === undefined);
+  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", soloOff && soloOff.node === undefined);
+
+  const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
+  const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
+  const soloOn = dsOn.designSystem.components.find((c) => c.id === "c:solo");
+  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", soloOn && soloOn.node && soloOn.node.fills && soloOn.node.fills[0].color === "#ff0000" && soloOn.node.radius === 8);
+  ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", soloOn && soloOn.variants === undefined);
+  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", tagOn && tagOn.visuals && tagOn.visuals.fills[0].color === "#9947ff");
+  ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
+    tagOn.variants.every((v) => v.id && v.name && v.key));
+  const va = tagOn.variants.find((v) => v.id === "v:a");
+  const vb = tagOn.variants.find((v) => v.id === "v:b");
+  ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", va && va.values && va.values.Type === "Default" && va.values.Status === "Default");
+  ok("[VARIANTVIS] variant values read from variantProperties when present", vb && vb.values && vb.values.Status === "Hover");
+  ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",
+    va && va.node && va.node.fills && va.node.fills[0].color === "#009900" && va.node.radius === 16);
+  ok("[VARIANTVIS] a variant whose own componentPropertyDefinitions throws still gets its node captured, not dropped",
+    vb && vb.node && vb.node.fills && vb.node.fills[0].color === "#006600");
+  ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",
+    va && va.node && va.node.props === undefined);
+  sandbox.figma.root.children = kidsBeforeVariantPage;
 
   // A user-maintained registry is the ONLY honest attribution route.
   sandbox.figma.root.getPluginData = (k) => (k === "libraryRegistry" ? JSON.stringify({ libkey_btn: "Acme DS" }) : "");

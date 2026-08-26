@@ -10,7 +10,7 @@ import { serializeText } from "./text";
 import { boundTokens, nodeStyles, variableModes, resolveBoundMap } from "./variables";
 import { simplifyReactions } from "./prototype";
 import { collectAsset } from "./assets";
-import { instanceComponent, componentPropRefs, instanceOverrides } from "./components";
+import { instanceComponentRef, componentPropRefs, instanceOverrides } from "./components";
 import { collectMotion } from "./motion";
 
 const MAX_DEPTH = 60;
@@ -353,8 +353,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
 
   // These hit the Plugin API independently and write distinct keys — resolve concurrently.
-  const [componentName, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
-    instanceComponent(node),
+  const [mainRef, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
+    instanceComponentRef(node),
     boundTokens(node),
     nodeStyles(node),
     collectAsset(node),
@@ -362,7 +362,9 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     variableModes(node),
     runOpts.css ? nodeCss(node) : Promise.resolve(undefined),
   ]);
-  if (componentName) out.component = componentName;
+  // out.component stays the bare name (byte-identical to before) for every existing consumer;
+  // mainComponent is purely additive — the join keys (id/key/setId/setKey) back to the catalog.
+  if (mainRef) { out.component = mainRef.name; out.mainComponent = mainRef; }
   if (tokens) out.tokens = tokens;
   if (styles) out.styles = styles;
   if (reactions) out.reactions = reactions;

@@ -47,8 +47,12 @@ A full pull writes `design/design-system.json` as a slim MANIFEST (`exportedAt`/
 concept: `tokens.json` (variable collections → modes → variables), one file per style type —
 `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate
 Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
-file), `components.library.json` (`remote: true` — consumed from a published library, recovered from
-instances, props possibly inferred) and `hygiene.json` (the lint report). Every part repeats the
+file — a `COMPONENT_SET`'s heavy per-variant node trees, or a standalone `COMPONENT`'s own node tree,
+are NOT inlined here; they live in a sibling `design-system/components/<name>__<id>.json`, pointed at
+by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `tooling/get-component.js`
+below), `components.library.json` (`remote: true` —
+consumed from a published library, recovered from instances, props possibly inferred) and
+`hygiene.json` (the lint report). Every part repeats the
 `exportedAt` stamp, so `tooling/` reads freshness off whichever part it is handed. The split files sit
 in a subdirectory because `design/tokens.json` and `design/components.json` at the export root are your
 hand-authored, non-regenerable config maps.
@@ -75,6 +79,49 @@ node bridge/figma-pull.js --children <id>       # 3. (optional) peek inside one 
 node bridge/figma-pull.js design --page <id>    # 4. pull only what you need
 ```
 
+### `--list-clients` / `--client` — working with two Figma files at once
+```
+node bridge/figma-pull.js --list-clients
+```
+The bridge accepts **one connection per open Figma file**, so a design file and the library it draws
+on can both be connected. Each plugin announces itself on connect (and on every reconnect), so the
+listing shows what you can address:
+
+```
+2 Figma files connected:
+
+  c1    "App — Base"
+        page "Home" · fileKey KEYBASE · up 12m
+  c2    "NERA Library"
+        page "Tokens" · no fileKey (private-plugin API not in effect) · up 3m
+
+Address one with --client <connId | fileKey | part of the file name>, e.g. --client "App".
+```
+
+`--client` is an **address**, not a scope — it composes with every other flag:
+```
+node bridge/figma-pull.js design/base --client c1 --page 12:34
+node bridge/figma-pull.js design/lib  --client "NERA" --as-library "NERA"
+```
+Give each file its own output directory, as above, and their exports never collide.
+
+**With one file connected, omit it** — nothing changes from the single-file workflow. **With several,
+omitting it is an error** that lists your choices:
+
+```
+2 Figma files are connected to the bridge — say which one to use.
+  c1  "App — Base"  fileKey KEYBASE
+  c2  "NERA Library"
+Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").
+```
+
+That refusal is deliberate. An export pulled from the wrong file is indistinguishable from a correct
+one — it writes the same shape of JSON to the same directory and reports success — so the bridge
+refuses rather than picking, the same call `adb` makes with "more than one device".
+
+MCP twins: `figma_list_clients`, plus a `client` argument on every tool. `figma_status` lists the
+roster instead of failing when several are connected.
+
 ### `--whoami` — who is connected (and can two files connect at once?)
 ```
 node bridge/figma-pull.js --whoami
@@ -83,17 +130,14 @@ Prints both halves of the connection: what the **plugin** says it is (`instanceI
 run, `file`, `page`, and whether `figma.fileKey` is available) and what the **socket** did
 (`connId`, uptime, `connectionsThisRun`, `takeovers`).
 
-**The bridge holds exactly ONE plugin connection.** If you run the plugin in a second Figma file, the
-new connection *displaces* the first — the older file silently stops answering. That is a limit of
-this bridge, not of Figma: two files each get their own plugin instance, and both will happily
-connect. `--whoami` is how you tell the two apart, because from the plugin window they look identical:
+Use `--list-clients` to see *which* files are connected; use `--whoami` to interrogate **one** of them
+(`--client` selects it). What the fields tell you:
 
 | What you see | What it means |
 | --- | --- |
-| Two different `instanceId`s from two files | Two plugin instances really are running side by side |
-| `takeovers` > 0 | A second connection displaced an earlier one — the one-connection limit, not a Figma failure |
-| `instanceId` **changed** between two calls from the *same* file | Figma tore down and re-ran the plugin runtime (see the runtime-teardown note below) |
-| `fileKeyAvailable: false` | `figma.fileKey` is gated to private plugins — routing must fall back to the server-minted `connId` |
+| `instanceId` **changed** between two calls addressing the *same* file | Figma tore down and re-ran the plugin runtime. The socket survived and the `connId` is unchanged — only the runtime restarted (see the note below) |
+| `fileKeyAvailable: false` | `figma.fileKey` is gated to private plugins, so this file is addressed by `connId` or name instead. Normal for a locally-imported plugin |
+| `takeovers` > 0 | Should never happen now — connections coexist. Retained so an older reader of this field sees `0` rather than the key vanishing |
 
 > **Runtime teardown.** At least one comparable project ([`southleft/figma-console-mcp#67`](https://github.com/southleft/figma-console-mcp/issues/67))
 > reports Figma destroying the plugin's JS execution context every 1–3 minutes regardless of focus.
@@ -205,6 +249,39 @@ refuses the read-option flags (`--css`/`--measurements`/…) since there is no n
 It waits for the plugin to connect, pulls, writes files to `design/`, and exits. The agent then
 Reads those files — big payloads live on disk, not in the context window.
 
+**`visuals`.** Every catalogued component/variant carries its own paint under `visuals` on each
+`components.local.json` entry: `{ fills, strokes, effects, radius, opacity, blendMode }` — the same
+fields `ComponentNode`/`ComponentSetNode` carry as any other node. This is always on, not a flag:
+unlike `--css`/`--measurements`/asset export, these six are plain synchronous property reads (Figma's
+Plugin API only marks the genuinely expensive calls `Async` — `getCSSAsync`, `exportAsync` — and
+fills/strokes/effects/cornerRadius/opacity/blendMode aren't among them), so there's no walk-avoiding
+reason to gate them the way `--design-system` gates a page walk. **Two honest limits:**
+1. It's the component's own base look — a specific instance's overrides elsewhere in the file are
+   not reflected, and a variant SET's `visuals` is the SET wrapper node's own paint (Figma's purple
+   dashed selection chrome), not a per-variant one. Pass `--variant-visuals` to also walk each set's
+   variants and attach their real `layout`/`fills`/`radius`/`tokens`/`css` under `entry.variants[]` —
+   opt-in because it costs one extra node walk per variant. A standalone `COMPONENT` (not inside a
+   set) gets the same walk, attached as `entry.node` instead — there's no set to enumerate variants
+   of. `entry.props` (the prop *schema*) is unaffected either way; a variant's
+   `componentPropertyDefinitions` throws, so per-variant `values` there come from `variantProperties`
+   or, failing that, the variant name Figma guarantees is `"Prop=Val, ..."`. The node tree itself never
+   lands in `components.local.json` — it is written to a sibling
+   `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets) or
+   `nodeFile` (standalone components) — absent when nothing was exported for that entry. `entry.variants[]`
+   in the slim catalog keeps only `id`/`name`/`key`/`values`. Fetch one component's real node tree(s) with
+   `node tooling/get-component.js design/design-system/components.local.json <key|id|name>`.
+2. It only covers components DEFINED in this file. Components consumed from a published library
+   (the `remote:true` entries, recovered via instance-walk — see the honest-limits note above) are
+   not covered here; pull `--as-library` on the *source* library file for those. There is no
+   client-side fix for this — Figma exposes no API to enumerate a library's contents from a
+   consuming file (see `--list-libraries` above), so this is a hard ceiling, not a gap.
+
+**Duplicate component names.** The catalog build already flags a component name reused elsewhere in
+the file (e.g. two unrelated "Action Buttons" component sets) as `duplicate component name: '<name>'`
+in `hygiene`. `--design-system`/full pulls now echo `hygiene` to stderr as soon as the write completes
+(prefixed `hygiene (N):`), so this shows up in the run itself instead of requiring a manual
+`hygiene.json` diff.
+
 Allowlist it in Claude Code so it runs without a prompt (`.claude/settings.json`):
 ```
 { "permissions": { "allow": ["Bash(node bridge/figma-pull.js:*)"] } }
@@ -251,7 +328,8 @@ Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_lis
 `figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
 execution**, unlike some community servers). The frame-walking export tools accept opt-in read flags
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
-take them — it never walks a node (see below).
+take them (it never walks a node — see below) but DOES take `variantVisuals`, since the component
+catalog it builds is exactly what that flag enriches.
 
 ### `writeToDisk` — the export path that doesn't go through the context window
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through

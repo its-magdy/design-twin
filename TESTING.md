@@ -19,7 +19,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.js
 ```
 
-Expected: **`358/358 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: **`374/374 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -40,7 +40,7 @@ The `tooling/` scripts (DTCG token emitter, map validator, drift-lint, bootstrap
 `tooling/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/tooling.test.js       # expect: 210/210 checks passed, exit 0
+node test/tooling.test.js       # expect: 222/222 checks passed, exit 0
 node --check tooling/tokens.js tooling/map-validate.js tooling/drift-lint.js tooling/map-bootstrap.js
 ```
 
@@ -61,7 +61,7 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 250/250 checks passed, exit 0
+node test/bridge.test.js        # expect: 309/309 checks passed, exit 0
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
 ```
 
@@ -198,7 +198,14 @@ style system), `components.local.json` / `components.library.json`, `hygiene.jso
 - `design-system/components.local.json` → `components[]` with `id`, `page`/`pageId`, `description`, and
   props as `{key,type,options,default}` (real `#uid` key kept). `components.library.json` holds the
   `remote: true` entries — library mains recovered from instances, so no `id`/`page` and possibly
-  INFERRED props
+  INFERRED props. Each COMPONENT_SET's `variants[]` keeps `id`/`name`/`key`/`values` but not the heavy
+  serialized `node` tree (opt-in via `variantVisuals`) — that lives in a sibling
+  `design-system/components/<name>__<id>.json`, pointed at by the entry's `variantsFile` (absent when
+  no node trees were exported for that set). A standalone `COMPONENT` (not a variant inside a set) gets
+  the same treatment under `variantVisuals`, but its node tree is attached directly as `entry.node` and
+  split out via `nodeFile` instead — there's no `variants[]` to hang it off of. `node
+  tooling/get-component.js <components.local.json> <key|id|name>` resolves one entry and follows its
+  `variantsFile`/`nodeFile` to print the full detail.
 - `design-system/hygiene.json` → `hygiene[]` — design-system smells (ALL_SCOPES, semantic-holds-raw, broken alias, variant>30, unnamed/dupe)
 
 ### Component-map seeding (optional, tested separately)
@@ -287,9 +294,10 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 | `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `358/358` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap) — expect `210/210` |
+| `node test/tooling.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component) — expect `222/222` |
 | `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema + single-connection takeover + `--whoami` parsing) — expect `250/250` |
+and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split) — expect `309/309` |
+| `node bridge/figma-pull.js --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
 | `node bridge/figma-pull.js --list-pages` | Cheap: page names only, no page load (prints to stdout) |
@@ -297,11 +305,12 @@ and the `figma_list_libraries` tool schema + single-connection takeover + `--who
 | `node bridge/figma-pull.js --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
 | `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
-| `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets |
+| `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
 | `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check tooling/*.js` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
 | `node tooling/map-bootstrap.js design/design-system/components.local.json` | Scaffold codeconnect.local.json from the Figma catalog |
 | `node tooling/drift-lint.js codeconnect.local.json design/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
+| `node tooling/get-component.js design/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
 | `node tooling/tokens.js design/design-system/tokens.json ./out` | Emit tokens.dtcg.json + tokens.css |

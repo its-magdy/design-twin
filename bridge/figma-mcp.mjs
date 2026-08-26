@@ -39,6 +39,9 @@ function exportResult(a, r) {
     note: "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity."
   });
 }
+const clientShape = {
+  client: z.string().optional().describe("WHICH connected Figma file to talk to \u2014 a connId (from figma_list_clients), a fileKey, or part of the file's name. The bridge accepts one connection per open Figma file, so a design file and the library it draws on can both be connected at once. Omit when only one file is connected. With several connected, omitting this is an ERROR listing the choices rather than a guess \u2014 an export from the wrong file is indistinguishable from a correct one.")
+};
 const writeShape = {
   writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes \u2014 they are never returned inline \u2014 and the right choice for anything large, since inline results are capped and truncated."),
   outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'.")
@@ -53,50 +56,95 @@ const { readSnapshotInfo } = require2("./snapshot-meta.js");
 const server = new McpServer({ name: "figma-bridge", version: "0.1.0" });
 server.registerTool(
   "figma_status",
-  { description: "Check whether the Figma plugin is connected to the bridge, and which page is open. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any \u2014 so an agent can tell whether it's about to read a stale snapshot.", annotations: READ_ONLY },
-  guarded(async () => {
+  {
+    description: "Check which Figma files are connected to the bridge, and which page each has open. Several files can be connected at once (one per open Figma file running the plugin) \u2014 the `clients` array lists them, and each row's connId is what you pass as `client` to every other tool. Also reports the age of the last figma-pull export on disk (design-system.json's exportedAt), if any \u2014 so an agent can tell whether it's about to read a stale snapshot.",
+    inputSchema: { ...clientShape },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => {
     const snapshot = readSnapshotInfo();
-    if (!bridge.isConnected()) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
-    return textResult({ connected: true, ...await bridge.request("ping", {}), snapshot });
+    const clients = bridge.listClients();
+    if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
+    if (clients.length > 1 && !(a && a.client)) {
+      return textResult({
+        connected: true,
+        clients,
+        snapshot,
+        note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant."
+      });
+    }
+    return textResult({ connected: true, clients, ...await bridge.request("ping", {}, TIMEOUTS.command, a && a.client), snapshot });
+  })
+);
+server.registerTool(
+  "figma_list_clients",
+  {
+    description: "WHICH Figma files are currently connected to the bridge \u2014 the discovery step before addressing one. Each row gives a connId (the routing key), the file name, its fileKey when available, the open page, and how long it has been connected. Pass any of connId / fileKey / part of the file name as `client` on the other tools. The bridge accepts one connection per open Figma file, so a design file and the library it draws on can be driven in the same session without either displacing the other. Costs nothing \u2014 it reads the bridge's own registry and never touches the plugin, so it answers even while every connected file is busy with a long export.",
+    annotations: READ_ONLY
+  },
+  guarded(async () => {
+    const clients = bridge.listClients();
+    return textResult({
+      clients,
+      count: clients.length,
+      // The EMPTY case has to explain itself: nothing connected is the normal state before the plugin
+      // is opened, not a broken bridge.
+      ...clients.length ? {} : {
+        note: 'Nothing connected. Open a file in Figma and run "Design Export for AI" (Plugins \u2192 Development) \u2014 it auto-connects and announces itself. You can open it in several files at once; each becomes a separate row here.'
+      },
+      ...clients.some((c) => !c.identified) ? {
+        identifiedNote: "A row with identified:false is connected but has not announced itself yet (or is an older plugin build that does not) \u2014 address it by connId."
+      } : {}
+    });
   })
 );
 server.registerTool(
   "figma_whoami",
   {
-    description: "Identity and liveness of the CONNECTED plugin: a per-run instanceId, the file/page name, whether figma.fileKey is available, plus how long the socket has been up and how many times a newer connection displaced an older one (takeovers). The bridge holds exactly ONE plugin connection, so if two Figma files both run the plugin the second one silently displaces the first — a non-zero `takeovers`, or an instanceId that differs from a previous call, is how you detect that. A CHANGED instanceId across two calls from the same file means Figma tore down and re-ran the plugin runtime, not that you switched files. Costs nothing (no page load, no node walk, no assets).",
+    description: "Identity and liveness of ONE connected plugin: a per-run instanceId, the file/page name, whether figma.fileKey is available, and how long its socket has been up. Use figma_list_clients to see every connected file; use this to interrogate one of them. A CHANGED instanceId across two calls addressing the same file means Figma tore down and re-ran the plugin runtime (the connection survived, the runtime did not) \u2014 worth knowing if a long-idle file starts behaving oddly. Costs nothing (no page load, no node walk, no assets).",
+    inputSchema: { ...clientShape },
     annotations: READ_ONLY
   },
-  guarded(async () => textResult({ plugin: await bridge.request("whoami", {}), connection: bridge.connectionInfo() }))
+  guarded(async (a) => textResult({
+    plugin: await bridge.request("whoami", {}, TIMEOUTS.command, a && a.client),
+    connection: bridge.connectionInfo()
+  }))
 );
 server.registerTool(
   "figma_get_selection",
-  { description: "List the currently selected nodes (id, name, type) in the open Figma file.", annotations: READ_ONLY },
-  guarded(async () => textResult(await bridge.request("getSelection", {})))
+  {
+    description: "List the currently selected nodes (id, name, type) in a connected Figma file.",
+    inputSchema: { ...clientShape },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => textResult(await bridge.request("getSelection", {}, TIMEOUTS.command, a && a.client)))
 );
 server.registerTool(
   "figma_list_pages",
   {
     description: "CHEAP structural index of the open file: pages, and (depth 2) their top-level frames with id/name/type/size. No recursion, no assets, no node properties. Call this FIRST to decide WHICH page or frame to export, then pass those ids to figma_export_full({page}) or figma_export_url. depth 1 is near-free (page names only, loads nothing); depth 2 loads every page, which Figma warns can be slow on large files \u2014 still far cheaper than an export.",
     inputSchema: {
+      ...clientShape,
       depth: z.union([z.literal(1), z.literal(2)]).optional().describe("1 = page names only (near-free). 2 = pages + their top-level frames (default).")
     },
     annotations: READ_ONLY
   },
   // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
   // tier there doesn't need a matching edit here.
-  guarded(async (a) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list)))
+  guarded(async (a) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list, a && a.client)))
 );
 server.registerTool(
   "figma_list_libraries",
   {
     description: "CHEAP discovery: which design libraries this file draws on \u2014 the local file's own published assets plus every ENABLED team library \u2014 with each one's variable collections and how many of its components this file uses. Call this BEFORE exporting, then scope the export to what you actually need (figma_list_pages -> figma_export_full({page})). Limits worth knowing: component counts are USAGE-derived (Figma exposes no API to enumerate a library's full contents), and libraries can only be enabled from the Figma UI \u2014 never via API \u2014 so results reflect whatever was enabled at call time. An EMPTY result is a normal outcome (free plan, or no library enabled), not a failure; check `warnings`. Requires a plugin built with the 'teamlibrary' permission \u2014 re-import the plugin in Figma if this returns nothing.",
+    inputSchema: { ...clientShape },
     annotations: READ_ONLY
   },
   // Compacted here rather than passed through: the plugin's shape is already small, but an agent
   // reads this tool's result in full, so collapse each library's collections to name+count and keep
   // `warnings` (the field that explains an empty list) intact. Same spirit as stripAssets.
-  guarded(async () => {
-    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list);
+  guarded(async (a) => {
+    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list, a && a.client);
     const libraries = (r && r.libraries || []).map((l) => ({
       key: l.key,
       name: l.name,
@@ -121,6 +169,7 @@ server.registerTool(
   {
     description: "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) \u2014 no recursion, no assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
     inputSchema: {
+      ...clientShape,
       nodeId: z.string().describe("A node id like '123:456' / '123-456', or a figma.com design URL containing ?node-id=...")
     },
     annotations: READ_ONLY
@@ -128,7 +177,7 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... \u2014 see figma_list_pages.");
-    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list));
+    return textResult(await bridge.request("listChildren", { nodeId }, TIMEOUTS.list, a && a.client));
   })
 );
 server.registerTool(
@@ -136,6 +185,7 @@ server.registerTool(
   {
     description: "Export the design system (component + token catalog \u2014 always spans the WHOLE file) plus frame trees. Frames default to the CURRENT page; pass page:[ids] to export named page(s), or allPages:true to walk every page. Large \u2014 call figma_list_pages first to pick a target, and pass writeToDisk:true for anything beyond a quick look: it writes the export to your project and returns a compact index, which is the only way to get asset bytes and avoids the result cap truncating the tree.",
     inputSchema: {
+      ...clientShape,
       allPages: z.boolean().optional().describe("Export frame trees from every page. Can be very large and slow (measured >15 min on a 25-page file) \u2014 prefer `page` with ids from figma_list_pages, or the figma-pull CLI."),
       page: z.array(z.string()).optional().describe("Export these page(s) by id (preferred) or exact name, instead of the current page. Ids come from figma_list_pages. Cannot be combined with allPages \u2014 passing both is refused rather than silently resolved. An unknown or ambiguous name fails with the available pages listed."),
       ...readOptsShape,
@@ -156,35 +206,37 @@ server.registerTool(
     return exportResult(a, await bridge.request(
       "exportFull",
       { allPages, page, ...readOpts(a) },
-      exportTimeout({ allPages })
+      exportTimeout({ allPages }),
+      a && a.client
     ));
   })
 );
 server.registerTool(
   "figma_export_design_system",
   {
-    description: "Export ONLY the design system \u2014 variables, styles, local + library components, hygiene report \u2014 with no page/frame walk and therefore no assets (assets are exported per-node during that walk). The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this session, so a bare design-system pull may see fewer of them than a full pull would \u2014 local variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split.",
-    inputSchema: { ...writeShape },
+    description: "Export ONLY the design system \u2014 variables, styles, local + library components, hygiene report \u2014 with no page/frame walk and therefore no assets (assets are exported per-node during that walk). The cheap sibling of figma_export_full for callers who just want tokens/styles/components. One tradeoff: library (remote) variable completeness depends on nodes/styles actually walked in this session, so a bare design-system pull may see fewer of them than a full pull would \u2014 local variables, styles and components are unaffected. Pass writeToDisk:true for the design-system/ split. Each catalogued component/variant carries its own fills/strokes/effects/cornerRadius/opacity/blendMode (componentsLocal[].visuals) \u2014 components DEFINED in this file only, not ones consumed from a published library (pull figma-pull --as-library on the source library file for those). Pass variantVisuals:true to also attach each COMPONENT_SET's variants' REAL layout/fills/radius/tokens (componentsLocal[].variants) \u2014 the master-component source of truth, not the set wrapper's own selection-chrome visuals. It is the ONE read option this tool accepts (the others need a node/page walk this tool skips); one extra node walk per variant, so it is slower on a large design system.",
+    inputSchema: { ...clientShape, variantVisuals: readOptsShape.variantVisuals, ...writeShape },
     annotations: READ_ONLY
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a) => exportResult(a, await bridge.request("exportDesignSystem", {}, TIMEOUTS.export)))
+  guarded(async (a) => exportResult(a, await bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client)))
 );
 server.registerTool(
   "figma_export_selection",
   {
     description: "Export the current selection as compacted node JSON + variables + assets.",
-    inputSchema: { ...readOptsShape, ...writeShape },
+    inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
     annotations: READ_ONLY
   },
-  guarded(async (a) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }))))
+  guarded(async (a) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client)))
 );
 server.registerTool(
   "figma_export_url",
   {
     description: "Given a Figma design URL (containing ?node-id=...) or a bare node id, select that node in the open file and export it as compacted node JSON + variables + an asset manifest. This is the 'paste a link and ask about it' path. Requires the file the link points to be OPEN in the Figma desktop app with the plugin running (the bridge reads the live file \u2014 it cannot fetch a link cold).",
     inputSchema: {
+      ...clientShape,
       url: z.string().describe("A figma.com design/file URL with ?node-id=..., or a bare node id like '123:456' / '123-456'."),
       ...readOptsShape,
       ...writeShape
@@ -194,7 +246,7 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " \u2014 paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export));
+    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
   })
 );
 server.registerTool(
@@ -202,6 +254,7 @@ server.registerTool(
   {
     description: "Apply a batch of safe write operations to the open Figma file. Each op: {op:'createFrame', name?, width?, height?, layoutMode?('HORIZONTAL'|'VERTICAL'), itemSpacing?, padding?[t,r,b,l], fill?(#hex), parentId?} | {op:'createText', text, fontSize?, fill?, parentId?} | {op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text}. Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied and their node ids are reported alongside the error so you can continue or clean up.",
     inputSchema: {
+      ...clientShape,
       // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
       // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
       ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough()).describe("Ordered list of write operations (each must have an `op` field).")
@@ -215,7 +268,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
   },
   guarded(async (a) => {
-    const r = await bridge.request("write", { ops: a.ops || [] });
+    const r = await bridge.request("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
     if (r && r.ok === false) {
       const applied = Array.isArray(r.applied) ? r.applied : [];
       return errorResult(

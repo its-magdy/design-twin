@@ -99,6 +99,11 @@ function serve(bridge, { port, log } = {}) {
             ok: true,
             result: {
               daemon: true, pid: process.pid, port: bridge.port, pluginConnected: bridge.isConnected(),
+              // The daemon owns the bridge, so it is the only side that can see WHICH files are
+              // connected — a CLI process routing through it has no socket of its own to ask.
+              // Guarded because `bridge` here is any object with the bridge shape (the test suite
+              // passes a minimal fake): a status call must never be the thing that kills the daemon.
+              clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
               // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
               // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
               idleMs: idleMs || null,
@@ -116,7 +121,9 @@ function serve(bridge, { port, log } = {}) {
         queue = queue.then(async () => {
           try {
             if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection);
-            const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs);
+            // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
+            // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
+            const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
             reply(conn, { ok: true, result });
           } catch (e) {
             reply(conn, { ok: false, error: errMsg(e) });

@@ -170,11 +170,12 @@ async function disconnectErr(code, reason) {
     !!pErr && /Open Console/i.test(pErr.message));
   ok("[dc-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
 
-  // ------------------------------------------ server-core: the ONE-connection rule, made observable
-  // The bridge keeps a single plugin socket and terminates the previous one — the behaviour that
-  // decides whether two open Figma files can use it at once. It had no direct coverage: the live
-  // handshake helper above existed, but nothing ever opened a SECOND client against the same bridge,
-  // so the takeover path (and the bookkeeping the --whoami probe reports) ran only in production.
+  // ------------------------------------------------- server-core: MULTI-CLIENT routing (two files)
+  // The bridge used to keep ONE plugin socket and terminate the incumbent, which made two open Figma
+  // files ping-pong: the displaced plugin's 3s auto-reconnect stole the bridge straight back, forever
+  // (observed live). Connections now coexist and commands are ADDRESSED. These drive real sockets —
+  // two of them — because the whole failure mode lived in the interaction between two clients, which
+  // no single-socket test could reach.
   {
     const port = nextPort++;
     const bridge = core.createBridge(port);
@@ -183,40 +184,102 @@ async function disconnectErr(code, reason) {
       c.on("open", () => res(c));
       c.on("error", rej);
     });
+    // A client that identifies itself the way the plugin UI does, then answers whatever it is asked.
+    const identify = (c, hello) => c.send(JSON.stringify({ type: "hello", ...hello }));
+    const autoReply = (c, result) => c.on("message", (b) => {
+      const m = JSON.parse(b.toString());
+      if (m && m.id) c.send(JSON.stringify({ id: m.id, ok: true, result: { ...result, cmd: m.cmd } }));
+    });
 
-    const first = await open();
-    const infoOne = bridge.connectionInfo();
-    // A request in flight on the FIRST connection when the second arrives: the caller must be told,
-    // not left hanging until its timeout. This is the exact experience of running the plugin in a
-    // second file mid-export.
-    let stolenErr;
-    const inflight = bridge.request("exportFull", {}, 20000).catch((e) => { stolenErr = e; });
+    const base = await open();
+    identify(base, { instanceId: "fig-base", file: "App — Base", fileKey: "KEYBASE", page: "Home" });
+    autoReply(base, { who: "base" });
+    await new Promise((r) => setTimeout(r, 80));
+
+    console.log("\nserver-core — multi-client routing (the two-files question):");
+    const one = bridge.listClients();
+    ok("[multi] a lone client is listed", one.length === 1 && one[0].connId === "c1");
+    ok("[multi] the hello announcement is recorded", one[0].file === "App — Base" && one[0].fileKey === "KEYBASE");
+    ok("[multi] and it is marked identified", one[0].identified === true);
+    // With ONE client, an unaddressed request must still work — every existing call site relies on it.
+    const soloRes = await bridge.request("ping", {}, 5000);
+    ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.who === "base");
+
+    // The second file connects. Under the old rule this terminated the first.
+    const lib = await open();
+    identify(lib, { instanceId: "fig-lib", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens" });
+    autoReply(lib, { who: "lib" });
+    await new Promise((r) => setTimeout(r, 80));
+
+    const two = bridge.listClients();
+    ok("[multi] BOTH files stay connected — no takeover", two.length === 2);
+    ok("[multi] neither is displaced (both ids present)",
+      two.some((c) => c.connId === "c1") && two.some((c) => c.connId === "c2"));
+    ok("[multi] takeovers stays 0 now that connections coexist", bridge.connectionInfo().takeovers === 0);
+    ok("[multi] connectionInfo reports the client count", bridge.connectionInfo().clientsConnected === 2);
+
+    // Addressing: by connId, by fileKey, and by a substring of the file name.
+    ok("[multi] routes by connId", (await bridge.request("ping", {}, 5000, "c2")).who === "lib");
+    ok("[multi] routes by fileKey", (await bridge.request("ping", {}, 5000, "KEYBASE")).who === "base");
+    ok("[multi] routes by file-name substring (case-insensitive)",
+      (await bridge.request("ping", {}, 5000, "nera")).who === "lib");
+
+    // Ambiguity must REFUSE, not guess. Silently picking one would export the wrong file and look
+    // entirely successful — the adb "more than one device" call.
+    let ambErr;
+    try { await bridge.request("ping", {}, 5000); } catch (e) { ambErr = e; }
+    ok("[multi] an unaddressed request with two files connected is REFUSED", !!ambErr);
+    ok("[multi] the refusal lists both files so the caller can choose",
+      !!ambErr && /App — Base/.test(ambErr.message) && /NERA Library/.test(ambErr.message));
+    ok("[multi] and names the flags that fix it", !!ambErr && /--client/.test(ambErr.message));
+
+    let missErr;
+    try { await bridge.request("ping", {}, 5000, "nope"); } catch (e) { missErr = e; }
+    ok("[multi] an unmatched target is refused and lists what IS connected",
+      !!missErr && /no connected Figma file matches/.test(missErr.message) && /c1/.test(missErr.message));
+
+    // A substring hitting several files must refuse rather than resolve to the first.
+    const dupA = await open();
+    identify(dupA, { instanceId: "fig-d", file: "Untitled", fileKey: null, page: "Page 1" });
     await new Promise((r) => setTimeout(r, 60));
+    let dupErr;
+    try { await bridge.request("ping", {}, 5000, "e"); } catch (e) { dupErr = e; }
+    ok("[multi] an ambiguous name match is refused, not resolved to the first",
+      !!dupErr && /matches \d+ connected files/.test(dupErr.message));
+    dupA.close();
+    await new Promise((r) => setTimeout(r, 80));
 
-    const second = await open();
-    await new Promise((r) => setTimeout(r, 120)); // let the terminate + close handler land
-    const infoTwo = bridge.connectionInfo();
-    await inflight;
+    // The isolation property that matters most: one file's plugin window closing must NOT abort work
+    // in flight in another file. Under the single-socket version every pending request shared one map
+    // and one close cleared them all.
+    const slow = await open(); // connects but never answers
+    await new Promise((r) => setTimeout(r, 60));
+    const slowId = bridge.listClients().find((c) => !c.identified).connId;
+    let slowErr;
+    const slowReq = bridge.request("exportFull", {}, 20000, slowId).catch((e) => { slowErr = e; });
+    const liveReq = bridge.request("ping", {}, 5000, "c1"); // base file, still healthy
+    await new Promise((r) => setTimeout(r, 60));
+    slow.close(1001, "");
+    await slowReq;
+    const liveRes = await liveReq;
+    ok("[multi] a closing client fails ITS OWN in-flight request", !!slowErr);
+    ok("[multi] and does NOT abort another file's in-flight request", liveRes.who === "base");
+    ok("[multi] the closed client leaves the registry", !bridge.listClients().some((c) => c.connId === slowId));
+    ok("[multi] while the others remain", bridge.listClients().length === 2);
 
-    console.log("\nserver-core — single-connection takeover (the two-files question):");
-    ok("[takeover] the first connection is reported with an id", !!infoOne.connId && infoOne.connected === true);
-    ok("[takeover] no takeover is recorded for a lone connection", infoOne.takeovers === 0);
-    ok("[takeover] a second connection is counted", infoTwo.connectionsThisRun === 2);
-    ok("[takeover] and IS recorded as a takeover", infoTwo.takeovers === 1);
-    ok("[takeover] the surviving connection is the NEWER one", infoTwo.connId !== infoOne.connId);
-    ok("[takeover] the bridge stays connected (the new socket serves)", infoTwo.connected === true);
-    ok("[takeover] lastTakeoverAt is stamped", typeof infoTwo.lastTakeoverAt === "number" && infoTwo.lastTakeoverAt > 0);
-    // The displaced caller must fail fast rather than wait out its 20s budget.
-    ok("[takeover] an in-flight request on the displaced socket rejects promptly", !!stolenErr);
+    // A re-announced hello (what the plugin sends after Figma restarts its runtime) must UPDATE the
+    // existing entry rather than duplicate it.
+    identify(base, { instanceId: "fig-base-2", file: "App — Base", fileKey: "KEYBASE", page: "Settings" });
+    await new Promise((r) => setTimeout(r, 60));
+    const afterRe = bridge.listClients().find((c) => c.connId === "c1");
+    ok("[multi] a re-announced identity updates in place (no duplicate entry)", bridge.listClients().length === 2);
+    ok("[multi] and carries the NEW instanceId", afterRe.instanceId === "fig-base-2");
 
-    try { first.terminate(); } catch (e) {}
-    try { second.close(); } catch (e) {}
+    base.close(); lib.close();
     bridge.close();
-
-    // After everything closes, the probe must report disconnected rather than a stale live socket.
-    const infoClosed = bridge.connectionInfo();
-    ok("[takeover] connectionInfo reports disconnected once closed", infoClosed.connected === false);
-    ok("[takeover] and zeroes the uptime instead of growing forever", infoClosed.connectionUptimeMs === 0);
+    await new Promise((r) => setTimeout(r, 60));
+    ok("[multi] closing the bridge empties the registry", bridge.listClients().length === 0);
+    ok("[multi] and reports disconnected", bridge.connectionInfo().connected === false);
   }
 
   // ---------------------------------------------------------------- figma-pull: argument parsing
@@ -316,6 +379,13 @@ async function disconnectErr(code, reason) {
   ok("[args] --design-system + --page is an ERROR", /different scopes/.test(usage(["--design-system", "--page", "1:2"]) || ""));
   ok("[args] --design-system + a read option is an ERROR (no node walk to apply it to)",
     /node\/page walk/.test(usage(["--design-system", "--css"]) || ""));
+  // --variant-visuals is the ONE exception: it enriches the component catalog --design-system/
+  // --as-library both build, so it must NOT trip the "no node walk" guard the other five do.
+  ok("[args] --design-system + --variant-visuals is ACCEPTED, not refused",
+    parse(["--design-system", "--variant-visuals"]).designSystemOnly === true);
+  ok("[args] --design-system + --variant-visuals + --css is STILL an error (css is refused, variant-visuals is not)",
+    /node\/page walk/.test(usage(["--design-system", "--variant-visuals", "--css"]) || "") &&
+    !/--variant-visuals/.test(usage(["--design-system", "--variant-visuals", "--css"]) || ""));
   ok("[args] --design-system + --serve is an ERROR", /manages the background bridge/.test(usage(["--serve", "--design-system"]) || ""));
   // --list/--children print a structural index and exit(0) before any export runs, so an export flag
   // combined with one of them is a no-op the caller has no way to observe.
@@ -412,6 +482,60 @@ async function disconnectErr(code, reason) {
   ok("[whoami] a daemon command alongside it is refused",
     /cannot be combined with --whoami/.test(usage(["--serve", "--whoami"]) || ""));
 
+  // ------------------------------------------------ figma-pull: --client / --list-clients (routing)
+  console.log("\nfigma-pull — multi-file routing flags:");
+  // --client is an ADDRESS, not a scope: unlike every other flag here it must COMPOSE with all of
+  // them, so the guards that refuse combinations must leave it alone.
+  ok("[client] --client takes a value", parse(["design", "--client", "c2"]).client === "c2");
+  ok("[client] the = form works too", parse(["design", "--client=NERA"]).client === "NERA");
+  ok("[client] a file name with spaces survives", parse(["design", "--client", "App — Base"]).client === "App — Base");
+  ok("[client] it is null when absent", parse(["design"]).client === null);
+  ok("[client] --client with no value is a usage error",
+    /needs a connection id/.test(usage(["design", "--client"]) || ""));
+  // The positional [outDir] must not swallow --client's value, the bug class takeValues exists for.
+  ok("[client] its value is not mistaken for outDir", parse(["--client", "c2", "design"]).outDir.endsWith("design"));
+  ok("[client] composes with an export scope", (() => {
+    const r = parse(["design", "--all-pages", "--client", "c1"]);
+    return r.allPages === true && r.client === "c1";
+  })());
+  ok("[client] composes with read options", (() => {
+    const r = parse(["design", "--page", "1:2", "--client", "lib", "--css"]);
+    return r.client === "lib" && r.readOpts.css === true;
+  })());
+  ok("[client] composes with an index command (it addresses WHICH file to list)", (() => {
+    const r = parse(["--list", "--client", "c2"]);
+    return r.listOnly === true && r.client === "c2";
+  })());
+
+  ok("[list-clients] parses as its own command", parse(["--list-clients"]).listClients === true);
+  ok("[list-clients] is off by default", parse(["design"]).listClients === false);
+  ok("[list-clients] + an export scope is an ERROR", /cannot be combined/.test(usage(["--list-clients", "--all-pages"]) || ""));
+  ok("[list-clients] + --list is an ERROR (two index commands)", /only one/.test(usage(["--list-clients", "--list"]) || ""));
+  ok("[list-clients] + --whoami is an ERROR", /only one/.test(usage(["--list-clients", "--whoami"]) || ""));
+  ok("[list-clients] read options are refused", /silently ignored/.test(usage(["--list-clients", "--css"]) || ""));
+  ok("[list-clients] the refusal describes what it DOES emit",
+    /which Figma files are connected/.test(usage(["--list-clients", "--css"]) || ""));
+
+  // formatClients renders for a human. The EMPTY case matters most: "nothing connected" is the normal
+  // state before the plugin is opened, and must read as an instruction rather than a failure.
+  const noClients = pull.formatClients([]);
+  ok("[list-clients] the empty listing explains rather than just printing nothing", /No Figma files are connected/.test(noClients));
+  ok("[list-clients] and says how to fix it", /Design Export for AI/.test(noClients));
+  ok("[list-clients] and mentions that SEVERAL files can connect", /SEVERAL files at once/.test(noClients));
+  const twoClients = pull.formatClients([
+    { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", uptimeMs: 65000, identified: true },
+    { connId: "c2", file: "NERA Library", fileKey: null, page: "Tokens", uptimeMs: 3000, identified: true },
+  ]);
+  ok("[list-clients] the listing counts the files", /2 Figma files connected/.test(twoClients));
+  ok("[list-clients] each row leads with the connId --client takes", /c1\s+"App — Base"/.test(twoClients));
+  ok("[list-clients] a present fileKey is shown", /fileKey KEYBASE/.test(twoClients));
+  ok("[list-clients] a MISSING fileKey is explained, not blank", /no fileKey \(private-plugin API not in effect\)/.test(twoClients));
+  ok("[list-clients] it tells you how to address one", /--client <connId \| fileKey \| part of the file name>/.test(twoClients));
+  // An unidentified socket is a real state (connected, no hello yet) and must not render as a blank row.
+  const anon = pull.formatClients([{ connId: "c9", file: null, fileKey: null, uptimeMs: 500, identified: false }]);
+  ok("[list-clients] an unidentified client says so and stays addressable",
+    /unidentified — address it by connId/.test(anon) && /c9/.test(anon));
+
   // Output rendering. The EMPTY case is the one that matters most: zero libraries is a NORMAL result
   // (free plan, or no library enabled in the Figma UI, or a plugin imported before the manifest
   // gained "teamlibrary") and must read as an explanation, not as a failure or an empty table.
@@ -457,13 +581,63 @@ async function disconnectErr(code, reason) {
   // Read here rather than reusing the `mcpSrc` below: this section runs first, and a const declared
   // further down is in its temporal dead zone.
   const libMcpSrc = fs.readFileSync(path.join(__dirname, "..", "bridge", "figma-mcp.mjs"), "utf8");
+  // figma-mcp.mjs is GENERATED from src/figma-mcp.mts. Every assertion in this file reads the
+  // generated bundle, so a tool added ONLY to the bundle passes every test here and then vanishes on
+  // the next `npm run build` — which is exactly what happened to figma_whoami. Compare the two
+  // directly: the source is the thing that has to hold the tool.
+  {
+    const mcpSrcTs = fs.readFileSync(path.join(__dirname, "..", "bridge", "src", "figma-mcp.mts"), "utf8");
+    const toolsOf = (src) => (src.match(/"figma_[a-z_]+"/g) || []).filter((t, i, a) => a.indexOf(t) === i).sort();
+    const inBundle = toolsOf(libMcpSrc);
+    const inSource = toolsOf(mcpSrcTs);
+    console.log("\nfigma-mcp — generated bundle matches its TypeScript source:");
+    ok("[mcp-gen] every tool in the built bundle also exists in src/figma-mcp.mts (else the next build deletes it)",
+      inBundle.every((t) => inSource.includes(t)));
+    ok("[mcp-gen] and the source declares no tool the bundle is missing (bundle is stale — rebuild)",
+      inSource.every((t) => inBundle.includes(t)));
+  }
+
+  // The routing surface on the MCP side. Every tool that reaches the plugin must accept `client`, or
+  // an agent with two files connected can address some tools and not others — the worst outcome,
+  // because the un-addressable ones fail only when a second file happens to be open.
+  console.log("\nfigma-mcp — multi-file routing surface:");
+  ok("[mcp-multi] figma_list_clients is registered", /"figma_list_clients"/.test(libMcpSrc));
+  ok("[mcp-multi] it is read-only and needs no arguments", (() => {
+    const b = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_clients"'), libMcpSrc.indexOf('"figma_whoami"'));
+    return /READ_ONLY/.test(b) && !/inputSchema/.test(b);
+  })());
+  ok("[mcp-multi] it reads the bridge registry, never the plugin (answers during a long export)", (() => {
+    const b = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_clients"'), libMcpSrc.indexOf('"figma_whoami"'));
+    return /bridge\.listClients\(\)/.test(b) && !/bridge\.request/.test(b);
+  })());
+  ok("[mcp-multi] every plugin-reaching tool accepts a client target", (() => {
+    // One clientShape spread per tool that calls bridge.request, plus the ones that only list.
+    const spreads = (libMcpSrc.match(/\.\.\.clientShape/g) || []).length;
+    const requests = (libMcpSrc.match(/bridge\.request\(/g) || []).length;
+    return spreads >= requests;
+  })());
+  ok("[mcp-multi] and every bridge.request forwards it", (() => {
+    // Each call must end with the routing argument; a forgotten one silently ignores `client`.
+    const calls = libMcpSrc.match(/bridge\.request\([^;]*?\);/gs) || [];
+    return calls.length > 0 && calls.every((c) => /a && a\.client/.test(c));
+  })());
+  ok("[mcp-multi] figma_status reports the roster rather than failing when several are connected",
+    /Several Figma files are connected/.test(libMcpSrc));
+  // The whoami description must no longer claim the bridge holds ONE connection — that was the old rule.
+  ok("[mcp-multi] no tool description still claims a single-connection bridge",
+    !/holds exactly ONE plugin connection/.test(libMcpSrc));
+
   ok("[lib] figma_list_libraries is registered in the built MCP bundle", /"figma_list_libraries"/.test(libMcpSrc));
   ok("[lib] it sends the listLibraries bridge command", /"listLibraries"/.test(libMcpSrc));
   (() => {
     const body = libMcpSrc.slice(libMcpSrc.indexOf('"figma_list_libraries"'), libMcpSrc.indexOf('"figma_list_children"'));
     ok("[lib] it is annotated read-only", /READ_ONLY/.test(body));
-    // It is a DISCOVERY call: no arguments to get wrong, and the cheap budget tier, not an export's.
-    ok("[lib] it declares no inputSchema — nothing to pass", !/inputSchema/.test(body));
+    // It is a DISCOVERY call: the cheap budget tier, not an export's. Its ONLY argument is `client`
+    // (which connected file to ask) — it gained one when the bridge learned to hold several files at
+    // once, because "which libraries does this file use" needs to know which file you mean.
+    ok("[lib] its only input is the routing target", /inputSchema: \{ \.\.\.clientShape \}/.test(body));
+    ok("[lib] and it takes no OTHER arguments — nothing else to get wrong",
+      !/readOptsShape|writeShape|z\.(string|boolean|number|union)/.test(body));
     ok("[lib] it uses the shared cheap list timeout tier, not an export budget",
       /TIMEOUTS\.list/.test(body) && !/exportTimeout/.test(body));
     // Compactness is the contract for a discovery call — it must not hand back an unbounded payload.
@@ -758,6 +932,13 @@ async function disconnectErr(code, reason) {
       components: [
         { key: "k1", name: "Button", id: "2:1", page: "Home", pageId: "1:0" },
         { key: "k2", name: "Card", remote: true, derivedFrom: "instances" },
+        { key: "k3", name: "Badge", type: "COMPONENT_SET", id: "2:9", page: "Home", pageId: "1:0",
+          variants: [
+            { id: "2:10", name: "Size=Small", key: "vk1", values: { Size: "Small" }, node: { type: "COMPONENT", name: "Size=Small", children: [] } },
+            { id: "2:11", name: "Size=Large", key: "vk2", values: { Size: "Large" }, node: { type: "COMPONENT", name: "Size=Large", children: [] } },
+          ] },
+        { key: "k4", name: "NoNodes", type: "COMPONENT_SET", id: "2:12", page: "Home", pageId: "1:0",
+          variants: [{ id: "2:13", name: "State=Default", key: "vk3", values: { State: "Default" } }] },
       ],
       hygiene: ["variant explosion: 'Button'"],
     },
@@ -807,7 +988,24 @@ async function disconnectErr(code, reason) {
       return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g); })());
   ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
     (() => { const c = readDS("components.local.json").components;
-      return c.length === 1 && c[0].key === "k1" && !!c[0].id && !!c[0].pageId; })());
+      return c.length === 3 && c[0].key === "k1" && !!c[0].id && !!c[0].pageId; })());
+
+  // --- component detail split (variants[].node stripped into design-system/components/) --------
+  ok("[component-split] the COMPONENT_SET with exported node trees gets a variantsFile pointer",
+    (() => { const c = readDS("components.local.json").components.find((x) => x.key === "k3");
+      return !!c.variantsFile && c.variantsFile === "design-system/components/Badge__2_9.json"; })());
+  ok("[component-split] its variants in the catalog keep id/name/key/values but lose .node",
+    (() => { const c = readDS("components.local.json").components.find((x) => x.key === "k3");
+      return c.variants.length === 2 && c.variants[0].id === "2:10" && c.variants[0].values.Size === "Small" && !("node" in c.variants[0]); })());
+  ok("[component-split] a COMPONENT_SET with no exported node trees gets NO pointer (absence = not exported)",
+    (() => { const c = readDS("components.local.json").components.find((x) => x.key === "k4");
+      return !("variantsFile" in c) && c.variants.length === 1; })());
+  ok("[component-split] the detail file carries the full node trees + stamp + set identity",
+    (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8"));
+      return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants.length === 2 &&
+        d.variants[0].node.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
+  ok("[component-split] design-system.json's manifest points at the components/ dir",
+    JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).files.componentsDir === "design-system/components");
   ok("[ds-split] components.library.json holds only remote:true entries — inferred from instances, not nodes here",
     (() => { const c = readDS("components.library.json").components;
       return c.length === 1 && c[0].key === "k2" && c[0].remote === true && c[0].id === undefined; })());
@@ -822,7 +1020,7 @@ async function disconnectErr(code, reason) {
         m.files.componentsLibrary === "design-system/components.library.json" && !m.variables && !m.components && !m.styles; })());
   ok("[ds-split] the manifest counts local and library components, and each style bucket, separately",
     (() => { const c = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).counts;
-      return c.variables === 1 && c.components === 1 && c.libraryComponents === 1 && c.hygiene === 1 &&
+      return c.variables === 1 && c.components === 3 && c.libraryComponents === 1 && c.hygiene === 1 &&
         c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0; })());
 
   // --- the --design-system / figma_export_design_system result shape: { designSystem } only, no
@@ -903,9 +1101,16 @@ async function disconnectErr(code, reason) {
   const fakeBridge = {
     port: D_PORT,
     isConnected: () => true,
+    // The daemon forwards the connected-file listing through __status, so the fake has to answer it
+    // too — two rows, so the routing assertions below have something to disambiguate between.
+    listClients: () => [
+      { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true },
+      { connId: "c2", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true },
+    ],
     close: () => calls.push("close"),
     waitForConnection: async () => {},
-    request: async (cmd, args) => {
+    request: async (cmd, args, timeoutMs, client) => {
+      if (client) calls.push("client:" + client);
       calls.push(cmd);
       if (cmd === "boom") throw new Error("plugin exploded");
       return { echo: cmd, big: "x".repeat((args && args.n) || 0) };
@@ -948,6 +1153,18 @@ async function disconnectErr(code, reason) {
   const order = [];
   await Promise.all(["q1", "q2", "q3"].map((c) => dcli.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
   ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === "q1,q2,q3");
+
+  // Routing has to survive the daemon hop. A CLI process behind a daemon has no bridge of its own, so
+  // if `client` were dropped in the unix-socket frame the command would silently run against whichever
+  // file the bridge picked — the exact wrong-file export the refusal in resolveClient exists to prevent.
+  calls.length = 0;
+  await dcli.request({ cmd: "routed", client: "NERA Library", timeoutMs: 5000 }, 5000);
+  ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NERA Library"));
+  ok("[daemon] and the command itself still arrives", calls.includes("routed"));
+  // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
+  const cstat = await daemon.status(D_PORT);
+  ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
+    Array.isArray(cstat.clients) && cstat.clients.length === 2 && cstat.clients[0].connId === "c1");
 
   // Newline-delimited framing has to survive a payload that arrives in many chunks — a real export is
   // megabytes, and reassembling it wrongly would corrupt every large pull.

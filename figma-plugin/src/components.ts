@@ -1,20 +1,46 @@
 // Components / instances: main-component name, prop references, overrides, and the whole-file
 // design-system catalog (variables + styles + component/variant catalog + hygiene).
-import { Obj, propName, errMsg, nonEmpty, exportedAt } from "./util";
-import { warn, loadAllPages } from "./state";
-import { simplifyFills } from "./paint";
+import { Obj, propName, errMsg, nonEmpty, putNonEmpty, round, exportedAt } from "./util";
+import { warn, loadAllPages, runOpts } from "./state";
+import { simplifyFills, simplifyStrokes } from "./paint";
 import { simplifyEffects } from "./effects";
 import { simplifyGrid } from "./layout";
 import { lineH, letterS } from "./text";
 import { dumpVariables, resolveBoundMap } from "./variables";
 import { collectLibraryComponents } from "./libraries";
 
-// INSTANCE main-component name (the referenced library component), or undefined.
-export async function instanceComponent(node: SceneNode): Promise<string | undefined> {
+// INSTANCE -> its main component, resolved via getMainComponentAsync (mainComponent itself is
+// write-only in the Plugin API's typings). Returns the join keys needed to resolve back to the
+// component catalog (buildDesignSystem below), not just the display name a bare INSTANCE swap
+// override happens to carry.
+export interface ComponentRef {
+  name: string;
+  id?: string;
+  key?: string;
+  remote?: boolean;
+  setId?: string;
+  setKey?: string;
+  setName?: string;
+  variant?: string;
+}
+export async function instanceComponentRef(node: SceneNode): Promise<ComponentRef | undefined> {
   if (node.type !== "INSTANCE") return undefined;
   try {
     const main = await node.getMainComponentAsync();
-    return main ? main.name : undefined;
+    if (!main) return undefined;
+    const ref: ComponentRef = { name: main.name };
+    if (main.id) ref.id = main.id;
+    if (main.key) ref.key = main.key;
+    if (main.remote) ref.remote = true;
+    // A REMOTE main's `.parent` may be null (plugin-api.d.ts) — this is documented shape, not a bug.
+    const parent: any = (main as any).parent;
+    if (parent && parent.type === "COMPONENT_SET") {
+      ref.setId = parent.id;
+      if (parent.key) ref.setKey = parent.key;
+      ref.setName = parent.name;
+      ref.variant = main.name;
+    }
+    return ref;
   } catch (e) {
     return undefined;
   }
@@ -51,13 +77,94 @@ export function instanceOverrides(node: SceneNode): Obj[] | undefined {
   return list;
 }
 
+// ComponentNode/ComponentSetNode carry their own visual properties (fills/strokes/effects/
+// cornerRadius/opacity/blendMode), same as any other SceneNode per the Plugin API, and — unlike
+// getCSSAsync/exportAsync/measurements — reading them costs nothing extra: they are plain synchronous
+// property getters (Figma's own API only marks the genuinely expensive calls with an `Async` suffix),
+// so there is no reason to gate them behind an opt-in flag the way the page-walk read options are.
+// Mirrors serialize.ts's per-node visual reads (fills/strokes/effects/corner/opacity/blendMode) so a
+// consumer sees the same shape it would from a page walk; kept local rather than imported to avoid a
+// components.ts <-> serialize.ts import cycle (serialize.ts already imports from components.ts).
+const VISUAL_CORNER_KEYS: Array<[string, string]> = [
+  ["topLeftRadius", "tl"],
+  ["topRightRadius", "tr"],
+  ["bottomRightRadius", "br"],
+  ["bottomLeftRadius", "bl"],
+];
+async function simplifyVisuals(node: any): Promise<Obj | undefined> {
+  const out: Obj = {};
+  const [fills, strokes, effects] = await Promise.all([
+    simplifyFills("fills" in node ? node.fills : undefined),
+    simplifyStrokes(node as SceneNode),
+    simplifyEffects("effects" in node ? node.effects : undefined),
+  ]);
+  if (fills) out.fills = fills;
+  if (strokes) out.strokes = strokes;
+  if (effects) out.effects = effects;
+  if ("cornerRadius" in node) {
+    if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = node.cornerRadius;
+    else if (node.cornerRadius === figma.mixed) {
+      const corners: Obj = {};
+      for (const [k, s] of VISUAL_CORNER_KEYS) {
+        if (k in node && typeof node[k] === "number" && node[k]) corners[s] = node[k];
+      }
+      putNonEmpty(out, "radius", corners);
+    }
+  }
+  if ("opacity" in node && typeof node.opacity === "number" && node.opacity < 1) out.opacity = round(node.opacity);
+  if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = String(node.blendMode).toLowerCase();
+  return nonEmpty(out);
+}
+
+// A variant's own prop VALUES (not definitions — componentPropertyDefinitions throws on a variant).
+// variantProperties is deprecated with no replacement (InstanceNode.componentProperties is
+// instance-only), so prefer it when present, else parse the name Figma guarantees is "Prop=Val, ...".
+function variantValues(main: any): Obj | undefined {
+  try {
+    if (main.variantProperties && Object.keys(main.variantProperties).length) return { ...main.variantProperties };
+  } catch (e) {}
+  const name: string = main.name || "";
+  const out: Obj = {};
+  for (const part of name.split(",")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k && v) out[k] = v;
+  }
+  return nonEmpty(out);
+}
+
+// Function type of serialize.ts's `serialize` — injected as a parameter rather than imported, since
+// serialize.ts already imports FROM components.ts (instanceComponentRef/componentPropRefs/
+// instanceOverrides) and a direct import back here would be a cycle.
+type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean) => Promise<Obj | null>;
+
+// Per-variant visual/layout truth (opt-in, runOpts.variantVisuals): the master COMPONENT itself, not
+// the COMPONENT_SET wrapper's own selection-chrome visuals. Depth-capped well below serialize.ts's
+// MAX_DEPTH (this rides along on --design-system, which is documented as cheap) and forced to skip
+// asset export — a design-system pull has no asset manifest path, so a real exportAsync render here
+// would silently orphan files no writer ever looks for.
+const VARIANT_WALK_DEPTH = 3;
+async function serializeVariant(main: ComponentNode, serialize: SerializeFn): Promise<Obj | null> {
+  const prevSkipAssets = runOpts.skipAssets;
+  try {
+    runOpts.skipAssets = true;
+    return await serialize(main, 60 - VARIANT_WALK_DEPTH); // depth budget: MAX_DEPTH - N levels below main
+  } finally {
+    runOpts.skipAssets = prevSkipAssets;
+  }
+}
+
 // The component + variant catalog across every page (a feature's states live here).
 // Pushes naming/variant-explosion notes into `hygiene`; per-page and per-component failures are
 // WARNED, never swallowed — an empty catalog must be distinguishable from "this page has none".
-async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean): Promise<Obj[]> {
+async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, serialize?: SerializeFn): Promise<Obj[]> {
   const components: Obj[] = [];
   const pendingPublish: { entry: Obj; node: any }[] = [];
   const seenNames = new Set<string>();
+  const variantsBySet = new Map<string, any[]>(); // setId -> variant COMPONENT nodes, collected in the same pass
+  const entriesBySetId = new Map<string, Obj>(); // setId -> that COMPONENT_SET's catalog entry
   // findAllWithCriteria is the extractor's one full-document traversal, and the Plugin API docs call
   // out invisible instance children as its main cost ("several times faster in large documents").
   // A COMPONENT/COMPONENT_SET is never nested inside an instance, so skipping them loses no catalog
@@ -76,7 +183,15 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean): 
         continue;
       }
       for (const n of nodes as any[]) {
-        if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") continue; // it's a variant
+        if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") {
+          // A variant — findAllWithCriteria already found it in this same traversal, so record it for
+          // the visuals pass below rather than walking the tree a second time to re-find it.
+          if (runOpts.variantVisuals) {
+            const list = variantsBySet.get(n.parent.id);
+            if (list) list.push(n); else variantsBySet.set(n.parent.id, [n]);
+          }
+          continue;
+        }
         const entry: Obj = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
         if (n.description) entry.description = n.description; // free intent annotation (Code Connect stand-in)
         if (n.remote) entry.remote = true; // consumed library component vs a local one
@@ -120,14 +235,61 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean): 
         if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
         if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
         seenNames.add(n.name);
+        // The component/variant's own fills/strokes/effects/corner/opacity/blendMode. Awaited
+        // per-component in place, not fanned out like publish status below: unlike a real round trip
+        // (getPublishStatusAsync), these are synchronous property reads wrapped in a Promise.all only
+        // to reuse the shared paint/effects helpers, so there is no serialization cost to batch away.
+        try {
+          const visuals = await simplifyVisuals(n);
+          if (visuals) entry.visuals = visuals;
+        } catch (e) {
+          warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — visuals omitted");
+        }
         // Collected, not awaited: one getPublishStatusAsync per component inside the page->component
         // loop would serialize a round trip per component. Fanned out once, after the walk.
         if (asLibrary) pendingPublish.push({ entry, node: n });
+        if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
+        // A standalone COMPONENT (not a variant inside a set — those were already filtered out above)
+        // has no COMPONENT_SET wrapper to hang variants[] off of, but it is exactly as "one master node
+        // worth walking" as any variant is, so give it the same serializeVariant treatment and attach
+        // the tree directly as entry.node rather than entry.variants[].node.
+        if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize) {
+          try {
+            const node = await serializeVariant(n as ComponentNode, serialize);
+            if (node) entry.node = node;
+          } catch (e) {
+            warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
+          }
+        }
         components.push(entry);
       }
     }
   } finally {
     try { (figma as any).skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
+  }
+  // Per-variant visual truth (opt-in). Runs AFTER skipInvisibleInstanceChildren is restored to its
+  // prior value: serialize() deliberately KEEPS hidden nodes (hidden variant states are real design),
+  // so the catalog traversal's flag must not leak into this walk.
+  if (runOpts.variantVisuals && serialize && variantsBySet.size) {
+    for (const [setId, variants] of variantsBySet) {
+      const entry = entriesBySetId.get(setId);
+      if (!entry) continue; // the owning COMPONENT_SET entry failed earlier in the loop — nothing to attach to
+      const out: Obj[] = [];
+      for (const v of variants) {
+        try {
+          const node = await serializeVariant(v as ComponentNode, serialize);
+          const o: Obj = { id: v.id, name: v.name };
+          if (v.key) o.key = v.key;
+          const values = variantValues(v);
+          if (values) o.values = values;
+          if (node) o.node = node;
+          out.push(o);
+        } catch (e) {
+          warn("component '" + v.name + "': variant visuals unreadable (" + errMsg(e) + ") — omitted");
+        }
+      }
+      if (out.length) entry.variants = out;
+    }
   }
   if (pendingPublish.length) {
     const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
@@ -155,7 +317,7 @@ async function publishOf(o: any): Promise<string | undefined> {
   }
 }
 
-export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<Obj> {
+export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize?: SerializeFn): Promise<Obj> {
   const asLibrary = !!(opts && opts.asLibrary);
   // getLocal*StylesAsync can throw on some file states — default to [] rather than aborting the build.
   const safeList = async <T>(fn: () => Promise<T[]>): Promise<T[]> => { try { return await fn(); } catch (e) { return []; } };
@@ -170,7 +332,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }): Promise<
   const hygiene: string[] = [];
   // Component + variant catalog across every page (a feature's states live here).
   await loadAllPages("component catalog may be incomplete");
-  const components = await collectComponentCatalog(hygiene, asLibrary);
+  const components = await collectComponentCatalog(hygiene, asLibrary, serialize);
 
   // LIBRARY components. findAllWithCriteria({types:["COMPONENT",...]}) above only ever finds mains
   // that live IN this document, so a file whose entire design system is a consumed library produced a

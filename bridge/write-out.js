@@ -70,6 +70,12 @@ function writePages(dir, layersDoc, log) {
 function writeDesignSystem(dir, designSystem, log) {
   const built = buildDesignSystemLayout(designSystem, "/");
   fs.mkdirSync(path.join(dir, built.dir), { recursive: true });
+  // COMPONENT_SET detail files land one level deeper, at manifest.files.componentsDir — only created
+  // when at least one entry actually produced a detail file (variantVisuals opt-in).
+  const componentsDir = built.manifest.files.componentsDir;
+  if (built.files.some((f) => f.path.startsWith(componentsDir + "/"))) {
+    fs.mkdirSync(path.join(dir, componentsDir), { recursive: true });
+  }
   for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
   const counts = built.counts;
   return counts;

@@ -421,7 +421,7 @@ export async function listChildren(rawId: string): Promise<Obj> {
 export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Obj> {
   resetRun();
   applyOpts(opts);
-  const designSystem = await buildDesignSystem();
+  const designSystem = await buildDesignSystem(undefined, serialize);
   designSystem.hygiene = [
     "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced — pull a page for the full set.",
     ...(Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []),
@@ -444,7 +444,7 @@ export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: stri
   resetRun();
   applyOpts(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
-  const designSystem = await buildDesignSystem({ asLibrary });
+  const designSystem = await buildDesignSystem({ asLibrary }, serialize);
   // Replaces collectDesignSystemOnly's caveat, which is FALSE here: nothing is limited to what a walk
   // referenced, because nothing in this file is remote.
   designSystem.hygiene = [
@@ -544,7 +544,7 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
   // AFTER the page walk: buildDesignSystem ends in dumpVariables, which uses the ids resolved during
   // that walk to also emit the LIBRARY variables the layers reference (see variables.ts). Building it
   // first — as this used to — meant the dump ran against an empty reference set.
-  const designSystem = await buildDesignSystem();
+  const designSystem = await buildDesignSystem(undefined, serialize);
   // Measurements are a PER-PAGE read. Scoping them to figma.currentPage while exporting a DIFFERENT
   // page attached another page's redlines to this doc — silently, and mislabelled. Read them from
   // the page(s) actually walked.

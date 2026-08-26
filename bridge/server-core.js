@@ -84,43 +84,36 @@ function createBridge(port = PORT) {
     console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + TOKEN);
     console.error("[bridge] tip: set FIGMA_BRIDGE_TOKEN to a stable value to avoid re-pasting on each run.");
   }
-  let socket = null;
-  const pending = new Map();
+  // MULTI-CLIENT registry. Every connected plugin instance gets an entry, keyed by a server-minted
+  // `connId` — one Figma file per entry, so a design file and the library file it draws on can be
+  // driven from the same bridge instead of stealing the socket from each other.
+  //
+  // Why the server mints the key rather than trusting the plugin: `figma.fileKey` is gated to private
+  // plugins (undefined for an ordinary local import — `--whoami` reports which case you are in) and
+  // `figma.root.name` is a human-editable display string that duplicated files share, so neither is a
+  // dependable identity on its own. Both are RECORDED (they are what a human recognises in a listing,
+  // and fileKey is genuinely unique when present) but the routing key is always ours. This mirrors the
+  // Chrome DevTools Protocol shape — discover targets, then address a server-assigned id — rather than
+  // the user-typed "channel name" other Figma bridges use, which has no uniqueness guarantee and
+  // misroutes silently on a typo or a duplicate.
+  const clients = new Map(); // connId -> { ws, connId, connectedAt, instanceId, file, fileKey, page }
+  const pending = new Map(); // requestId -> { resolve, reject, connId }
   let seq = 0;
-  // Connection bookkeeping for the whoami probe. The bridge still keeps exactly ONE socket (see the
-  // takeover below) — these only DESCRIBE what happened, so the multi-file question can be answered
-  // from evidence instead of inference: `takeovers` > 0 proves a second plugin instance really did
-  // connect and displace the first, which is the single-client limit being hit rather than Figma
-  // refusing to run the plugin twice. Those are indistinguishable from the plugin window alone.
   let connSeq = 0;
-  let connId = null;
-  let connectedAt = 0;
-  let takeovers = 0;
+  let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything now.
   let lastTakeoverAt = 0;
 
   wss.on("connection", (ws) => {
-    // Keep only the most recent plugin connection. Reassign `socket` FIRST so the stale socket's
-    // close handler (guarded by `socket === ws`) won't clear the new connection's pending requests,
-    // then terminate the stale one so it doesn't leak.
-    const stale = socket;
-    socket = ws;
-    ws._connId = "c" + ++connSeq;
-    connId = ws._connId;
-    connectedAt = Date.now();
-    if (stale && stale !== ws) {
-      takeovers++;
-      lastTakeoverAt = Date.now();
-      // Say it out loud. This is the exact moment a second Figma file steals the bridge, and it used
-      // to be silent — the first file simply stopped answering, which reads as a Figma bug from the
-      // plugin window. Naming it here is what turns "two files don't work" into "the bridge allows
-      // one, and here is when the second took over".
-      console.error(
-        `[bridge] connection ${ws._connId} took over from ${stale._connId || "?"} — the bridge holds ONE ` +
-          `plugin connection, so the previous file (likely another open Figma file running the plugin) ` +
-          `is now disconnected. Takeovers this run: ${takeovers}.`
-      );
-      try { stale.terminate(); } catch (e) {}
-    }
+    // Every connection is kept. The previous single-socket rule terminated the incumbent here, which
+    // made two open Figma files fight: the displaced plugin's 3s auto-reconnect immediately stole the
+    // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
+    // contention rather than arbitrating it.
+    const connId = "c" + ++connSeq;
+    const entry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null };
+    ws._connId = connId;
+    clients.set(connId, entry);
+    console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
+
     ws.on("message", (buf) => {
       let msg;
       try {
@@ -131,6 +124,20 @@ function createBridge(port = PORT) {
       // JSON.parse can return a non-object (null, number, string) — guard before reading .id so a
       // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
       if (!msg || typeof msg !== "object") return;
+      // Unsolicited identity announcement, sent by the plugin UI on connect AND on every reconnect.
+      // Re-announcing is the whole point: identity is DERIVED from the environment each time rather
+      // than issued by us and replayed, so a plugin that Figma tore down and re-ran comes back
+      // correctly labelled without any resumable-session machinery. A `hello` carries no request id,
+      // so it can never be confused with a reply.
+      if (msg.type === "hello") {
+        entry.instanceId = typeof msg.instanceId === "string" ? msg.instanceId : null;
+        entry.file = typeof msg.file === "string" ? msg.file : null;
+        entry.fileKey = typeof msg.fileKey === "string" && msg.fileKey ? msg.fileKey : null;
+        entry.page = typeof msg.page === "string" ? msg.page : null;
+        console.error(`[bridge] ${connId} identified: ${JSON.stringify(entry.file || "(unnamed file)")}` +
+          (entry.fileKey ? ` [fileKey ${entry.fileKey}]` : " [no fileKey — private-plugin API not in effect]"));
+        return;
+      }
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);
@@ -144,26 +151,34 @@ function createBridge(port = PORT) {
     let lastError = null;
     ws.on("error", (e) => { lastError = e; });
     ws.on("close", (code, reasonBuf) => {
-      if (socket === ws) {
-        socket = null;
-        connId = null;
-        const reason = reasonBuf && reasonBuf.length ? reasonBuf.toString() : "";
-        let why = `Figma plugin disconnected before replying (close ${code || "?"}${reason ? ": " + reason : ""}).`;
-        if (lastError && lastError.message) why += ` socket error: ${lastError.message}.`;
-        // 1009 is the one a caller can actually act on, and the likeliest failure on a big file:
-        // the export outgrew the frame limit, so name the knob instead of making them find it.
-        if (code === 1009 || /max payload|too large|too big/i.test((lastError && lastError.message) || "")) {
-          why += ` The export exceeded the ${maxPayloadMb} MB frame limit — raise FIGMA_BRIDGE_MAX_PAYLOAD_MB,` +
-                 ` or pull less at once (a single page instead of --all-pages).`;
-        } else if (!lastError) {
-          // No socket error at all => the peer went away on its own: a plugin-side crash/OOM, or the
-          // window was closed. That surfaces in Figma's console, not here — say so.
-          why += ` No socket error was reported, so the plugin itself likely stopped (crash/OOM, or the` +
-                 ` window was closed). Check Plugins → Development → Open Console in Figma.`;
-        }
-        // Fail in-flight requests fast instead of hanging until their timeout.
-        for (const p of pending.values()) p.reject(new Error(why));
-        pending.clear();
+      // Only forget THIS connection. Under the old single-socket rule the guard was `socket === ws`,
+      // which did the same job by accident; with a registry it has to be explicit, or one file closing
+      // its plugin window would drop the entry a different file is actively using.
+      if (clients.get(connId) === entry) clients.delete(connId);
+      const label = entry.file ? ` (${entry.file})` : "";
+      console.error(`[bridge] plugin disconnected: ${connId}${label} (${clients.size} still connected).`);
+      const reason = reasonBuf && reasonBuf.length ? reasonBuf.toString() : "";
+      let why = `Figma plugin disconnected before replying (close ${code || "?"}${reason ? ": " + reason : ""}).`;
+      if (lastError && lastError.message) why += ` socket error: ${lastError.message}.`;
+      // 1009 is the one a caller can actually act on, and the likeliest failure on a big file:
+      // the export outgrew the frame limit, so name the knob instead of making them find it.
+      if (code === 1009 || /max payload|too large|too big/i.test((lastError && lastError.message) || "")) {
+        why += ` The export exceeded the ${maxPayloadMb} MB frame limit — raise FIGMA_BRIDGE_MAX_PAYLOAD_MB,` +
+               ` or pull less at once (a single page instead of --all-pages).`;
+      } else if (!lastError) {
+        // No socket error at all => the peer went away on its own: a plugin-side crash/OOM, or the
+        // window was closed. That surfaces in Figma's console, not here — say so.
+        why += ` No socket error was reported, so the plugin itself likely stopped (crash/OOM, or the` +
+               ` window was closed). Check Plugins → Development → Open Console in Figma.`;
+      }
+      // Fail in-flight requests fast instead of hanging until their timeout — but ONLY the ones sent to
+      // the socket that just died. Rejecting the whole map (as the single-client version did, when the
+      // whole map could only ever belong to one socket) would now abort a long export running happily
+      // in ANOTHER file because an unrelated one closed its plugin window.
+      for (const [id, p] of pending) {
+        if (p.connId !== connId) continue;
+        pending.delete(id);
+        p.reject(new Error(why));
       }
     });
   });
@@ -179,31 +194,99 @@ function createBridge(port = PORT) {
     console.error("[bridge] server error:", e.message);
   });
 
+  const isLive = (e) => !!e && !!e.ws && e.ws.readyState === 1;
+  const liveClients = () => [...clients.values()].filter(isLive);
+
   function isConnected() {
-    return !!socket && socket.readyState === 1;
+    return liveClients().length > 0;
+  }
+
+  // One connection, described for a human or an agent choosing between them. `describe` is what a
+  // listing shows and what an ambiguity error quotes, so the two can never disagree about what a
+  // client is called.
+  const describe = (e) => ({
+    connId: e.connId,
+    file: e.file,
+    fileKey: e.fileKey,
+    page: e.page,
+    instanceId: e.instanceId,
+    connectedAt: e.connectedAt,
+    uptimeMs: Date.now() - e.connectedAt,
+    identified: !!e.instanceId,
+  });
+
+  function listClients() {
+    return liveClients().map(describe);
+  }
+
+  // Which connection does a command go to? The rules, in order:
+  //   no target + exactly one client  -> that one (the overwhelmingly common case: one file open)
+  //   no target + several clients     -> REFUSE, and list them. Silently picking one would send an
+  //                                      export to whichever file happened to connect first, write it
+  //                                      to the caller's outDir, and look completely successful. adb
+  //                                      makes the same call ("more than one device") for the same
+  //                                      reason: guessing is worse than asking.
+  //   target                          -> exact connId, then exact fileKey, then case-insensitive
+  //                                      substring of the file name. A substring matching several
+  //                                      files is refused rather than resolved to the first.
+  function resolveClient(target) {
+    const live = liveClients();
+    if (!live.length) {
+      throw new Error("Figma plugin not connected. Open the file in Figma and run the plugin.");
+    }
+    const list = () => live.map((e) => `  ${e.connId}  ${JSON.stringify(e.file || "(unidentified)")}${e.fileKey ? "  fileKey " + e.fileKey : ""}`).join("\n");
+    if (target === undefined || target === null || target === "") {
+      if (live.length === 1) return live[0];
+      throw new Error(
+        `${live.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n` +
+        `Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").`
+      );
+    }
+    const t = String(target);
+    const byId = live.find((e) => e.connId === t);
+    if (byId) return byId;
+    const byKey = live.find((e) => e.fileKey && e.fileKey === t);
+    if (byKey) return byKey;
+    const lower = t.toLowerCase();
+    const byName = live.filter((e) => e.file && e.file.toLowerCase().includes(lower));
+    if (byName.length === 1) return byName[0];
+    if (byName.length > 1) {
+      throw new Error(
+        `'${t}' matches ${byName.length} connected files — be more specific, or use the connId.\n${list()}`
+      );
+    }
+    throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
   }
 
   // Server-side half of the whoami probe. The plugin reports who IT is (instanceId, file, fileKey);
-  // this reports what the SOCKET did — how long the current connection has been up, and whether any
-  // earlier one was displaced. Pairing them is what distinguishes the two failure modes that look
-  // identical from Figma: a plugin runtime that Figma tore down and re-ran (instanceId changes,
-  // takeovers stays put) versus a second file stealing the bridge (takeovers increments).
+  // this reports what the SOCKETS did. `takeovers` is retained and always 0 now that connections
+  // coexist — kept rather than removed so an older reader of this field sees "no displacement is
+  // happening" instead of the key vanishing.
   function connectionInfo() {
+    const live = liveClients();
+    const first = live[0];
     return {
-      connId,
-      connected: isConnected(),
-      connectedAt: connectedAt || null,
-      connectionUptimeMs: connectedAt && isConnected() ? Date.now() - connectedAt : 0,
+      connId: first ? first.connId : null,
+      connected: live.length > 0,
+      connectedAt: first ? first.connectedAt : null,
+      connectionUptimeMs: first ? Date.now() - first.connectedAt : 0,
       connectionsThisRun: connSeq,
+      clientsConnected: live.length,
+      clients: live.map(describe),
       takeovers,
       lastTakeoverAt: lastTakeoverAt || null,
     };
   }
 
-  function request(cmd, args, timeoutMs = TIMEOUTS.command) {
+  // `target` is optional and LAST so every existing three-argument call site keeps working unchanged:
+  // with one file connected it resolves to that file, which is exactly what it did before.
+  function request(cmd, args, timeoutMs = TIMEOUTS.command, target) {
     return new Promise((resolve, reject) => {
-      if (!isConnected()) {
-        return reject(new Error("Figma plugin not connected. Open the file in Figma and run the plugin."));
+      let client;
+      try {
+        client = resolveClient(target);
+      } catch (e) {
+        return reject(e);
       }
       const id = "r" + ++seq;
       const timer = setTimeout(() => {
@@ -222,11 +305,14 @@ function createBridge(port = PORT) {
       }, timeoutMs);
       // Clear the timer once the request settles, so a resolved/rejected request doesn't
       // leave a live 2-minute timer (and its closure) armed until it harmlessly fires.
+      // connId is recorded so the close handler can fail exactly this client's in-flight work and
+      // leave every other file's alone.
       pending.set(id, {
+        connId: client.connId,
         resolve: (v) => { clearTimeout(timer); resolve(v); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
-      socket.send(JSON.stringify({ id, cmd, args }));
+      client.ws.send(JSON.stringify({ id, cmd, args }));
     });
   }
 
@@ -249,11 +335,15 @@ function createBridge(port = PORT) {
   function close() {
     for (const p of pending.values()) p.reject(new Error("bridge closed"));
     pending.clear();
-    if (socket) { try { socket.close(); } catch { /* already gone */ } socket = null; }
+    // Close EVERY client, not just the one that used to be `socket` — otherwise a second connected
+    // file would hold the event loop open and the process would never exit on its own, which is the
+    // whole reason this function exists.
+    for (const e of clients.values()) { try { e.ws.close(); } catch { /* already gone */ } }
+    clients.clear();
     try { wss.close(); } catch { /* already closing */ }
   }
 
-  return { request, isConnected, waitForConnection, connectionInfo, close, port };
+  return { request, isConnected, waitForConnection, connectionInfo, listClients, resolveClient, close, port };
 }
 
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's

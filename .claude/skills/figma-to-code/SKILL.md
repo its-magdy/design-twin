@@ -22,7 +22,18 @@ API, no MCP), saved into `design/`. The export JSON is a **stack-neutral interme
     — one file per style type, each holding its `styles` array. Figma's style system is SEPARATE from
     variables; a style can bind variables into its fields, but it is its own object.
   - `design-system/components.local.json` — the `components` catalog for components that really live
-    in this file, each prop `{key,type,options,default}` (`options` = a variant's states).
+    in this file, each prop `{key,type,options,default}` (`options` = a variant's states). Each entry
+    also carries `visuals: {fills,strokes,effects,radius,opacity,blendMode}` — the component/variant
+    NODE's own base paint (not a specific instance's overrides, and a variant SET's `visuals` is the
+    set node's own paint, not per-variant). A `COMPONENT_SET` entry's `variants[]` keeps only
+    `id`/`name`/`key`/`values` here — its real per-variant node trees (opt-in `--variant-visuals`) are
+    split into a sibling `design-system/components/<name>__<id>.json`, pointed at by the entry's
+    `variantsFile` (absent when nothing was exported for that set). A standalone `COMPONENT` (not
+    inside a set) gets the same treatment under `--variant-visuals`, but its own node tree is pointed
+    at by `nodeFile` on the entry instead (no `variants[]` to hang it off of). Only load that file for
+    a component you're actually building; `node tooling/get-component.js
+    design/design-system/components.local.json <key|id|name>` resolves one entry and follows either
+    pointer for you.
   - `design-system/components.library.json` — the same shape for components consumed from a published
     LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a SAMPLE of
     what this file uses, not the component's full API — don't treat an absent prop as nonexistent.

@@ -94,7 +94,9 @@
   var require_design_system_layout = __commonJS({
     "../bridge/design-system-layout.js"(exports, module) {
       "use strict";
+      var { safe: safe2 } = require_pages_layout();
       var DIR = "design-system";
+      var COMPONENTS_DIR = "components";
       var TOKENS = "tokens.json";
       var STYLES_PAINT = "styles.paint.json";
       var STYLES_TEXT = "styles.text.json";
@@ -112,9 +114,48 @@
         const join = (name) => DIR + (sep || "/") + name;
         const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
         const components = Array.isArray(d.components) ? d.components : [];
-        const local = components.filter((c) => !isLibraryEntry(c));
+        const rawLocal = components.filter((c) => !isLibraryEntry(c));
         const library = components.filter(isLibraryEntry);
         const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
+        const usedNames = /* @__PURE__ */ new Set();
+        const uniqueDetailName = (name, id) => {
+          const base = safe2(name || "component") + "__" + safe2(id);
+          if (!usedNames.has(base)) {
+            usedNames.add(base);
+            return base;
+          }
+          let i = 2;
+          while (usedNames.has(base + "_" + i)) i++;
+          usedNames.add(base + "_" + i);
+          return base + "_" + i;
+        };
+        const componentFiles = [];
+        const local = rawLocal.map((c) => {
+          if (c.type === "COMPONENT" && c.node) {
+            const { node, ...rest } = c;
+            const detailName2 = uniqueDetailName(c.name, c.id);
+            const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
+            componentFiles.push({
+              path: detailPath2,
+              data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
+            });
+            return { ...rest, nodeFile: detailPath2 };
+          }
+          if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
+            return c;
+          }
+          const slimVariants = c.variants.map((v) => {
+            const { node, ...rest } = v || {};
+            return rest;
+          });
+          const detailName = uniqueDetailName(c.name, c.id);
+          const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
+          componentFiles.push({
+            path: detailPath,
+            data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
+          });
+          return { ...c, variants: slimVariants, variantsFile: detailPath };
+        });
         const styles = d.styles || {};
         const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
         const stylesText = Array.isArray(styles.text) ? styles.text : [];
@@ -128,7 +169,8 @@
           { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
           { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
           { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
-          { path: join(HYGIENE), data: { ...stamp, hygiene } }
+          { path: join(HYGIENE), data: { ...stamp, hygiene } },
+          ...componentFiles
         ];
         const counts = {
           collections: (d.collections || []).length,
@@ -151,6 +193,7 @@
             stylesGrid: join(STYLES_GRID),
             componentsLocal: join(COMPONENTS_LOCAL),
             componentsLibrary: join(COMPONENTS_LIBRARY),
+            componentsDir: DIR + (sep || "/") + COMPONENTS_DIR,
             hygiene: join(HYGIENE)
           },
           counts
@@ -161,6 +204,7 @@
       module.exports = {
         buildDesignSystemLayout: buildDesignSystemLayout2,
         isLibraryEntry,
+        DESIGN_SYSTEM_DIR: DIR,
         DESIGN_SYSTEM_FILES: {
           TOKENS,
           STYLES_PAINT,
@@ -169,6 +213,7 @@
           STYLES_GRID,
           COMPONENTS_LOCAL,
           COMPONENTS_LIBRARY,
+          COMPONENTS_DIR,
           HYGIENE,
           MANIFEST
         }
@@ -208,6 +253,11 @@
           name: "sharedData",
           flag: "--shared-data",
           describe: "Include cross-plugin shared data (getSharedPluginData) \u2014 notably Tokens Studio applied tokens (the semantic token layer on files without native Figma Variables). Free; per-node."
+        },
+        {
+          name: "variantVisuals",
+          flag: "--variant-visuals",
+          describe: "Walk each COMPONENT_SET's variant children and record their real layout/fills/radius/tokens/css \u2014 the master-component source of truth, not the component-set wrapper's own selection-chrome visuals. One node walk per variant; noticeably slower on large systems."
         },
         {
           // The odd one out: the others ADD work, this one REMOVES it. Asset export is one exportAsync (a
@@ -1501,11 +1551,23 @@
   }
 
   // src/components.ts
-  async function instanceComponent(node) {
+  async function instanceComponentRef(node) {
     if (node.type !== "INSTANCE") return void 0;
     try {
       const main = await node.getMainComponentAsync();
-      return main ? main.name : void 0;
+      if (!main) return void 0;
+      const ref = { name: main.name };
+      if (main.id) ref.id = main.id;
+      if (main.key) ref.key = main.key;
+      if (main.remote) ref.remote = true;
+      const parent = main.parent;
+      if (parent && parent.type === "COMPONENT_SET") {
+        ref.setId = parent.id;
+        if (parent.key) ref.setKey = parent.key;
+        ref.setName = parent.name;
+        ref.variant = main.name;
+      }
+      return ref;
     } catch (e) {
       return void 0;
     }
@@ -1534,10 +1596,68 @@
     }
     return list;
   }
-  async function collectComponentCatalog(hygiene, asLibrary) {
+  var VISUAL_CORNER_KEYS = [
+    ["topLeftRadius", "tl"],
+    ["topRightRadius", "tr"],
+    ["bottomRightRadius", "br"],
+    ["bottomLeftRadius", "bl"]
+  ];
+  async function simplifyVisuals(node) {
+    const out = {};
+    const [fills, strokes, effects] = await Promise.all([
+      simplifyFills("fills" in node ? node.fills : void 0),
+      simplifyStrokes(node),
+      simplifyEffects("effects" in node ? node.effects : void 0)
+    ]);
+    if (fills) out.fills = fills;
+    if (strokes) out.strokes = strokes;
+    if (effects) out.effects = effects;
+    if ("cornerRadius" in node) {
+      if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = node.cornerRadius;
+      else if (node.cornerRadius === figma.mixed) {
+        const corners = {};
+        for (const [k, s] of VISUAL_CORNER_KEYS) {
+          if (k in node && typeof node[k] === "number" && node[k]) corners[s] = node[k];
+        }
+        putNonEmpty(out, "radius", corners);
+      }
+    }
+    if ("opacity" in node && typeof node.opacity === "number" && node.opacity < 1) out.opacity = round(node.opacity);
+    if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = String(node.blendMode).toLowerCase();
+    return nonEmpty(out);
+  }
+  function variantValues(main) {
+    try {
+      if (main.variantProperties && Object.keys(main.variantProperties).length) return { ...main.variantProperties };
+    } catch (e) {
+    }
+    const name = main.name || "";
+    const out = {};
+    for (const part of name.split(",")) {
+      const eq = part.indexOf("=");
+      if (eq === -1) continue;
+      const k = part.slice(0, eq).trim();
+      const v = part.slice(eq + 1).trim();
+      if (k && v) out[k] = v;
+    }
+    return nonEmpty(out);
+  }
+  var VARIANT_WALK_DEPTH = 3;
+  async function serializeVariant(main, serialize2) {
+    const prevSkipAssets = runOpts.skipAssets;
+    try {
+      runOpts.skipAssets = true;
+      return await serialize2(main, 60 - VARIANT_WALK_DEPTH);
+    } finally {
+      runOpts.skipAssets = prevSkipAssets;
+    }
+  }
+  async function collectComponentCatalog(hygiene, asLibrary, serialize2) {
     const components = [];
     const pendingPublish = [];
     const seenNames = /* @__PURE__ */ new Set();
+    const variantsBySet = /* @__PURE__ */ new Map();
+    const entriesBySetId = /* @__PURE__ */ new Map();
     const prevSkip = figma.skipInvisibleInstanceChildren;
     try {
       try {
@@ -1553,7 +1673,14 @@
           continue;
         }
         for (const n of nodes) {
-          if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") continue;
+          if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") {
+            if (runOpts.variantVisuals) {
+              const list = variantsBySet.get(n.parent.id);
+              if (list) list.push(n);
+              else variantsBySet.set(n.parent.id, [n]);
+            }
+            continue;
+          }
           const entry = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
@@ -1591,7 +1718,22 @@
           if (/^(Component|Frame)\s*\d+$/.test(n.name)) hygiene.push("unnamed component: '" + n.name + "'");
           if (seenNames.has(n.name)) hygiene.push("duplicate component name: '" + n.name + "'");
           seenNames.add(n.name);
+          try {
+            const visuals = await simplifyVisuals(n);
+            if (visuals) entry.visuals = visuals;
+          } catch (e) {
+            warn("component '" + n.name + "': visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 visuals omitted");
+          }
           if (asLibrary) pendingPublish.push({ entry, node: n });
+          if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
+          if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize2) {
+            try {
+              const node = await serializeVariant(n, serialize2);
+              if (node) entry.node = node;
+            } catch (e) {
+              warn("component '" + n.name + "': visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 node tree omitted");
+            }
+          }
           components.push(entry);
         }
       }
@@ -1599,6 +1741,27 @@
       try {
         figma.skipInvisibleInstanceChildren = prevSkip;
       } catch (e) {
+      }
+    }
+    if (runOpts.variantVisuals && serialize2 && variantsBySet.size) {
+      for (const [setId, variants] of variantsBySet) {
+        const entry = entriesBySetId.get(setId);
+        if (!entry) continue;
+        const out = [];
+        for (const v of variants) {
+          try {
+            const node = await serializeVariant(v, serialize2);
+            const o = { id: v.id, name: v.name };
+            if (v.key) o.key = v.key;
+            const values = variantValues(v);
+            if (values) o.values = values;
+            if (node) o.node = node;
+            out.push(o);
+          } catch (e) {
+            warn("component '" + v.name + "': variant visuals unreadable (" + (0, import_errmsg.errMsg)(e) + ") \u2014 omitted");
+          }
+        }
+        if (out.length) entry.variants = out;
       }
     }
     if (pendingPublish.length) {
@@ -1618,7 +1781,7 @@
       return void 0;
     }
   }
-  async function buildDesignSystem(opts) {
+  async function buildDesignSystem(opts, serialize2) {
     const asLibrary = !!(opts && opts.asLibrary);
     const safeList = async (fn) => {
       try {
@@ -1635,7 +1798,7 @@
     ]);
     const hygiene = [];
     await loadAllPages("component catalog may be incomplete");
-    const components = await collectComponentCatalog(hygiene, asLibrary);
+    const components = await collectComponentCatalog(hygiene, asLibrary, serialize2);
     if (asLibrary) {
       hygiene.push(
         "library mode: this catalog is the COMPLETE set of components defined in this library file. Publish status is per-object (publish: current | changed | unpublished); Figma exposes no way to list what the last PUBLISHED snapshot contained, so a component deleted here but still live in the library is not visible."
@@ -2084,8 +2247,8 @@
       const sd = sharedData(node);
       if (sd) out.sharedData = sd;
     }
-    const [componentName, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
-      instanceComponent(node),
+    const [mainRef, tokens, styles, asset, reactions, varModes, css] = await Promise.all([
+      instanceComponentRef(node),
       boundTokens(node),
       nodeStyles(node),
       collectAsset(node),
@@ -2093,7 +2256,10 @@
       variableModes(node),
       runOpts.css ? nodeCss(node) : Promise.resolve(void 0)
     ]);
-    if (componentName) out.component = componentName;
+    if (mainRef) {
+      out.component = mainRef.name;
+      out.mainComponent = mainRef;
+    }
     if (tokens) out.tokens = tokens;
     if (styles) out.styles = styles;
     if (reactions) out.reactions = reactions;
@@ -2411,7 +2577,7 @@
   async function collectDesignSystemOnly(opts) {
     resetRun();
     applyOpts(opts);
-    const designSystem = await buildDesignSystem();
+    const designSystem = await buildDesignSystem(void 0, serialize);
     designSystem.hygiene = [
       "design-system pull: library (remote) variables are limited to what a prior/no page walk referenced \u2014 pull a page for the full set.",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -2422,7 +2588,7 @@
     resetRun();
     applyOpts(opts);
     const asLibrary = opts && opts.asLibrary || figma.root && figma.root.name || "library";
-    const designSystem = await buildDesignSystem({ asLibrary });
+    const designSystem = await buildDesignSystem({ asLibrary }, serialize);
     designSystem.hygiene = [
       "library pull: this is the COMPLETE local catalog of '" + asLibrary + "' \u2014 variables, styles and components, with full per-mode values. It is a snapshot of the library file's CURRENT state, which is not necessarily what consumers see: `publish` reports each object's own status (current | changed | unpublished).",
       ...Array.isArray(designSystem.hygiene) ? designSystem.hygiene : []
@@ -2485,7 +2651,7 @@
         }
       }
     }
-    const designSystem = await buildDesignSystem();
+    const designSystem = await buildDesignSystem(void 0, serialize);
     const measurements = collectMeasurements(pages);
     const layersDoc = {
       exportedAt: exportedAt(),
@@ -2742,6 +2908,14 @@
       figma.ui.postMessage({ type: "token", token: token || "" });
     } else if (msg.type === "set-token") {
       await figma.clientStorage.setAsync("bridgeToken", msg.token || "");
+    } else if (msg.type === "get-identity") {
+      let identity = {};
+      try {
+        identity = await handleBridge("whoami", {});
+      } catch (e) {
+        identity = { error: (0, import_errmsg.errMsg)(e) };
+      }
+      figma.ui.postMessage({ type: "identity", identity });
     } else if (msg.type === "run-selection") {
       await runSelection();
     } else if (msg.type === "run-full") {

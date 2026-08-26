@@ -163,6 +163,25 @@
         connect();
         return;
       }
+      if (m.type === "identity") {
+        // The main thread answered "who am I". Forward it to the bridge as an unsolicited `hello` so
+        // the bridge can tell this file apart from any OTHER Figma file connected at the same time.
+        // Sent on every socket open (see onopen), never cached: if Figma restarts the plugin runtime
+        // the instanceId changes, and re-deriving it each time is what keeps the bridge's listing
+        // honest without any session-token machinery.
+        var idn = m.identity || {};
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: "hello",
+            instanceId: idn.instanceId || null,
+            file: idn.file || null,
+            fileKey: idn.fileKeyAvailable ? idn.fileKey : null,
+            page: idn.page || null
+          }));
+        }
+        if (idn.file) setBridge(true, "connected as " + JSON.stringify(idn.file));
+        return;
+      }
       if (m.type === "bridge-result") {
         if (ws && ws.readyState === 1) {
           ws.send(JSON.stringify({ id: m.id, ok: m.ok, result: m.result, error: m.error }));
@@ -203,7 +222,15 @@
         s = new WebSocket("ws://localhost:" + BRIDGE_PORT + "/?token=" + encodeURIComponent(bridgeToken));
       } catch (e) { setBridge(false, "offline"); scheduleReconnect(); return; }
       ws = s;
-      s.onopen = function () { if (s !== ws) return; setBridge(true, "connected (localhost:" + BRIDGE_PORT + ")"); };
+      s.onopen = function () {
+        if (s !== ws) return;
+        setBridge(true, "connected (localhost:" + BRIDGE_PORT + ")");
+        // Announce which FILE this is, every time the socket opens — including each reconnect. The
+        // bridge accepts several plugin instances at once (one per open Figma file) and routes
+        // commands by identity, so a connection that never says who it is can only be addressed by
+        // its raw connection id.
+        parent.postMessage({ pluginMessage: { type: "get-identity" } }, "*");
+      };
       s.onclose = function () { if (s !== ws) return; ws = null; setBridge(false, "offline"); scheduleReconnect(); };
       s.onerror = function () { try { s.close(); } catch (e) {} };
       s.onmessage = function (ev) {

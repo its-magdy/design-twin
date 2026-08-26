@@ -41,7 +41,10 @@
 // (Figma component -> your code component). A generated tokens.json at the root would overwrite the
 // styling source of truth on every pull. The subdirectory keeps the taxonomy names AND that boundary:
 // design/ root = your config + screens, design/design-system/ = the regenerable catalog.
+const { safe } = require("./pages-layout.js"); // same filesystem-boundary sanitiser pages-layout.js uses for layer files
+
 const DIR = "design-system";
+const COMPONENTS_DIR = "components"; // sibling subdir of design-system/, holds one detail file per COMPONENT_SET
 const TOKENS = "tokens.json";
 const STYLES_PAINT = "styles.paint.json";
 const STYLES_TEXT = "styles.text.json";
@@ -74,9 +77,55 @@ function buildDesignSystemLayout(ds, sep) {
   // The stamp every split file carries. Written through byte for byte — nothing here re-derives it.
   const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
   const components = Array.isArray(d.components) ? d.components : [];
-  const local = components.filter((c) => !isLibraryEntry(c));
+  const rawLocal = components.filter((c) => !isLibraryEntry(c));
   const library = components.filter(isLibraryEntry);
   const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
+
+  // The heavy part of a COMPONENT_SET entry — variants[].node, a full serialized node tree per variant
+  // (opt-in via runOpts.variantVisuals in components.ts) — is what makes components.local.json huge on
+  // a real design-system file. Neither drift-lint.js nor map-bootstrap.js ever reads `.node` (both key
+  // off name/id/key/type/props), so it is safe to split out unread. Everything else on the entry,
+  // INCLUDING each variant's id/name/key/values, stays in the catalog byte for byte.
+  const usedNames = new Set();
+  const uniqueDetailName = (name, id) => {
+    const base = safe(name || "component") + "__" + safe(id);
+    if (!usedNames.has(base)) { usedNames.add(base); return base; }
+    let i = 2;
+    while (usedNames.has(base + "_" + i)) i++;
+    usedNames.add(base + "_" + i);
+    return base + "_" + i;
+  };
+  const componentFiles = [];
+  const local = rawLocal.map((c) => {
+    // A standalone COMPONENT (variantVisuals also walks these now, components.ts) carries its own
+    // node tree directly on `.node` rather than under `.variants[].node` — same reason to split it out
+    // (unread by drift-lint.js/map-bootstrap.js, and it is the single biggest field on the entry), but
+    // mirrored as its own nodeFile pointer since there is no variants array to slim here.
+    if (c.type === "COMPONENT" && c.node) {
+      const { node, ...rest } = c;
+      const detailName = uniqueDetailName(c.name, c.id);
+      const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
+      componentFiles.push({
+        path: detailPath,
+        data: { ...stamp, id: c.id, key: c.key, name: c.name, node },
+      });
+      return { ...rest, nodeFile: detailPath };
+    }
+    if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
+      return c; // no exported node trees (variantVisuals was off, or nothing serialized) -> no detail file, no pointer
+    }
+    const slimVariants = c.variants.map((v) => {
+      const { node, ...rest } = v || {};
+      return rest;
+    });
+    const detailName = uniqueDetailName(c.name, c.id);
+    const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
+    componentFiles.push({
+      path: detailPath,
+      data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants },
+    });
+    return { ...c, variants: slimVariants, variantsFile: detailPath };
+  });
   const styles = d.styles || {};
   const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
   const stylesText = Array.isArray(styles.text) ? styles.text : [];
@@ -92,6 +141,7 @@ function buildDesignSystemLayout(ds, sep) {
     { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
     { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
     { path: join(HYGIENE), data: { ...stamp, hygiene } },
+    ...componentFiles,
   ];
 
   const counts = {
@@ -119,6 +169,7 @@ function buildDesignSystemLayout(ds, sep) {
       stylesGrid: join(STYLES_GRID),
       componentsLocal: join(COMPONENTS_LOCAL),
       componentsLibrary: join(COMPONENTS_LIBRARY),
+      componentsDir: DIR + (sep || "/") + COMPONENTS_DIR,
       hygiene: join(HYGIENE),
     },
     counts,
@@ -130,8 +181,9 @@ function buildDesignSystemLayout(ds, sep) {
 module.exports = {
   buildDesignSystemLayout,
   isLibraryEntry,
+  DESIGN_SYSTEM_DIR: DIR,
   DESIGN_SYSTEM_FILES: {
     TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
-    HYGIENE, MANIFEST,
+    COMPONENTS_DIR, HYGIENE, MANIFEST,
   },
 };
