@@ -112,8 +112,9 @@ only when the fidelity grade is low:
 Push determinism into scripts + hooks; reserve skills/agents for judgment.
 - Scripts (`tooling/*.js`): token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
 - Hook: run drift-lint on export / pre-commit so drift is caught automatically.
-- Skill/agent: the fuzzy-match confirm loop and the codegen resolver live in `figma-to-code` /
-  `figma-screen-builder`, where model judgment meets the map.
+- Skill: the fuzzy-match confirm loop and the codegen resolver live in `figma-to-code`, where model
+  judgment meets the map. Multi-screen runs fan out to plain subagents carrying that same skill —
+  context isolation, not a separate agent definition.
 
 ## Build status
 - **Built (repo-agnostic, harness-tested + adversarially reviewed):** `tooling/tokens.js`,

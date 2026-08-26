@@ -1,4 +1,4 @@
-# Profile: <name>  (copy this file to profiles/<name>.md and set `profile` in design/target.json)
+# Profile: <name>  (copy this file to a root-level `profiles/<name>.md` in your project — it overrides this skill's bundled profiles — and set `profile` in design/target.json)
 
 Describe how to translate the neutral export IR into this stack. Keep it short and concrete.
 
