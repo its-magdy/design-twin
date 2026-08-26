@@ -92,7 +92,7 @@
 //   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
 //   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
 //
-// The Figma file must be open with the "Design Export for AI" plugin running.
+// The Figma file must be open with the "Design Twin" plugin running.
 
 const fs = require("fs");
 const path = require("path");
@@ -388,7 +388,7 @@ function formatClients(rows) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) {
     return "No Figma files are connected to the bridge.\n" +
-      "  Open a file in Figma and run \"Design Export for AI\" (Plugins → Development). The plugin\n" +
+      "  Open a file in Figma and run \"Design Twin\" (Plugins → Development). The plugin\n" +
       "  auto-connects and announces itself. You can open it in SEVERAL files at once — each one\n" +
       "  becomes a separate row here, addressable with --client.";
   }
@@ -423,7 +423,7 @@ function formatLibraries(r) {
     lines.push("");
     lines.push("This is a normal outcome, not necessarily an error. In order of likelihood:");
     lines.push('  1. The plugin in Figma predates the "teamlibrary" permission — re-import/reload');
-    lines.push("     \"Design Export for AI\" in Figma, then run this again.");
+    lines.push("     \"Design Twin\" in Figma, then run this again.");
     lines.push("  2. No team library is ENABLED for this file. Libraries can only be enabled from the");
     lines.push("     Figma UI (Assets panel -> Libraries) — no API can enable one.");
     lines.push("  3. Free plan: library variable collections are not exposed to plugins.");
@@ -497,7 +497,7 @@ async function main() {
     const bridge = createBridge();
     const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[figma-pull] " + m) });
     console.error("[figma-pull] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
-    console.error('[figma-pull] Open your Figma file and run "Design Export for AI" (it auto-connects).');
+    console.error('[figma-pull] Open your Figma file and run "Design Twin" (it auto-connects).');
     console.error("[figma-pull] The connection stays open until you run --stop (or Ctrl-C here).");
     const idleMin = Number(process.env.FIGMA_DAEMON_IDLE_MIN ?? 120);
     console.error("[figma-pull] " + (idleMin > 0
@@ -525,7 +525,7 @@ async function main() {
   } else {
     bridge = createBridge();
     console.error("[figma-pull] listening on ws://localhost:" + bridge.port);
-    console.error('[figma-pull] Open your Figma file and run "Design Export for AI" (it auto-connects)…');
+    console.error('[figma-pull] Open your Figma file and run "Design Twin" (it auto-connects)…');
     console.error("[figma-pull] tip: --serve keeps this connection open so later pulls skip the reconnect.");
     // --list-clients is the one command that is MEANINGFUL with nothing connected ("which files can I
     // talk to?" → "none, open one"), so it must not sit in the 10-minute connect wait that exists for

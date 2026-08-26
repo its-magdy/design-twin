@@ -520,7 +520,7 @@ async function disconnectErr(code, reason) {
   // state before the plugin is opened, and must read as an instruction rather than a failure.
   const noClients = pull.formatClients([]);
   ok("[list-clients] the empty listing explains rather than just printing nothing", /No Figma files are connected/.test(noClients));
-  ok("[list-clients] and says how to fix it", /Design Export for AI/.test(noClients));
+  ok("[list-clients] and says how to fix it", /Design Twin/.test(noClients));
   ok("[list-clients] and mentions that SEVERAL files can connect", /SEVERAL files at once/.test(noClients));
   const twoClients = pull.formatClients([
     { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", uptimeMs: 65000, identified: true },

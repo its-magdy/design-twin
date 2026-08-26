@@ -16,7 +16,7 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 | Audience | Uses it for |
 |---|---|
 | **You / the design-system owner** | Author the component map once per repo (bootstrap → fill in code targets → confirm). |
-| **The codegen agent** (`figma-to-code` skill) | Consults the map + emitted tokens so it reuses your components/tokens. *(resolver wiring is the deferred, repo-specific step.)* |
+| **The codegen agent** (`build-screen` skill) | Consults the map + emitted tokens so it reuses your components/tokens. *(resolver wiring is the deferred, repo-specific step.)* |
 | **CI / pre-commit** | Runs `drift-lint` so a Figma change that breaks the map fails the build instead of shipping silently. |
 
 ## What's here

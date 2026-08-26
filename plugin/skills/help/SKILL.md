@@ -1,6 +1,6 @@
 ---
 name: help
-description: Orientation, one-time setup and troubleshooting for the free-plan Figma→code workflow. Invoke as /figma-to-code:help when the user asks how this tool works, how to set it up, which of the three export paths to use, or when something is broken (plugin won't import, port 8787 busy, bridge token / 401, MCP not connecting, empty library list, stale snapshot). It routes and diagnoses; it does not export (that's extract) and does not write code (that's build-screen).
+description: Orientation, one-time setup and troubleshooting for the free-plan Figma→code workflow. Invoke as /designtwin:help when the user asks how this tool works, how to set it up, which of the three export paths to use, or when something is broken (plugin won't import, port 8787 busy, bridge token / 401, MCP not connecting, empty library list, stale snapshot). It routes and diagnoses; it does not export (that's extract) and does not write code (that's build-screen).
 disable-model-invocation: true
 ---
 
@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 This repo feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
 A self-authored plugin (`allowedDomains: ["none"]`) extracts the design as stack-neutral JSON + real
-assets; the `/figma-to-code` skill turns that into code for any stack.
+assets; the `/designtwin:build-screen` skill turns that into code for any stack.
 
 **Your job when this skill is invoked: figure out what the user is trying to do, give them the exact
 next step, and point at the one doc that covers it. Route — do not re-explain what the docs already say.**
@@ -33,7 +33,7 @@ next step, and point at the one doc that covers it. Route — do not re-explain 
 | **C. `figma-mcp` server** (write / interactive) | "Check this, now pull that" + code→design | stdio MCP + persistent loopback WS; opt-in, **disabled by default** |
 
 All of them require the **Figma file open with the plugin running** — nothing is headless.
-Once files are in `design/`, building code is identical for all three: **`/figma-to-code:build-screen <screen>`**.
+Once files are in `design/`, building code is identical for all three: **`/designtwin:build-screen <screen>`**.
 
 **The one thing to say up front: B, B+ and C all bind port 8787, so exactly one can run at a time.**
 Whichever starts second exits with `EADDRINUSE`.
@@ -60,10 +60,10 @@ Whichever starts second exits with `EADDRINUSE`.
 
 Running an export is the **extract** skill's job, not this one — it owns path selection, the
 discover-then-scope order, and the manifest check afterwards. Hand off to
-**`/figma-to-code:extract`** rather than reciting commands here; the full flag surface is in
+**`/designtwin:extract`** rather than reciting commands here; the full flag surface is in
 `bridge/README.md`.
 
-Then build: **`/figma-to-code:build-screen <screen>`**.
+Then build: **`/designtwin:build-screen <screen>`**.
 
 ## Troubleshooting — match the symptom, give the fix
 
@@ -97,7 +97,7 @@ Then build: **`/figma-to-code:build-screen <screen>`**.
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
   `.mcp.json` there pointing at an absolute path to `bridge/figma-mcp.mjs`, with the same
   `FIGMA_BRIDGE_TOKEN`. Then enable it via `/mcp` and restart.
-- **`design/` is empty / `/figma-to-code` can't find files** → nothing exported yet. `design/` is a
+- **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
   root (copy `plugin/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
@@ -113,7 +113,7 @@ Then build: **`/figma-to-code:build-screen <screen>`**.
 
 ## Related
 
-- **Get the design out of Figma:** `/figma-to-code:extract`.
-- **Build a screen from it:** `/figma-to-code:build-screen <screen>`.
+- **Get the design out of Figma:** `/designtwin:extract`.
+- **Build a screen from it:** `/designtwin:build-screen <screen>`.
 - **Build many screens:** `build-screen` handles the fan-out itself — it delegates one layer per
   subagent so each screen's large JSON stays out of the main context.

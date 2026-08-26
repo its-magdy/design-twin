@@ -1,6 +1,6 @@
 # bridge — figma-pull (read CLI) + figma-mcp (write MCP)
 
-Local, loopback-only bridge between Claude Code and the **Design Export for AI** Figma plugin.
+Local, loopback-only bridge between Claude Code and the **Design Twin** Figma plugin.
 The plugin's hidden UI iframe is a WebSocket **client**; these processes are the **server**
 (`127.0.0.1:8787`). Nothing touches the internet. See `../ARCHITECTURE.md` for the full design.
 

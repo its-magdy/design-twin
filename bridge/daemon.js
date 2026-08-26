@@ -22,7 +22,7 @@ const { errMsg } = require("./errmsg.js");
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
 // socket. Under the user's own tmpdir, which is already 0700 on the platforms this runs on.
 function sockPath(port) {
-  return path.join(os.tmpdir(), `figma-bridge-${port || process.env.FIGMA_BRIDGE_PORT || 8787}.sock`);
+  return path.join(os.tmpdir(), `designtwin-${port || process.env.FIGMA_BRIDGE_PORT || 8787}.sock`);
 }
 
 // Newline-delimited JSON. JSON.stringify escapes literal newlines, so a bare "\n" is an unambiguous

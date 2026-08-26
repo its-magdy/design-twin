@@ -1,15 +1,24 @@
 {
-  "name": "Design Export for AI",
+  "name": "Design Twin — Design Export for AI",
   "id": "design-export-for-ai",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",
-  "editorType": ["figma"],
+  "editorType": [
+    "figma"
+  ],
   "documentAccess": "dynamic-page",
-  "permissions": ["teamlibrary"],
+  "permissions": [
+    "teamlibrary"
+  ],
   "networkAccess": {
-    "allowedDomains": ["none"],
-    "devAllowedDomains": ["ws://localhost:8787", "http://localhost:8787"],
+    "allowedDomains": [
+      "none"
+    ],
+    "devAllowedDomains": [
+      "ws://localhost:8787",
+      "http://localhost:8787"
+    ],
     "reasoning": "Optional local bridge (figma-pull CLI / figma-mcp) for automated extraction. Localhost only — no internet access. Production access stays 'none'."
   }
 }

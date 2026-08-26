@@ -7,7 +7,7 @@ W3C DTCG format, Style Dictionary, Tokens Studio, Anima/Locofy/Builder.io, and t
 
 This document is the source of truth for the layer that turns the extractor's faithful JSON into
 **reused real components + real tokens**, instead of pixel-regenerated lookalikes. It complements
-`ARCHITECTURE.md` (the read/write planes) and the `figma-to-code` skill (the codegen consumer).
+`ARCHITECTURE.md` (the read/write planes) and the `build-screen` skill (the codegen consumer).
 
 ## Problem
 
@@ -112,7 +112,7 @@ only when the fidelity grade is low:
 Push determinism into scripts + hooks; reserve skills/agents for judgment.
 - Scripts (`tooling/*.js`): token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
 - Hook: run drift-lint on export / pre-commit so drift is caught automatically.
-- Skill: the fuzzy-match confirm loop and the codegen resolver live in `figma-to-code`, where model
+- Skill: the fuzzy-match confirm loop and the codegen resolver live in `build-screen`, where model
   judgment meets the map. Multi-screen runs fan out to plain subagents carrying that same skill —
   context isolation, not a separate agent definition.
 

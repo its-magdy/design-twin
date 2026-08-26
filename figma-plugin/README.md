@@ -1,4 +1,4 @@
-# Design Export for AI — plugin (main thread)
+# Design Twin — plugin (main thread)
 
 The plugin's read/extraction logic is written in **TypeScript** (`src/*.ts`) and bundled to
 **`code.js`** — the file `manifest.json` loads as `main`. `code.js` is committed, so the plugin

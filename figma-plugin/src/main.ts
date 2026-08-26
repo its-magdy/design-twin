@@ -1,4 +1,4 @@
-// Design Export for AI — plugin main thread (entry point).
+// Design Twin — plugin main thread (entry point).
 // Two manual export modes:
 //   1) Export current selection      -> <screen>.json + variables.json
 //   2) Export design system + page   -> design-system.json + pages/<page>/ (one file per layer) + assets

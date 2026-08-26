@@ -6,7 +6,7 @@ description: Build a front-end screen as real code from a Figma export, for ANY 
 # Figma → code (any stack)
 
 Turn a Figma export into a faithful, maintainable screen for whatever stack the project uses.
-Free-plan workflow: the design data comes from the local **Design Export for AI** plugin (no Figma
+Free-plan workflow: the design data comes from the local **Design Twin** plugin (no Figma
 API, no MCP), saved into `design/`. The export JSON is a **stack-neutral intermediate representation
 (IR)**; this skill translates it into the project's actual framework via a target *profile*.
 
@@ -122,6 +122,6 @@ subagent reads the same `design/` files from disk.
   Match what's already there; don't impose new conventions.
 - **Missing screen → extract it, don't improvise.** If the requested screen/layer isn't in its page's
   index `layers[]` (or its JSON is missing/empty), it was never exported. Hand off to
-  `/figma-to-code:extract` rather than guessing or building from the `.png` alone. Same if `design/`
+  `/designtwin:extract` rather than guessing or building from the `.png` alone. Same if `design/`
   doesn't exist at all.
 - Match the surrounding codebase's conventions and the profile's output section.

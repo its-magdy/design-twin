@@ -1,4 +1,4 @@
-# Testing the "Design Export for AI" plugin
+# Testing the "Design Twin" plugin
 
 Two layers. **Layer A runs with no Figma app** and an agent can do it alone. **Layer B needs the
 Figma desktop app** (a human clicks Export; the agent reads and validates the output). Do A first —
@@ -115,7 +115,7 @@ field, assert both the DTCG output and the CSS output.
 
 ### Procedure (manual download — recommended)
 
-1. Open a real design file. Import the plugin (gotcha #1). Run **Plugins → Development → Design Export for AI**.
+1. Open a real design file. Import the plugin (gotcha #1). Run **Plugins → Development → Design Twin**.
 2. Confirm health: status shows **"N selected"** or a select-a-frame hint (not stuck on "Loading…").
 3. **Select a frame**, click **"Export current selection"** → click **Download `<screen>.json`** and
    **Download `variables.json`** (and **Download assets** if a count shows). Files land in `~/Downloads`.

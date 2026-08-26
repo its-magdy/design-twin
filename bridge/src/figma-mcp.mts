@@ -159,7 +159,7 @@ const READ_ONLY = { readOnlyHint: true } as const;
 // trigger from a test.
 const { readSnapshotInfo } = require("./snapshot-meta.js") as { readSnapshotInfo: (outDir?: string) => any };
 
-const server = new McpServer({ name: "figma-bridge", version: "0.1.0" });
+const server = new McpServer({ name: "designtwin", version: "0.1.0" });
 
 server.registerTool(
   "figma_status",
@@ -211,7 +211,7 @@ server.registerTool(
       // The EMPTY case has to explain itself: nothing connected is the normal state before the plugin
       // is opened, not a broken bridge.
       ...(clients.length ? {} : {
-        note: "Nothing connected. Open a file in Figma and run \"Design Export for AI\" (Plugins → Development) — it auto-connects and announces itself. You can open it in several files at once; each becomes a separate row here.",
+        note: "Nothing connected. Open a file in Figma and run \"Design Twin\" (Plugins → Development) — it auto-connects and announces itself. You can open it in several files at once; each becomes a separate row here.",
       }),
       ...(clients.some((c: any) => !c.identified) ? {
         identifiedNote: "A row with identified:false is connected but has not announced itself yet (or is an older plugin build that does not) — address it by connId.",

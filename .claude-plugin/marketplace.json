@@ -1,12 +1,12 @@
 {
-  "name": "figma-to-code-marketplace",
+  "name": "designtwin-marketplace",
   "description": "Marketplace for the free-plan Figma→code workflow plugin.",
   "owner": {
     "name": "Mohamed Magdy Omar"
   },
   "plugins": [
     {
-      "name": "figma-to-code",
+      "name": "designtwin",
       "source": "./plugin",
       "description": "Free-plan Figma→code workflow: extract a design via the Figma Plugin API, then build any-stack screens with token/component reuse and drift checking."
     }

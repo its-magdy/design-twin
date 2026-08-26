@@ -16,11 +16,11 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
 - `figma-plugin/` — a self-authored Figma plugin (`allowedDomains: ["none"]` → cannot phone home).
   Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
 - `plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
-  Invoke with `/figma-to-code:build-screen <screen>`.
+  Invoke with `/designtwin:build-screen <screen>`.
 - `plugin/skills/extract/SKILL.md` — get the design out of Figma onto disk (path selection,
-  discover-then-scope, manifest check). Invoke with `/figma-to-code:extract`.
+  discover-then-scope, manifest check). Invoke with `/designtwin:extract`.
 - `plugin/skills/help/SKILL.md` — orientation: the three export paths, one-time setup, and the
-  symptom→fix list. Invoke with `/figma-to-code:help` when something isn't working.
+  symptom→fix list. Invoke with `/designtwin:help` when something isn't working.
 - `tooling/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
   DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
   `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
@@ -76,16 +76,16 @@ files. You only author the config maps below.
    components instead of reusing yours, and the token drift check has nothing to compare against.
 
 ## Per-screen loop
-1. In Figma, select the frame → run **Plugins → Development → Design Export for AI** →
+1. In Figma, select the frame → run **Plugins → Development → Design Twin** →
    click **Export current selection** (or **Export design system + all page frames** for a full pull).
 2. Save the resulting **Download …** links into `design/`:
    - "Download <screen>.json" → `design/<screen>.json`
    - "Download variables.json" → `design/variables.json`
    - "Download assets (N)" → `design/assets/` — this now includes a **full-frame reference PNG**
      per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The `<screen>.json`
-     points at it via a `reference` field, and `/figma-to-code:build-screen` self-corrects against it. No manual
+     points at it via a `reference` field, and `/designtwin:build-screen` self-corrects against it. No manual
      screenshot step needed anymore.
-3. In Claude Code: `/figma-to-code:build-screen <screen>` (or: "build <screen> from design/<screen>.json").
+3. In Claude Code: `/designtwin:build-screen <screen>` (or: "build <screen> from design/<screen>.json").
 
 ## Why this shape (evidence)
 - Structured metadata beats a screenshot alone for fidelity, but **raw** metadata makes models hardcode
@@ -139,9 +139,9 @@ plugin never needs an `npm install`, and users get only `plugin/` in their cache
 `.mcp.json`: the MCP server is registered in the project you point it at, not here.
 
 To try it locally: `claude --plugin-dir /path/to/this/repo/plugin`. To hand it to a teammate: they run
-`claude plugin marketplace add <you>/Figma` then `claude plugin install figma-to-code@figma-to-code-marketplace`
+`claude plugin marketplace add <you>/Figma` then `claude plugin install designtwin@designtwin-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
-for auto-load). Skills load under the `figma-to-code:` namespace. `claude plugin validate .`
+for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate .`
 checks the manifest before you publish. The Figma-side plugin import (`figma-plugin/manifest.json`)
 and `bridge/`'s `npm install` stay manual — installing the Claude plugin doesn't set those up.
 

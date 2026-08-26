@@ -370,11 +370,11 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **MCP transports:** stdio (default, recommended here), http/streamable-http, sse (deprecated), and
   **ws** (via `.mcp.json` / `claude mcp add-json` only). Our MCP server exposes **stdio** to Claude Code
   and keeps the WebSocket-to-plugin internal.
-- **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "figma-bridge": { "type":"stdio",
+- **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "designtwin": { "type":"stdio",
   "command":"node", "args":["./mcp-server.js"] } } }`.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
-  (`"mcp__figma-bridge__*"`). CLI: allowlist `"Bash(figma-pull:*)"`. (Configure only if/when we build these.)
-- **Skill vs MCP:** the `figma-to-code` **Skill orchestrates** (read files → map → build → self-correct);
+  (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`. (Configure only if/when we build these.)
+- **Skill vs MCP:** the `build-screen` **skill orchestrates** (read files → map → build → self-correct);
   MCP/CLI **provide the data**. Complementary.
 
 ## Reuse posture — Figma's skills & knowledge (verified 2026-07)
@@ -384,7 +384,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 are all wired to the **metered/paid MCP tools** (`get_design_context`, `use_figma`, …) — the exact plane
 this repo avoids — so they don't *run* in a free Plugin-API pipeline. They also carry **no OSI license**
 (Figma Developer Terms, Beta) → **do not vendor their files**; read them, then **re-express** the ideas in
-our own `code.js` / `profiles/*.md` / skills. Our `figma-to-code` Skill stays the orchestrator.
+our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the orchestrator.
 
 - **Knowledge worth lifting (re-authored):** the Plugin-API gotchas (systematic `=== figma.mixed` guards,
   async-under-dynamic-page, `findAllWithCriteria` perf), `variable.codeSyntax {WEB,ANDROID,iOS}` for free

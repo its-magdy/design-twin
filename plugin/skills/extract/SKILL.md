@@ -1,6 +1,6 @@
 ---
 name: extract
-description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Export for AI" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, synced, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "re-sync the tokens", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen.
+description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, synced, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "re-sync the tokens", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen.
 ---
 
 # Extract a design from Figma
@@ -12,11 +12,11 @@ never leaves the machine. There is no Figma API key and no cloud round-trip.
 
 ## Before anything: is the plugin running?
 
-Every path needs the **Figma file open with the "Design Export for AI" plugin running**. None of this
+Every path needs the **Figma file open with the "Design Twin" plugin running**. None of this
 is headless — the plugin *is* the reader. If the user hasn't started it: Figma desktop →
-**Plugins → Development → Design Export for AI**.
+**Plugins → Development → Design Twin**.
 
-Not imported yet? That's one-time setup — send them to `/figma-to-code:help`.
+Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 
 ## Pick a path
 
@@ -79,7 +79,7 @@ and without it fidelity checking is guesswork.
 ## Then hand off
 
 Report briefly: what landed, anything the manifest flagged, and whether the PNG exists. Then
-**`/figma-to-code:build-screen <screen>`**.
+**`/designtwin:build-screen <screen>`**.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
-in **`/figma-to-code:help`**. Don't debug it from memory.
+in **`/designtwin:help`**. Don't debug it from memory.
