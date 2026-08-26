@@ -1,7 +1,7 @@
 {
   "name": "figma-to-code",
   "description": "Free-plan Figma→code workflow: a Plugin API extractor + skills that build any-stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose) screens from a Figma export, with a token/component drift check.",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "author": {
     "name": "Mohamed Magdy Omar"
   },
