@@ -125,7 +125,8 @@ MCP twins: `figma_list_clients`, and a `client` argument on every tool.
 
 ## Sharing this as a plugin
 This repo *is* a Claude Code plugin (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`,
-`skills/` and `.mcp.json` at the root) — that's why the skills moved out of `.claude/`.
+`skills/` at the root) — that's why the skills moved out of `.claude/`. It deliberately ships **no**
+`.mcp.json`: the MCP server is for the project you point it at, not for this repo.
 To try it locally: `claude --plugin-dir /path/to/this/repo`. To hand it to a teammate: they run
 `claude plugin marketplace add <you>/Figma` then `claude plugin install figma-to-code@figma-to-code-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`

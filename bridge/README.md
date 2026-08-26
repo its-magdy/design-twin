@@ -319,7 +319,10 @@ Behaviour worth knowing:
   its own daemon. `--daemon-status` shows how much of the window is used.
 
 ## Write / interactive: figma-mcp (MCP over stdio)
-Registered via `../.mcp.json`. Start Claude Code in the repo; it launches `figma-mcp.mjs` over stdio.
+**Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
+while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
+there with an absolute path to this `figma-mcp.mjs`, and the same `FIGMA_BRIDGE_TOKEN`. Claude Code
+then launches it over stdio.
 The server also hosts the bridge WebSocket the plugin connects to. Built on `@modelcontextprotocol/sdk`
 with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, validated per call).
 
