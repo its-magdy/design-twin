@@ -1,6 +1,6 @@
 ---
-name: figma-to-code
-description: Build a front-end screen as code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, or a custom target). Use when the user asks to implement/build a screen from a design/<screen>.json export (from the "Design Export for AI" plugin) or points at a Figma export. Resolves the target stack, reads the compacted node JSON + assets + token/component maps, generates the component, then self-corrects against the reference screenshot.
+name: build-screen
+description: Build a front-end screen as real code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, or a custom target). Use this whenever the user wants a design turned into code — "implement the login screen", "build this frame", "code up the settings page", "make this design real" — or points at a design/ export or a Figma frame, even if they don't say which stack. Resolves the target stack, reads the node JSON + assets + token/component maps, reuses existing components and tokens instead of regenerating them, then self-corrects against the reference screenshot. If design/ is empty or stale, use the extract skill first.
 ---
 
 # Figma → code (any stack)
@@ -120,6 +120,8 @@ subagent reads the same `design/` files from disk.
 - **Convention fallback ladder** when something's ambiguous (naming, which primitive, structure):
   `design-system/`/IR first → the user's codebase → common patterns only when neither settles it.
   Match what's already there; don't impose new conventions.
-- **Missing screen → STOP.** If the requested screen/layer isn't in its page's index `layers[]` (or its
-  JSON is missing/empty), ask — don't guess or build from the `.png` alone.
+- **Missing screen → extract it, don't improvise.** If the requested screen/layer isn't in its page's
+  index `layers[]` (or its JSON is missing/empty), it was never exported. Hand off to
+  `/figma-to-code:extract` rather than guessing or building from the `.png` alone. Same if `design/`
+  doesn't exist at all.
 - Match the surrounding codebase's conventions and the profile's output section.

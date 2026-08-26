@@ -9,23 +9,25 @@ The **extraction half is identical for every target** — the plugin and its JSO
 intermediate representation (Auto Layout expressed as flex intent, which maps equally to flexbox,
 SwiftUI stacks, and Compose Row/Column). Only the **translation half** is stack-specific, and it lives
 in three small places: `design/target.json` (which stack), `profiles/<profile>.md` (how to translate,
-in `plugin/skills/figma-to-code/profiles/` — a project can override with its own root-level `profiles/`),
+in `plugin/skills/build-screen/profiles/` — a project can override with its own root-level `profiles/`),
 and the right-hand values in `tokens.json`/`components.json`. One plugin, any framework.
 
 ## Pieces
 - `figma-plugin/` — a self-authored Figma plugin (`allowedDomains: ["none"]` → cannot phone home).
   Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
-- `plugin/skills/figma-to-code/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
-  Invoke with `/figma-to-code <screen>`.
-- `plugin/skills/figma-help/SKILL.md` — orientation/help: the three export paths, setup, and
-  troubleshooting. Invoke with `/figma-help` when unsure how to use this or something isn't working.
+- `plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
+  Invoke with `/figma-to-code:build-screen <screen>`.
+- `plugin/skills/extract/SKILL.md` — get the design out of Figma onto disk (path selection,
+  discover-then-scope, manifest check). Invoke with `/figma-to-code:extract`.
+- `plugin/skills/help/SKILL.md` — orientation: the three export paths, one-time setup, and the
+  symptom→fix list. Invoke with `/figma-to-code:help` when something isn't working.
 - `tooling/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
   DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
   `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
   to the real node trees). This is
   the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
   `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
-- `plugin/skills/figma-to-code/profiles/<profile>.md` — IR→stack translation rules, shipped with the
+- `plugin/skills/build-screen/profiles/<profile>.md` — IR→stack translation rules, shipped with the
   skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`; add
   your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
   overrides the skill's bundled set).
@@ -63,7 +65,7 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
 files. You only author the config maps below.
 1. Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so no build is needed to use it. To edit the extractor, see `figma-plugin/README.md` — TypeScript source lives in `figma-plugin/src/`, `npm run build` regenerates `code.js`.)
 2. Create `design/target.json` for your stack (or let the skill auto-detect from the repo on first run
-   and offer to write it). If your stack isn't in `plugin/skills/figma-to-code/profiles/`, copy its
+   and offer to write it). If your stack isn't in `plugin/skills/build-screen/profiles/`, copy its
    `_template.md` to a root-level `profiles/<name>.md` in your project and fill it in — it overrides
    the skill's bundled profiles.
 3. Create `design/tokens.json` and `design/components.json` for your project. Shapes:
@@ -81,9 +83,9 @@ files. You only author the config maps below.
    - "Download variables.json" → `design/variables.json`
    - "Download assets (N)" → `design/assets/` — this now includes a **full-frame reference PNG**
      per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The `<screen>.json`
-     points at it via a `reference` field, and `/figma-to-code` self-corrects against it. No manual
+     points at it via a `reference` field, and `/figma-to-code:build-screen` self-corrects against it. No manual
      screenshot step needed anymore.
-3. In Claude Code: `/figma-to-code <screen>` (or: "build <screen> from design/<screen>.json").
+3. In Claude Code: `/figma-to-code:build-screen <screen>` (or: "build <screen> from design/<screen>.json").
 
 ## Why this shape (evidence)
 - Structured metadata beats a screenshot alone for fidelity, but **raw** metadata makes models hardcode

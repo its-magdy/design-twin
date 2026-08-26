@@ -1,6 +1,6 @@
 ---
-name: figma-help
-description: Orientation and help for THIS repo's free-plan Figma→code workflow. Invoke as /figma-help when the user asks how to use this tool, how to set it up, how to export a screen, which of the three paths (manual / figma-pull CLI / figma-mcp) to use, or when something isn't working (plugin won't import, port 8787 busy, bridge token, MCP not connecting, empty design/). Explains the workflow and routes to the right doc; it does NOT itself build a screen — that's /figma-to-code.
+name: help
+description: Orientation, one-time setup and troubleshooting for the free-plan Figma→code workflow. Invoke as /figma-to-code:help when the user asks how this tool works, how to set it up, which of the three export paths to use, or when something is broken (plugin won't import, port 8787 busy, bridge token / 401, MCP not connecting, empty library list, stale snapshot). It routes and diagnoses; it does not export (that's extract) and does not write code (that's build-screen).
 disable-model-invocation: true
 ---
 
@@ -21,7 +21,7 @@ next step, and point at the one doc that covers it. Route — do not re-explain 
 | `bridge/README.md` | **The full CLI + MCP surface** — install, token, every `figma-pull` flag, `--list-clients`/`--whoami`/`--list-libraries`/`--as-library`, the `--serve` daemon, MCP tools, `writeToDisk`, limits |
 | `ARCHITECTURE.md` | The two-plane design, plugin two-context model, full API surface, security |
 | `figma-plugin/README.md` | The Figma-side plugin: import, UI buttons, what each export produces |
-| `plugin/skills/figma-to-code/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
+| `plugin/skills/build-screen/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
 
 ## Step 1 — which of the three paths?
 
@@ -33,7 +33,7 @@ next step, and point at the one doc that covers it. Route — do not re-explain 
 | **C. `figma-mcp` server** (write / interactive) | "Check this, now pull that" + code→design | stdio MCP + persistent loopback WS; opt-in, **disabled by default** |
 
 All of them require the **Figma file open with the plugin running** — nothing is headless.
-Once files are in `design/`, building code is identical for all three: **`/figma-to-code <screen>`**.
+Once files are in `design/`, building code is identical for all three: **`/figma-to-code:build-screen <screen>`**.
 
 **The one thing to say up front: B, B+ and C all bind port 8787, so exactly one can run at a time.**
 Whichever starts second exits with `EADDRINUSE`.
@@ -56,30 +56,14 @@ Whichever starts second exits with `EADDRINUSE`.
    `export FIGMA_BRIDGE_TOKEN="$(openssl rand -hex 24)"` in your shell profile — and paste it into the
    plugin's **Bridge token** field once. Details: `bridge/README.md` → "Bridge token".
 
-## Step 3 — run the path
+## Step 3 — run it
 
-**Path A (manual).** Select the frame in Figma → **Plugins → Development → Design Export for AI** →
-either **Export current selection** or **Export design system + all page frames**, then save every
-`Download <name>` link into `design/` and **Download assets (N)** into `design/assets/`. Also export a
-**PNG** of the frame (Figma right-click → Export) into `design/<screen>.png` — the plugin doesn't emit
-PNGs and the skill always reads it. Button-by-button detail and the flat `__` download naming:
-`figma-plugin/README.md`.
+Running an export is the **extract** skill's job, not this one — it owns path selection, the
+discover-then-scope order, and the manifest check afterwards. Hand off to
+**`/figma-to-code:extract`** rather than reciting commands here; the full flag surface is in
+`bridge/README.md`.
 
-**Paths B / B+ / C.** The full command surface is in `bridge/README.md`. The only thing worth saying
-from here is **the discovery order — discover, then scope, never open with a whole-file pull**:
-
-```
-node bridge/figma-pull.js --list-libraries    # which libraries this file draws on
-node bridge/figma-pull.js --list             # pages + their top-level frames, with ids
-node bridge/figma-pull.js --children <id>    # peek at one node's direct children
-node bridge/figma-pull.js design --page <id> # deep-pull just that page
-```
-
-MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_children` →
-`figma_export_full({page:[id]})`. **Pass `writeToDisk: true` for anything past a quick look** — inline
-results are capped (`MAX_MCP_OUTPUT_TOKENS`, 25k default) and asset bytes are never returned inline.
-
-Then: **`/figma-to-code <screen>`**.
+Then build: **`/figma-to-code:build-screen <screen>`**.
 
 ## Troubleshooting — match the symptom, give the fix
 
@@ -116,7 +100,7 @@ Then: **`/figma-to-code <screen>`**.
 - **`design/` is empty / `/figma-to-code` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `plugin/skills/figma-to-code/profiles/_template.md`) — it overrides the bundled profiles.
+  root (copy `plugin/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
@@ -129,6 +113,7 @@ Then: **`/figma-to-code <screen>`**.
 
 ## Related
 
-- **Build a screen:** `/figma-to-code <screen>` (after files are in `design/`).
-- **Build many screens:** `/figma-to-code` handles the fan-out itself — it delegates one layer per
+- **Get the design out of Figma:** `/figma-to-code:extract`.
+- **Build a screen from it:** `/figma-to-code:build-screen <screen>`.
+- **Build many screens:** `build-screen` handles the fan-out itself — it delegates one layer per
   subagent so each screen's large JSON stays out of the main context.
