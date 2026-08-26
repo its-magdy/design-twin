@@ -48,7 +48,7 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
     const maxH = (maxAgeMs / 3600000).toFixed(1);
     const w = {
       code: "stale-snapshot",
-      message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file — re-run figma-pull / the export tool before trusting them.`,
+      message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file — re-run dtwin / the export tool before trusting them.`,
     };
     push(warnings, w.code, w.message, { exportedAt, ageMs, maxAgeMs });
     return w;

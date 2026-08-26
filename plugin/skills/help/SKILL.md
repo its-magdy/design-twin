@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Using this tool (free-plan Figma → code)
 
-This repo feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
+Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
 A self-authored plugin (`allowedDomains: ["none"]`) extracts the design as stack-neutral JSON + real
 assets; the `/designtwin:build-screen` skill turns that into code for any stack.
 
@@ -22,13 +22,14 @@ next step, and point at the one doc that covers it. Route — do not re-explain 
 | `ARCHITECTURE.md` | The two-plane design, plugin two-context model, full API surface, security |
 | `figma-plugin/README.md` | The Figma-side plugin: import, UI buttons, what each export produces |
 | `plugin/skills/build-screen/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
+| `plugin/skills/extract/SKILL.md` | How an export actually gets run (path choice, discover-then-scope) |
 
 ## Step 1 — which of the three paths?
 
 | Path | When to use | What runs |
 |------|-------------|-----------|
 | **A. Manual export** (default, zero setup) | One screen, or first time | Plugin UI buttons → download files into `design/` by hand |
-| **B. `figma-pull` CLI** (read, automated) | Bulk / repeated pulls | `node bridge/figma-pull.js` hosts a loopback WS; plugin auto-connects and pushes; CLI writes files and exits |
+| **B. `figma-pull` CLI** (read, automated) | Bulk / repeated pulls | `dtwin` hosts a loopback WS; plugin auto-connects and pushes; CLI writes files and exits |
 | **B+. `figma-pull --serve`** (daemon) | Many pulls in a row | Same CLI, but the bridge stays open until `--stop`; later invocations route through it |
 | **C. `figma-mcp` server** (write / interactive) | "Check this, now pull that" + code→design | stdio MCP + persistent loopback WS; opt-in, **disabled by default** |
 
@@ -70,7 +71,7 @@ Then build: **`/designtwin:build-screen <screen>`**.
 - **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
   manifest…*. It lives under **Plugins → Development**, not the main plugin list.
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
-  `node bridge/figma-pull.js --daemon-status` first — if a daemon is up, ordinary commands route
+  `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
   through it and nothing needs stopping, so this means something *else* holds the port (usually the
   MCP server, or a stale `node`). If the MCP is the holder and you wanted files, use `writeToDisk:
   true` rather than killing it.

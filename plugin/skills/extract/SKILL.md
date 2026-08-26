@@ -23,7 +23,7 @@ Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 | Path | Use when | How |
 |---|---|---|
 | **A. Manual** | One screen, first time, or the bridge isn't set up | Click the plugin's export buttons, save the downloads into `design/` |
-| **B. CLI** | Anything repeated or bulk | `node bridge/figma-pull.js …` — hosts a loopback socket, the plugin pushes, files land, it exits |
+| **B. CLI** | Anything repeated or bulk | `dtwin …` — hosts a loopback socket, the plugin pushes, files land, it exits |
 | **B+. Daemon** | Several pulls in a row | `--serve` holds the connection open so each pull skips the reconnect wait |
 | **C. MCP** | Interactive "look at this, now pull that", or design *writes* | Registered in the project you're building, not in this repo |
 
@@ -41,11 +41,16 @@ A full pull on a real design file is enormous and most of it is irrelevant to th
 cheap calls to find the one page you actually need:
 
 ```
-node bridge/figma-pull.js --list-libraries   # which design libraries this file draws on
-node bridge/figma-pull.js --list             # pages + their top-level frames, WITH IDS
-node bridge/figma-pull.js --children <id>    # peek inside one node before committing
-node bridge/figma-pull.js design --page <id> # then deep-pull only that page
+dtwin --list-libraries   # which design libraries this file draws on
+dtwin --list             # pages + their top-level frames, WITH IDS
+dtwin --children <id>    # peek inside one node before committing
+dtwin design --page <id> # then deep-pull only that page
 ```
+
+**`dtwin` comes from the `designtwin` npm package.** If it isn't on PATH, you are probably working
+inside a clone of the Design Twin repo itself — there, every `dtwin` above is
+`node bridge/figma-pull.js`. If neither is available, the CLI isn't installed: fall back to Path A
+(the plugin's own export buttons), which needs nothing.
 
 MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_children` →
 `figma_export_full({page:[id]})`.

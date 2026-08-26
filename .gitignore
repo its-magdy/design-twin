@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 
-# Generated Figma exports (regenerable via the plugin / figma-pull).
+# Generated Figma exports (regenerable via the plugin / dtwin).
 # NOTE: your hand-authored config maps are NOT regenerable — if you keep
 # target.json / tokens.json / components.json in design/, un-ignore them.
 design/

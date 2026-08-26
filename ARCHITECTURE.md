@@ -371,9 +371,10 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   **ws** (via `.mcp.json` / `claude mcp add-json` only). Our MCP server exposes **stdio** to Claude Code
   and keeps the WebSocket-to-plugin internal.
 - **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "designtwin": { "type":"stdio",
-  "command":"node", "args":["./mcp-server.js"] } } }`.
+  "command":"node", "args":["/abs/path/to/bridge/figma-mcp.mjs"] } } }` — registered in the
+  project you point the bridge at, never in this repo.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
-  (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`. (Configure only if/when we build these.)
+  (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`.
 - **Skill vs MCP:** the `build-screen` **skill orchestrates** (read files → map → build → self-correct);
   MCP/CLI **provide the data**. Complementary.
 
@@ -406,11 +407,13 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    **TypeScript** (`figma-plugin/src/*.ts`, typed against `@figma/plugin-typings`) and bundled to
    `code.js` via esbuild; the built `code.js` is committed so import stays zero-build. `tsc --noEmit`
    is the first test gate. See `figma-plugin/README.md`.
-2. **`figma-pull` CLI** (next, optional) — plugin gains a hidden-iframe WS client (`devAllowedDomains:
-   ["ws://localhost:PORT"]`); CLI hosts an ephemeral WS server, pulls, writes the same files, exits.
-   Removes the manual click. No MCP.
-3. **`figma-mcp` write server** (later, opt-in only) — stdio↔Claude Code, persistent WS↔plugin, for
-   code→design. Kept separate so the write surface never touches the read path.
+2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
+   (`devAllowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
+   the same files, exits. Removes the manual click. No MCP. Shipped as the `designtwin` npm package;
+   `bridge/figma-pull.js` is its entry point.
+3. ✅ **`dtwin mcp` write server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin, for
+   code→design. Kept separate so the write surface never touches the read path. The write plane is
+   still a small fixed set of safe ops, not a general authoring API.
 
 ## Security posture
 

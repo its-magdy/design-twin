@@ -101,7 +101,7 @@ authentication, so the bridge is gated by a **shared token** you paste into the 
 `bridge/README.md`). The Skill and the token/component maps carry over unchanged.
 
 Two front-ends sit on that bridge, and they speak the same commands:
-- **`figma-pull` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so
+- **`dtwin` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so
   later pulls skip the plugin reconnect; `--stop` ends it.
   Start with the cheap discovery steps: `--list-libraries` (which design libraries this file draws on)
   then `--list` (pages + frame ids), and only then `--page <id>` to pull what you actually need.
@@ -131,7 +131,7 @@ This repo holds **three separate products**, deliberately kept apart:
 | | What it is | How it ships |
 |---|---|---|
 | `plugin/` | The Claude Code plugin — skills + profiles, **markdown only, zero dependencies** | `claude plugin install` |
-| `bridge/` | The `figma-pull` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm (`npm i -g` / `npx`) |
+| `bridge/` | The `dtwin` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm (`npm i -g` / `npx`) |
 | `figma-plugin/` | The Figma-side plugin | imported into Figma from its manifest |
 
 The Claude Code plugin has no dependencies because the CLI is **not** inside it — installing the
@@ -141,8 +141,8 @@ plugin never needs an `npm install`, and users get only `plugin/` in their cache
 To try it locally: `claude --plugin-dir /path/to/this/repo/plugin`. To hand it to a teammate: they run
 `claude plugin marketplace add <you>/Figma` then `claude plugin install designtwin@designtwin-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
-for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate .`
-checks the manifest before you publish. The Figma-side plugin import (`figma-plugin/manifest.json`)
+for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate ./plugin`
+checks the plugin manifest before you publish (`validate .` checks the *marketplace* manifest instead). The Figma-side plugin import (`figma-plugin/manifest.json`)
 and `bridge/`'s `npm install` stay manual — installing the Claude plugin doesn't set those up.
 
 With **one** file connected you can omit `--client` entirely — nothing changes from before. With
