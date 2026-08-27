@@ -1,4 +1,6 @@
-# Architecture — Figma → code (free plan), verified
+# Design Twin — architecture
+
+**Figma → code on the free plan, verified.**
 
 Every API and behavior below was verified against official Figma / Claude Code docs
 (five parallel doc-verification passes). Time-sensitive; re-verify if Figma changes plans/APIs.

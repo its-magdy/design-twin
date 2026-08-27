@@ -1,4 +1,6 @@
-# Figma → code (free-plan workflow)
+# Design Twin
+
+**Figma → code, on the free plan.**
 
 A repeatable, genuinely-free way to feed a Figma design to an AI coding agent (Claude Code).
 No Figma REST API (throttled to ~6 requests/month on free files), no paid Dev Mode MCP.

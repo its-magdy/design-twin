@@ -1,4 +1,6 @@
-# bridge — figma-pull (read CLI) + figma-mcp (write MCP)
+# Design Twin — bridge
+
+**figma-pull (read CLI) + figma-mcp (write MCP).**
 
 Local, loopback-only bridge between Claude Code and the **Design Twin** Figma plugin.
 The plugin's hidden UI iframe is a WebSocket **client**; these processes are the **server**
