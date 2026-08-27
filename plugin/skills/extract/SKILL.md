@@ -7,7 +7,7 @@ description: Get a design OUT of Figma and onto disk as JSON + assets, using the
 
 Get design data onto disk. Nothing here writes code — that's `build-screen`.
 
-**Everything runs locally.** The Figma plugin declares `allowedDomains: ["none"]`, so design data
+**Everything runs locally.** The Figma plugin's `allowedDomains` names only `ws://localhost`, so design data
 never leaves the machine. There is no Figma API key and no cloud round-trip.
 
 ## Before anything: is the plugin running?
@@ -32,7 +32,7 @@ better once someone is pulling repeatedly, but it needs `npm install` and a brid
 walking a user through that mid-task is worse than just clicking the buttons.
 
 **Only one bridge can hold port 8787.** B, B+ and C all bind it; whichever starts second dies with
-`EADDRINUSE`. If the MCP server is already running you cannot also run the CLI — use the MCP's own
+`EADDRINUSE` (set `FIGMA_BRIDGE_PORT=8788` or `8789` — the only other ports the plugin can reach). If the MCP server is already running you cannot also run the CLI — use the MCP's own
 export tools with `writeToDisk: true` instead.
 
 ## Discover, then scope — never open with a whole-file pull

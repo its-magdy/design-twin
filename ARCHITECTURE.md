@@ -123,8 +123,15 @@ Design decisions worth not re-litigating:
   keeping the Origin/Host checks only as defense-in-depth.
 - **No documented payload-size cap** → **chunk large exports** across `postMessage` and add reconnect logic.
 - **Network manifest:** `ws`/`wss` and `http(s)://localhost[:PORT]` are permitted in
-  `networkAccess.allowedDomains`; put the bridge URL in **`devAllowedDomains`** with a `reasoning` string.
-  The pure exporter keeps `allowedDomains: ["none"]` (cannot exfiltrate).
+  `networkAccess.allowedDomains` — **including for a published plugin**, which is what makes the bridge
+  survive Community distribution. Figma's docs require a `reasoning` string precisely *because*
+  `allowedDomains` may name a local server ("`reasoning` is required if … your `allowedDomains` list
+  includes local or development servers"); a published counterexample is Grab's Talk to Figma MCP
+  plugin, which ships `ws://localhost:3055` in production `allowedDomains`.
+  Match patterns take **no port wildcard**, so every reachable port must be listed literally: we declare
+  `ws://localhost:{8787,8788,8789}` and the plugin walks all three. Adding a fourth needs a new
+  published version, which is why `FIGMA_BRIDGE_PORT` is validated against that set
+  (`bridge/server-core.js` `ALLOWED_PORTS`) instead of accepting any number.
 - **Whole-document read (dynamic-page, required for new plugins):** `documentAccess: "dynamic-page"`;
   call `figma.loadAllPagesAsync()` before traversing other pages; `findAllWithCriteria` needs pages loaded.
   Under dynamic-page **all reads are async** — use `getMainComponentAsync`, `getLocalPaintStylesAsync`,
@@ -402,13 +409,13 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 
 ## Build order
 
-1. ✅ **Exporter plugin** (done) — full design system + all layers + assets, `allowedDomains:["none"]`,
-   read-only, no network. Manual file handoff. **This is enough to start.** Now authored in
+1. ✅ **Exporter plugin** (done) — full design system + all layers + assets, loopback-only
+   `allowedDomains`, read-only, no internet. Manual file handoff. **This is enough to start.** Now authored in
    **TypeScript** (`figma-plugin/src/*.ts`, typed against `@figma/plugin-typings`) and bundled to
    `code.js` via esbuild; the built `code.js` is committed so import stays zero-build. `tsc --noEmit`
    is the first test gate. See `figma-plugin/README.md`.
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
-   (`devAllowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
+   (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
    the same files, exits. Removes the manual click. No MCP. Shipped as the `designtwin` npm package;
    `bridge/figma-pull.js` is its entry point.
 3. ✅ **`dtwin mcp` write server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin, for
@@ -417,7 +424,9 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 
 ## Security posture
 
-- Exporter: `["none"]` → structurally cannot exfiltrate.
+- Exporter: no internet domain in `allowedDomains` → structurally cannot exfiltrate. Figma **publishes**
+  the declared domain list on the Community page, so this is a claim a stranger can verify without
+  reading the source — a stronger guarantee than a self-asserted one.
 - Bridge: `ws://localhost` only → reaches your machine, never the internet. But loopback is *reachability*,
   not authentication — any local process, and any page in your browser, can open the port. So the bridge
   requires a **shared token** (from `FIGMA_BRIDGE_TOKEN`, else printed per-run; pasted into the plugin and

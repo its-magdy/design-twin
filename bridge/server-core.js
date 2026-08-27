@@ -8,7 +8,24 @@
 const { WebSocketServer } = require("ws");
 const crypto = require("crypto");
 
-const PORT = Number(process.env.FIGMA_BRIDGE_PORT || 8787);
+// The ONLY ports a published plugin can reach. figma-plugin/manifest.json lists these three in
+// `networkAccess.allowedDomains`, Figma's match patterns have no port wildcard, and a plugin socket to
+// any other port is blocked by Figma before it leaves the iframe. So FIGMA_BRIDGE_PORT is a choice of
+// three, not a free number: binding 9999 gives a bridge that nothing can ever connect to. Keep this
+// array and the manifest's allowedDomains in sync — they are two halves of one contract.
+const ALLOWED_PORTS = [8787, 8788, 8789];
+
+const PORT = (() => {
+  const raw = process.env.FIGMA_BRIDGE_PORT;
+  if (!raw) return ALLOWED_PORTS[0];
+  const n = Number(raw);
+  if (ALLOWED_PORTS.includes(n)) return n;
+  console.error(
+    `[bridge] FIGMA_BRIDGE_PORT=${raw} is not one of ${ALLOWED_PORTS.join(", ")}. The Figma plugin ` +
+      "may only open sockets to ports named in its manifest, so a bridge here would never be reachable."
+  );
+  process.exit(1);
+})();
 
 // Shared secret the plugin must present as ?token=... on connect. Prefer a stable
 // value via FIGMA_BRIDGE_TOKEN (paste once into the plugin); otherwise a per-run
@@ -187,7 +204,8 @@ function createBridge(port = PORT) {
     if (e && e.code === "EADDRINUSE") {
       console.error(
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
-          "Stop it first, or set FIGMA_BRIDGE_PORT to a free port."
+          `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +
+          `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`
       );
       process.exit(1);
     }
@@ -349,4 +367,4 @@ function createBridge(port = PORT) {
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg };
+module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS };

@@ -2,10 +2,10 @@
 // Two manual export modes:
 //   1) Export current selection      -> <screen>.json + variables.json
 //   2) Export design system + page   -> design-system.json + pages/<page>/ (one file per layer) + assets
-// In production the plugin has NO network (manifest allowedDomains:["none"]) — data leaves only via
-// the clipboard / file download YOU trigger. A Development build additionally opts into a localhost-only
-// bridge (devAllowedDomains, ignored once published) that can also apply the enumerated writes in
-// writes.ts. See ARCHITECTURE.md "Verified extraction API surface".
+// The plugin reaches NO internet domain, published or not: manifest allowedDomains lists only
+// ws://localhost:{8787,8788,8789}. Data leaves either via the clipboard / file download YOU trigger,
+// or over the loopback bridge to a server YOU run, which can also apply the enumerated writes in
+// writes.ts. Figma blocks any other destination before it leaves the iframe.
 //
 // Extraction surface is grounded in the verified Figma Plugin API (dynamic-page async reads,
 // figma.mixed guards, defensive `in` checks). See ARCHITECTURE.md "Verified extraction API surface".

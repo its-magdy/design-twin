@@ -13,7 +13,7 @@ in `plugin/skills/build-screen/profiles/` — a project can override with its ow
 and the right-hand values in `tokens.json`/`components.json`. One plugin, any framework.
 
 ## Pieces
-- `figma-plugin/` — a self-authored Figma plugin (`allowedDomains: ["none"]` → cannot phone home).
+- `figma-plugin/` — a self-authored Figma plugin (`allowedDomains` lists only `ws://localhost` → cannot phone home).
   Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
 - `plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
   Invoke with `/designtwin:build-screen <screen>`.
@@ -96,7 +96,7 @@ files. You only author the config maps below.
 
 ## Upgrade path (later, optional)
 If manual export gets tedious, swap the file handoff for a **localhost-only** WebSocket bridge
-(`devAllowedDomains: ["ws://localhost:8787"]` — reaches your machine, never the internet). Loopback isn't
+(`allowedDomains: ["ws://localhost:8787", …]` — reaches your machine, never the internet). Loopback isn't
 authentication, so the bridge is gated by a **shared token** you paste into the plugin once (see
 `bridge/README.md`). The Skill and the token/component maps carry over unchanged.
 
@@ -112,7 +112,9 @@ Two front-ends sit on that bridge, and they speak the same commands:
   `writeToDisk: true` on the export tools to write files and get back a compact index instead of the
   payload — the only way to get asset bytes, and the right choice for anything large.
 
-Only one of them can hold port 8787 at a time; run the one that matches what you're doing.
+Only one of them can hold port 8787 at a time; run the one that matches what you're doing. If something
+else already owns it, `FIGMA_BRIDGE_PORT` accepts `8788` or `8789` — and only those, because the plugin
+manifest names exactly those three ports and the plugin walks all three when connecting.
 
 **Several Figma FILES at once, though.** The bridge accepts one connection per open Figma file, so a
 design file and the library it draws on can both be connected and driven in the same session. Each

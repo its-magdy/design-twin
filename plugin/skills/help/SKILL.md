@@ -7,7 +7,7 @@ disable-model-invocation: true
 # Using this tool (free-plan Figma → code)
 
 Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
-A self-authored plugin (`allowedDomains: ["none"]`) extracts the design as stack-neutral JSON + real
+A self-authored plugin (`allowedDomains`: loopback only) extracts the design as stack-neutral JSON + real
 assets; the `/designtwin:build-screen` skill turns that into code for any stack.
 
 **Your job when this skill is invoked: figure out what the user is trying to do, give them the exact

@@ -9,8 +9,10 @@ The plugin's hidden UI iframe is a WebSocket **client**; these processes are the
 cd bridge
 npm install        # ws + @modelcontextprotocol/sdk (+ zod, and build deps for the MCP server)
 ```
-The plugin manifest already allows the bridge in dev (`devAllowedDomains: ws://localhost:8787`),
-so re-import the plugin in Figma after pulling these changes.
+The plugin manifest allows the bridge in **both** dev and published builds
+(`allowedDomains: ws://localhost:{8787,8788,8789}`), so re-import the plugin in Figma after pulling
+these changes. Those three ports are the only ones the plugin can dial — `FIGMA_BRIDGE_PORT` is
+validated against them and exits rather than binding a port nothing could ever reach.
 
 > **Re-import the plugin — required for library reads.** The manifest now declares
 > `"permissions": ["teamlibrary"]`, without which Figma denies the team-library APIs. A plugin

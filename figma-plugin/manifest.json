@@ -13,12 +13,15 @@
   ],
   "networkAccess": {
     "allowedDomains": [
-      "none"
+      "ws://localhost:8787",
+      "ws://localhost:8788",
+      "ws://localhost:8789"
     ],
     "devAllowedDomains": [
       "ws://localhost:8787",
-      "http://localhost:8787"
+      "ws://localhost:8788",
+      "ws://localhost:8789"
     ],
-    "reasoning": "Optional local bridge (figma-pull CLI / figma-mcp) for automated extraction. Localhost only — no internet access. Production access stays 'none'."
+    "reasoning": "Loopback only. The plugin connects to a WebSocket bridge the user runs on their own machine (the open-source figma-pull CLI / designtwin MCP server) to hand design data to their local coding agent. No internet domain is listed and none is reachable: design data never leaves the user's computer. Three ports are declared only so the bridge can fall back if 8787 is taken."
   }
 }

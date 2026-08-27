@@ -47,7 +47,13 @@
   //  - DOM-dependent wiring (button handlers, get-token) runs on DOMContentLoaded, never before the
   //    elements exist — the classic "script ran before the buttons" freeze.
   (function () {
-    var BRIDGE_PORT = 8787;
+    // The ports the bridge may listen on, in the order we try them. This list is NOT free-form: a
+    // published plugin can only open sockets to ports named in manifest.json's `allowedDomains`, and
+    // match patterns take no port wildcard, so every port here must also be listed there (and vice
+    // versa). Adding a fourth port means shipping a new plugin VERSION through review — which is why
+    // FIGMA_BRIDGE_PORT can no longer be an arbitrary number; see bridge/server-core.js.
+    var BRIDGE_PORTS = [8787, 8788, 8789];
+    var portIdx = 0; // which one the NEXT connect() attempt uses; advances on every failure
     var assetsState = [];
     var layerFilesState = [];
     // A batch runs for items.length * 200ms — 80s for 400 assets — with the button still on screen.
@@ -217,14 +223,22 @@
     function connect() {
       if (!bridgeToken) { setBridge(false, "offline — paste the bridge token above"); return; }
       if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // already CONNECTING/OPEN
+      // Try each allowed port in turn rather than only 8787. A bridge that lost the race for 8787 to
+      // some unrelated local process is otherwise invisible to the plugin, and the user has no way to
+      // point it elsewhere — the manifest, not a setting, decides what we may dial.
+      var port = BRIDGE_PORTS[portIdx % BRIDGE_PORTS.length];
+      portIdx++;
       var s;
       try {
-        s = new WebSocket("ws://localhost:" + BRIDGE_PORT + "/?token=" + encodeURIComponent(bridgeToken));
+        s = new WebSocket("ws://localhost:" + port + "/?token=" + encodeURIComponent(bridgeToken));
       } catch (e) { setBridge(false, "offline"); scheduleReconnect(); return; }
       ws = s;
       s.onopen = function () {
         if (s !== ws) return;
-        setBridge(true, "connected (localhost:" + BRIDGE_PORT + ")");
+        // Stick to whatever answered: the next reconnect should retry the LIVE bridge's port first,
+        // not resume walking the ladder past it.
+        portIdx = BRIDGE_PORTS.indexOf(port);
+        setBridge(true, "connected (localhost:" + port + ")");
         // Announce which FILE this is, every time the socket opens — including each reconnect. The
         // bridge accepts several plugin instances at once (one per open Figma file) and routes
         // commands by identity, so a connection that never says who it is can only be addressed by
