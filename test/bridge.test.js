@@ -45,13 +45,20 @@ ok("[auth] safeEqual is length-safe", core.safeEqual("abc", "abcdef") === false 
 // ---------------------------------------------------------------- seed-components CLI
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "seed-test-"));
 const seed = path.join(__dirname, "..", "bridge", "seed-components.js");
-function runSeed(name, files, existingMap) {
+function runSeed(name, files, existingMap, designFiles) {
   const root = path.join(tmp, name);
   const design = path.join(root, "design");
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.mkdirSync(design, { recursive: true });
   for (const [f, body] of Object.entries(files)) fs.writeFileSync(path.join(root, "src", f), body);
   if (existingMap) fs.writeFileSync(path.join(design, "components.json"), JSON.stringify(existingMap, null, 2));
+  // Export files the seeder reads back (the design-system manifest + whatever it points at), written
+  // at paths relative to the export dir so the pointer indirection is exercised for real.
+  for (const [f, body] of Object.entries(designFiles || {})) {
+    const dest = path.join(design, f);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, JSON.stringify(body, null, 2));
+  }
   execFileSync(process.execPath, [seed, root, design], { stdio: "pipe" });
   const out = path.join(design, "components.json");
   return fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : null;
@@ -86,6 +93,34 @@ ok("[sec-seed-no-starve] unrelated entry still backfilled after a '__proto__' en
 ok("[sec-seed-no-pollute] Object.prototype was not mutated",
   ({}).source === undefined && ({}).nodeId === undefined);
 ok("[seed-preserves-human-fields] hand-authored import survives the merge", poisoned.Widget.import === "@/ui");
+
+console.log("\nseed-components — node-id -> name via the split catalog:");
+// A Code Connect template that carries a node-id but NO `component=` can only be named by looking the
+// id up in the export. That lookup used to read `components` straight off design-system.json — which
+// since the design-system split is a slim POINTER manifest with no such array, so the map came back
+// empty and every name-less mapping was silently dropped (a clean-looking run that just found less).
+// The seeder must follow files.componentsLocal to the real catalog.
+const viaManifest = runSeed(
+  "manifest-lookup",
+  { "a.figma.tsx": "// url=https://figma.com/design/x?node-id=1-2\n// source=Card.tsx\n" },
+  null,
+  {
+    "design-system.json": { files: { componentsLocal: "design-system/components.local.json" }, counts: { components: 1 } },
+    "design-system/components.local.json": { components: [{ id: "1:2", name: "Card", key: "abc" }] },
+  }
+);
+ok("[seed-split-catalog] node-id resolved to a name through files.componentsLocal",
+  !!viaManifest && !!viaManifest.Card && viaManifest.Card.nodeId === "1:2" && viaManifest.Card.source === "Card.tsx");
+
+// Pre-split exports inlined the array on design-system.json itself; keep reading those.
+const viaInline = runSeed(
+  "inline-lookup",
+  { "a.figma.tsx": "// url=https://figma.com/design/x?node-id=3-4\n// source=Chip.tsx\n" },
+  null,
+  { "design-system.json": { components: [{ id: "3:4", name: "Chip" }] } }
+);
+ok("[seed-inline-catalog] pre-split inline components array still resolves",
+  !!viaInline && !!viaInline.Chip && viaInline.Chip.nodeId === "3:4");
 
 fs.rmSync(tmp, { recursive: true, force: true });
 

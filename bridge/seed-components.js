@@ -93,11 +93,28 @@ function loadJson(p) {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) { return undefined; }
 }
 
-function main() {
-  // id -> component name, from an existing export (optional; only needed for forms lacking a name).
-  const ds = loadJson(path.join(outDir, "design-system.json"));
+// id -> component name, from an existing export (optional; only needed for Code Connect forms that
+// give a node-id URL but no component identifier).
+//
+// Since the design-system split (bridge/design-system-layout.js) `design-system.json` is a slim
+// pointer manifest with NO `components` array — reading `ds.components` off it silently yields an
+// empty map, and every node-id-only mapping is then dropped at the `if (!name) continue` below. That
+// reads as a clean run that just "found fewer mappings", which is the silent-wrong-answer failure
+// tooling/catalog-input.js exists to prevent. So follow the `files.componentsLocal` pointer instead,
+// and keep accepting an inline array for pre-split exports.
+function loadIdToName(dir) {
   const idToName = new Map();
-  if (ds && Array.isArray(ds.components)) for (const c of ds.components) if (c.id) idToName.set(c.id, c.name);
+  const ds = loadJson(path.join(dir, "design-system.json"));
+  if (!ds) return idToName;
+  const inline = Array.isArray(ds.components) ? ds.components : null;
+  const pointer = ds.files && typeof ds.files === "object" ? ds.files.componentsLocal : null;
+  const rows = inline || (pointer ? (loadJson(path.join(dir, pointer)) || {}).components : null);
+  if (Array.isArray(rows)) for (const c of rows) if (c && c.id) idToName.set(c.id, c.name);
+  return idToName;
+}
+
+function main() {
+  const idToName = loadIdToName(outDir);
 
   const files = [];
   walk(codeRoot, files);
@@ -153,7 +170,7 @@ function main() {
   fs.writeFileSync(outPath, JSON.stringify(existing, null, 2));
   console.error(`[seed-components] ${found.length} mapping(s) from ${files.length} scanned file(s) → ${outPath}`);
   console.error(`[seed-components] ${added} new entr(ies), ${filled} field(s) filled. Fill in each entry's "import" and "props".`);
-  if (!ds) console.error("[seed-components] tip: export design-system.json first so node-id-only mappings resolve to real component names.");
+  if (!idToName.size) console.error("[seed-components] tip: export design-system.json first so node-id-only mappings resolve to real component names.");
 }
 
 main();
