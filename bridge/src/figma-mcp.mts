@@ -493,12 +493,33 @@ server.registerTool(
 // — the agent had twelve figma_* tools and no way in, which is why the map and the codegen skill drifted
 // into two different formats. Registering them here is what makes that layer exist for its actual
 // consumer.
-const {
-  getComponent,
-}: { getComponent: (catalogFile: string, handle: string) => any } = require("../design-to-code/get-component.js");
-const {
-  driftLint,
-}: { driftLint: (map: any, catalog: any, opts?: { maxAgeMs?: number }) => any } = require("../design-to-code/drift-lint.js");
+// Loaded LAZILY, on call, and never at module scope. ../design-to-code/ is a SIBLING of this package
+// root (bridge/), so npm — whose `files` cannot reach outside the package root — does not ship it.
+// Requiring it eagerly took the whole server down with MODULE_NOT_FOUND on an `npm i -g designtwin`
+// install, killing the other twelve tools over two that merely could not work. Now the server always
+// starts and only these two report, precisely, that they need the repo checkout.
+function loadLayer<T>(mod: string, tool: string): T {
+  try {
+    return require("../design-to-code/" + mod) as T;
+  } catch (e) {
+    throw new Error(
+      `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
+        `Design Twin repository, not with the published npm package — run this MCP server from a repo ` +
+        `checkout (node bridge/figma-mcp.mjs) to use it. Everything else on this server works either way.`
+    );
+  }
+}
+const getComponent = (catalogFile: string, handle: string) =>
+  loadLayer<{ getComponent: (c: string, h: string) => any }>("get-component.js", "design_get_component").getComponent(
+    catalogFile,
+    handle
+  );
+const driftLint = (map: any, catalog: any, opts?: { maxAgeMs?: number }) =>
+  loadLayer<{ driftLint: (m: any, c: any, o?: any) => any }>("drift-lint.js", "design_drift_lint").driftLint(
+    map,
+    catalog,
+    opts
+  );
 const nodeFs = require("node:fs") as typeof import("node:fs");
 const nodePath = require("node:path") as typeof import("node:path");
 

@@ -280,12 +280,24 @@ ${applied.length} earlier op(s) were applied and NOT rolled back:
     return textResult(r);
   })
 );
-const {
-  getComponent
-} = require2("../design-to-code/get-component.js");
-const {
-  driftLint
-} = require2("../design-to-code/drift-lint.js");
+function loadLayer(mod, tool) {
+  try {
+    return require2("../design-to-code/" + mod);
+  } catch (e) {
+    throw new Error(
+      `${tool} needs the design-to-code layer, which is not present in this install. It ships with the Design Twin repository, not with the published npm package \u2014 run this MCP server from a repo checkout (node bridge/figma-mcp.mjs) to use it. Everything else on this server works either way.`
+    );
+  }
+}
+const getComponent = (catalogFile, handle) => loadLayer("get-component.js", "design_get_component").getComponent(
+  catalogFile,
+  handle
+);
+const driftLint = (map, catalog, opts) => loadLayer("drift-lint.js", "design_drift_lint").driftLint(
+  map,
+  catalog,
+  opts
+);
 const nodeFs = require2("node:fs");
 const nodePath = require2("node:path");
 function componentsLocalPath(exportDir) {
