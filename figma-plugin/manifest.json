@@ -1,6 +1,6 @@
 {
   "name": "Design Twin — Design Export for AI",
-  "id": "design-export-for-ai",
+  "id": "design-twin",
   "api": "1.0.0",
   "main": "code.js",
   "ui": "ui.html",

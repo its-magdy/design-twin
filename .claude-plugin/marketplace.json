@@ -1,6 +1,6 @@
 {
   "name": "designtwin-marketplace",
-  "description": "Marketplace for the free-plan Figma→code workflow plugin.",
+  "description": "Design Twin: the free-plan Figma→code workflow for Claude Code.",
   "owner": {
     "name": "Mohamed Magdy Omar"
   },

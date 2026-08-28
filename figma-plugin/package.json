@@ -1,5 +1,5 @@
 {
-  "name": "design-export-for-ai-plugin",
+  "name": "design-twin-figma-plugin",
   "version": "0.1.0",
   "private": true,
   "description": "Figma plugin (main thread) for the free-plan design-to-code read pipeline. TypeScript source in src/, bundled to code.js which manifest.json loads.",
