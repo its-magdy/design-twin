@@ -1,12 +1,16 @@
 // map-validate.js — structural validation of a codeconnect.local.json map.
 //
-// No runtime dependency (matches this repo's zero-dep style). This IS the executable validator; it does
-// not read tooling/map-schema.json — the JSON is the published/human-facing schema and this file hand-
-// mirrors it (additionalProperties:false, the per-kind prop `oneOf` field sets, required/type rules).
-// The two are therefore kept in sync BY HAND — edit both when the shape changes. Returns
-// { ok, errors:[{path,message}] }; never throws on bad data. A schema-driven walker that interprets
-// map-schema.json directly (or a Zod schema behind a build step) would make the JSON the single source
-// and retire this mirror — deferred as a larger change than the current zero-dep validator warrants.
+// No runtime dependency (matches this repo's zero-dep style). This file IS the source of truth for the
+// map shape: the KEYS/PROP tables below encode additionalProperties:false, the per-kind prop field
+// sets and the required/type rules, and `tooling/README.md` documents that shape in prose for humans.
+//
+// There used to be a parallel map-schema.json that hand-mirrored these tables and that nothing read —
+// two representations kept in sync by hand, which is the exact drift this directory builds tools to
+// catch. It was deleted rather than wired up: the map's only consumers are this validator, drift-lint
+// and an agent reading JSON, none of which want a JSON Schema document. If a published schema is ever
+// needed, GENERATE it from these tables so there is still one source.
+//
+// Returns { ok, errors:[{path,message}] }; never throws on bad data.
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).

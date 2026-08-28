@@ -81,10 +81,10 @@ was confirmed to compose end-to-end. Assertions pin actual VALUES (RGB channels,
 Lesson baked in: assert values, mutation-test, and adversarially re-review EACH fix pass — every fix pass
 can introduce its own bugs (findings converged 28 → ~6 → 1 → ~0 real across the four rounds).
 
-When you change a `tooling/` script or the map schema, extend `test/tooling.test.js` with the new
-behavior AND keep `tooling/map-schema.json` and `tooling/map-validate.js` in lock-step (the JSON Schema
-is the source of truth; the validator must reject everything the schema rejects). If you add a token
-field, assert both the DTCG output and the CSS output.
+When you change a `tooling/` script or the map shape, extend `test/tooling.test.js` with the new
+behavior. `tooling/map-validate.js` is the single source of truth for that shape — update its KEYS/PROP
+tables and the prose in `tooling/README.md` together. If you add a token field, assert both the DTCG
+output and the CSS output.
 
 ---
 

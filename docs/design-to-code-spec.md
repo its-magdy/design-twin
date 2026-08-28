@@ -81,10 +81,12 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
 - **No-eval is validated by Figma's own design:** Code Connect transforms are declarative value-tables;
   "files are not executed." The map is plain JSON data. Computed transforms only via a **whitelisted
   named-op registry** (e.g. `{ "transform": "pxToRem", "base": 16 }`), never inline functions.
-- **Schema as single source of truth.** `tooling/map-schema.json` (JSON Schema) is the authored source;
-  `tooling/map-validate.js` enforces it with structured errors (no runtime dependency — matches this
-  repo's zero-dep style). If a build step is later adopted, a Zod schema deriving `z.infer` + the JSON
-  Schema is the upgrade path.
+- **One source of truth for the map shape.** `tooling/map-validate.js` both defines and enforces it,
+  with structured errors and no runtime dependency (matches this repo's zero-dep style). A parallel
+  hand-mirrored `map-schema.json` was deleted — nothing read it, and two representations synced by hand
+  are the drift this directory exists to catch. If a published JSON Schema is ever needed, generate it
+  from the validator's tables; if a build step is later adopted, a Zod schema deriving `z.infer` is the
+  upgrade path.
 - **Drift-lint beats the paid tool.** Figma Code Connect keys on node-id and has an open, unfixed bug
   (github.com/figma/code-connect/issues/337): a deleted/moved mapped component makes `publish` succeed
   *silently* with a broken link. Because we key on the stable `key`, `tooling/drift-lint.js` catches
@@ -118,7 +120,7 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
 
 ## Build status
 - **Built (repo-agnostic, harness-tested + adversarially reviewed):** `tooling/tokens.js`,
-  `tooling/map-schema.json`, `tooling/map-validate.js`, `tooling/drift-lint.js`, `tooling/map-bootstrap.js`.
+  `tooling/map-validate.js`, `tooling/drift-lint.js`, `tooling/map-bootstrap.js`.
   Adversarially reviewed across **FOUR rounds** (4 agents each, all node-proven), findings converging
   28 → ~6 → 1 → ~0 real: round 1 found 28 confirmed bugs (validator too lenient vs its schema; drift-lint
   name-fallback masking the deleted-component case it advertises; token collisions/shorthand-hex/alpha-

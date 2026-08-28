@@ -23,8 +23,7 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 | File | What it does |
 |---|---|
 | `tokens.js` | Variables → **W3C DTCG JSON** (aliases preserved as `{group.token}` references — the themeability lever; structured color w/ P3 + hex fallback) **and** a zero-dependency **CSS emitter** (`:root` + `[data-theme]` blocks). Usable without Style Dictionary. |
-| `map-schema.json` | JSON Schema for `codeconnect.local.json` — the authored source of truth for the map shape. |
-| `map-validate.js` | No-dependency structural validator; returns `{ok, errors:[{path,message}]}`, never throws on bad input. |
+| `map-validate.js` | **The** source of truth for the `codeconnect.local.json` shape: a no-dependency structural validator; returns `{ok, errors:[{path,message}]}`, never throws on bad input. (A parallel `map-schema.json` used to hand-mirror it and was read by nothing; deleted rather than kept in sync.) |
 | `drift-lint.js` | Joins the map against the live component catalog **by stable `key`**; reports orphaned entries, unmapped components, stale/uncovered props, and kind/enum mismatches. Catches the exact bug Figma's own Code Connect ships silently (issue #337). |
 | `map-bootstrap.js` | Scaffolds `codeconnect.local.json` from the catalog with props pre-translated and `status:"needs-review"` — the free-plan `figma connect create`. Re-run merges (preserves confirmed entries). |
 
@@ -51,7 +50,7 @@ one → generated markup) and emits token references instead of literals.
 ## The map: `codeconnect.local.json`
 Keyed by the **stable component publish `key`** (name is a low-confidence fallback only). Prop transforms
 are **declarative value-tables — no functions, no eval** (validated by Figma's own "files are not
-executed" design). Full shape in `map-schema.json`; each entry:
+executed" design). Full shape is enforced by `map-validate.js` (and documented here); each entry:
 ```jsonc
 "<component key>": {
   "figma": { "key": "…", "name": "Button" },          // key = identity; name = advisory
