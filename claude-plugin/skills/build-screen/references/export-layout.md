@@ -44,8 +44,9 @@ above — to learn the system before building.
   treatment under `--variant-visuals`, but its own node tree is pointed at by `nodeFile` on the entry
   instead (no `variants[]` to hang it off of).
 
-  Only load that file for a component you're actually building; resolve one entry and follow either
-  pointer with:
+  Only load that file for a component you're actually building. Resolve one entry and follow either
+  pointer with the **`design_get_component`** MCP tool (`{handle:"<key|id|name>"}` — no Figma connection
+  needed, it reads the export on disk), or on the command line:
   ```
   node tooling/get-component.js design/design-system/components.local.json <key|id|name>
   ```
@@ -115,10 +116,16 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 - `design/<screen>.png` — reference screenshot (visual ground truth). **Always read it** — JSON gives
   exact values, the image tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
-- `design/tokens.json` — Figma variable/value → **your** code token (in the form your target uses).
-- `design/components.json` — Figma component name → **your** code component + import path. Can be
-  **auto-seeded from Code Connect files** in the repo: `node bridge/seed-components.js` (fills
-  `component` + `source` + `nodeId`; you add `import`/`props`). If it's missing/thin, offer to run it.
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node tooling/tokens.js`),
+  with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
+  token, in the form your target uses.
+- `codeconnect.local.json` (repo ROOT, not `design/`) — Figma component → **your** code component +
+  import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
+  unmap it. Scaffold from the Figma side with `node tooling/map-bootstrap.js`, or auto-seed the code
+  side from **Code Connect files** in the repo with `node bridge/seed-components.js`. Check it with
+  the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
+  *(A legacy `design/components.json` keyed by component NAME exists in older projects; it cannot
+  detect drift, so prefer `codeconnect.local.json` where both are present.)*
 - `design/variables.json` — full Figma variable snapshot (for the drift check).
 - `design/target.json` — the target stack config (optional; auto-detected if absent).
 - `profiles/<profile>.md` — how to translate the IR into a specific stack. A project can override or

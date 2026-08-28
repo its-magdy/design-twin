@@ -280,6 +280,83 @@ ${applied.length} earlier op(s) were applied and NOT rolled back:
     return textResult(r);
   })
 );
+const {
+  getComponent
+} = require2("../tooling/get-component.js");
+const {
+  driftLint
+} = require2("../tooling/drift-lint.js");
+const nodeFs = require2("node:fs");
+const nodePath = require2("node:path");
+function componentsLocalPath(exportDir) {
+  const dir = assertInsideCwd(exportDir);
+  const manifestPath = nodePath.join(dir, "design-system.json");
+  let manifest;
+  try {
+    manifest = JSON.parse(nodeFs.readFileSync(manifestPath, "utf8"));
+  } catch (e) {
+    throw new Error(
+      `No design export found at ${manifestPath}. Run an export first (figma_export_design_system with writeToDisk:true, or the dtwin CLI), or pass exportDir.`
+    );
+  }
+  const rel = manifest && manifest.files && manifest.files.componentsLocal;
+  if (!rel) throw new Error(`${manifestPath} has no files.componentsLocal pointer \u2014 re-export with a current dtwin.`);
+  return nodePath.join(dir, rel);
+}
+const exportDirShape = {
+  exportDir: z.string().optional().describe(
+    "Directory holding the design export, relative to the directory this server was started in. Default: FIGMA_EXPORT_DIR or 'design'."
+  )
+};
+server.registerTool(
+  "design_get_component",
+  {
+    description: "Read ONE component out of the design export on disk, with its real variant node trees. Handle is the component's stable publish `key` (preferred \u2014 survives renames), its node id, or its exact name (an ambiguous name is an ERROR listing the keys, never a guess). Use this when building a screen and you need one component's actual variant visuals: the catalog is deliberately slim, so every COMPONENT_SET's heavy per-variant node trees live in their own file and this is the tool that follows that pointer. Needs NO Figma connection and costs nothing \u2014 it reads files an earlier export already wrote.",
+    inputSchema: {
+      handle: z.string().describe("Component publish key, node id, or exact name. Keys come from design_drift_lint or the components.local.json catalog."),
+      ...exportDirShape
+    },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => {
+    const res = getComponent(componentsLocalPath(a.exportDir), a.handle);
+    if (!res.found) return errorResult(`No component matches '${a.handle}' in the export. Try its publish key or id.`);
+    if (!res.detail) {
+      return textResult({
+        component: res.component,
+        detail: null,
+        note: "No node trees were exported for this component \u2014 re-run the export with variantVisuals:true to get its variant visuals."
+      });
+    }
+    return textResult({ component: res.component, detail: res.detail });
+  })
+);
+server.registerTool(
+  "design_drift_lint",
+  {
+    description: "Check a codeconnect.local.json map against the design export for DRIFT, and report snapshot staleness. Joins on the stable publish `key`, so it catches the case Figma's own Code Connect ships silently (its node-id join misses renamed/republished components \u2014 issue #337): orphaned map entries, unmapped components, stale or uncovered props, kind/enum mismatches. Also warns when the export on disk is older than --max-age. Run it before building a screen (so you find out the map is wrong BEFORE generating code against it) and in CI/pre-commit. Needs NO Figma connection.",
+    inputSchema: {
+      map: z.string().optional().describe("Path to the map, relative to the server's start directory. Default: 'codeconnect.local.json'."),
+      maxAgeHours: z.number().optional().describe("Warn if the export snapshot is older than this many hours. Omit for the built-in default."),
+      ...exportDirShape
+    },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => {
+    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json");
+    let map;
+    try {
+      map = JSON.parse(nodeFs.readFileSync(mapPath, "utf8"));
+    } catch (e) {
+      throw new Error(
+        `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with \`node tooling/map-bootstrap.js <componentsLocal> > codeconnect.local.json\`.`
+      );
+    }
+    const catalog = JSON.parse(nodeFs.readFileSync(componentsLocalPath(a.exportDir), "utf8"));
+    const res = driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 36e5 } : void 0);
+    return textResult({ ok: res.errors.length === 0, ...res });
+  })
+);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
