@@ -247,7 +247,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     // exclude/tag these rather than leak internal primitives into the public token API. Only meaningful
     // for local vars (the API guarantees it's false when remote).
     if (v.hiddenFromPublishing) rec.hiddenFromPublishing = true;
-    // Durable cross-file identity (importVariableByKeyAsync) — rename-proof anchor for the tooling/ map +
+    // Durable cross-file identity (importVariableByKeyAsync) — rename-proof anchor for the design-to-code/ map +
     // drift-lint. Mirrors the component `key` precedent; present on local and published variables.
     if (v.key) rec.key = v.key;
     if (asLibrary) pendingPublish.push({ rec, obj: v });

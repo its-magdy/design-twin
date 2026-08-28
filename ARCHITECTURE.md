@@ -276,7 +276,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   are now closed: **`EllipseNode.arcData`** → `arc {start,end,innerRadius}` (arcs/donuts/rings; omitted for a plain full
   ellipse); **`StarNode.pointCount`/`innerRadius`** + **`PolygonNode.pointCount`** → `shape {points,innerRadius}`;
   **`BooleanOperationNode.booleanOperation`** → `booleanOp`; variable + collection **`hiddenFromPublishing`** (stops
-  designer-private tokens leaking into the public API) and **`key`** (durable cross-file identity for the `tooling/`
+  designer-private tokens leaking into the public API) and **`key`** (durable cross-file identity for the `design-to-code/`
   map, mirroring the component-`key` precedent); **image source bytes + intrinsic size** via
   `figma.getImageByHash(hash).getBytesAsync()`/`getSizeAsync()` (asset `kind:"source"`, deduped by hash;
   paint `intrinsicSize {w,h}`); **`useAbsoluteBounds:true`** on the image-fill PNG export (overhang no longer clipped);
@@ -312,8 +312,8 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   single-node / small (≤60-node) selections so Figma's `getCSSAsync` oracle is on by default where it's cheap
   (large trees & multi-select stay opt-in; an explicit `css:false` always wins).
   **Code Connect** (node→codebase-component + prop transforms) is Org/Ent-gated — **now replicated locally**
-  in `tooling/` (DTCG token emitter, schema'd + validated + drift-checked `codeconnect.local.json` map,
-  bootstrapper). See `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
+  in `design-to-code/` (DTCG token emitter, schema'd + validated + drift-checked `codeconnect.local.json` map,
+  bootstrapper). See `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
   ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built + 4-round adversarially
   reviewed (tooling suite 126/126); codegen resolver deferred to a target repo.
 - **Competitor sweep + Plugin API cross-check (2026-08-13; harness 306/306):** researched 10+ Figma-to-code
@@ -353,12 +353,12 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **`components.local.json` index/detail split (2026-08-18):** `--variant-visuals` made the catalog huge
   on a real design-system file — one real export measured `components.local.json` at 4.3MB, almost
   entirely `variants[].node` trees an agent doesn't need just to see a component's prop table. Neither
-  `tooling/drift-lint.js` nor `tooling/map-bootstrap.js` ever reads `.node` (both key off
+  `design-to-code/drift-lint.js` nor `design-to-code/map-bootstrap.js` ever reads `.node` (both key off
   `name`/`id`/`key`/`type`/`props`), so `bridge/design-system-layout.js` now strips it out of each
   `COMPONENT_SET` entry into a sibling `design-system/components/<safe(name)>__<safe(id)>.json`, and adds
   a `variantsFile` pointer on the entry (absent, not null, when the set had no exported node trees — same
   convention as `pageId`'s absence on pre-pageId exports). Every variant keeps its `id`/`name`/`key`/
-  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `tooling/get-component.js`
+  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `design-to-code/get-component.js`
   resolves one entry by key/id/name and follows `variantsFile` to print its full detail — the read path
   for an agent that DOES want one component's real variant visuals. On that same real export the split
   took `components.local.json` from 4.3MB to 196KB with drift-lint/map-bootstrap unmodified against it
@@ -371,7 +371,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   attaches the result as **`entry.node`** (not `entry.variants[]` — there is no set to enumerate variants
   of). `bridge/design-system-layout.js` splits any local `COMPONENT` entry carrying `.node` into the same
   `design-system/components/<name>__<id>.json` sibling file, replacing it with a **`nodeFile`** pointer
-  (mirroring `variantsFile`). `tooling/get-component.js` resolves either pointer. Flag-off and
+  (mirroring `variantsFile`). `design-to-code/get-component.js` resolves either pointer. Flag-off and
   `COMPONENT_SET` output are byte-identical (regression-tested).
 
 ## Claude Code integration (verified)

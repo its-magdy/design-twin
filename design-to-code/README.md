@@ -1,4 +1,4 @@
-# `tooling/` — the design-to-code layer (who / what / how / why)
+# `design-to-code/` — the design-to-code layer (who / what / how / why)
 
 This directory turns the extractor's faithful JSON into **reused real components and real tokens**
 instead of pixel-regenerated lookalikes. It is the free-plan equivalent of Figma's (Org/Enterprise-only)
@@ -35,13 +35,13 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 #    NOTE: pass the SPLIT files below, never design-system.json — that is now a slim pointer
 #    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):
-node tooling/map-bootstrap.js design/design-system/components.local.json > codeconnect.local.json
+node design-to-code/map-bootstrap.js design/design-system/components.local.json > codeconnect.local.json
 # 3. Validate the map shape:
-node tooling/map-validate.js codeconnect.local.json
+node design-to-code/map-validate.js codeconnect.local.json
 # 4. Check it against the current Figma catalog (run this in CI / pre-commit):
-node tooling/drift-lint.js codeconnect.local.json design/design-system/components.local.json
+node design-to-code/drift-lint.js codeconnect.local.json design/design-system/components.local.json
 # 5. Emit code tokens:
-node tooling/tokens.js design/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
+node design-to-code/tokens.js design/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
 #    (or feed tokens.dtcg.json to Style Dictionary for Tailwind/SwiftUI/Compose output)
 ```
 Then the codegen step consults `codeconnect.local.json` (a mapped instance → your component; an unmapped
@@ -68,13 +68,13 @@ executed" design). Full shape is enforced by `map-validate.js` (and documented h
 ## Relationship to the existing `design/` maps
 The repo already had a simpler `design/components.json` (`{import, component, props}`) and `design/tokens.json`,
 plus `bridge/seed-components.js` (which seeds the component map from *code-side* Code Connect files).
-`tooling/` is the **formalized superset**: a schema'd, validated, drift-checked, bootstrappable map plus a
-DTCG token pipeline. `bridge/seed-components.js` seeds from the code side; `tooling/map-bootstrap.js` seeds
-from the Figma side — they are complementary. Consolidating the codegen skill onto the `tooling/` format is
+`design-to-code/` is the **formalized superset**: a schema'd, validated, drift-checked, bootstrappable map plus a
+DTCG token pipeline. `bridge/seed-components.js` seeds from the code side; `design-to-code/map-bootstrap.js` seeds
+from the Figma side — they are complementary. Consolidating the codegen skill onto the `design-to-code/` format is
 part of the deferred resolver work (needs a target repo).
 
 ## Validating on a real file
-`node test/tooling.test.js` (122 checks) runs on **mock** data. Before trusting the tooling on real
+`node test/design-to-code.test.js` (122 checks) runs on **mock** data. Before trusting the tooling on real
 output, walk the **Layer C checklist in `../TESTING.md`** — it runs the token emitter, bootstrap,
 validator, and drift-lint against a genuine export (`design/design-system/`) and injects each drift class to confirm
 the lint catches it.

@@ -100,7 +100,7 @@ function loadJson(p) {
 // pointer manifest with NO `components` array — reading `ds.components` off it silently yields an
 // empty map, and every node-id-only mapping is then dropped at the `if (!name) continue` below. That
 // reads as a clean run that just "found fewer mappings", which is the silent-wrong-answer failure
-// tooling/catalog-input.js exists to prevent. So follow the `files.componentsLocal` pointer instead,
+// design-to-code/catalog-input.js exists to prevent. So follow the `files.componentsLocal` pointer instead,
 // and keep accepting an inline array for pre-split exports.
 function loadIdToName(dir) {
   const idToName = new Map();

@@ -177,7 +177,7 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
 
 module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
-// CLI: node tooling/drift-lint.js <codeconnect.local.json> <design-system/components.local.json> [--max-age <hours>]
+// CLI: node design-to-code/drift-lint.js <codeconnect.local.json> <design-system/components.local.json> [--max-age <hours>]
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
 if (require.main === module) {
@@ -197,7 +197,7 @@ if (require.main === module) {
   const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
 
   const [mapFile, catalogFile] = argv;
-  if (!mapFile || !catalogFile) { console.error("usage: node tooling/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]"); process.exit(2); }
+  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]"); process.exit(2); }
   const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const res = driftLint(JSON.parse(fs.readFileSync(mapFile, "utf8")), catalog, { maxAgeMs });

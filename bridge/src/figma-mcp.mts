@@ -489,16 +489,16 @@ server.registerTool(
 
 // ---------------------------------------------------------------- design-to-code layer (no Figma)
 // These two read the EXPORT ON DISK, not the live file, so they work with no plugin connected and
-// cost nothing. Until now the ../tooling layer was reachable only by a human typing `node tooling/...`
+// cost nothing. Until now the ../tooling layer was reachable only by a human typing `node design-to-code/...`
 // — the agent had twelve figma_* tools and no way in, which is why the map and the codegen skill drifted
 // into two different formats. Registering them here is what makes that layer exist for its actual
 // consumer.
 const {
   getComponent,
-}: { getComponent: (catalogFile: string, handle: string) => any } = require("../tooling/get-component.js");
+}: { getComponent: (catalogFile: string, handle: string) => any } = require("../design-to-code/get-component.js");
 const {
   driftLint,
-}: { driftLint: (map: any, catalog: any, opts?: { maxAgeMs?: number }) => any } = require("../tooling/drift-lint.js");
+}: { driftLint: (map: any, catalog: any, opts?: { maxAgeMs?: number }) => any } = require("../design-to-code/drift-lint.js");
 const nodeFs = require("node:fs") as typeof import("node:fs");
 const nodePath = require("node:path") as typeof import("node:path");
 
@@ -577,7 +577,7 @@ server.registerTool(
     } catch (e) {
       throw new Error(
         `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +
-          `\`node tooling/map-bootstrap.js <componentsLocal> > codeconnect.local.json\`.`
+          `\`node design-to-code/map-bootstrap.js <componentsLocal> > codeconnect.local.json\`.`
       );
     }
     const catalog = JSON.parse(nodeFs.readFileSync(componentsLocalPath(a.exportDir), "utf8"));

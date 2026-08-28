@@ -112,14 +112,14 @@ function bootstrap(catalog, existing) {
 
 module.exports = { bootstrap };
 
-// CLI: node tooling/map-bootstrap.js <design-system/components.local.json> [existing-map.json]
+// CLI: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
 // manifest since the split and carries no `components` array (see bridge/design-system-layout.js).
 if (require.main === module) {
   const fs = require("fs");
   const { assertNotManifest } = require("./catalog-input.js");
   const [catalogFile, existingFile] = process.argv.slice(2);
-  if (!catalogFile) { console.error("usage: node tooling/map-bootstrap.js <design-system/components.local.json> [existing-map.json]"); process.exit(1); }
+  if (!catalogFile) { console.error("usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json]"); process.exit(1); }
   const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const existing = existingFile && fs.existsSync(existingFile) ? JSON.parse(fs.readFileSync(existingFile, "utf8")) : null;

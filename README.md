@@ -23,12 +23,12 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
   discover-then-scope, manifest check). Invoke with `/designtwin:extract`.
 - `plugin/skills/help/SKILL.md` — orientation: the three export paths, one-time setup, and the
   symptom→fix list. Invoke with `/designtwin:help` when something isn't working.
-- `tooling/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
+- `design-to-code/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
   DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
   `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
   to the real node trees). This is
   the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
-  `tooling/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
+  `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
 - `plugin/skills/build-screen/profiles/<profile>.md` — IR→stack translation rules, shipped with the
   skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`; add
   your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
@@ -45,7 +45,7 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
     `components.local.json` (component sets/variants that are real nodes in this file — each
     COMPONENT_SET's own heavy per-variant node tree, or a standalone COMPONENT's own node tree, lives
     in a sibling `components/<name>__<id>.json`, pointed at by that entry's `variantsFile`/`nodeFile`;
-    `tooling/get-component.js` resolves one and follows it),
+    `design-to-code/get-component.js` resolves one and follows it),
     `components.library.json` (entries flagged `remote: true` — consumed from a published library,
     recovered from instances, **not** nodes here) and `hygiene.json` (the lint report)
     and, when you pull a LIBRARY file with `--as-library`, `libraries/index.json` + one

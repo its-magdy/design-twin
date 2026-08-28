@@ -282,10 +282,10 @@ ${applied.length} earlier op(s) were applied and NOT rolled back:
 );
 const {
   getComponent
-} = require2("../tooling/get-component.js");
+} = require2("../design-to-code/get-component.js");
 const {
   driftLint
-} = require2("../tooling/drift-lint.js");
+} = require2("../design-to-code/drift-lint.js");
 const nodeFs = require2("node:fs");
 const nodePath = require2("node:path");
 function componentsLocalPath(exportDir) {
@@ -349,7 +349,7 @@ server.registerTool(
       map = JSON.parse(nodeFs.readFileSync(mapPath, "utf8"));
     } catch (e) {
       throw new Error(
-        `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with \`node tooling/map-bootstrap.js <componentsLocal> > codeconnect.local.json\`.`
+        `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with \`node design-to-code/map-bootstrap.js <componentsLocal> > codeconnect.local.json\`.`
       );
     }
     const catalog = JSON.parse(nodeFs.readFileSync(componentsLocalPath(a.exportDir), "utf8"));

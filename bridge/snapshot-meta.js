@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const { errMsg } = require("./errmsg.js");
 
-// The ONE freshness rule, shared with tooling/drift-lint.js: given a parsed catalog, what is its
+// The ONE freshness rule, shared with design-to-code/drift-lint.js: given a parsed catalog, what is its
 // export timestamp and how old is it? Callers own the POLICY (max-age threshold, warning codes,
 // wording); this owns only "which field, and is it parseable". Two copies of the parse rule meant
 // figma_status and drift-lint could disagree about the same file on disk.

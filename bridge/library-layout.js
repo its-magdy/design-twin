@@ -63,7 +63,7 @@ function buildLibraryLayout(ds, sep) {
   const join = (name) => dir + s + name;
 
   // The stamp every split file carries, plus `source`. `exportedAt`/`file` stay top-level and
-  // unmodified so snapshot-meta.js and tooling/drift-lint.js keep reading them off whichever file they
+  // unmodified so snapshot-meta.js and design-to-code/drift-lint.js keep reading them off whichever file they
   // are handed; `source` is additive and tells a consumer this is a library catalog, not a design
   // file's — a distinction that is otherwise invisible, because inside the library file every object
   // is local and `remote` is therefore false on all of them.

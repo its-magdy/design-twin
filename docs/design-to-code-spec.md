@@ -81,7 +81,7 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
 - **No-eval is validated by Figma's own design:** Code Connect transforms are declarative value-tables;
   "files are not executed." The map is plain JSON data. Computed transforms only via a **whitelisted
   named-op registry** (e.g. `{ "transform": "pxToRem", "base": 16 }`), never inline functions.
-- **One source of truth for the map shape.** `tooling/map-validate.js` both defines and enforces it,
+- **One source of truth for the map shape.** `design-to-code/map-validate.js` both defines and enforces it,
   with structured errors and no runtime dependency (matches this repo's zero-dep style). A parallel
   hand-mirrored `map-schema.json` was deleted — nothing read it, and two representations synced by hand
   are the drift this directory exists to catch. If a published JSON Schema is ever needed, generate it
@@ -89,7 +89,7 @@ Figma ──▶ extractor ─────┤                        ──▶ pe
   upgrade path.
 - **Drift-lint beats the paid tool.** Figma Code Connect keys on node-id and has an open, unfixed bug
   (github.com/figma/code-connect/issues/337): a deleted/moved mapped component makes `publish` succeed
-  *silently* with a broken link. Because we key on the stable `key`, `tooling/drift-lint.js` catches
+  *silently* with a broken link. Because we key on the stable `key`, `design-to-code/drift-lint.js` catches
   exactly that — plus unmapped components, prop-name mismatches, and prop-type/enum-value mismatches —
   at lint time. A pure rename produces zero drift.
 
@@ -112,15 +112,15 @@ only when the fidelity grade is low:
 
 ## Form factor
 Push determinism into scripts + hooks; reserve skills/agents for judgment.
-- Scripts (`tooling/*.js`): token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
+- Scripts (`design-to-code/*.js`): token emitter, validator, drift-lint, bootstrap, the mechanical parts of normalize.
 - Hook: run drift-lint on export / pre-commit so drift is caught automatically.
 - Skill: the fuzzy-match confirm loop and the codegen resolver live in `build-screen`, where model
   judgment meets the map. Multi-screen runs fan out to plain subagents carrying that same skill —
   context isolation, not a separate agent definition.
 
 ## Build status
-- **Built (repo-agnostic, harness-tested + adversarially reviewed):** `tooling/tokens.js`,
-  `tooling/map-validate.js`, `tooling/drift-lint.js`, `tooling/map-bootstrap.js`.
+- **Built (repo-agnostic, harness-tested + adversarially reviewed):** `design-to-code/tokens.js`,
+  `design-to-code/map-validate.js`, `design-to-code/drift-lint.js`, `design-to-code/map-bootstrap.js`.
   Adversarially reviewed across **FOUR rounds** (4 agents each, all node-proven), findings converging
   28 → ~6 → 1 → ~0 real: round 1 found 28 confirmed bugs (validator too lenient vs its schema; drift-lint
   name-fallback masking the deleted-component case it advertises; token collisions/shorthand-hex/alpha-
@@ -129,7 +129,7 @@ Push determinism into scripts + hooks; reserve skills/agents for judgment.
   edits → reverted to always-preserve); round 4 found one narrow fix (the ambiguous-prop guard was
   asymmetric — catalog-only; now symmetric) and otherwise only LOW/pathological or test-coverage items,
   and confirmed the whole pipeline composes end-to-end. All fixed; the validator is ajv-verified (0
-  divergences / 10,733 inputs). `test/tooling.test.js` hardened 33→122 checks, a tagged regression test per
+  divergences / 10,733 inputs). `test/design-to-code.test.js` hardened 33→122 checks, a tagged regression test per
   finding, assertions pin values. Validate on real data via the **Layer C checklist in TESTING.md**.
 
   **Documented low/pathological limitations (not fixed — would risk regressions for scenarios normal use

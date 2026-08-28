@@ -9,7 +9,7 @@
 //
 // The freshness stamp (`exportedAt`/`file`) is stamped by the PLUGIN (collect.ts/components.ts).
 // Nothing here adds, strips or re-derives it — writeJson writes what it was handed, byte for byte,
-// because snapshot-meta.js and tooling/drift-lint.js both read that stamp back off disk.
+// because snapshot-meta.js and design-to-code/drift-lint.js both read that stamp back off disk.
 const fs = require("fs");
 const path = require("path");
 const { buildPageLayout, safe } = require("./pages-layout.js");

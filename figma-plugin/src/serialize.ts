@@ -376,7 +376,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // emitted here as `inferredTokens` and has been REMOVED. A live export measured it at 20.5% of the
   // whole payload — 2,151 occurrences — while the matches are pure value-coincidence (line-width
   // tokens suggested for `opacity`), and a repo-wide audit found ZERO consumers in profiles/, skills
-  // or tooling/. Explicit bindings are in `tokens`; guesses are the codegen agent's job, not ours.
+  // or design-to-code/. Explicit bindings are in `tokens`; guesses are the codegen agent's job, not ours.
   // --no-assets suppressed a render that WOULD have produced an asset. Still a LEAF: the normal run
   // flattens this node to one SVG/PNG, so descending here would hand back a DIFFERENT tree than the
   // default export — the structural drift --no-assets promises not to cause. Flagged per-node (not

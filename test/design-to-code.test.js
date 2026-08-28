@@ -1,12 +1,12 @@
-// Offline tests for the tooling/ layer. No Figma, no dependencies:  node test/tooling.test.js
+// Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.js
 // Hardened after an adversarial review — assertions pin VALUES (not just presence) and every
 // confirmed finding has a regression test. Tags: [Fn]/[An]/[Mn]/[Bn] map to review finding ids.
-const { toDTCG, toCSS, lintTokens, hexToColorValue, cssVarName } = require("../tooling/tokens");
-const { validateMap } = require("../tooling/map-validate");
-const { driftLint } = require("../tooling/drift-lint");
-const { bootstrap } = require("../tooling/map-bootstrap");
-const { isManifest } = require("../tooling/catalog-input");
-const { getComponent, findComponent, resolveVariantsFile } = require("../tooling/get-component");
+const { toDTCG, toCSS, lintTokens, hexToColorValue, cssVarName } = require("../design-to-code/tokens");
+const { validateMap } = require("../design-to-code/map-validate");
+const { driftLint } = require("../design-to-code/drift-lint");
+const { bootstrap } = require("../design-to-code/map-bootstrap");
+const { isManifest } = require("../design-to-code/catalog-input");
+const { getComponent, findComponent, resolveVariantsFile } = require("../design-to-code/get-component");
 const { buildDesignSystemLayout } = require("../bridge/design-system-layout");
 const { check, report } = require("./assert");
 const fs = require("fs");
@@ -133,7 +133,7 @@ const clean = driftLint({ version: 1, components: {
 check("[B4] complete map is error- AND warning-clean", clean.errors.length === 0 && clean.warnings.length === 0);
 
 console.log("drift — staleness:");
-const { checkFreshness, DEFAULT_MAX_AGE_MS } = require("../tooling/drift-lint");
+const { checkFreshness, DEFAULT_MAX_AGE_MS } = require("../design-to-code/drift-lint");
 const emptyMap = { version: 1, components: {} };
 check("[stale-1] missing exportedAt -> unknown-freshness warning", driftLint(emptyMap, { components: [] }).warnings.some((w) => w.code === "unknown-freshness"));
 check("[stale-2] unparseable exportedAt -> unknown-freshness warning", driftLint(emptyMap, { exportedAt: "not-a-date", components: [] }).warnings.some((w) => w.code === "unknown-freshness"));

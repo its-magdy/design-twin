@@ -48,7 +48,7 @@ above — to learn the system before building.
   pointer with the **`design_get_component`** MCP tool (`{handle:"<key|id|name>"}` — no Figma connection
   needed, it reads the export on disk), or on the command line:
   ```
-  node tooling/get-component.js design/design-system/components.local.json <key|id|name>
+  node design-to-code/get-component.js design/design-system/components.local.json <key|id|name>
   ```
 - **`design-system/components.library.json`** — the same shape for components consumed from a
   published LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a
@@ -116,12 +116,12 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 - `design/<screen>.png` — reference screenshot (visual ground truth). **Always read it** — JSON gives
   exact values, the image tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
-- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node tooling/tokens.js`),
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node design-to-code/tokens.js`),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
   token, in the form your target uses.
 - `codeconnect.local.json` (repo ROOT, not `design/`) — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
-  unmap it. Scaffold from the Figma side with `node tooling/map-bootstrap.js`, or auto-seed the code
+  unmap it. Scaffold from the Figma side with `node design-to-code/map-bootstrap.js`, or auto-seed the code
   side from **Code Connect files** in the repo with `node bridge/seed-components.js`. Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(A legacy `design/components.json` keyed by component NAME exists in older projects; it cannot

@@ -61,11 +61,11 @@ function getComponent(catalogFile, handle) {
 
 module.exports = { getComponent, findComponent, resolveVariantsFile };
 
-// CLI: node tooling/get-component.js <design-system/components.local.json> <key|id|name>
+// CLI: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>
 if (require.main === module) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
-    console.error("usage: node tooling/get-component.js <design-system/components.local.json> <key|id|name>");
+    console.error("usage: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>");
     process.exit(2);
   }
   try {

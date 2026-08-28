@@ -2,7 +2,7 @@
 //
 // No runtime dependency (matches this repo's zero-dep style). This file IS the source of truth for the
 // map shape: the KEYS/PROP tables below encode additionalProperties:false, the per-kind prop field
-// sets and the required/type rules, and `tooling/README.md` documents that shape in prose for humans.
+// sets and the required/type rules, and `design-to-code/README.md` documents that shape in prose for humans.
 //
 // There used to be a parallel map-schema.json that hand-mirrored these tables and that nothing read —
 // two representations kept in sync by hand, which is the exact drift this directory builds tools to
@@ -134,11 +134,11 @@ function validateProp(p, at, err) {
 
 module.exports = { validateMap };
 
-// CLI: node tooling/map-validate.js <codeconnect.local.json>
+// CLI: node design-to-code/map-validate.js <codeconnect.local.json>
 if (require.main === module) {
   const fs = require("fs");
   const file = process.argv[2];
-  if (!file) { console.error("usage: node tooling/map-validate.js <map.json>"); process.exit(1); }
+  if (!file) { console.error("usage: node design-to-code/map-validate.js <map.json>"); process.exit(1); }
   const res = validateMap(JSON.parse(fs.readFileSync(file, "utf8")));
   if (res.ok) { console.log("map valid"); process.exit(0); }
   res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));

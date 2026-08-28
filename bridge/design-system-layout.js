@@ -27,8 +27,8 @@
 //
 // design-system.json stays, slim: the stamp (`exportedAt`/`file`/`colorProfile`) plus a `files`
 // pointer map, so an existing consumer that opens design-system.json still finds its way. The stamp is
-// repeated into every split file on purpose — snapshot-meta.js and tooling/drift-lint.js read
-// `exportedAt` off whichever file they are handed, and tooling/tokens.js, map-bootstrap.js and
+// repeated into every split file on purpose — snapshot-meta.js and design-to-code/drift-lint.js read
+// `exportedAt` off whichever file they are handed, and design-to-code/tokens.js, map-bootstrap.js and
 // drift-lint.js are now pointed at tokens.json / components.local.json directly.
 //
 // Kept dependency-free CJS for the same reason as pages-layout.js: the Node CLI requires it and

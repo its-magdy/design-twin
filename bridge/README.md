@@ -53,11 +53,11 @@ concept: `tokens.json` (variable collections → modes → variables), one file 
 Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
 file — a `COMPONENT_SET`'s heavy per-variant node trees, or a standalone `COMPONENT`'s own node tree,
 are NOT inlined here; they live in a sibling `design-system/components/<name>__<id>.json`, pointed at
-by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `tooling/get-component.js`
+by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `design-to-code/get-component.js`
 below), `components.library.json` (`remote: true` —
 consumed from a published library, recovered from instances, props possibly inferred) and
 `hygiene.json` (the lint report). Every part repeats the
-`exportedAt` stamp, so `tooling/` reads freshness off whichever part it is handed. The split files sit
+`exportedAt` stamp, so `design-to-code/` reads freshness off whichever part it is handed. The split files sit
 in a subdirectory because `design/tokens.json` and `design/components.json` at the export root are your
 hand-authored, non-regenerable config maps.
 
@@ -237,7 +237,7 @@ and "what props does this component *really* take?".
 
 Because the layout matches `design-system/`, existing tooling runs on it unchanged:
 ```
-node tooling/tokens.js design/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+node design-to-code/tokens.js design/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
 
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
@@ -273,7 +273,7 @@ reason to gate them the way `--design-system` gates a page walk. **Two honest li
    `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets) or
    `nodeFile` (standalone components) — absent when nothing was exported for that entry. `entry.variants[]`
    in the slim catalog keeps only `id`/`name`/`key`/`values`. Fetch one component's real node tree(s) with
-   `node tooling/get-component.js design/design-system/components.local.json <key|id|name>`.
+   `node design-to-code/get-component.js design/design-system/components.local.json <key|id|name>`.
 2. It only covers components DEFINED in this file. Components consumed from a published library
    (the `remote:true` entries, recovered via instance-walk — see the honest-limits note above) are
    not covered here; pull `--as-library` on the *source* library file for those. There is no

@@ -908,8 +908,8 @@ async function disconnectErr(code, reason) {
     ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
     ok("[lib-layout] tokens.json exists", fs.existsSync(path.join(base, "libraries", dirName, "tokens.json")));
     const tok = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "tokens.json"), "utf8"));
-    // The shape contract: a top-level `variables` array is what keeps tooling/catalog-input.js from
-    // rejecting this as the slim manifest, and what lets tooling/tokens.js run on it unchanged.
+    // The shape contract: a top-level `variables` array is what keeps design-to-code/catalog-input.js from
+    // rejecting this as the slim manifest, and what lets design-to-code/tokens.js run on it unchanged.
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
     ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
