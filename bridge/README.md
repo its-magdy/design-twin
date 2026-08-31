@@ -34,15 +34,53 @@ npm run build       # esbuild src/figma-mcp.mts -> figma-mcp.mjs
 ### Bridge token (required)
 The bridge authenticates every connection with a shared token — loopback binding alone is not
 access control (a sandboxed browser iframe on any site the user visits sends `Origin: null` and
-could otherwise drive the plugin). On start, the bridge either:
-- uses `FIGMA_BRIDGE_TOKEN` if set (**recommended** — a stable value you paste once), or
-- prints a random per-run token to the console.
+could otherwise drive the plugin), so the token is the real gate.
 
-Paste that token into the plugin's **Bridge token** field (stored per-user via `clientStorage`).
-Set a stable token to avoid re-pasting:
+**You do not have to set anything up.** The first time a bridge starts it generates a token, saves it,
+prints it once, and reuses it forever after. Paste it into the plugin's **Bridge token** field (the
+plugin saves it per-user in `clientStorage`) and neither side asks again.
+
 ```
-export FIGMA_BRIDGE_TOKEN="$(openssl rand -hex 24)"   # add to your shell profile
+dtwin --token-status    # where it lives, which source wins, its fingerprint — never the token
+dtwin --show-token      # print the token itself (stdout only, so `dtwin --show-token | pbcopy` works)
+dtwin --rotate-token    # replace it — you must then re-paste it into the plugin
+dtwin --forget-token    # delete it; the next bridge start mints a new one
+dtwin --token-file <p>  # read the token from <p> for this run instead of the stored one
 ```
+
+**Where it is stored**
+
+| OS | Path |
+|---|---|
+| macOS / Linux | `$XDG_CONFIG_HOME/design-twin/bridge-token`, else `~/.config/design-twin/bridge-token` |
+| Windows | `%APPDATA%\design-twin\bridge-token` |
+
+Written `0600` (owner only) in a `0700` directory, atomically. `DESIGNTWIN_CONFIG_DIR` overrides the
+directory outright — for a container, a CI runner, or a test.
+
+**Precedence** — first match wins:
+
+1. `--token-file <path>`
+2. `FIGMA_BRIDGE_TOKEN` (the CI / ephemeral escape hatch)
+3. the saved file
+4. otherwise: generate one, save it, print it once
+
+There is deliberately **no `--token <value>` flag**. Process arguments are world-readable through
+`ps` and `/proc/<pid>/cmdline`, so a value flag would hand the secret to every other user on the
+machine for as long as the command runs. A *path* is not a secret; the file it points at is.
+
+`FIGMA_BRIDGE_TOKEN` still works and still wins over the file, so nothing that already exports it
+changes. It is no longer the recommended setup, for two reasons: exported environment variables
+propagate to every child process and leak into logs, and it has to be re-exported in every shell.
+When both are present `--token-status` says so explicitly — a saved token silently shadowed by an
+env var is otherwise a genuinely confusing state to debug.
+
+**What this protects against, and what it doesn't.** The `0600` file stops *other users* on the
+machine. It does not stop another process running as *you* — only an OS keychain would, and this
+bridge deliberately doesn't use one: `keytar` is archived, its live replacements are native binaries
+with per-platform install friction, and that is disproportionate for a loopback token that grants no
+authority beyond driving a Figma plugin you already have open. If that trade doesn't suit your
+environment, keep the token in your own secret manager and pass `--token-file`.
 
 ## Read: figma-pull (CLI) — recommended for bulk extraction
 
@@ -325,8 +363,10 @@ Behaviour worth knowing:
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
-there with an absolute path to this `figma-mcp.mjs`, and the same `FIGMA_BRIDGE_TOKEN`. Claude Code
-then launches it over stdio.
+there with an absolute path to this `figma-mcp.mjs`. Claude Code then launches it over stdio.
+No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI
+does, so the one you already pasted into the plugin keeps working (set `FIGMA_BRIDGE_TOKEN` in the
+registration only if you deliberately want the MCP on a *different* token from the CLI).
 The server also hosts the bridge WebSocket the plugin connects to. Built on `@modelcontextprotocol/sdk`
 with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, validated per call).
 

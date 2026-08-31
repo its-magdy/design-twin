@@ -27,14 +27,39 @@ const PORT = (() => {
   process.exit(1);
 })();
 
-// Shared secret the plugin must present as ?token=... on connect. Prefer a stable
-// value via FIGMA_BRIDGE_TOKEN (paste once into the plugin); otherwise a per-run
-// token is generated and printed. This is the REAL access control: loopback binding
-// and the Origin check below are both defeatable — a sandboxed attacker iframe on any
-// site the user visits also sends "Origin: null" — so without the token any local
-// page/process could drive the plugin. See AgentSeal's Figma-MCP CSWSH writeup.
-const TOKEN = process.env.FIGMA_BRIDGE_TOKEN || crypto.randomBytes(24).toString("hex");
-const TOKEN_FROM_ENV = !!process.env.FIGMA_BRIDGE_TOKEN;
+// Shared secret the plugin must present as ?token=... on connect. This is the REAL access control:
+// loopback binding and the Origin check below are both defeatable — a sandboxed attacker iframe on
+// any site the user visits also sends "Origin: null" — so without the token any local page/process
+// could drive the plugin. See AgentSeal's Figma-MCP CSWSH writeup.
+//
+// token-store.js owns everything ABOUT the token that isn't this handshake: the precedence
+// (--token-file > env > stored file > mint), the per-OS path, and the file's 0600 mode. It is
+// resolved once here at require time, so the tests that set FIGMA_BRIDGE_TOKEN before requiring this
+// module still get exactly that token.
+//
+// `persist: false` here on purpose: requiring this module must not have the side effect of CREATING
+// a token file. `dtwin --token-status` requires it just to ask a question, and a status command that
+// silently mints the thing it is reporting on would be lying. The mint is committed in createBridge
+// instead — the moment a token is actually about to be used.
+const tokenStore = require("./token-store.js");
+// Resolution happens at REQUIRE time, so a bad --token-file would otherwise throw out of a module
+// load — a raw stack trace, before either front-end has any error handling in scope, for what is
+// just a mistyped path. Hold the failure instead and re-throw it from createBridge, which every
+// caller already funnels into its own "[dtwin] error: …" + exit 1 path. Commands that never open a
+// bridge (--token-status) then keep working, which is exactly when you want to diagnose this.
+let TOKEN_INFO;
+let TOKEN_ERROR = null;
+try {
+  TOKEN_INFO = tokenStore.resolve({
+    tokenFile: process.env.FIGMA_BRIDGE_TOKEN_FILE || null,
+    persist: false,
+  });
+} catch (e) {
+  TOKEN_ERROR = e;
+  TOKEN_INFO = { token: null, source: "error", path: null, created: false };
+}
+const TOKEN = TOKEN_INFO.token;
+const TOKEN_FROM_ENV = TOKEN_INFO.source === "env";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -60,10 +85,44 @@ const exportTimeout = ({ selection, allPages } = {}) =>
 // bundle share the one definition in errmsg.js.
 const { errMsg } = require("./errmsg.js");
 
+// Compare the SHA-256 digests, not the raw tokens. timingSafeEqual throws on unequal lengths, so the
+// previous `ba.length === bb.length && ...` guard short-circuited before the constant-time compare
+// and leaked the token's LENGTH through timing. Hashing first makes both sides a fixed 32 bytes, so
+// every comparison takes the same path regardless of what was presented.
 function safeEqual(a, b) {
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+  const ha = crypto.createHash("sha256").update(String(a)).digest();
+  const hb = crypto.createHash("sha256").update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+// Failed-handshake accounting. Two jobs, one counter:
+//
+//  1. DIAGNOSIS. The plugin caches its token in figma.clientStorage and retries every 3s, so a token
+//     that no longer matches (usually: someone ran --rotate-token and didn't re-paste) becomes a
+//     silent 3-second reconnect loop. The bridge is the only side that can see WHY, so it says so —
+//     once, not sixty times a minute.
+//  2. THROTTLE. Nothing here is a serious brute-force defence (the token is 192 bits; a local
+//     attacker guessing it is not the threat model — see the Origin note above). It exists so a
+//     runaway client can't spin the handshake path, and so the log stays readable.
+let authFailures = 0;
+let lastAuthLog = 0;
+const AUTH_LOG_INTERVAL_MS = 30000;
+
+function rejectBadToken(presented) {
+  authFailures++;
+  const now = Date.now();
+  if (now - lastAuthLog > AUTH_LOG_INTERVAL_MS) {
+    lastAuthLog = now;
+    const detail = presented
+      ? `presented ${tokenStore.fingerprint(presented)}, expected ${tokenStore.fingerprint(TOKEN)}`
+      : "no token presented";
+    console.error(
+      `[bridge] rejected a connection: ${detail}` +
+        (authFailures > 1 ? ` (${authFailures} failures so far)` : "") +
+        ". Re-paste the plugin's \"Bridge token\" field — `dtwin --show-token` prints the current one."
+    );
+  }
+  return "bad or missing token";
 }
 
 // Runs during the WS handshake, before the connection is accepted.
@@ -83,7 +142,8 @@ function verifyClient(info, done) {
   try {
     token = new URL(req.url, "http://127.0.0.1").searchParams.get("token") || "";
   } catch (e) {}
-  if (!safeEqual(token, TOKEN)) return done(false, 401, "bad or missing token");
+  if (!safeEqual(token, TOKEN)) return done(false, 401, rejectBadToken(token));
+  authFailures = 0; // a success clears the backoff — a mis-paste then a fix shouldn't stay penalised
   done(true);
 }
 
@@ -95,11 +155,47 @@ function createBridge(port = PORT) {
   const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
   const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient });
 
-  if (TOKEN_FROM_ENV) {
-    console.error("[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment.");
-  } else {
+  // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
+  // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
+  // every single run is exactly the habit this store exists to end. `--show-token` reveals it on
+  // demand; `--token-status` answers "which one is in play" without disclosing it.
+  // A token that could not be resolved at require time (a mistyped --token-file) surfaces HERE, where
+  // the caller's error handling can turn it into a one-line message instead of a module-load stack.
+  // Before the port is bound, so a failed start leaves nothing listening.
+  if (TOKEN_ERROR) throw TOKEN_ERROR;
+
+  // Commit a freshly-minted token to disk now that one is actually being used. Resolution happened at
+  // require time (deliberately without persisting); this is where it becomes permanent.
+  if (TOKEN_INFO.source === "ephemeral") {
+    try {
+      const file = tokenStore.write(TOKEN);
+      TOKEN_INFO = { ...TOKEN_INFO, source: "file", path: file, created: true };
+    } catch (e) {
+      TOKEN_INFO = { ...TOKEN_INFO, persistError: e };
+    }
+  }
+
+  if (TOKEN_INFO.source === "token-file") {
+    console.error(`[bridge] auth: token read from ${TOKEN_INFO.path} (${tokenStore.fingerprint(TOKEN)}).`);
+  } else if (TOKEN_FROM_ENV) {
+    console.error(`[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment (${tokenStore.fingerprint(TOKEN)}).`);
+  } else if (TOKEN_INFO.created) {
     console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + TOKEN);
-    console.error("[bridge] tip: set FIGMA_BRIDGE_TOKEN to a stable value to avoid re-pasting on each run.");
+    console.error(`[bridge] saved to ${TOKEN_INFO.path} — you won't be asked to paste it again.`);
+    console.error("[bridge] see it later with `dtwin --show-token`; replace it with `dtwin --rotate-token`.");
+  } else if (TOKEN_INFO.source === "ephemeral") {
+    // Couldn't persist (read-only FS, no HOME, locked-down container). Still works — but say so,
+    // because the user WILL have to paste again next run and deserves to know why.
+    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + TOKEN);
+    console.error(
+      "[bridge] could not save it (" + errMsg(TOKEN_INFO.persistError) + ") — it changes every run. " +
+        "Set FIGMA_BRIDGE_TOKEN to a stable value instead."
+    );
+  } else {
+    console.error(`[bridge] auth: using the saved token from ${TOKEN_INFO.path} (${tokenStore.fingerprint(TOKEN)}).`);
+    if (tokenStore.loosePerms(TOKEN_INFO.path)) {
+      console.error(`[bridge] warning: ${TOKEN_INFO.path} is readable by other users — chmod 600 it.`);
+    }
   }
   // MULTI-CLIENT registry. Every connected plugin instance gets an entry, keyed by a server-minted
   // `connId` — one Figma file per entry, so a design file and the library file it draws on can be
@@ -367,4 +463,4 @@ function createBridge(port = PORT) {
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS };
+module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore };

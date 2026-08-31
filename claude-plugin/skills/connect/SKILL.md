@@ -55,9 +55,10 @@ spacing does this use?" gets answered from the real file, not a stale export.
      and save the downloads into `design/`. Nothing else to set up.
    - **Want the CLI** → first run only: `cd bridge && npm install`. `dtwin` comes from the
      `designtwin` npm package — if it's not on PATH (e.g. working inside this repo itself), use
-     `node bridge/figma-pull.js` instead. A bridge token is **required**, but nothing to generate by
-     hand for a first try: the bridge prints one on start if `FIGMA_BRIDGE_TOKEN` isn't set — paste it
-     into the plugin's **Bridge token** field once (Save) and it connects. Then `dtwin --list` to see
+     `node bridge/figma-pull.js` instead. A bridge token is **required**, but there is nothing to
+     generate by hand: the first bridge start mints one, saves it per-user, and prints it once — paste
+     it into the plugin's **Bridge token** field (Save) and neither side asks again
+     (`dtwin --show-token` reprints it later). Then `dtwin --list` to see
      what's there, followed by a real pull.
    - **Want Claude to query Figma live, mid-conversation, in another project** → same install as the
      CLI, and that project needs a `.mcp.json` pointing at an absolute path to `bridge/figma-mcp.mjs`,

@@ -35,6 +35,7 @@
     "seed-components.js",
     "server-core.js",
     "snapshot-meta.js",
+    "token-store.js",
     "write-out.js",
     "design-system-layout.d.ts",
     "errmsg.d.ts",

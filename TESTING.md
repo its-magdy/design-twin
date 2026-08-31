@@ -47,7 +47,9 @@ node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-c
 ### `bridge/` — handshake auth + seed CLI
 
 `test/bridge.test.js` covers the bridge files the plugin harness can't reach: `server-core.js`'s
-`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host), the
+`verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host),
+`token-store.js` (where that token lives between runs — precedence, `0600` permissions, the
+lifecycle commands), the
 `seed-components.js` CLI driven as a subprocess against a temp directory, `write-out.js` (the one
 writer both front-ends share), and `daemon.js`. It also owns `figma-pull.js`'s argument parsing and
 its `--list-libraries` renderer: the CLI/MCP layer is testable without a plugin on the other end
@@ -61,8 +63,8 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 suite can't contend with a bridge you have open.
 
 ```
-node test/bridge.test.js        # expect: 309/309 checks passed, exit 0
-node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js
+node test/bridge.test.js        # expect: 389/389 checks passed, exit 0
+node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js
 ```
 
 `verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed

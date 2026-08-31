@@ -431,8 +431,11 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   reading the source — a stronger guarantee than a self-asserted one.
 - Bridge: `ws://localhost` only → reaches your machine, never the internet. But loopback is *reachability*,
   not authentication — any local process, and any page in your browser, can open the port. So the bridge
-  requires a **shared token** (from `FIGMA_BRIDGE_TOKEN`, else printed per-run; pasted into the plugin and
-  kept in `clientStorage`); connections without it are rejected at the handshake (401), foreign origins 403.
+  requires a **shared token**, generated on first use and persisted per-user (`bridge/token-store.js`:
+  `~/.config/design-twin/bridge-token` / `%APPDATA%`, mode `0600`; `--token-file` and
+  `FIGMA_BRIDGE_TOKEN` override it). Pasted into the plugin once and kept in `clientStorage`.
+  Connections without it are rejected at the handshake (401, compared as SHA-256 digests through
+  `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).

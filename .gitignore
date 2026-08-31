@@ -15,5 +15,6 @@ out-allpages/
 # macOS
 .DS_Store
 
-# Local Claude Code settings — holds FIGMA_BRIDGE_TOKEN.
+# Local Claude Code settings. (The bridge token no longer lives here: it is stored per-user in
+# ~/.config/design-twin/bridge-token — see bridge/README.md. FIGMA_BRIDGE_TOKEN still overrides it.)
 .claude/settings.local.json

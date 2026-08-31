@@ -109,13 +109,39 @@ if (require.main === module && process.argv[2] === "mcp") {
 //   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
 //   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
 //
+// The bridge token (auth for the plugin -> bridge handshake). Generated once on the first bridge
+// start, saved to a per-user config file (0600), and reused forever after — so you paste it into the
+// plugin ONCE. These commands need no plugin and no bridge:
+//   dtwin --token-status   # where it lives, which source wins, its fingerprint — never the token
+//   dtwin --show-token     # print the token itself (stdout only, so `| pbcopy` works)
+//   dtwin --rotate-token   # replace it — you must then re-paste it into the plugin
+//   dtwin --forget-token   # delete it; the next bridge start mints a new one
+//   dtwin --token-file <p> # read the token from <p> for this run instead of the stored one
+//   Precedence: --token-file > FIGMA_BRIDGE_TOKEN > the saved file > mint a new one.
+//   There is no `--token <value>`: argv is world-readable via `ps`, so passing a secret there leaks
+//   it to every other user on the machine. Use --token-file, or the env var.
+//
 // The Figma file must be open with the "Design Twin" plugin running.
 
 const fs = require("fs");
 const path = require("path");
+
+// --token-file has to be honoured BEFORE server-core is required, because server-core resolves the
+// token at require time (so the test suite can set FIGMA_BRIDGE_TOKEN and require it). parseArgs
+// runs far below that require, so the flag is pre-scanned here and handed over as the env var
+// server-core already reads. parseArgs still parses it properly — this scan only has to be right
+// about the VALUE, and it is checked against the parsed result once parsing has happened.
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  const i = argv.indexOf("--token-file");
+  const eq = argv.find((a) => a.startsWith("--token-file="));
+  const v = i !== -1 ? argv[i + 1] : eq ? eq.slice("--token-file=".length) : null;
+  if (v && !v.startsWith("--")) process.env.FIGMA_BRIDGE_TOKEN_FILE = v;
+}
+
 // TIMEOUTS is the per-command budget table both front-ends read (server-core.js) — the tiers below
 // pick from it rather than restating them, so the CLI and the MCP tools cannot drift apart.
-const { createBridge, TIMEOUTS, exportTimeout, errMsg } = require("./server-core");
+const { createBridge, TIMEOUTS, exportTimeout, errMsg, tokenStore } = require("./server-core");
 // node-id.js is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
 // (its own header). This file used to hand --children's raw token straight to the plugin, whose only
 // normalisation is replace(/-/g, ":") — so a pasted design URL worked through the MCP twin
@@ -176,6 +202,14 @@ const designSystemOnly = args.includes("--design-system");
 const daemonCmd = args.includes("--serve") ? "--serve"
   : args.includes("--stop") ? "--stop"
   : args.includes("--daemon-status") ? "--daemon-status"
+  : null;
+// Token lifecycle. COMMANDS, like the daemon ones above: each owns the whole invocation, needs no
+// bridge and no plugin (they only touch the local token file), and so is refused in combination with
+// anything else. --token-file is the exception — it is a MODIFIER, read below.
+const tokenCmd = args.includes("--token-status") ? "--token-status"
+  : args.includes("--show-token") ? "--show-token"
+  : args.includes("--rotate-token") ? "--rotate-token"
+  : args.includes("--forget-token") ? "--forget-token"
   : null;
 // --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
 // which dominates the export on a real design-system file. Structure, layout and tokens are
@@ -285,6 +319,14 @@ const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-li
 // --list-clients), a fileKey, or part of the file's name.
 const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)")[0] || null;
 
+// --token-file <path>: read the bridge token from somewhere other than the stored default. A
+// MODIFIER (it changes which token every other command uses), not a command.
+//
+// There is deliberately NO `--token <value>` twin. Process arguments are world-readable — `ps aux`,
+// /proc/<pid>/cmdline — so a value flag would hand the secret to every other user on the machine for
+// as long as the command runs. A path is not a secret; the file it points at is.
+const tokenFile = takeValues(args, "--token-file", "--token-file needs a path to a file containing the token")[0] || null;
+
 
 // A missing VALUE is distinct from a missing FLAG, and takeValues makes that structural: `--timeout`
 // with nothing after it (or another flag after it) throws here rather than leaving `undefined` for the
@@ -389,7 +431,32 @@ if (daemonCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd };
+// A token command owns the invocation for the same reason a daemon one does: it manages the local
+// credential and never opens a bridge, so pairing it with a pull would start an export the user did
+// not ask for — or, worse, silently do only the token half of what they typed.
+if (tokenCmd) {
+  const others = [
+    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page",
+    designSystemOnly && "--design-system", asLibrary && "--as-library",
+    daemonCmd, ...indexCmds, ...readOptFlagsGiven,
+  ].filter(Boolean);
+  if (others.length) {
+    throw new UsageError(`${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`);
+  }
+  const tokenCmds = ["--token-status", "--show-token", "--rotate-token", "--forget-token"].filter((f) => args.includes(f));
+  if (tokenCmds.length > 1) {
+    throw new UsageError(`${tokenCmds.join(" and ")} are different commands — pass only one.`);
+  }
+  // --token-file names a token to READ; these three act on the STORED one. Passing both reads as
+  // "rotate/report the token in this file", which is not what happens — the stored token is the one
+  // acted on and the --token-file one is silently ignored. --show-token is the ONE token command
+  // where --token-file genuinely applies (print the token in that file), so it is not listed here.
+  if (tokenFile && tokenCmd !== "--show-token") {
+    throw new UsageError(`${tokenCmd} acts on the stored token, so --token-file would be silently ignored. Drop it (or, for --rotate-token/--forget-token, edit that file directly).`);
+  }
+}
+
+return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -492,9 +559,60 @@ try {
   console.error("[dtwin] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile } = parsed;
 
 async function main() {
+  // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
+  // so unlike everything below they need no bridge, no daemon and no plugin. Running them before
+  // daemon.connect() also means they still work while a daemon holds the port.
+  if (tokenCmd === "--token-status") {
+    const st = tokenStore.status();
+    console.log(JSON.stringify(st, null, 2));
+    console.error("[dtwin] token file: " + st.path + (st.stored ? "" : " (none saved yet)"));
+    console.error("[dtwin] in use: " + (
+      st.activeSource === "env" ? "FIGMA_BRIDGE_TOKEN from the environment"
+        : st.activeSource === "token-file" ? "the file given by --token-file"
+        : st.activeSource === "file" ? "the saved token"
+        : "a per-run token (nothing saved yet — the next bridge start will save one)"
+    ) + (st.fingerprint ? ` (${st.fingerprint})` : ""));
+    // The genuinely confusing state: a saved token exists, but the env var overrides it, so editing
+    // the file changes nothing and the user has no way to see why.
+    if (st.shadowed) {
+      console.error("[dtwin] note: FIGMA_BRIDGE_TOKEN is set, so it WINS over the saved token. Unset it to use the file.");
+    }
+    if (st.loosePerms) console.error("[dtwin] warning: " + st.path + " is readable by other users — chmod 600 it.");
+    return;
+  }
+  if (tokenCmd === "--show-token") {
+    const { token, source } = tokenStore.resolve({ tokenFile, persist: false });
+    // stdout, alone, so it pipes: `dtwin --show-token | pbcopy`. Every note goes to stderr.
+    console.log(token);
+    if (source === "ephemeral") {
+      console.error("[dtwin] note: nothing is saved yet, so this token is NOT what a future run will use. Start a bridge once to save one.");
+    }
+    return;
+  }
+  if (tokenCmd === "--rotate-token") {
+    const had = tokenStore.readFrom(tokenStore.tokenPath());
+    const token = tokenStore.generate();
+    const file = tokenStore.write(token);
+    console.log(token);
+    console.error(`[dtwin] ${had ? "replaced" : "saved"} the bridge token in ${file}.`);
+    // The whole point of naming this: the plugin has the OLD token in clientStorage and will now
+    // fail every handshake with a bare 401, retrying every 3s, until someone re-pastes.
+    console.error('[dtwin] re-paste it into the plugin\'s "Bridge token" field and press Save — until you do, the plugin cannot connect.');
+    if (process.env.FIGMA_BRIDGE_TOKEN) {
+      console.error("[dtwin] warning: FIGMA_BRIDGE_TOKEN is set and OVERRIDES this file, so the bridge will keep using the env value. Unset it for the rotation to take effect.");
+    }
+    return;
+  }
+  if (tokenCmd === "--forget-token") {
+    const file = tokenStore.tokenPath();
+    const removed = tokenStore.remove(file);
+    console.error("[dtwin] " + (removed ? `deleted ${file}. The next bridge start mints and saves a new token.` : `nothing to delete — no token saved at ${file}.`));
+    return;
+  }
+
   // ---- daemon lifecycle commands. Each owns the whole invocation and returns.
   if (daemonCmd === "--stop") {
     const stopped = await daemon.stop();

@@ -53,9 +53,11 @@ Whichever starts second exits with `EADDRINUSE`.
    code token), `design/components.json` (Figma component → your code component + import). Shapes are
    in `README.md` → "One-time setup". Auto-seed the last one from Code Connect files:
    `node bridge/seed-components.js`.
-3. **(Only for paths B/C)** `cd bridge && npm install`, then set a stable bridge token —
-   `export FIGMA_BRIDGE_TOKEN="$(openssl rand -hex 24)"` in your shell profile — and paste it into the
-   plugin's **Bridge token** field once. Details: `bridge/README.md` → "Bridge token".
+3. **(Only for paths B/C)** `cd bridge && npm install`. There is no token to set up: the first
+   bridge start generates one, saves it (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on
+   Windows) and prints it once — paste that into the plugin's **Bridge token** field and neither side
+   asks again. `dtwin --show-token` reprints it, `--rotate-token` replaces it, `--token-status` says
+   which token is in play without disclosing it. Details: `bridge/README.md` → "Bridge token".
 
 ## Step 3 — run it
 
@@ -78,8 +80,11 @@ Then build: **`/designtwin:build-screen <screen>`**.
 - **Bridge stays "offline" in the plugin** → either no token pasted (the plugin says
   `offline — paste the bridge token above` and won't dial until you paste + Save), or no server is
   running yet — the plugin UI is a WS *client*. Fix the token, start a server, it auto-connects (3s retry).
-- **Connection rejected / 401** → token mismatch. What the bridge prints (or `FIGMA_BRIDGE_TOKEN`) must
-  equal the plugin's **Bridge token** field. Re-paste + Save.
+- **Connection rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
+  the bridge's. Run `dtwin --token-status` (says which source is winning — a saved token *shadowed* by
+  a `FIGMA_BRIDGE_TOKEN` export is the usual surprise), then `dtwin --show-token` and re-paste + Save.
+  The bridge also logs the mismatch itself, with both fingerprints. Most common cause: someone ran
+  `--rotate-token` and the plugin still has the old one cached in `clientStorage`.
 - **Changed the port?** The plugin tries `8787`, then `8788`, then `8789` in turn (manifest +
   `ui.html`) — those are the only three it can dial, so `FIGMA_BRIDGE_PORT` must be one of them.
   Usually easier to just free `8787` than to move the server.

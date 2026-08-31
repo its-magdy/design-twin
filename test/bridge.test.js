@@ -1232,6 +1232,311 @@ async function disconnectErr(code, reason) {
   ok("[daemon] and an ordinary pull still parses with no daemon command",
     pull.parseArgs(["design", "--all-pages"]).daemonCmd === null);
 
+
+  // ---------------------------------------------------------------- token-store
+  // The token STORE: where the bridge token lives between runs. Before it, the token was
+  // env-var-or-nothing and a fresh one was minted every run, so the plugin's saved token was stale on
+  // the very next `dtwin`. These tests own the precedence chain, the file's permissions, and the
+  // lifecycle commands' argument guards.
+  //
+  // Every case points DESIGNTWIN_CONFIG_DIR at a temp dir: the suite must never read, write or delete
+  // the developer's real ~/.config/design-twin/bridge-token.
+  const store = require("../bridge/token-store.js");
+  const withStore = (fn, { env = {}, dir = null } = {}) => {
+    const saved = { ...process.env };
+    const d = dir || fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-token-"));
+    process.env.DESIGNTWIN_CONFIG_DIR = d;
+    delete process.env.FIGMA_BRIDGE_TOKEN;
+    delete process.env.FIGMA_BRIDGE_TOKEN_FILE;
+    for (const [k, v] of Object.entries(env)) process.env[k] = v;
+    try { return fn(d); } finally { for (const k of Object.keys(process.env)) delete process.env[k]; Object.assign(process.env, saved); }
+  };
+
+  console.log("\ntoken-store — path resolution:");
+  ok("[token] DESIGNTWIN_CONFIG_DIR overrides the per-OS default",
+    withStore((d) => store.tokenPath() === path.join(d, "bridge-token")));
+  ok("[token] a RELATIVE XDG_CONFIG_HOME is ignored, per the XDG spec",
+    (() => {
+      const saved = { ...process.env };
+      delete process.env.DESIGNTWIN_CONFIG_DIR;
+      process.env.XDG_CONFIG_HOME = "relative/path";
+      const p = store.configDir();
+      Object.assign(process.env, saved);
+      // Must NOT resolve against cwd — the token's location can't depend on where dtwin was run.
+      return !p.startsWith("relative") && path.isAbsolute(p);
+    })());
+  ok("[token] the path is absolute on this platform", path.isAbsolute(store.configDir()));
+
+  console.log("\ntoken-store — precedence:");
+  ok("[token] env beats the stored file",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      process.env.FIGMA_BRIDGE_TOKEN = "env-tok";
+      const r = store.resolve({ persist: false });
+      return r.token === "env-tok" && r.source === "env";
+    }));
+  ok("[token] --token-file beats env",
+    withStore((d) => {
+      const f = path.join(d, "custom");
+      fs.writeFileSync(f, "file-tok");
+      process.env.FIGMA_BRIDGE_TOKEN = "env-tok";
+      const r = store.resolve({ tokenFile: f, persist: false });
+      return r.token === "file-tok" && r.source === "token-file";
+    }));
+  ok("[token] the stored file is used when no env var is set",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      const r = store.resolve({ persist: false });
+      return r.token === "stored-tok" && r.source === "file";
+    }));
+  ok("[token] with nothing set at all, one is minted and persisted",
+    withStore((d) => {
+      const r = store.resolve();
+      return r.created === true && r.source === "file" && fs.existsSync(path.join(d, "bridge-token"));
+    }));
+  ok("[token] and the minted token is 48 hex chars (24 bytes of CSPRNG)",
+    withStore(() => /^[0-9a-f]{48}$/.test(store.resolve().token)));
+  ok("[token] a minted token is STABLE across runs — the whole point of the store",
+    withStore((d) => store.resolve().token === store.resolve().token));
+  ok("[token] persist:false mints without writing anything, so --token-status can't lie",
+    withStore((d) => {
+      const r = store.resolve({ persist: false });
+      return r.source === "ephemeral" && !fs.existsSync(path.join(d, "bridge-token"));
+    }));
+  ok("[token] an unreadable --token-file is a clear error, not a silent fallback",
+    withStore((d) => {
+      try { store.resolve({ tokenFile: path.join(d, "nope") }); return false; }
+      catch (e) { return e.code === "TOKEN_FILE_UNREADABLE"; }
+    }));
+  ok("[token] an EMPTY token file is treated as absent, not as an empty token",
+    withStore((d) => {
+      const f = path.join(d, "bridge-token");
+      fs.writeFileSync(f, "   \n");
+      return store.readFrom(f) === null;
+    }));
+  ok("[token] an empty FIGMA_BRIDGE_TOKEN does not shadow the stored file",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      process.env.FIGMA_BRIDGE_TOKEN = "";
+      return store.resolve({ persist: false }).source === "file";
+    }));
+
+  console.log("\ntoken-store — file hygiene:");
+  ok("[token] a trailing newline is trimmed (echo tok > file must work)",
+    withStore((d) => {
+      const f = path.join(d, "bridge-token");
+      fs.writeFileSync(f, "tok-with-newline\n");
+      return store.readFrom(f) === "tok-with-newline";
+    }));
+  ok("[token] the file is written 0600 — owner only",
+    withStore((d) => {
+      const f = store.write("tok", path.join(d, "bridge-token"));
+      if (process.platform === "win32") return true; // mode bits aren't meaningful on Windows
+      return (fs.statSync(f).mode & 0o777) === 0o600;
+    }));
+  ok("[token] the config dir is created 0700",
+    withStore(() => {
+      const nested = path.join(process.env.DESIGNTWIN_CONFIG_DIR, "deep", "bridge-token");
+      store.write("tok", nested);
+      if (process.platform === "win32") return true;
+      return (fs.statSync(path.dirname(nested)).mode & 0o777) === 0o700;
+    }));
+  ok("[token] a world-readable file is detected so the bridge can warn",
+    withStore((d) => {
+      if (process.platform === "win32") return true;
+      const f = store.write("tok", path.join(d, "bridge-token"));
+      fs.chmodSync(f, 0o644);
+      return store.loosePerms(f) === true;
+    }));
+  ok("[token] the write is atomic — no .tmp is left behind",
+    withStore((d) => {
+      store.write("tok", path.join(d, "bridge-token"));
+      return !fs.existsSync(path.join(d, "bridge-token.tmp"));
+    }));
+  ok("[token] writing twice REPLACES rather than appending",
+    withStore((d) => {
+      const f = path.join(d, "bridge-token");
+      store.write("first", f);
+      store.write("second", f);
+      return store.readFrom(f) === "second";
+    }));
+  ok("[token] remove() deletes it",
+    withStore((d) => {
+      const f = store.write("tok", path.join(d, "bridge-token"));
+      return store.remove(f) === true && !fs.existsSync(f);
+    }));
+  ok("[token] and removing a token that isn't there is not an error",
+    withStore((d) => store.remove(path.join(d, "bridge-token")) === false));
+
+  console.log("\ntoken-store — fingerprint + status:");
+  ok("[token] the fingerprint is stable for the same token",
+    store.fingerprint("abc") === store.fingerprint("abc"));
+  ok("[token] differs for a different token", store.fingerprint("abc") !== store.fingerprint("abd"));
+  ok("[token] and never contains the token itself",
+    !store.fingerprint("supersecrettoken").includes("supersecret"));
+  // Regression: status() resolves with persist:false, so the ephemeral branch mints a throwaway that
+  // differs every call. Reporting ITS fingerprint invited the user to compare a meaningless value
+  // against the plugin's — caught by running --token-status twice and seeing the answer change.
+  ok("[token] status reports NO fingerprint when nothing is saved",
+    withStore(() => store.status().fingerprint === null));
+  ok("[token] and a STABLE one when a token is saved",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      return store.status().fingerprint === store.status().fingerprint && store.status().fingerprint !== null;
+    }));
+  ok("[token] status reports a stored token WITHOUT creating one",
+    withStore((d) => {
+      const st = store.status();
+      return st.stored === false && !fs.existsSync(path.join(d, "bridge-token"));
+    }));
+  ok("[token] status names the shadowing case: a saved token the env var overrides",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      process.env.FIGMA_BRIDGE_TOKEN = "env-tok";
+      const st = store.status();
+      return st.shadowed === true && st.activeSource === "env" && st.stored === true;
+    }));
+  ok("[token] and does not claim shadowing when only a file exists",
+    withStore((d) => {
+      store.write("stored-tok", path.join(d, "bridge-token"));
+      return store.status().shadowed === false;
+    }));
+
+  console.log("\nserver-core — hashed compare:");
+  // safeEqual previously short-circuited on length before timingSafeEqual, leaking the token's
+  // length. Hashing first makes both sides 32 bytes, so unequal lengths compare normally (and false)
+  // rather than returning early — or throwing, which is what a raw timingSafeEqual would do.
+  ok("[auth] equal tokens compare true", core.safeEqual("abc", "abc"));
+  ok("[auth] different-LENGTH tokens compare false instead of throwing", core.safeEqual("abc", "abcdef") === false);
+  ok("[auth] same-length different tokens compare false", core.safeEqual("abc", "abd") === false);
+  ok("[auth] the empty token compares false against a real one", core.safeEqual("", TOKEN) === false);
+
+  console.log("\nfigma-pull — token command guards:");
+  ok("[token] --token-status parses as a command", pull.parseArgs(["--token-status"]).tokenCmd === "--token-status");
+  ok("[token] --show-token parses as a command", pull.parseArgs(["--show-token"]).tokenCmd === "--show-token");
+  ok("[token] --rotate-token parses as a command", pull.parseArgs(["--rotate-token"]).tokenCmd === "--rotate-token");
+  ok("[token] --forget-token parses as a command", pull.parseArgs(["--forget-token"]).tokenCmd === "--forget-token");
+  ok("[token] --token-file takes a value and is NOT a command",
+    (() => { const p = pull.parseArgs(["--token-file", "/tmp/t"]); return p.tokenFile === "/tmp/t" && p.tokenCmd === null; })());
+  ok("[token] --token-file=<path> form works too", pull.parseArgs(["--token-file=/tmp/t"]).tokenFile === "/tmp/t");
+  ok("[token] --token-file with no value is refused",
+    /needs a path/.test(parseThrows(["--token-file"]) || ""));
+  ok("[token] its value is not mistaken for the positional outDir",
+    pull.parseArgs(["--token-file", "/tmp/t"]).outDir !== "/tmp/t");
+  ok("[token] a token command is refused alongside an export scope",
+    /cannot be combined with --all-pages/.test(parseThrows(["--rotate-token", "--all-pages"]) || ""));
+  ok("[token] a token command is refused alongside a daemon command",
+    /cannot be combined with --serve/.test(parseThrows(["--show-token", "--serve"]) || ""));
+  ok("[token] a token command is refused alongside an index command",
+    /cannot be combined with --whoami/.test(parseThrows(["--token-status", "--whoami"]) || ""));
+  ok("[token] two token commands at once are refused",
+    /different commands/.test(parseThrows(["--show-token", "--rotate-token"]) || ""));
+  ok("[token] --token-file is refused with --rotate-token (it would rotate the OTHER token)",
+    /silently ignored/.test(parseThrows(["--rotate-token", "--token-file", "/tmp/t"]) || ""));
+  ok("[token] and with --token-status, which reports on the STORED token",
+    /silently ignored/.test(parseThrows(["--token-status", "--token-file", "/tmp/t"]) || ""));
+  ok("[token] and with --forget-token",
+    /silently ignored/.test(parseThrows(["--forget-token", "--token-file", "/tmp/t"]) || ""));
+  ok("[token] but --token-file IS allowed with --show-token",
+    pull.parseArgs(["--show-token", "--token-file", "/tmp/t"]).tokenCmd === "--show-token");
+  ok("[token] an ordinary pull still parses with no token command",
+    pull.parseArgs(["design"]).tokenCmd === null);
+
+  console.log("\nfigma-pull — token commands end to end (subprocess):");
+  // Driven as a real subprocess: these commands must work with NO bridge, NO daemon and NO plugin,
+  // which is only honestly testable by running the CLI itself.
+  const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-cli-token-"));
+  const cli = path.join(__dirname, "..", "bridge", "figma-pull.js");
+  const runCli = (argv, extraEnv = {}) => {
+    const env = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, ...extraEnv };
+    delete env.FIGMA_BRIDGE_TOKEN;
+    delete env.FIGMA_BRIDGE_TOKEN_FILE;
+    if (extraEnv.FIGMA_BRIDGE_TOKEN) env.FIGMA_BRIDGE_TOKEN = extraEnv.FIGMA_BRIDGE_TOKEN;
+    return spawnSync(process.execPath, [cli, ...argv], { encoding: "utf8", env });
+  };
+
+  const statusFresh = runCli(["--token-status"]);
+  ok("[token-cli] --token-status exits 0 with nothing saved", statusFresh.status === 0);
+  ok("[token-cli] and reports no saved token rather than inventing one",
+    JSON.parse(statusFresh.stdout).stored === false);
+  ok("[token-cli] and did NOT create the file as a side effect of asking",
+    !fs.existsSync(path.join(cliDir, "bridge-token")));
+
+  ok("[token-cli] --token-status twice reports the SAME thing when nothing is saved",
+    runCli(["--token-status"]).stdout === runCli(["--token-status"]).stdout);
+
+  const rotated = runCli(["--rotate-token"]);
+  ok("[token-cli] --rotate-token exits 0", rotated.status === 0);
+  const rotatedTok = rotated.stdout.trim();
+  ok("[token-cli] and prints the new token on stdout so it can be piped", /^[0-9a-f]{48}$/.test(rotatedTok));
+  ok("[token-cli] and saved it", fs.readFileSync(path.join(cliDir, "bridge-token"), "utf8").trim() === rotatedTok);
+  // The failure mode that would otherwise be a silent 3s reconnect loop in the plugin.
+  ok("[token-cli] and TELLS the user to re-paste it into the plugin",
+    /re-paste/i.test(rotated.stderr));
+
+  const shown = runCli(["--show-token"]);
+  ok("[token-cli] --show-token prints the saved token, not a new one", shown.stdout.trim() === rotatedTok);
+  ok("[token-cli] and prints it alone on stdout so `| pbcopy` works", shown.stdout.trim().split("\n").length === 1);
+
+  const statusSaved = JSON.parse(runCli(["--token-status"]).stdout);
+  ok("[token-cli] --token-status now reports it as stored", statusSaved.stored === true);
+  ok("[token-cli] and never prints the token itself",
+    !runCli(["--token-status"]).stdout.includes(rotatedTok));
+  ok("[token-cli] and reports the saved token as the active source", statusSaved.activeSource === "file");
+
+  const shadowed = JSON.parse(runCli(["--token-status"], { FIGMA_BRIDGE_TOKEN: "env-wins" }).stdout);
+  ok("[token-cli] with the env var set, status reports env as the winner", shadowed.activeSource === "env");
+  ok("[token-cli] and flags that the saved token is being shadowed", shadowed.shadowed === true);
+  ok("[token-cli] --rotate-token warns when the env var would override the rotation",
+    /OVERRIDES/.test(runCli(["--rotate-token"], { FIGMA_BRIDGE_TOKEN: "env-wins" }).stderr));
+
+  const customFile = path.join(cliDir, "custom-token");
+  fs.writeFileSync(customFile, "custom-tok-value\n");
+  ok("[token-cli] --token-file is honoured by --show-token",
+    runCli(["--show-token", "--token-file", customFile]).stdout.trim() === "custom-tok-value");
+
+  // The mint-on-first-bridge-start path, which no other test reaches: the CLI tests above never open
+  // a bridge, and this suite's own server-core is loaded with FIGMA_BRIDGE_TOKEN set (source "env",
+  // which never persists). Driven as a subprocess on a spare port so it neither needs a plugin nor
+  // collides with a real bridge on 8787.
+  const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
+  const bootScript = path.join(bootDir, "boot.js");
+  fs.writeFileSync(bootScript, `
+    const core = require(${JSON.stringify(path.join(__dirname, "..", "bridge", "server-core.js"))});
+    const b = core.createBridge(19788);
+    b.close();
+  `);
+  const bootEnv = { ...process.env, DESIGNTWIN_CONFIG_DIR: bootDir };
+  delete bootEnv.FIGMA_BRIDGE_TOKEN;
+  delete bootEnv.FIGMA_BRIDGE_TOKEN_FILE;
+  const boot = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  const bootFile = path.join(bootDir, "bridge-token");
+  ok("[token-boot] starting a bridge with nothing saved mints and PERSISTS a token", fs.existsSync(bootFile));
+  const bootTok = fs.existsSync(bootFile) ? fs.readFileSync(bootFile, "utf8").trim() : "";
+  ok("[token-boot] and prints it once, to paste into the plugin", boot.stderr.includes(bootTok) && bootTok.length === 48);
+  ok("[token-boot] and says it was saved, so the user knows not to expect it again",
+    /saved to/.test(boot.stderr) && /won't be asked to paste it again/.test(boot.stderr));
+  // The regression the whole store exists to prevent: the SECOND run must reuse, not re-mint.
+  const boot2 = spawnSync(process.execPath, [bootScript], { encoding: "utf8", env: bootEnv });
+  ok("[token-boot] a SECOND bridge start reuses the saved token instead of minting a new one",
+    fs.readFileSync(bootFile, "utf8").trim() === bootTok);
+  ok("[token-boot] and does NOT reprint the secret into the terminal", !boot2.stderr.includes(bootTok));
+  ok("[token-boot] it reports which token is in play by fingerprint instead",
+    boot2.stderr.includes(store.fingerprint(bootTok)));
+
+  // Regression: server-core resolves the token at REQUIRE time, so an unreadable --token-file used to
+  // throw out of a module load — a raw stack trace, before any front-end error handling was in scope.
+  const badFile = runCli(["--show-token", "--token-file", "/nonexistent/nope"]);
+  ok("[token-cli] an unreadable --token-file exits 1", badFile.status === 1);
+  ok("[token-cli] with a one-line message, not a stack trace",
+    /^\[dtwin\] error: --token-file/.test(badFile.stderr.trim()) && !badFile.stderr.includes("at Object."));
+
+  const forgot = runCli(["--forget-token"]);
+  ok("[token-cli] --forget-token exits 0", forgot.status === 0);
+  ok("[token-cli] and deletes the file", !fs.existsSync(path.join(cliDir, "bridge-token")));
+  ok("[token-cli] and forgetting twice is not an error",
+    runCli(["--forget-token"]).status === 0);
+
   // ---------------------------------------------------------------- report
   report();
 })();
