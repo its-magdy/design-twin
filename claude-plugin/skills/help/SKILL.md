@@ -80,8 +80,9 @@ Then build: **`/designtwin:build-screen <screen>`**.
   running yet — the plugin UI is a WS *client*. Fix the token, start a server, it auto-connects (3s retry).
 - **Connection rejected / 401** → token mismatch. What the bridge prints (or `FIGMA_BRIDGE_TOKEN`) must
   equal the plugin's **Bridge token** field. Re-paste + Save.
-- **Changed the port?** Don't — the plugin is pinned to `ws://localhost:8787` (manifest + `ui.html`).
-  `FIGMA_BRIDGE_PORT` only moves the *server*, which the plugin then can't reach. Free 8787 instead.
+- **Changed the port?** The plugin tries `8787`, then `8788`, then `8789` in turn (manifest +
+  `ui.html`) — those are the only three it can dial, so `FIGMA_BRIDGE_PORT` must be one of them.
+  Usually easier to just free `8787` than to move the server.
 - **`--list-libraries` / `figma_list_libraries` returns nothing** → in this order: (1) the plugin in
   Figma predates the manifest's `"permissions": ["teamlibrary"]` — **re-import it**; (2) no team
   library is enabled for the file (Figma UI → Assets → Libraries; no API can do this); (3) free plan.
@@ -114,6 +115,8 @@ Then build: **`/designtwin:build-screen <screen>`**.
 
 ## Related
 
+- **What connections exist and what they let Claude do:** `connect` (auto-triggers on plain-English
+  "how does this work" / "how do I connect" questions — you don't need to send the user here by hand).
 - **Get the design out of Figma:** `/designtwin:extract`.
 - **Build a screen from it:** `/designtwin:build-screen <screen>`.
 - **Build many screens:** `build-screen` handles the fan-out itself — it delegates one layer per

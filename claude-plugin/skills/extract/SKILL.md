@@ -20,20 +20,17 @@ Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 
 ## Pick a path
 
-| Path | Use when | How |
-|---|---|---|
-| **A. Manual** | One screen, first time, or the bridge isn't set up | Click the plugin's export buttons, save the downloads into `design/` |
-| **B. CLI** | Anything repeated or bulk | `dtwin …` — hosts a loopback socket, the plugin pushes, files land, it exits |
-| **B+. Daemon** | Several pulls in a row | `--serve` holds the connection open so each pull skips the reconnect wait |
-| **C. MCP** | Interactive "look at this, now pull that", or design *writes* | Registered in the project you're building, not in this repo |
+Four ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI, hold it
+open as a daemon (`--serve`) for several pulls in a row, or go through a registered `figma-mcp` server.
+What each is, when to reach for it, and how a connection actually gets opened is the **connect**
+skill's job, not this one — read there if the user hasn't got a connection working yet.
 
-**Default to A when the bridge isn't already working.** It needs zero setup and always works. B is
-better once someone is pulling repeatedly, but it needs `npm install` and a bridge token first, and
-walking a user through that mid-task is worse than just clicking the buttons.
+**Default to manual export when the bridge isn't already working.** It needs zero setup and always
+works; walking a user through CLI/token setup mid-task is worse than just clicking the buttons.
 
-**Only one bridge can hold port 8787.** B, B+ and C all bind it; whichever starts second dies with
-`EADDRINUSE` (set `FIGMA_BRIDGE_PORT=8788` or `8789` — the only other ports the plugin can reach). If the MCP server is already running you cannot also run the CLI — use the MCP's own
-export tools with `writeToDisk: true` instead.
+**Only one bridge can hold port 8787** at a time (CLI, daemon, and MCP all bind it) — if the MCP
+server is already running, use its own export tools with `writeToDisk: true` instead of also trying
+the CLI.
 
 ## Discover, then scope — never open with a whole-file pull
 

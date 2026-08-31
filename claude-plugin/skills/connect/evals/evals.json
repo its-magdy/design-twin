@@ -1,0 +1,45 @@
+{
+  "skill_name": "connect",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "hey i just installed this design twin plugin in claude code, what does it actually do and how do i get claude talking to my figma file?",
+      "expected_output": "Explains both connection modes (dtwin CLI, figma-mcp server), what each lets Claude do, and the short steps to open a connection (plugin running in Figma, then pick CLI or MCP). Hands off to /designtwin:help for setup details and /designtwin:extract for actually pulling data, without reciting the full flag/tool reference inline.",
+      "files": [],
+      "expectations": [
+        "Mentions the dtwin CLI as one way to connect",
+        "Mentions the figma-mcp / MCP server as the other way to connect",
+        "States the Figma file must be open with the plugin running (not headless)",
+        "Names at least one concrete next step to actually open a connection (e.g. import the plugin, run dtwin --list, register .mcp.json)",
+        "Points to /designtwin:extract and/or /designtwin:help for next steps rather than reciting the full CLI flag or MCP tool reference inline",
+        "Does not fabricate commands, flags, or tool names that don't exist in the repo (dtwin flags, figma_* tool names)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "is there a way for claude to just read my figma file directly instead of me exporting stuff manually?",
+      "expected_output": "Identifies this as answered by the CLI/MCP connection (not manual export), briefly contrasts the CLI (one-shot/daemon, read-only, writes to design/) vs MCP (live, interactive, in-conversation), and gives the short path to get one running.",
+      "files": [],
+      "expectations": [
+        "Answers yes and points at the CLI and/or MCP connection as the direct-read alternative to manual export",
+        "Distinguishes the CLI (writes files to design/, one-shot or daemon) from the MCP server (live, interactive tool calls)",
+        "States the Figma file must be open with the plugin running",
+        "Gives a concrete first action rather than only describing concepts abstractly",
+        "Does not claim this works headlessly or without the Figma desktop plugin running"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "what's this figma-mcp thing i see in the bridge folder, do i need it?",
+      "expected_output": "Explains figma-mcp is the live/interactive MCP connection (vs the dtwin CLI's one-shot/bulk reads), that it's optional (not required for the CLI path), what it lets Claude do (live tool calls, figma_export_url for pasted links, safe writes), and how it gets registered (in the consuming project, not this repo).",
+      "files": [],
+      "expectations": [
+        "Correctly identifies figma-mcp as the MCP server / interactive connection, distinct from the dtwin CLI",
+        "States it is optional — the CLI path works without it",
+        "Mentions it needs to be registered (.mcp.json) in the project being built, not in this repo",
+        "Mentions at least one concrete capability it adds (live queries, pasting a Figma link, or safe writes)",
+        "Does not claim the MCP server is required to use Design Twin at all"
+      ]
+    }
+  ]
+}
