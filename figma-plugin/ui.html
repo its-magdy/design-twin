@@ -33,12 +33,12 @@
 <div class="sep"></div>
 <div class="label">Bridge token</div>
 <div class="row">
-  <input id="token" type="password" placeholder="paste token from the bridge console" />
+  <input id="token" type="password" placeholder="paste token from the bridge console" title="The bridge prints this once, the first time it starts. Lost it? Run: dtwin --show-token" />
   <button id="save-token" style="flex: 0 0 60px">Save</button>
 </div>
 
 <div id="bridge">Bridge: offline (start figma-pull or the MCP to connect)</div>
-<div class="hint">Save into <code>design/</code> (assets into <code>design/assets/</code>). Bridge is localhost-only; the token authenticates it.</div>
+<div class="hint">Save into <code>design/</code> (assets into <code>design/assets/</code>). Bridge is localhost-only; the token authenticates it. Printed once on first start — <code>dtwin --show-token</code> reprints it.</div>
 
 <script>
   // Everything is wrapped so a single init error can NEVER leave the UI silently frozen:

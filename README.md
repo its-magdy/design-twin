@@ -99,8 +99,11 @@ files. You only author the config maps below.
 ## Upgrade path (later, optional)
 If manual export gets tedious, swap the file handoff for a **localhost-only** WebSocket bridge
 (`allowedDomains: ["ws://localhost:8787", …]` — reaches your machine, never the internet). Loopback isn't
-authentication, so the bridge is gated by a **shared token** you paste into the plugin once (see
-`bridge/README.md`). The Skill and the token/component maps carry over unchanged.
+authentication, so the bridge is gated by a **shared token**. Nothing to configure: the first bridge
+start generates one, saves it per-user (`~/.config/design-twin/bridge-token`, mode `0600`) and prints
+it once — paste that into the plugin and neither side asks again (`dtwin --token-status` /
+`--show-token` / `--rotate-token`; see `bridge/README.md`). The Skill and the token/component maps
+carry over unchanged.
 
 Two front-ends sit on that bridge, and they speak the same commands:
 - **`dtwin` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so

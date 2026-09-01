@@ -121,8 +121,10 @@ Design decisions worth not re-litigating:
 - **Iframe has `null` origin** → the local CLI/MCP server must send `Access-Control-Allow-Origin: *`
   for any HTTP; for WebSocket, origin **cannot** authenticate — the plugin sends `null`, but so does a
   sandboxed attacker iframe (`<iframe sandbox="allow-scripts">`) on any site the user visits. The bridge
-  therefore requires a **shared token** (`?token=…`, constant-time compare) validated at the handshake,
-  keeping the Origin/Host checks only as defense-in-depth.
+  therefore requires a **shared token** (`?token=…`) validated at the handshake, keeping the Origin/Host
+  checks only as defense-in-depth. Compared as SHA-256 digests through `timingSafeEqual`: hashing first
+  makes both sides a fixed 32 bytes, so unlike a raw compare guarded by a length check, neither the
+  token's content nor its **length** leaks through timing.
 - **No documented payload-size cap** → **chunk large exports** across `postMessage` and add reconnect logic.
 - **Network manifest:** `ws`/`wss` and `http(s)://localhost[:PORT]` are permitted in
   `networkAccess.allowedDomains` — **including for a published plugin**, which is what makes the bridge

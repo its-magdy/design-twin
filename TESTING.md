@@ -70,7 +70,8 @@ node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.j
 `verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed
 attacker iframe sends `Origin: null` exactly like the real plugin does, so the suite asserts that
 `Origin: null` **without** a valid token is still rejected (the CSWSH case), alongside DNS-rebinding
-(non-loopback `Host`) and length-mismatched tokens.
+(non-loopback `Host`) and tokens of a different length — which must compare `false` rather than throw,
+since the compare hashes both sides to a fixed width precisely so length cannot leak.
 
 This suite was hardened over FOUR adversarial review rounds. Round 1 found 28 confirmed bugs; round 2
 (re-reviewing the fixes) found ~6 regressions the fixes themselves introduced; round 3 found one more (a
