@@ -17,7 +17,7 @@ Development → Design Twin). If it isn't imported yet, that's one-time setup �
 | | Manual export | `dtwin` CLI | `figma-mcp` server |
 |---|---|---|---|
 | What it is | Clicking the plugin's own export buttons, saving downloads into `design/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
-| Setup | **None** — no bridge, no token | `npm install` once, plus a bridge token | Same install as the CLI, plus a `.mcp.json` registration |
+| Setup | **None** — no bridge, no token | `npm install` once; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
 | Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
 | Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
@@ -62,7 +62,8 @@ spacing does this use?" gets answered from the real file, not a stale export.
      what's there, followed by a real pull.
    - **Want Claude to query Figma live, mid-conversation, in another project** → same install as the
      CLI, and that project needs a `.mcp.json` pointing at an absolute path to `bridge/figma-mcp.mjs`,
-     with `FIGMA_BRIDGE_TOKEN` set the same on both ends, then enable it via `/mcp` and restart. This
+     then enable it via `/mcp` and restart. No token goes in that file: the MCP server reads the same
+     per-user stored token the CLI does, so the one already pasted into the plugin keeps working. This
      repo itself registers no MCP server on purpose — that's for the project being *built*, not this one.
 3. From here: pulling/exporting data is the **extract** skill's job — hand off to
    `/designtwin:extract`. Something not connecting? That's **help**'s job —

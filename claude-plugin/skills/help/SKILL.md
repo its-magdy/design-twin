@@ -102,8 +102,9 @@ Then build: **`/designtwin:build-screen <screen>`**.
   when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
 - **MCP `figma` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
-  `.mcp.json` there pointing at an absolute path to `bridge/figma-mcp.mjs`, with the same
-  `FIGMA_BRIDGE_TOKEN`. Then enable it via `/mcp` and restart.
+  `.mcp.json` there pointing at an absolute path to `bridge/figma-mcp.mjs` — no token needed in it,
+  since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
+  and restart.
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
