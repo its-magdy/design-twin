@@ -324,6 +324,19 @@ async function disconnectErr(code, reason) {
   const pull = require("../bridge/figma-pull.js");
   const parse = (argv) => pull.parseArgs(argv);
   const usage = (argv) => { try { parse(argv); return null; } catch (e) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + e.message; } };
+  // Anti-drift: --node and --selection must both write through write-out.js's shared writeScreen
+  // helper, not an ad hoc trio of writeJson/writeAssets calls each branch could quietly reinvent.
+  const pullSrc = fs.readFileSync(require.resolve("../bridge/figma-pull.js"), "utf8");
+  ok("[args] --node dispatch routes through the shared OUT.writeScreen writer", (() => {
+    const i = pullSrc.indexOf("if (nodeId) {");
+    const j = pullSrc.indexOf("} else if (selection) {");
+    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
+  })());
+  ok("[args] --selection dispatch ALSO routes through OUT.writeScreen (no more ad hoc write trio)", (() => {
+    const i = pullSrc.indexOf("} else if (selection) {");
+    const j = pullSrc.indexOf("} else if (asLibrary) {");
+    return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
+  })());
 
   console.log("\nfigma-pull — argument parsing:");
   // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
@@ -388,6 +401,36 @@ async function disconnectErr(code, reason) {
   ok("[args] an unrecognised id shape is passed through untouched",
     parse(["--children", "weird_id"]).childrenId === "weird_id");
   ok("[args] --children= empty is an ERROR", /needs a node id/.test(usage(["--children="]) || ""));
+
+  // --node <id>: the REAL single-node export (properties + assets) — a SCOPE flag, unlike --children
+  // (peek) and --screenshot (PNG only), so it must accept the same id shapes --children does and join
+  // the scopes/indexCmds mutual-exclusion guards below rather than living in its own lane.
+  ok("[args] --node <id> value is not mistaken for outDir", (() => {
+    const r = parse(["--node", "131:1879"]);
+    return r.nodeId === "131:1879" && r.outDir === "design";
+  })());
+  ok("[args] --node with no value is an ERROR", /needs a node id/.test(usage(["--node"]) || ""));
+  ok("[args] --node= form is accepted", parse(["--node=131:1879"]).nodeId === "131:1879");
+  ok("[args] --node accepts the DASH form (normalised to colons)",
+    parse(["--node", "131-1879"]).nodeId === "131:1879");
+  ok("[args] --node accepts a full figma.com design URL",
+    parse(["--node", "https://www.figma.com/design/abc123/NERA?node-id=131-1879&t=x"]).nodeId === "131:1879");
+  ok("[args] --node accepts a percent-encoded id",
+    parse(["--node=131%3A1879"]).nodeId === "131:1879");
+  ok("[args] --node accepts a nested-instance path",
+    parse(["--node", "I131-1879;12-34"]).nodeId === "I131:1879;12:34");
+  ok("[args] --node= empty is an ERROR", /needs a node id/.test(usage(["--node="]) || ""));
+  ok("[args] --node + --selection is an ERROR (different scopes)", /different scopes/.test(usage(["--node", "1:2", "--selection"]) || ""));
+  ok("[args] --node + --page is an ERROR (different scopes)", /different scopes/.test(usage(["--node", "1:2", "--page", "3:4"]) || ""));
+  ok("[args] --node + --list is an ERROR (structural index only)", /structural index/.test(usage(["--list", "--node", "1:2"]) || ""));
+  ok("[args] --node + --serve is an ERROR", /manages the background bridge/.test(usage(["--serve", "--node", "1:2"]) || ""));
+  // Unlike --screenshot (skips the walk entirely), --node DOES a real serialize() pass, so read
+  // options are genuinely live and must compose rather than being refused.
+  ok("[args] --node + a read option is ACCEPTED (unlike --screenshot)", (() => {
+    const r = parse(["--node", "1:2", "--css"]);
+    return r.nodeId === "1:2" && r.readOpts.css === true;
+  })());
+
   ok("[args] --no-assets sets skipAssets", parse(["--no-assets"]).readOpts.skipAssets === true);
   ok("[args] --list implies depth 2, --list-pages depth 1", (() => {
     const l = parse(["--list"]), lp = parse(["--list-pages"]);

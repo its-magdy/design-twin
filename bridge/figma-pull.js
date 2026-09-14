@@ -26,6 +26,13 @@ if (require.main === module && process.argv[2] === "mcp") {
 //   dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
 //   dtwin [outDir] --selection  # just the current selection
 //   dtwin [outDir] --page <id|name>   # ONE named page (repeatable; ids come from --list)
+//   dtwin [outDir] --node <id>  # ONE node, fully exported (properties + assets) — the
+//                                            # "paste a Figma link" path. Takes a bare id, dash form,
+//                                            # percent-encoded id, or a whole figma.com URL. Unlike
+//                                            # --children (peek only) and --screenshot (PNG only) this
+//                                            # walks the subtree and exports its assets, same as a
+//                                            # --page pull would for that subtree. The CLI twin of the
+//                                            # MCP figma_export_url tool.
 //   dtwin [outDir] --design-system    # ONLY tokens/styles/components/hygiene — no page
 //                                                   # walk, no assets (the cheap "just the design
 //                                                   # system" pull). Each catalogued component/variant
@@ -73,6 +80,15 @@ if (require.main === module && process.argv[2] === "mcp") {
 //   dtwin --list-pages   # page names only (near-free: does not load any page)
 //   dtwin --children <id>  # ONE node's direct children only (peek inside a frame from
 //                                        # --list before committing to a full recursive --page pull)
+//   dtwin --screenshot <id> [--scale N]  # on-demand PNG of ONE node (a component/instance
+//                                        # buried in a dense screen, say) — the visual-validation
+//                                        # counterpart to --list/--children. WRITES assets/<id>_ref.png
+//                                        # (unlike --list/--children, which only print), but is still
+//                                        # cheap: it skips serialize() and the recursive asset walk, so
+//                                        # exportAsync on the node itself is the only cost. --scale
+//                                        # overrides the default (auto, capped at 2048px on the longest
+//                                        # side). Mirrors Figma's own get_screenshot tool (single-node,
+//                                        # called on demand) rather than pre-rendering every node.
 //   dtwin --list-libraries  # which design libraries this file draws on (local + enabled
 //                                        # team libraries), their variable collections, and how many
 //                                        # of their components this file USES. The discovery step
@@ -165,6 +181,7 @@ const writeJson = (dir, name, obj, quiet) => OUT.writeJson(dir, name, obj, quiet
 // through this exact entry point.
 const writePages = (dir, layersDoc) => OUT.writePages(dir, layersDoc, plog);
 const writeAssets = (dir, assets) => OUT.writeAssets(dir, assets, plog);
+const writeScreenshot = (dir, r) => OUT.writeScreenshot(dir, r, plog);
 // hygiene.json persists every warning (see design-system-layout.js), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
 // COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
@@ -301,6 +318,31 @@ let childrenId = takeValues(args, "--children", "--children needs a node id (see
 // doesn't recognise passes through and works exactly as before rather than becoming a hard failure.
 if (childrenId) childrenId = toNodeId(childrenId);
 
+// --node <id>: a REAL export (properties + assets) of exactly ONE node — the CLI twin of the MCP
+// `figma_export_url` tool ("paste a link and ask about it"). Unlike --children (peek, no recursion)
+// and --screenshot (PNG only, no asset walk) this walks the node's subtree with the full serialize()
+// pass and exports the assets found inside it, same as a --page pull would for that subtree. It is a
+// SCOPE flag (selects WHAT is exported), not an index command, so it joins the `scopes` guard below.
+let nodeId = takeValues(args, "--node", "--node needs a node id or figma.com URL (see --list / --children)")[0] || null;
+if (nodeId) nodeId = toNodeId(nodeId);
+
+// --screenshot <id>: an on-demand PNG of ONE node — the visual-validation counterpart to --list/
+// --children (see collectScreenshot's comment in collect.ts for why this is a single-node pull rather
+// than a bulk pre-render pass). Unlike --list/--children it WRITES a file, so it is its own small
+// export, not a member of the indexCmds family below.
+let screenshotId = takeValues(args, "--screenshot", "--screenshot needs a node id (see --list / --children)")[0] || null;
+if (screenshotId) screenshotId = toNodeId(screenshotId);
+// --scale <n>: override collectReference's default (auto, capped at 2048px on the longest side). Only
+// meaningful paired with --screenshot — refused standalone below, the same silent-loss class as a read
+// option combined with --list.
+const BAD_SCALE = "--scale expects a positive number";
+const scaleArg = takeValues(args, "--scale", BAD_SCALE)[0];
+const scale = scaleArg !== undefined ? Number(scaleArg) : undefined;
+if (scaleArg !== undefined && !(scale > 0)) throw new UsageError(`${BAD_SCALE}, got '${scaleArg}'`);
+if (scale !== undefined && !screenshotId) {
+  throw new UsageError("--scale only applies to --screenshot — pass both, or drop --scale.");
+}
+
 // --page <id|name>, REPEATABLE (docker -e / curl -H convention): export a bounded, caller-chosen set
 // of pages. Accepts `--page=x` and `--page x`. Ambiguous/unknown selectors fail loudly plugin-side
 // with the available pages listed — never a silent pick, since nothing here is interactive.
@@ -358,9 +400,14 @@ const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) |
 // watched for one; `--selection --page Foo` never forwards the page at all. Both produce a plausible
 // export of the WRONG scope — the failure you don't notice. Now that parsing is a pure function,
 // refusing costs two lines and a test.
-const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library"].filter(Boolean);
+const scopes = [selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node"].filter(Boolean);
 if (scopes.length > 1) {
   throw new UsageError(`${scopes.join(" and ")} select different scopes — pass only one.`);
+}
+// --screenshot exports exactly one node's reference PNG — it is not a scope modifier, so combining it
+// with one is the same silent-loss class the scope guard above exists for.
+if (screenshotId && scopes.length) {
+  throw new UsageError(`--screenshot renders ONE node's reference image — it cannot be combined with ${scopes.join(" / ")}. Run it on its own.`);
 }
 // The cheap-index FAMILY, decided once. Every guard below asks this list rather than re-deriving
 // "is this an index command?" from a growing pile of booleans — which is exactly how a flag gets
@@ -368,6 +415,18 @@ if (scopes.length > 1) {
 // flag is accepted, and then quietly does nothing).
 const indexCmds = [listCmd, childrenId && "--children", listLibraries && "--list-libraries", whoami && "--whoami", listClients && "--list-clients"].filter(Boolean);
 const indexCmd = indexCmds[0] || null;
+// --screenshot writes a file, so it does not join the indexCmds family above (which never do) — but
+// combining it with one is still the same silent-loss class: only one command's output would appear.
+if (screenshotId && indexCmds.length) {
+  throw new UsageError(`--screenshot cannot be combined with ${indexCmds.join(" / ")} — run them as separate commands.`);
+}
+// Read options need a serialize()/node walk that --screenshot deliberately skips (see its usage
+// comment above), so any of them here would be silently ignored exactly as they would on a list command.
+if (screenshotId && readOptFlagsGiven.length) {
+  const many = readOptFlagsGiven.length > 1;
+  const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
+  throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`);
+}
 
 // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
 // export flag combined with one of them is a no-op the user has no way to see.
@@ -420,8 +479,8 @@ if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
 // export the user typed, with nothing said about it.
 if (daemonCmd) {
   const others = [
-    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library",
-    ...indexCmds, ...readOptFlagsGiven,
+    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node",
+    screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven,
   ].filter(Boolean);
   if (others.length) {
     throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
@@ -437,7 +496,7 @@ if (daemonCmd) {
 if (tokenCmd) {
   const others = [
     selection && "--selection", allPages && "--all-pages", pageSel.length && "--page",
-    designSystemOnly && "--design-system", asLibrary && "--as-library",
+    designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node", screenshotId && "--screenshot",
     daemonCmd, ...indexCmds, ...readOptFlagsGiven,
   ].filter(Boolean);
   if (others.length) {
@@ -456,7 +515,7 @@ if (tokenCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile };
+return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -559,7 +618,7 @@ try {
   console.error("[dtwin] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, asLibrary, readOpts, listOnly, listDepth, childrenId, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile } = parsed;
 
 async function main() {
   // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
@@ -754,9 +813,8 @@ async function main() {
     for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
     console.log(JSON.stringify(r, null, 2));
     console.error("[dtwin] " + q.summary(r));
-    // Point at a flag that actually EXISTS. This previously suggested `--node <id>`, which was never
-    // wired up — an instruction the CLI could not honour is worse than no instruction.
     console.error("[dtwin] next: dtwin design --page <id>   (repeatable; add --no-assets to skip the render pass)");
+    console.error("[dtwin]       or: dtwin design --node <id>   (just ONE node, fully exported with its own assets)");
     // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
     // forever after printing (found live: still resident and holding port 8787 a minute later,
     // blocking every subsequent pull). close() rather than process.exit(0) — same effect on the hang,
@@ -764,7 +822,21 @@ async function main() {
     return finish();
   }
 
-  const mode = asLibrary ? `library "${asLibrary}"` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
+  // --screenshot: one node's reference PNG, on demand — the visual-validation counterpart to --list/
+  // --children above. Cheap next to a full export (skips serialize() and the recursive asset walk —
+  // see collectScreenshot's comment in collect.ts) but it DOES write a file, unlike the two commands
+  // it sits next to, so it gets its own branch rather than joining their print-only one.
+  if (screenshotId) {
+    console.error("[dtwin] plugin connected — rendering a reference screenshot…");
+    const r = await send("screenshot", { nodeId: screenshotId, scale }, exportTimeoutMs);
+    for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
+    writeScreenshot(outDir, r);
+    console.log(JSON.stringify({ id: r.id, name: r.name, type: r.type, reference: r.reference }, null, 2));
+    console.error(`[dtwin] wrote ${r.reference} — ${r.name} (${r.type}).`);
+    return finish();
+  }
+
+  const mode = asLibrary ? `library "${asLibrary}"` : nodeId ? `node ${nodeId}` : selection ? "selection" : designSystemOnly ? "design system only" : allPages ? "all pages" : pageSel.length ? `page(s) ${pageSel.join(", ")}` : "current page";
   // Measured: --all-pages did not finish in 15 minutes on a real 25-page/119-frame file, even with
   // --no-assets. Kept (it's slow, not unsafe — and it's fine on small files) but it should not be the
   // path anyone reaches for by default, so say so up front rather than after a quarter-hour.
@@ -774,11 +846,18 @@ async function main() {
   }
   console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
 
-  if (selection) {
+  if (nodeId) {
+    // Same writer the MCP figma_export_url tool uses (write-out.js's writeScreen), so a CLI --node
+    // pull and an MCP pull of the same node land in identical shape.
+    const r = await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs);
+    OUT.writeScreen(outDir, r, plog);
+  } else if (selection) {
+    // Same writer as --node above — routing both through write-out.js's writeScreen means a
+    // selection pull and a --node pull can never drift into two slightly different write shapes
+    // (this used to write variables.json unconditionally, where writeScreen correctly skips it
+    // when the result carries none, and printed no summary).
     const r = await send("exportSelection", { ...readOpts }, exportTimeoutMs);
-    writeJson(outDir, safe(r.screenName || "screen") + ".json", r.screen);
-    writeJson(outDir, "variables.json", r.variables);
-    writeAssets(outDir, r.assets);
+    OUT.writeScreen(outDir, r, plog);
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
     // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.

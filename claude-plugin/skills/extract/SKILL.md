@@ -42,6 +42,7 @@ dtwin --list-libraries   # which design libraries this file draws on
 dtwin --list             # pages + their top-level frames, WITH IDS
 dtwin --children <id>    # peek inside one node before committing
 dtwin design --page <id> # then deep-pull only that page
+dtwin design --node <id> # or just ONE node (a link someone pasted, a single component)
 ```
 
 **`dtwin` comes from the `designtwin` npm package.** If it isn't on PATH, you are probably working
@@ -55,6 +56,11 @@ MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_childre
 Two narrower pulls worth knowing: `design --design-system` gets tokens/styles/components with **no**
 page walk and no assets; `design --as-library "<name>"` gets a library file's complete catalog (run it
 with the *library* open, not the file consuming it).
+
+**After `build-screen` generates code for one component**, `dtwin --screenshot <id>` gets a fresh PNG of
+just that node to compare the output against — cheaper than re-exporting, and a tighter check than the
+one whole-frame reference PNG every export already carries (which is too zoomed-out to eyeball a small
+component inside a dense screen). MCP twin: `figma_screenshot`.
 
 **The full flag surface lives in `bridge/README.md`** — read it rather than guessing at flags. This
 skill owns the decision of *which* pull to run; that file owns *how*.
@@ -81,7 +87,8 @@ and without it fidelity checking is guesswork.
 ## Then hand off
 
 Report briefly: what landed, anything the manifest flagged, and whether the PNG exists. Then
-**`/designtwin:build-screen <screen>`**.
+**`/designtwin:audit-design <screen>`** to check the design is buildable (missing states, contrast,
+touch targets, designer questions), and **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
 in **`/designtwin:help`**. Don't debug it from memory.

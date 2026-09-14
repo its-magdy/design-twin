@@ -108,6 +108,8 @@ dtwin design --design-system  # ONLY design-system.json + design-system/ — no 
                                                    # walk, no assets/ (the cheap "tokens only" pull)
 dtwin design --as-library NERA # the COMPLETE catalog of a LIBRARY file — run this
                                                    # with the LIBRARY open, not the file that uses it
+dtwin design --node <id>      # ONE node, fully exported (properties + assets) —
+                                                   # see "--node <id>" below
 ```
 **Recommended workflow — discover, then scope.** Never open with a whole-file pull. Work down from
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
@@ -118,8 +120,67 @@ dtwin --list-libraries      # 1. WHICH libraries does this file draw on?
 dtwin --list-pages          # 1b. page NAMES only (near-free — loads no page)
 dtwin --list                # 2. WHERE is what — pages + top-level frames (ids)
 dtwin --children <id>       # 3. (optional) peek inside one frame
-dtwin design --page <id>    # 4. pull only what you need
+dtwin design --page <id>    # 4. pull only what you need — or just ONE node:
+dtwin design --node <id>    # 4b. (optional) just that ONE node, real export + its own assets
+dtwin --screenshot <id>     # 5. (optional) visually check ONE component after generating code for it
 ```
+
+### `--node <id>` — one node, fully exported
+
+```
+dtwin design --node 123:456                                          # writes 123_456.json + assets/
+dtwin design --node "https://figma.com/design/KEY/App?node-id=123-456" # a pasted link works too
+```
+
+A REAL export scoped to exactly one node — the CLI twin of the MCP `figma_export_url` tool ("paste a
+link and ask about it," see below). It runs the full `serialize()` walk on that node's subtree and
+exports the assets found inside it, exactly as a `--page` pull would for that subtree, just rooted
+lower. Accepts a bare id, dash form, percent-encoded id, a nested-instance path, or a whole figma.com
+URL — the same lenient parsing `--children`/`--screenshot` use.
+
+Don't confuse it with its two neighbors:
+- `--children <id>` peeks at one node's **direct children only** — no recursion, no assets, for
+  deciding whether to pull further.
+- `--screenshot <id>` renders a **PNG only** — skips `serialize()` and the asset walk entirely, for
+  visual validation after you've already generated code.
+- `--node <id>` is the one that actually **exports** — real node tree + real assets, just scoped
+  smaller than a whole page.
+
+It is a SCOPE flag like `--page`/`--selection`/`--all-pages`, so it's mutually exclusive with them,
+and unlike `--screenshot` it composes with read options (`--css`, `--measurements`, etc.) since it
+does a real walk. Writes `<node-name>.json` + `variables.json` (if any) + `assets/` — the same shape
+`--selection` writes, since both are single-root exports. As with `--selection`, the output file is
+named after the node's own name, so two same-named nodes in one pull would overwrite each other —
+pull them into separate `outDir`s if that matters.
+
+MCP twin: `figma_export_url` (also accepts a bare node id, not just a URL).
+
+### `--screenshot <id>` — an on-demand PNG of one node
+
+```
+dtwin --screenshot 123:456                # writes design/screenshots/123_456_ref.png
+dtwin --screenshot 123:456 --scale 3      # override the default (auto, capped at 2048px on the longest side)
+```
+
+Every export already carries **one** whole-frame reference PNG per exported root (`reference` in the
+tree), for the codegen agent to self-check the overall page against. That's a weak validation target
+for a **dense** screen, though — eyeballing one small component inside a huge flat image doesn't scale.
+`--screenshot` is the single-node counterpart: pull it for *one* component/instance you just generated
+code for, after `--list`/`--children` gave you its id, and compare it directly.
+
+It is cheap next to a real export — it skips `serialize()` and the recursive asset walk entirely, so
+`exportAsync` on the node itself is the only Plugin-API cost — but unlike `--list`/`--children` it
+**writes a file** (it's a tiny export, not a structural index), so it can't be combined with a scope
+flag, another index command, or a read option (`--css` etc. need a node walk this skips).
+
+This mirrors Figma's own Dev Mode MCP server: `get_screenshot` is scoped to a single node/selection,
+called **on demand** after `get_metadata`, specifically for post-generation visual validation — not a
+bulk pre-render pass over every node, which would pay the same per-node cost `--no-assets` exists to
+avoid, for a much bigger payload (PNG > structural JSON). If you want a component's reference image
+without picking through instances one at a time, dedupe by the component's own id (or its
+`mainComponent`) rather than pulling every instance of it.
+
+MCP twin: `figma_screenshot`.
 
 ### `--list-clients` / `--client` — working with two Figma files at once
 ```
@@ -372,6 +433,8 @@ with the `McpServer` + `registerTool` + zod pattern (tool schemas are zod, valid
 
 Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_list_pages`, `figma_list_children`,
 `figma_export_full`, `figma_export_design_system`, `figma_export_selection`, `figma_export_url`,
+`figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
+export tools' whole-frame reference PNG; see `--screenshot` above),
 `figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
 execution**, unlike some community servers). The frame-walking export tools accept opt-in read flags
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
@@ -420,6 +483,9 @@ one honest gap, too: library (remote) variable completeness depends on nodes/sty
 this session, so a bare design-system pull may see fewer of them than a full pull would.
 
 ### "Paste a link and ask about it" (`figma_export_url`)
+CLI twin: `dtwin design --node <id>` (see above) — same underlying `exportNode` op, so a pull from
+either surface lands in the identical shape.
+
 Keep Claude Code and the MCP running for the whole session; the plugin stays connected to your
 open file. Then just paste a Figma link and ask — Claude pulls the node the link points to and
 answers from live data, as many times as you like (free, no per-request cap):
