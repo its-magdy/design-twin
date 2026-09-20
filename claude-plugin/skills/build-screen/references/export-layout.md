@@ -28,6 +28,9 @@ above — to learn the system before building.
 - **`design-system/tokens.json`** — `collections` (Figma's variable collections, each with its
   `modes`) + `variables` (each with `tier` primitive/semantic, `scopes`, and `codeSyntax`
   `{WEB,ANDROID,iOS}` when the designer set it — prefer that platform string over hand-mapping).
+  A variable's `values` is keyed by mode: each is a hex/number, or `{aliasOf:"other/token"}` — a
+  semantic token pointing at a primitive. Follow the alias to get the value; keep the SEMANTIC name
+  as the token you map to code.
 - **`design-system/styles.paint.json`** / `styles.text.json` / `styles.effect.json` /
   `styles.grid.json` — one file per style type, each holding its `styles` array. Figma's style system
   is SEPARATE from variables; a style can bind variables into its fields, but it is its own object.

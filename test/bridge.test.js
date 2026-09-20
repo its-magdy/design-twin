@@ -405,13 +405,26 @@ async function disconnectErr(code, reason) {
       const d = mk({ ".mcp.json": '{"mcpServers":{"other":{"command":"x"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       const m = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")).mcpServers;
-      return m.other.command === "x" && m.figma.args[0] === "/abs/figma-mcp.mjs";
+      return m.other.command === "x" && m.designtwin.args[0] === "/abs/figma-mcp.mjs";
     })());
-    ok("[init] --mcp leaves an existing figma entry, and an invalid .mcp.json, untouched", (() => {
-      const a = mk({ ".mcp.json": '{"mcpServers":{"figma":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
+    ok("[init] --mcp registers as \"designtwin\" BESIDE Figma's own \"figma\" server, never in its place", (() => {
+      const d = mk({ ".mcp.json": '{"mcpServers":{"figma":{"type":"http","url":"https://mcp.figma.com/mcp"}}}' });
+      init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      const m = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")).mcpServers;
+      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args[0] === "/abs/figma-mcp.mjs";
+    })());
+    ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
+      const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
+      const d = mk({ ".mcp.json": before });
+      const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
+      init.apply(d, plan, () => {});
+      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma"/.test(a.note));
+    })());
+    ok("[init] --mcp leaves a foreign designtwin entry, and an invalid .mcp.json, untouched", (() => {
+      const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
       init.apply(a, init.plan(a, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
-      return JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")).mcpServers.figma.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
+      return JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")).mcpServers.designtwin.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
     ok("[init] warns when .gitignore would swallow the hand-authored maps", init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).some((a) => a.kind === "note" && /un-ignore/.test(a.note)));
     ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {

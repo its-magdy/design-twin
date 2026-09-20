@@ -23,6 +23,10 @@ const fs = require("fs");
 const path = require("path");
 const tokenStore = require("./token-store.js");
 
+// The key the MCP server is registered under in .mcp.json — matches the server's own name
+// (bridge/src/figma-mcp.mts), so its tools surface as mcp__designtwin__figma_status etc.
+const MCP_KEY = "designtwin";
+
 // Same detection order build-screen's step 0 documents — first match wins, most specific first.
 function detectProfile(cwd) {
   const has = (f) => fs.existsSync(path.join(cwd, f));
@@ -73,12 +77,22 @@ function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
     let bad = false;
     if (fs.existsSync(file)) { try { doc = JSON.parse(fs.readFileSync(file, "utf8")); } catch { bad = true; } }
     if (bad) actions.push({ kind: "skip", path: rel(file), note: "exists but is not valid JSON — fix it, then re-run with --mcp" });
-    else if (doc.mcpServers && doc.mcpServers.figma) actions.push({ kind: "skip", path: rel(file), note: 'already has a "figma" server — left as is' });
     else {
-      const next = { ...doc, mcpServers: { ...(doc.mcpServers || {}), figma: mcpEntry } };
-      // merge:true — the ONE write allowed onto an existing file: it re-serialises the user's own
-      // document with one key added. Everything else is written with "wx" and cannot clobber.
-      actions.push({ kind: "write", merge: fs.existsSync(file), path: rel(file), content: JSON.stringify(next, null, 2) + "\n", note: 'registered the "figma" MCP server (enable it with /mcp, then restart Claude Code). While it runs it holds port 8787 — use its writeToDisk:true instead of one-shot dtwin pulls' });
+      // Registered as "designtwin", never "figma": that is the name Figma's own MCP server is usually
+      // given, and Claude Code loads only one server per name — sharing it would silently drop one.
+      const servers = doc.mcpServers || {};
+      // Ours under ANY key (older inits wrote "figma"): a second entry would start a second server
+      // and the two would fight over port 8787.
+      const isOurs = (e) => e && Array.isArray(e.args) && e.args.some((a) => /(^|[\\/])figma-mcp\.mjs$/.test(String(a)));
+      const mine = Object.keys(servers).find((k) => isOurs(servers[k]));
+      if (mine) actions.push({ kind: "skip", path: rel(file), note: `Design Twin's MCP server is already registered as "${mine}" — left as is` });
+      else if (servers[MCP_KEY]) actions.push({ kind: "skip", path: rel(file), note: `already has a "${MCP_KEY}" server that is not Design Twin's — left as is` });
+      else {
+        const next = { ...doc, mcpServers: { ...servers, [MCP_KEY]: mcpEntry } };
+        // merge:true — the ONE write allowed onto an existing file: it re-serialises the user's own
+        // document with one key added. Everything else is written with "wx" and cannot clobber.
+        actions.push({ kind: "write", merge: fs.existsSync(file), path: rel(file), content: JSON.stringify(next, null, 2) + "\n", note: `registered the "${MCP_KEY}" MCP server (enable it with /mcp, then restart Claude Code). While it runs it holds port 8787 — use its writeToDisk:true instead of one-shot dtwin pulls` });
+      }
     }
   }
 

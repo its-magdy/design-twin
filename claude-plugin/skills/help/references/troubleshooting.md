@@ -32,7 +32,7 @@ Loaded from the `help` skill. Find the symptom, give the fix — don't debug fro
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.
 - **A component in an export has no library/main component** → its library probably wasn't enabled
   when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
-- **MCP `figma` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
+- **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
   here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
   `.mcp.json` there pointing at an absolute path to `bridge/figma-mcp.mjs` — no token needed in it,
   since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`

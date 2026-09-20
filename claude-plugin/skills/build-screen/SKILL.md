@@ -93,7 +93,7 @@ Copy this checklist into your notes and keep it updated:
    - Read the export `manifest` (`truncated`/`assetsFailed`/`warnings`). Anything incomplete → tell
      the user before building. Missing screen → hand off to `/designtwin:extract`; never build from the
      `.png` alone.
-   - Run the drift check: `design_drift_lint` MCP tool (or
+   - Run the drift check: `mcp__designtwin__design_drift_lint` MCP tool (or
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js"`). Fix an `ok:false` map before generating
      against it; heed a stale-snapshot warning. No `codeconnect.local.json` at all → **stop**: run
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json
@@ -180,6 +180,12 @@ Copy this checklist into your notes and keep it updated:
      your own icon, or leave a placeholder** — the only exception is a node carrying `geometry` (export
      failed; its paths are provided). Reuse a project icon only if the glyph clearly matches. Size every
      icon explicitly (square container, both dimensions set).
+   - **Instances** — before writing anything for an instance's sublayer, check `propRefs`,
+     `overrides` and `exposedInstances` on the node: a prop-driven or overridden sublayer becomes a
+     **prop on the mapped component**, never hand-built markup beside it. `detachedFrom` (`{key}`/
+     `{componentId}`) was an instance — look that component up in `codeconnect.local.json` and reuse it.
+   - **Hints are not output** — `layoutGrids`, `measurements`, `devStatus`/`devStatusNote` and
+     `devResources` inform structure and let you sanity-check spacing; never render them as UI.
    - **Interactions** — `reactions` become real navigation/state, not dead buttons; `overlay` →
      the stack's modal/sheet; transitions use the given duration (seconds → ms) and easing.
 

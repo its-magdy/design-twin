@@ -53,8 +53,8 @@ bridge/figma-pull.js`). `dtwin --help` prints every flag; a mistyped flag is ref
   cheaper than re-exporting and tighter than the one whole-frame reference PNG every export carries.
 - Keep the connection warm across several pulls with `dtwin --serve` instead of reconnecting every time.
 
-**Through the MCP server**, once registered in the target project, Claude gets live tools instead of
-shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
+**Through the MCP server**, once registered in the target project (as `designtwin`, so each tool's full
+name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
 `figma_list_libraries`, `figma_list_pages`, `figma_list_children`, `figma_export_full` /
 `figma_export_design_system` / `figma_export_selection` / `figma_export_url`, `figma_screenshot`,
 `design_get_component`, `design_drift_lint`, and `figma_write` for the small set of safe writes. The

@@ -4,7 +4,7 @@
 Detect · Layout · Grid · Scroll/clip/sticky · Text metrics · Effects · Shapes & strokes · Fills & images ·
 Safe area & insets · Accessibility & RTL · Accessibility naming · Theming & tokens · Idiomatic Flutter
 (M3 by structure) · Interaction states · Hints, not output · Component reuse · Components ·
-Interactions & motion · Vector fallback · Units · Assets · Output
+Interactions & motion · Vector fallback · Units · Assets · State · Output
 
 **Detect** — `pubspec.yaml` with a `flutter:` sdk dependency.
 
@@ -21,13 +21,31 @@ Interactions & motion · Vector fallback · Units · Assets · Output
 - `absolute:true` child → `Stack` + `Positioned` (only for genuine overlays); `layout.mode:"absolute"` →
   infer a flow layout, do NOT hardcode coordinates.
 
-**Grid (`layout.display:"grid"`)** → `GridView.count`/`SliverGrid` for uniform tracks; mixed `columnSizes`
-(`flex`/`fixed`/`hug`) → a `Row` of `Expanded(flex:)`/`SizedBox` per row; `columnGap`/`rowGap` →
-`crossAxisSpacing`/`mainAxisSpacing`; spans → merge cells (or `flutter_staggered_grid_view`).
+**Grid (`layout.display:"grid"`)** — read `columns`, `columnSizes[]`, `columnGap`/`rowGap` and pick by track type:
+- **Every track `{type:"flex"}` with the same `value`** (a uniform card/photo grid) → `GridView.builder` with
+  `SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, crossAxisSpacing: columnGap,
+  mainAxisSpacing: rowGap, childAspectRatio: cellW / cellH)` — `childAspectRatio` is REQUIRED for the
+  cell height to match (default 1.0 = squares); take `cellW`/`cellH` from a child's `box`. Column count
+  that should change with width → `SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent:)`.
+- **Mixed tracks** (`columnSizes` like `[{type:"fixed",value:72},{type:"flex",value:1},{type:"hug"}]`
+  — a form or table row) → one `Row` per grid row: `fixed` → `SizedBox(width: value)`, `flex` →
+  `Expanded(flex: value)`, `hug` → the child as is; `columnGap` → `Row(spacing:)`, `rowGap` → the enclosing `Column(spacing:)`. Rows that must share
+  column widths → `Table(columnWidths: {0: FixedColumnWidth(72), 1: FlexColumnWidth(), 2:
+  IntrinsicColumnWidth()})`.
+- **Spans** (a child's `gridColumnSpan`/`gridRowSpan` > 1, placed by `gridColumnStart`/`gridRowStart`) → `flutter_staggered_grid_view` `StaggeredGrid.count` +
+  `StaggeredGridTile.count(crossAxisCellCount:, mainAxisCellCount:)`; flag the dependency.
+- A grid inside a scrolling screen is a **sliver** (`SliverGrid` in the screen's `CustomScrollView`), not
+  a `GridView` nested in a scroll view — see the next section.
 
 **Scroll, clip & sticky** — `clip:true` → `ClipRRect`/`clipBehavior: Clip.hardEdge`; `layout.scroll` →
 `SingleChildScrollView` (short) or `ListView.builder` (long). `fixedChildren` if present → `CustomScrollView`
 with `SliverAppBar(pinned: true)`/`SliverPersistentHeader(pinned: true)`, or keep them outside the scroll.
+**A scrollable inside a `Column` (or inside another scrollable on the same axis) throws "Vertical
+viewport was given unbounded height"** — the most common generated-Flutter crash. The list that fills
+the rest of the screen → `Expanded(child: ListView.builder(...))`. A screen that scrolls as a whole and
+contains lists/grids → ONE `CustomScrollView` with `SliverList`/`SliverGrid`/`SliverToBoxAdapter`
+children. `shrinkWrap: true` + `NeverScrollableScrollPhysics` silences the error by building every item
+eagerly — acceptable only for a short fixed list, never for data-driven content.
 
 **Text metrics** — `TextStyle.height` is a MULTIPLIER: `lineHeight` `px` → px/fontSize, `percent` → pct/100,
 `auto` → omit; add `leadingDistribution: TextLeadingDistribution.even` to match Figma's half-leading.
@@ -51,8 +69,14 @@ directly. Per-side `weights` → `Border(top: BorderSide(...))`; `dash` → Cust
 `RadialGradient`/`SweepGradient` (angular); diamond → asset. `scaleMode` `fill` → `BoxFit.cover`, `fit` →
 `BoxFit.contain`, `tile` → `ImageRepeat.repeat`. `intrinsicSize` → `AspectRatio`. Hex is 8-bit sRGB.
 
-**Safe area & insets** — `SafeArea` / `MediaQuery.viewPaddingOf(context)`; a fake status bar in the design →
-insets, never a widget.
+**Safe area & insets** — a fake status bar / home indicator in the design → insets, never a widget.
+**Don't double-inset:** `Scaffold` already insets for what it owns — `appBar:` covers the status bar,
+`bottomNavigationBar:` covers the home indicator, and `resizeToAvoidBottomInset` (default true) lifts the
+body above the keyboard. So with an `AppBar`, do NOT also wrap the body in `SafeArea` (or use
+`SafeArea(top: false)` when only the bottom is unowned), and drop the Figma frame's status-bar-height
+top padding instead of reproducing it. No `AppBar` (full-bleed hero, custom header) → `SafeArea` around
+the content that must stay clear, with the background painted OUTSIDE it so it still reaches the edges.
+Read raw values with `MediaQuery.viewPaddingOf(context)` only for custom geometry.
 
 **Accessibility & RTL** — RTL via `Directionality` + `EdgeInsetsDirectional`/`AlignmentDirectional`.
 
@@ -126,5 +150,12 @@ still exist in `codeconnect.local.json` — look it up and reuse it unless the d
 **Assets** — SVG → `flutter_svg` `SvgPicture.asset`; PNG → `assets/images/` with `2.0x/`/`3.0x/` variant
 folders, declared in `pubspec.yaml`. Flag anything the user must add.
 
-**Output** — one `StatelessWidget`/`StatefulWidget` per screen (`.dart`) under `outputDir`; suggest a golden
-test (`matchesGoldenFile`) for visual checking.
+**State** — match what the project already uses (check `pubspec.yaml`: `flutter_riverpod`, `provider`,
+`flutter_bloc`, `get_it`…); don't introduce a second state library. Screen data states (loading/empty/
+error) come from that layer; keep `setState` for purely local UI state (a toggle, the selected tab).
+
+**Output** — one `StatelessWidget`/`StatefulWidget` per screen (`.dart`) under `outputDir`. To see it while
+building: a `@Preview`-annotated top-level function (`package:flutter/widget_previews.dart`, run
+`flutter widget-preview start`; stable from Flutter 3.47 — check `flutter --version`, and note previews
+can't load native plugins or `dart:io`), one per key state. For the verify step, a golden test
+(`matchesGoldenFile`) at the frame's size.

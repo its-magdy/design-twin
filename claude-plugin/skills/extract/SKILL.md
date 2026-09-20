@@ -68,6 +68,9 @@ skill owns the decision of *which* pull to run; that reference owns *how*.
 
 ## Through the MCP instead
 
+The server is registered as `designtwin`, so a tool's full name is `mcp__designtwin__<tool>` (e.g.
+`mcp__designtwin__figma_list_pages`) — call it by that name if the short one isn't found.
+
 **Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
 default), so a real page export is silently truncated without it — and asset bytes are never returned
 inline at all, so it's the only way to get `design/assets/`.

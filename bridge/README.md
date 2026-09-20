@@ -93,7 +93,10 @@ dtwin init --dry-run   # print what it would do; write nothing, mint no token
 ```
 
 It needs no bridge, plugin or free port. It never overwrites: an existing `target.json`, an existing
-`figma` entry in `.mcp.json`, or an unparseable `.mcp.json` are all left alone and reported. `--mcp` is
+`designtwin` entry in `.mcp.json` (or this server already registered under any other name), or an
+unparseable `.mcp.json` are all left alone and reported. The server is registered as `designtwin`,
+never `figma` — that is the name Figma's own MCP server usually has, and Claude Code loads one server
+per name, so the two sit side by side. `--mcp` is
 opt-in because a registered MCP server holds port 8787 while Claude Code runs, which rules out
 one-shot `dtwin` pulls in that project (use the export tools' `writeToDisk: true` instead). The two
 steps it cannot do — importing the plugin into Figma and pasting the token — it prints.
@@ -444,7 +447,9 @@ Behaviour worth knowing:
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
-there with an absolute path to this `figma-mcp.mjs`. Claude Code then launches it over stdio.
+there with an absolute path to this `figma-mcp.mjs`, under the key `designtwin` (`dtwin init --mcp`
+writes exactly that). Claude Code then launches it over stdio, and its tools surface as
+`mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_status`).
 No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI
 does, so the one you already pasted into the plugin keeps working (set `FIGMA_BRIDGE_TOKEN` in the
 registration only if you deliberately want the MCP on a *different* token from the CLI).
@@ -522,7 +527,7 @@ scrolls the node into view so you can see what's being read.
 
 Pre-approve tools in `.claude/settings.json`:
 ```
-{ "permissions": { "allow": ["mcp__figma__*"] } }
+{ "permissions": { "allow": ["mcp__designtwin__*"] } }
 ```
 
 ## Notes / limits
