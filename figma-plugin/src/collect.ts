@@ -9,7 +9,8 @@ import { Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
 import { toNodeId } from "../../bridge/node-id.js";
-import { assets, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
+import { assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
+import { checkCancelled, enterPage, progress } from "./progress";
 import { ReadOptName } from "../../bridge/read-opts.js";
 import { serialize } from "./serialize";
 import { collectReference, devResources } from "./assets";
@@ -298,6 +299,25 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Ob
   return screenResult(node.name, node.name, [tree]);
 }
 
+// On-demand visual reference for ONE node — the cheap, single-node twin of the whole-frame reference
+// PNG every root export already carries (serializeWithRefs). Skips serialize() and the recursive asset
+// walk entirely: exportAsync on the node itself is the only Plugin-API cost, so a component buried in a
+// dense screen can be screenshotted without paying for (or re-emitting) a full export of it. Mirrors
+// Figma's own get_screenshot (single-node/selection scope, pulled on demand for visual validation)
+// rather than a bulk pre-render pass over every node/instance in a dense screen, which would pay the
+// same O(nodes) cost --no-assets exists to avoid for a much bigger payload (PNG > structural JSON).
+export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<Obj> {
+  resetRun();
+  const nodeId = toNodeId(rawId);
+  if (!nodeId) throw new Error("No node id provided.");
+  const node = await findNodeById(nodeId, warn);
+  const reference = await collectReference(node as SceneNode, opts);
+  if (!reference) {
+    throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed — see warnings).");
+  }
+  return { id: node.id, name: node.name, type: (node as any).type, reference, manifest: manifest(), assets: assets.slice() };
+}
+
 // Containers first, then loose top-level canvas content — a standalone TEXT note, a logo VECTOR, an
 // image RECTANGLE, a TABLE placed directly on the page is real design too. Anything else (SLICE, etc.)
 // is warned, not dropped.
@@ -513,7 +533,14 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
   const index: Obj[] = [];
   const flows: Obj[] = []; // prototype entry points = the app's navigation-graph roots
   const pageSettings: Obj[] = []; // per-page canvas backgrounds (only where the designer set one)
+  // 1-based, and counted over the pages actually WALKED (not figma.root.children) so "page 3 of 4"
+  // means what it says on a --page pull of four named pages.
+  let pageIndex = 0;
   for (const page of pages) {
+    // The coarsest safe abort point: nothing is half-built between pages. Checked BEFORE the page
+    // boundary frame so a cancel doesn't first announce a page it will never walk.
+    checkCancelled();
+    enterPage("pages", ++pageIndex, pages.length, page.name, page.id, { nodes: stats.nodes, assets: assets.length });
     // A page that failed to load must be skipped with a word, not abort the whole export.
     const children = pageChildren(page, warn, "its frames are missing from this export");
     if (!children) continue;
@@ -529,6 +556,10 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
       else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
     }
     for (const f of frames) {
+      // Second safe abort point: between TOP-LEVEL frames. One frame's serializeWithRefs is the unit
+      // of work that cannot be interrupted, so this bounds a cancel's latency to one frame on a page
+      // with many, while the per-asset checkpoint in assets.ts bounds it INSIDE one dense frame.
+      checkCancelled();
       const { tree, ref, dev } = await serializeWithRefs(f);
       if (tree) {
         // `pageId` alongside `page`: PageNode.name is user-editable and the Plugin API documents no
@@ -539,8 +570,15 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
         index.push({ name: f.name, id: f.id, type: f.type, page: page.name, pageId: page.id,
           nodes: countNodes(tree), bytes: JSON.stringify(tree).length });
       }
+      // Throttled (no `force`): a page of 200 small frames would otherwise post 200 frames the UI
+      // renders for one animation tick each. The page boundary above is the one that must never drop.
+      progress("pages", { nodes: stats.nodes, assets: assets.length });
     }
   }
+  // Phase change — unthrottled, because the page walk going quiet while the catalog builds is exactly
+  // when a static status line reads as "stuck". buildDesignSystem has its own per-page ticks inside it.
+  checkCancelled();
+  progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
   // AFTER the page walk: buildDesignSystem ends in dumpVariables, which uses the ids resolved during
   // that walk to also emit the LIBRARY variables the layers reference (see variables.ts). Building it
   // first — as this used to — meant the dump ran against an empty reference set.

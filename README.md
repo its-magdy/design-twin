@@ -11,33 +11,45 @@ The **extraction half is identical for every target** — the plugin and its JSO
 intermediate representation (Auto Layout expressed as flex intent, which maps equally to flexbox,
 SwiftUI stacks, and Compose Row/Column). Only the **translation half** is stack-specific, and it lives
 in three small places: `design/target.json` (which stack), `profiles/<profile>.md` (how to translate,
-in `plugin/skills/build-screen/profiles/` — a project can override with its own root-level `profiles/`),
+in `claude-plugin/skills/build-screen/profiles/` — a project can override with its own root-level `profiles/`),
 and the right-hand values in `tokens.json`/`components.json`. One plugin, any framework.
 
 ## Pieces
 - `figma-plugin/` — a self-authored Figma plugin (`allowedDomains` lists only `ws://localhost` → cannot phone home).
   Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
-- `plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → read → map → build → self-correct).
+- `claude-plugin/skills/audit-design/SKILL.md` — the pre-build design review a senior frontend/iOS/Android
+  engineer does: token binding, spacing grid, component + screen states (loading/empty/error), touch
+  targets, contrast, font scaling, theming, RTL, platform chrome, effects that won't translate — ending
+  in `design/audit/<screen>.md` with a verdict and designer questions (each with a default). Backed by
+  `design-to-code/audit.js`. Invoke with `/designtwin:audit-design <screen>`.
+- `claude-plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → gate + audit → map plan →
+  build leaf-first → states/scaling/theme/RTL → render-and-compare verification).
   Invoke with `/designtwin:build-screen <screen>`.
-- `plugin/skills/extract/SKILL.md` — get the design out of Figma onto disk (path selection,
+- `claude-plugin/skills/extract/SKILL.md` — get the design out of Figma onto disk (path selection,
   discover-then-scope, manifest check). Invoke with `/designtwin:extract`.
-- `plugin/skills/help/SKILL.md` — orientation: the three export paths, one-time setup, and the
-  symptom→fix list. Invoke with `/designtwin:help` when something isn't working.
+- `claude-plugin/skills/help/SKILL.md` — orientation: the three ways to connect, one-time setup, and
+  (in `references/troubleshooting.md`) the symptom→fix list. Claude loads it on "how does this work"
+  questions and on bridge errors; `/designtwin:help` invokes it by hand.
 - `design-to-code/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
-  DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, and
+  DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, the
+  pre-build design audit (`audit.js`), and
   `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
   to the real node trees). This is
   the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
   `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
-- `plugin/skills/build-screen/profiles/<profile>.md` — IR→stack translation rules, shipped with the
-  skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`; add
+- `claude-plugin/skills/build-screen/profiles/<profile>.md` — IR→stack translation rules, shipped with the
+  skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`,
+  `flutter` — including exact text-metric, stroke, shadow/blur, safe-area, accessibility/RTL and motion
+  conversions (e.g. Figma letter-spacing % → em on Compose/CSS, points on iOS); add
   your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
   overrides the skill's bundled set).
 - `design/` — a **generated, untracked drop-target** (does not exist until you create it or run an
   export). It holds two kinds of files:
   - **Generated exports** (regenerable — recreated on every plugin export / `figma-pull` run):
     `<screen>.json`, `variables.json`, `assets/` (icons/images **plus** a full-frame reference PNG
-    per frame, referenced from the JSON's `reference` field), and for full pulls `design-system.json`
+    per frame, referenced from the JSON's `reference` field — plus, on demand, a single-node reference
+    PNG for one component via `dtwin --screenshot <id>` / `figma_screenshot`, see `bridge/README.md`),
+    and for full pulls `design-system.json`
     — a slim manifest (`exportedAt`/`file`/`colorProfile` + pointers + counts) over the catalog split
     under `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections →
     modes → variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`
@@ -63,11 +75,17 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
     of truth).
 
 ## One-time setup
+**Shortcut:** `cd bridge && npm install`, then in the project you are building run
+`node /path/to/design-twin/bridge/figma-pull.js init` (`dtwin init` once the npm package is published;
+add `--mcp` to register the MCP server, `--dry-run` to preview). It creates `design/`, writes
+`design/target.json` for the detected stack, makes sure a bridge token exists, and prints the steps
+that are clicks in Figma (import the plugin, paste the token). It never overwrites a file. By hand:
+
 `design/` starts empty (or absent) — the plugin export / `figma-pull` creates it and its generated
 files. You only author the config maps below.
 1. Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so no build is needed to use it. To edit the extractor, see `figma-plugin/README.md` — TypeScript source lives in `figma-plugin/src/`, `npm run build` regenerates `code.js`.)
 2. Create `design/target.json` for your stack (or let the skill auto-detect from the repo on first run
-   and offer to write it). If your stack isn't in `plugin/skills/build-screen/profiles/`, copy its
+   and offer to write it). If your stack isn't in `claude-plugin/skills/build-screen/profiles/`, copy its
    `_template.md` to a root-level `profiles/<name>.md` in your project and fill it in — it overrides
    the skill's bundled profiles.
 3. Create `design/tokens.json` and `design/components.json` for your project. Shapes:
@@ -87,7 +105,12 @@ files. You only author the config maps below.
      per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The `<screen>.json`
      points at it via a `reference` field, and `/designtwin:build-screen` self-corrects against it. No manual
      screenshot step needed anymore.
-3. In Claude Code: `/designtwin:build-screen <screen>` (or: "build <screen> from design/<screen>.json").
+3. In Claude Code, review it first: `/designtwin:audit-design <screen>` (or: "is this design ready to
+   build?") → `design/audit/<screen>.md` with blockers, missing states, and questions for the designer.
+   Standalone: `node design-to-code/audit.js design/<screen>.json --platform ios --catalog
+   design/design-system/components.local.json --out design/audit/<screen>`.
+4. Build: `/designtwin:build-screen <screen>` (or: "build <screen> from design/<screen>.json"). It reads
+   the audit (or runs the script itself) and records every default it had to assume.
 
 ## Why this shape (evidence)
 - Structured metadata beats a screenshot alone for fidelity, but **raw** metadata makes models hardcode
@@ -137,18 +160,20 @@ This repo holds **three separate products**, deliberately kept apart:
 
 | | What it is | How it ships |
 |---|---|---|
-| `plugin/` | The Claude Code plugin — skills + profiles, **markdown only, zero dependencies** | `claude plugin install` |
-| `bridge/` | The `dtwin` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm (`npm i -g` / `npx`) |
+| `claude-plugin/` | The Claude Code plugin — skills + profiles + self-contained `scripts/` (bundled from `design-to-code/`), **zero dependencies** | `claude plugin install` |
+| `bridge/` | The `dtwin` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm package `designtwin` — **not published yet**; until it is, clone and run `node bridge/figma-pull.js` |
 | `figma-plugin/` | The Figma-side plugin | imported into Figma from its manifest |
 
 The Claude Code plugin has no dependencies because the CLI is **not** inside it — installing the
-plugin never needs an `npm install`, and users get only `plugin/` in their cache. It also ships no
+plugin never needs an `npm install`, and users get only `claude-plugin/` in their cache. Its `scripts/`
+are committed bundles: after editing `design-to-code/*.js` run `node claude-plugin/build-scripts.js`
+(`test/verify-build.test.js` fails if they are stale). It also ships no
 `.mcp.json`: the MCP server is registered in the project you point it at, not here.
 
-To try it locally: `claude --plugin-dir /path/to/this/repo/plugin`. To hand it to a teammate: they run
+To try it locally: `claude --plugin-dir /path/to/this/repo/claude-plugin`. To hand it to a teammate: they run
 `claude plugin marketplace add <you>/Figma` then `claude plugin install designtwin@designtwin-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
-for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate ./plugin`
+for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate ./claude-plugin`
 checks the plugin manifest before you publish (`validate .` checks the *marketplace* manifest instead). The Figma-side plugin import (`figma-plugin/manifest.json`)
 and `bridge/`'s `npm install` stay manual — installing the Claude plugin doesn't set those up.
 

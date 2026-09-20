@@ -1,129 +1,120 @@
 ---
 name: help
-description: Orientation, one-time setup and troubleshooting for the free-plan Figma→code workflow. Invoke as /designtwin:help when the user asks how this tool works, how to set it up, which of the three export paths to use, or when something is broken (plugin won't import, port 8787 busy, bridge token / 401, MCP not connecting, empty library list, stale snapshot). It routes and diagnoses; it does not export (that's extract) and does not write code (that's build-screen).
-disable-model-invocation: true
+description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design) or write code (that's build-screen).
 ---
 
-# Using this tool (free-plan Figma → code)
+# Design Twin — what it is, how to connect, what to do when it breaks
 
 Design Twin feeds a Figma design to Claude Code **on a free Figma plan, with zero network egress**.
-A self-authored plugin (`allowedDomains`: loopback only) extracts the design as stack-neutral JSON + real
-assets; the `/designtwin:build-screen` skill turns that into code for any stack.
+A self-authored Figma plugin (`allowedDomains`: loopback only) extracts the design as stack-neutral
+JSON + real assets into `design/`; `/designtwin:audit-design` reviews it for implementation gaps, and
+`/designtwin:build-screen` turns it into code for any stack.
 
-**Your job when this skill is invoked: figure out what the user is trying to do, give them the exact
-next step, and point at the one doc that covers it. Route — do not re-explain what the docs already say.**
+**Your job when this skill is invoked: figure out what the user is trying to do and give them the
+exact next step.** Orientation → this file. Something broken → read
+[`references/troubleshooting.md`](references/troubleshooting.md), match the symptom, give the fix —
+don't debug a bridge error from memory.
 
-## Where the real docs live — send the user here rather than paraphrasing
+Nothing here is headless: the target Figma file must be **open in the desktop app with the "Design
+Twin" plugin running** (Figma desktop → Plugins → Development → Design Twin).
 
-| Doc | Covers |
-|-----|--------|
-| `README.md` | The workflow, one-time setup, per-screen loop, config-map shapes, why this shape, plugin packaging |
-| `bridge/README.md` | **The full CLI + MCP surface** — install, token, every `figma-pull` flag, `--list-clients`/`--whoami`/`--list-libraries`/`--as-library`, the `--serve` daemon, MCP tools, `writeToDisk`, limits |
-| `ARCHITECTURE.md` | The two-plane design, plugin two-context model, full API surface, security |
-| `figma-plugin/README.md` | The Figma-side plugin: import, UI buttons, what each export produces |
-| `plugin/skills/build-screen/SKILL.md` | How the agent actually builds a screen (+ its `references/`, `profiles/`) |
-| `plugin/skills/extract/SKILL.md` | How an export actually gets run (path choice, discover-then-scope) |
+## The three ways to reach a Figma file
 
-## Step 1 — which of the three paths?
+| | Manual export | `dtwin` CLI | `figma-mcp` server |
+|---|---|---|---|
+| What it is | Clicking the plugin's own export buttons, saving downloads into `design/` | A one-shot (or `--serve` daemon) local process that pulls data and writes it to `design/` on disk | A persistent MCP server, registered in the project being *built*, that Claude calls as tools mid-conversation |
+| Setup | **None** — no bridge, no token | `npm install` once; the token generates itself on first start (paste it into the plugin once) | Same install as the CLI, plus a `.mcp.json` registration — same token, nothing extra |
+| Direction | Read only | Read only | Read **and** a small set of safe writes (create a frame/text, set a fill, set text) |
+| Best for | One screen, or a first try before setting anything up | Bulk/repeated pulls, CI-style extraction | Interactive back-and-forth, "check this, now pull that", code → design writes |
 
-| Path | When to use | What runs |
-|------|-------------|-----------|
-| **A. Manual export** (default, zero setup) | One screen, or first time | Plugin UI buttons → download files into `design/` by hand |
-| **B. `figma-pull` CLI** (read, automated) | Bulk / repeated pulls | `dtwin` hosts a loopback WS; plugin auto-connects and pushes; CLI writes files and exits |
-| **B+. `figma-pull --serve`** (daemon) | Many pulls in a row | Same CLI, but the bridge stays open until `--stop`; later invocations route through it |
-| **C. `figma-mcp` server** (write / interactive) | "Check this, now pull that" + code→design | stdio MCP + persistent loopback WS; opt-in, **disabled by default** |
+**Default to manual export for a brand-new user** — it needs nothing installed and always works.
+Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
 
-All of them require the **Figma file open with the plugin running** — nothing is headless.
-Once files are in `design/`, building code is identical for all three: **`/designtwin:build-screen <screen>`**.
-
-**The one thing to say up front: B, B+ and C all bind port 8787, so exactly one can run at a time.**
-Whichever starts second exits with `EADDRINUSE`.
-- While the **MCP server** runs, `figma-pull` cannot. Use `writeToDisk: true` on the MCP export tools
+**The one thing to say up front: the CLI, its `--serve` daemon and the MCP server all bind port 8787
+(loopback), so exactly one can hold it at a time.** Whichever starts second exits with `EADDRINUSE`.
+- While the **MCP server** runs, `dtwin` cannot. Use `writeToDisk: true` on the MCP export tools
   instead — that is the MCP path's way to get files, and the **only** way to get asset bytes.
-- While a **daemon** (`--serve`) runs, ordinary `figma-pull` commands work normally — they detect it
-  and route through it. Nothing changes in how you invoke them.
-- To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one.
+- While a **daemon** (`dtwin --serve`) runs, ordinary `dtwin` commands work normally — they detect
+  it and route through it. Nothing changes in how you invoke them.
+- To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
+  ports the plugin can dial).
 
-## Step 2 — one-time setup (once per machine)
+## What each one lets Claude actually do
 
-1. **Import the plugin.** Figma desktop → **Plugins → Development → Import plugin from manifest…** →
-   pick `figma-plugin/manifest.json`.
-2. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
+**Through the CLI**, Claude runs `dtwin` (inside a clone of the Design Twin repo: `node
+bridge/figma-pull.js`). `dtwin --help` prints every flag; a mistyped flag is refused, not ignored.
+- Discover structure cheaply before pulling anything heavy: `--whoami` (which file am I on),
+  `--list-clients`, `--list-libraries`, `--list-pages` / `--list` (pages + frame ids),
+  `--children <id>` (peek one frame).
+- Pull a real export: `dtwin design` (current page), `--all-pages`, `--selection`, `--page <id>`,
+  `--node <id|figma-url>`, `--design-system` (tokens/styles/components only, no page walk),
+  `--as-library "<name>"` (a whole library file's catalog — run with the *library* open).
+- Visually check ONE component after generating code for it: `--screenshot <id>` — an on-demand PNG,
+  cheaper than re-exporting and tighter than the one whole-frame reference PNG every export carries.
+- Keep the connection warm across several pulls with `dtwin --serve` instead of reconnecting every time.
+
+**Through the MCP server**, once registered in the target project, Claude gets live tools instead of
+shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
+`figma_list_libraries`, `figma_list_pages`, `figma_list_children`, `figma_export_full` /
+`figma_export_design_system` / `figma_export_selection` / `figma_export_url`, `figma_screenshot`,
+`design_get_component`, `design_drift_lint`, and `figma_write` for the small set of safe writes. The
+standout move is pasting a Figma link mid-conversation — `figma_export_url` reads that exact node
+live, so "what spacing does this use?" gets answered from the real file, not a stale export.
+
+## One-time setup (once per machine)
+
+**Shortcut:** with the CLI installed, run **`dtwin init`** in the root of the project being built (add
+`--mcp` to also register the MCP server; `--dry-run` to preview). It creates `design/`, writes
+`design/target.json` for the detected stack, makes sure a bridge token exists, merges `.mcp.json`
+without overwriting anything, and prints the steps that are clicks in Figma. The manual version:
+
+1. **Import the Figma plugin.** Figma desktop → **Plugins → Development → Import plugin from
+   manifest…** → pick `figma-plugin/manifest.json` from a clone of the Design Twin repo.
+2. **Pick a lane:**
+   - **Just one screen, nothing installed** → click the plugin's export buttons and save the downloads
+     into `design/`. Done.
+   - **The CLI** → in the Design Twin clone: `cd bridge && npm install`. There is no token to make by
+     hand: the first bridge start generates one, saves it per-user
+     (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
+     it into the plugin's **Bridge token** field (Save) and neither side asks again.
+     `dtwin --show-token` reprints it, `--rotate-token` replaces it, `--token-status` says which token
+     is in play without disclosing it. Then `dtwin --list` to see what's there.
+   - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
+     that project* pointing at the absolute path of `bridge/figma-mcp.mjs` (`dtwin init --mcp` writes
+     it); enable it via `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.
+3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
-   code token), `design/components.json` (Figma component → your code component + import). Shapes are
-   in `README.md` → "One-time setup". Auto-seed the last one from Code Connect files:
-   `node bridge/seed-components.js`.
-3. **(Only for paths B/C)** `cd bridge && npm install`. There is no token to set up: the first
-   bridge start generates one, saves it (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on
-   Windows) and prints it once — paste that into the plugin's **Bridge token** field and neither side
-   asks again. `dtwin --show-token` reprints it, `--rotate-token` replaces it, `--token-status` says
-   which token is in play without disclosing it. Details: `bridge/README.md` → "Bridge token".
+   code token — hand-authored; do NOT confuse with the generated `design/design-system/tokens.json`,
+   which is Figma's own raw values), and the component map `codeconnect.local.json` (scaffold it with
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json --out codeconnect.local.json`).
+   `build-screen` documents all three.
 
-## Step 3 — run it
+## Then run it
 
-Running an export is the **extract** skill's job, not this one — it owns path selection, the
-discover-then-scope order, and the manifest check afterwards. Hand off to
-**`/designtwin:extract`** rather than reciting commands here; the full flag surface is in
-`bridge/README.md`.
+Running an export is the **extract** skill's job — it owns path selection, the discover-then-scope
+order, and the manifest check afterwards. Hand off to **`/designtwin:extract`** rather than reciting
+commands here. Then: **`/designtwin:audit-design <screen>`** (is it buildable?) →
+**`/designtwin:build-screen <screen>`**.
 
-Then build: **`/designtwin:build-screen <screen>`**.
+## Where the long-form docs live
 
-## Troubleshooting — match the symptom, give the fix
+These are files in the Design Twin repository, **not** in the project being built — point a user at
+them only if they have a clone: `README.md` (workflow, config-map shapes), `bridge/README.md` (full
+CLI + MCP surface, token, daemon, limits), `figma-plugin/README.md` (the plugin's UI and outputs),
+`ARCHITECTURE.md` (CLI vs MCP front-ends, security). Without a clone, `dtwin --help` and the skills in this
+plugin are the reference.
 
-- **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
-  manifest…*. It lives under **Plugins → Development**, not the main plugin list.
-- **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
-  `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
-  through it and nothing needs stopping, so this means something *else* holds the port (usually the
-  MCP server, or a stale `node`). If the MCP is the holder and you wanted files, use `writeToDisk:
-  true` rather than killing it.
-- **Bridge stays "offline" in the plugin** → either no token pasted (the plugin says
-  `offline — paste the bridge token above` and won't dial until you paste + Save), or no server is
-  running yet — the plugin UI is a WS *client*. Fix the token, start a server, it auto-connects (3s retry).
-- **Connection rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
-  the bridge's. Run `dtwin --token-status` (says which source is winning — a saved token *shadowed* by
-  a `FIGMA_BRIDGE_TOKEN` export is the usual surprise), then `dtwin --show-token` and re-paste + Save.
-  The bridge also logs the mismatch itself, with both fingerprints. Most common cause: someone ran
-  `--rotate-token` and the plugin still has the old one cached in `clientStorage`.
-- **Changed the port?** The plugin tries `8787`, then `8788`, then `8789` in turn (manifest +
-  `ui.html`) — those are the only three it can dial, so `FIGMA_BRIDGE_PORT` must be one of them.
-  Usually easier to just free `8787` than to move the server.
-- **`--list-libraries` / `figma_list_libraries` returns nothing** → in this order: (1) the plugin in
-  Figma predates the manifest's `"permissions": ["teamlibrary"]` — **re-import it**; (2) no team
-  library is enabled for the file (Figma UI → Assets → Libraries; no API can do this); (3) free plan.
-  All three are normal, and the command's own output says which.
-- **"N Figma files are connected — say which one to use"** → pass `--client` (CLI) or `client` (MCP);
-  `--list-clients` shows the valid names. Refused rather than guessed on purpose: an export from the
-  wrong file looks exactly like a correct one. Give each file its own output dir (`design/base`,
-  `design/lib`) so exports don't collide.
-- **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
-  runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.
-- **A component in an export has no library/main component** → its library probably wasn't enabled
-  when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
-- **MCP `figma` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
-  here, by choice — see `bridge/README.md`). Path C is for the project you are *building*: add a
-  `.mcp.json` there pointing at an absolute path to `bridge/figma-mcp.mjs` — no token needed in it,
-  since the MCP server reads the same per-user stored token the CLI does. Then enable it via `/mcp`
-  and restart.
-- **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
-  generated drop-target and doesn't exist until an export runs. Do Path A/B first.
-- **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `plugin/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
-- **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
-  24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
-  Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
-- **Icons missing / lots of asset warnings** → warnings aggregate by kind. Invisible vector nodes are
-  skipped silently; failed SVG exports fall back to a `geometry` field the codegen renders inline. A
-  node with **neither** `asset` nor `geometry` is a genuine failure — report it.
-- **Async / `figma.mixed` errors while editing the plugin** → the manifest uses
-  `documentAccess: "dynamic-page"`, so all reads are async and mixed-value props must be guarded.
-  See `ARCHITECTURE.md` → "Verified mechanism details".
+## Subagents this plugin ships
+
+- **`designtwin:screen-builder`** — builds one screen with `build-screen` preloaded, in its own
+  context. Used for multi-screen fan-out.
+- **`designtwin:visual-verifier`** — renders a built screen, compares it to the Figma reference, and
+  returns the differences. Never edits app code.
 
 ## Related
 
-- **What connections exist and what they let Claude do:** `connect` (auto-triggers on plain-English
-  "how does this work" / "how do I connect" questions — you don't need to send the user here by hand).
+- **Something broken:** [`references/troubleshooting.md`](references/troubleshooting.md).
 - **Get the design out of Figma:** `/designtwin:extract`.
-- **Build a screen from it:** `/designtwin:build-screen <screen>`.
-- **Build many screens:** `build-screen` handles the fan-out itself — it delegates one layer per
-  subagent so each screen's large JSON stays out of the main context.
+- **Check the design is buildable first (states, tokens, a11y, designer questions):** `/designtwin:audit-design <screen>`.
+- **Build a screen from it:** `/designtwin:build-screen <screen>` — it handles multi-screen fan-out
+  itself (one layer per subagent, so each screen's large JSON stays out of the main context).

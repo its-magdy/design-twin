@@ -17,14 +17,16 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 |---|---|
 | **You / the design-system owner** | Author the component map once per repo (bootstrap → fill in code targets → confirm). |
 | **The codegen agent** (`build-screen` skill) | Consults the map + emitted tokens so it reuses your components/tokens. *(resolver wiring is the deferred, repo-specific step.)* |
+| **The review agent** (`audit-design` skill) + `build-screen`'s gate | Runs `audit.js` on a screen before any code: what's unbound, undesigned, inaccessible, or won't translate to the target platform. |
 | **CI / pre-commit** | Runs `drift-lint` so a Figma change that breaks the map fails the build instead of shipping silently. |
 
 ## What's here
 | File | What it does |
 |---|---|
-| `tokens.js` | Variables → **W3C DTCG JSON** (aliases preserved as `{group.token}` references — the themeability lever; structured color w/ P3 + hex fallback) **and** a zero-dependency **CSS emitter** (`:root` + `[data-theme]` blocks). Usable without Style Dictionary. |
+| `tokens.js` | Variables → **W3C DTCG JSON** (aliases preserved as `{group.token}` references — the themeability lever; structured color w/ P3 + hex fallback), a **DTCG Resolver Module 2025.10** document (`tokens.resolver.json` + per-mode set files under `tokens/`: each multi-mode collection becomes a modifier whose contexts are its modes, and a context file carries only what differs from the default mode) **and** a zero-dependency **CSS emitter** (`:root` + `[data-theme]` blocks). Usable without Style Dictionary. |
 | `map-validate.js` | **The** source of truth for the `codeconnect.local.json` shape: a no-dependency structural validator; returns `{ok, errors:[{path,message}]}`, never throws on bad input. (A parallel `map-schema.json` used to hand-mirror it and was read by nothing; deleted rather than kept in sync.) |
 | `drift-lint.js` | Joins the map against the live component catalog **by stable `key`**; reports orphaned entries, unmapped components, stale/uncovered props, and kind/enum mismatches. Catches the exact bug Figma's own Code Connect ships silently (issue #337). |
+| `audit.js` | Pre-build design audit for one or more screen/layer files: token-binding %, off-grid spacing, touch targets per platform (web 24 / iOS 44 / Android 48), WCAG contrast over composited backgrounds, fixed-size text, drawn status bars/home indicators, component state coverage from variant options, undrawn loading/empty/error states, and effects that don't translate to the target. Writes `design/audit/<screen>.{json,md}`; never fails a build. Used by the `audit-design` and `build-screen` skills. |
 | `map-bootstrap.js` | Scaffolds `codeconnect.local.json` from the catalog with props pre-translated and `status:"needs-review"` — the free-plan `figma connect create`. Re-run merges (preserves confirmed entries). |
 
 ## How to use it (the workflow)
@@ -35,14 +37,16 @@ modes/aliases) — so this layer only adds the **code side** (import paths, prop
 #    NOTE: pass the SPLIT files below, never design-system.json — that is now a slim pointer
 #    manifest and carries no variables/components (the tools fail loud if you hand it one).
 # 2. Scaffold the component map (fill in the TODO import paths afterwards):
-node design-to-code/map-bootstrap.js design/design-system/components.local.json > codeconnect.local.json
+node design-to-code/map-bootstrap.js design/design-system/components.local.json --out codeconnect.local.json
 # 3. Validate the map shape:
 node design-to-code/map-validate.js codeconnect.local.json
 # 4. Check it against the current Figma catalog (run this in CI / pre-commit):
 node design-to-code/drift-lint.js codeconnect.local.json design/design-system/components.local.json
 # 5. Emit code tokens:
 node design-to-code/tokens.js design/design-system/tokens.json ./out    # -> out/tokens.dtcg.json + out/tokens.css
-#    (or feed tokens.dtcg.json to Style Dictionary for Tailwind/SwiftUI/Compose output)
+#                                                                      #    + out/tokens.resolver.json + out/tokens/*.json
+#    (or feed tokens.dtcg.json to Style Dictionary for Tailwind/SwiftUI/Compose output; feed
+#     tokens.resolver.json to any DTCG 2025.10 resolver-aware tool to pick a theme/mode)
 ```
 Then the codegen step consults `codeconnect.local.json` (a mapped instance → your component; an unmapped
 one → generated markup) and emits token references instead of literals.

@@ -1,7 +1,7 @@
 // Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.js
 // Hardened after an adversarial review — assertions pin VALUES (not just presence) and every
 // confirmed finding has a regression test. Tags: [Fn]/[An]/[Mn]/[Bn] map to review finding ids.
-const { toDTCG, toCSS, lintTokens, hexToColorValue, cssVarName } = require("../design-to-code/tokens");
+const { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName } = require("../design-to-code/tokens");
 const { validateMap } = require("../design-to-code/map-validate");
 const { driftLint } = require("../design-to-code/drift-lint");
 const { bootstrap } = require("../design-to-code/map-bootstrap");
@@ -44,7 +44,22 @@ check("[M2] primitive color RGB channels correct", near(c600[0], 0.1451) && near
 check("alias PRESERVED as reference", dtcg.color.primary.$value === "{blue.600}");
 check("per-mode values under $extensions (figma.com)", dtcg.color.primary.$extensions["figma.com"].modes.Dark === "{blue.300}");
 check("scopes + codeSyntax in $extensions (figma.com)", dtcg.color.primary.$extensions["figma.com"].scopes[0] === "FRAME_FILL" && dtcg.color.primary.$extensions["figma.com"].codeSyntax.WEB === "var(--color-primary)");
-check("FLOAT -> number + literal value", dtcg.space.md.$type === "number" && dtcg.space.md.$value === 16);
+// DTCG 2025.10: a length is $type "dimension" with the OBJECT value {value, unit:"px"|"rem"}; a bare
+// number under "dimension" (or a length typed as "number") is what Style Dictionary emits unitless.
+check("length FLOAT -> dimension {value, unit:'px'} (DTCG 2025.10 object form)", dtcg.space.md.$type === "dimension" && dtcg.space.md.$value.value === 16 && dtcg.space.md.$value.unit === "px");
+check("unitless FLOAT (OPACITY scope) stays $type number + literal", (() => { const d = toDTCG({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] }); return d.opacity.disabled.$type === "number" && d.opacity.disabled.$value === 0.5; })());
+check("dimension: aliases stay references, per-mode values get the object form too", (() => {
+  const d = toDTCG({ collections: [{ name: "S", modes: ["Compact", "Cozy"], default: "Compact" }], variables: [
+    { name: "space/base", type: "FLOAT", collection: "S", values: { Compact: 8, Cozy: 12 } },
+    { name: "space/gap", type: "FLOAT", collection: "S", values: { Compact: { aliasOf: "space/base" }, Cozy: { aliasOf: "space/base" } } }] });
+  const m = d.space.base.$extensions["figma.com"].modes;
+  return d.space.gap.$type === "dimension" && d.space.gap.$value === "{space.base}" && m.Cozy.value === 12 && m.Cozy.unit === "px";
+})());
+check("DTCG and CSS agree on which FLOATs are lengths (one unitDecision, opts.unitless honoured)", (() => {
+  const one = { variables: [{ name: "z/modal", type: "FLOAT", values: { v: 100 } }] }, opts = { unitless: new Set(["z/modal"]) };
+  const e = emitTokens(one, opts);
+  return e.dtcg.z.modal.$type === "number" && e.dtcg.z.modal.$value === 100 && e.css.includes("--z-modal: 100;");
+})());
 check("description -> $description", dtcg.color.primary.$description === "Primary brand");
 check("clean ds lints clean", lintTokens(ds).length === 0);
 // DTCG 2025.10 conformance: no typeless leaves; 6-digit hex fallback; boolean coerced not dropped.
@@ -69,6 +84,80 @@ check("[H6] cssVarName preserves case (custom props are case-sensitive)", cssVar
 const darkBlock = (css.match(/\[data-theme="Dark"\]\s*\{([^}]*)\}/) || [])[1] || "";
 check("dark block overrides differing token", darkBlock.includes("--color-primary: var(--blue-300);"));
 check("[M1] per-mode dedup: equal-to-default token has NO override", !darkBlock.includes("color-muted"));
+
+// ---------- tokens: DTCG Resolver Module 2025.10 ----------
+// Spec: designtokens.org/tr/2025.10/resolver/ — `version` (MUST be "2025.10") and `resolutionOrder`
+// are the only REQUIRED root keys; a set MUST have `sources`; a modifier MUST have a non-empty
+// `contexts` map and its `default` MUST be one of its context keys.
+console.log("tokens — resolver:");
+const rw = [];
+const { resolver: rz, files: rzFiles } = toResolver(ds, rw);
+check("[R1] required root shape: version '2025.10' + resolutionOrder array", rz.version === "2025.10" && Array.isArray(rz.resolutionOrder) && rz.$schema === "https://www.designtokens.org/schemas/2025.10/resolver.json");
+check("[R2] every set has a `sources` array of reference objects that name an emitted file", Object.keys(rz.sets).length === 2 && Object.values(rz.sets).every((s) => Array.isArray(s.sources) && s.sources.every((src) => typeof src.$ref === "string" && rzFiles[src.$ref])));
+check("[R3] multi-mode collection -> modifier with both contexts + spec-valid default", (() => {
+  const m = rz.modifiers.Semantic;
+  return m && Object.keys(m.contexts).sort().join(",") === "Dark,Light" && m.default === "Light" && Object.keys(m.contexts).includes(m.default);
+})());
+check("[R4] single-mode collection contributes a set but NO modifier", rz.sets.Primitives && rz.modifiers.Primitives === undefined);
+check("[R5] default-mode context is the empty array (nothing differs), no file written", Array.isArray(rz.modifiers.Semantic.contexts.Light) && rz.modifiers.Semantic.contexts.Light.length === 0);
+const darkSet = rzFiles[rz.modifiers.Semantic.contexts.Dark[0].$ref];
+check("[R6] context set holds ONLY the differing token (same dedup as toCSS)", darkSet.color.primary !== undefined && darkSet.color.muted === undefined);
+check("[R7] aliases preserved as {a.b} references in set files (resolved only at resolution time)", darkSet.color.primary.$value === "{blue.300}" && rzFiles[rz.sets.Semantic.sources[0].$ref].color.primary.$value === "{blue.600}");
+check("[R8] dimensions keep the 2025.10 object form inside set files", (() => { const base = rzFiles[rz.sets.Primitives.sources[0].$ref]; return base.space.md.$type === "dimension" && base.space.md.$value.value === 16 && base.space.md.$value.unit === "px"; })());
+check("[R9] set files carry no $extensions.modes (the resolver IS the mode mechanism)", rzFiles[rz.sets.Semantic.sources[0].$ref].color.primary.$extensions === undefined);
+check("[R10] resolutionOrder refs resolve in-document, sets before modifiers", (() => {
+  const ptrs = rz.resolutionOrder.map((r) => r.$ref);
+  const idx = ptrs.findIndex((p) => p.startsWith("#/modifiers/"));
+  const resolve = (p) => p.split("/").slice(1).reduce((o, k) => o && o[k.replace(/~1/g, "/").replace(/~0/g, "~")], rz);
+  return ptrs.length === 3 && ptrs.every((p) => resolve(p) !== undefined) && idx === 2;
+})());
+check("[R11] emitTokens/CLI surface: resolver + files alongside the UNCHANGED dtcg/css outputs", (() => {
+  const e = emitTokens(ds);
+  return e.resolver.version === "2025.10" && Object.keys(e.resolverFiles).every((k) => k.startsWith("tokens/") && k.endsWith(".json"))
+    && JSON.stringify(e.dtcg) === JSON.stringify(toDTCG(ds)) && e.dtcg.color.primary.$extensions["figma.com"].modes.Dark === "{blue.300}";
+})());
+check("[R12] single-mode-only design system -> valid resolver with NO modifiers key", (() => {
+  const r = toResolver({ collections: [{ name: "P", modes: ["Value"], default: "Value" }], variables: [{ name: "a/b", type: "COLOR", collection: "P", values: { Value: "#000000" } }] }).resolver;
+  return r.modifiers === undefined && r.version === "2025.10" && r.resolutionOrder.length === 1;
+})());
+check("[R13] filename collision after sanitizing -> warned + disambiguated, never overwritten", (() => {
+  const w = [];
+  const r = toResolver({ collections: [{ name: "C", modes: ["Light", "light", "LIGHT"], default: "Light" }], variables: [
+    { name: "bg", type: "COLOR", collection: "C", values: { Light: "#111111", light: "#222222", LIGHT: "#333333" } }] }, w);
+  const refs = ["light", "LIGHT"].map((m) => r.resolver.modifiers.C.contexts[m][0].$ref);
+  return refs[0] !== refs[1] && new Set(refs).size === 2 && Object.keys(r.files).length === 3
+    && r.files[refs[0]].bg.$value.hex === "#222222" && r.files[refs[1]].bg.$value.hex === "#333333"
+    && w.some((m) => /collides/.test(m));
+})());
+check("[R14] `__proto__` mode name neither pollutes nor vanishes", (() => {
+  const ds2 = JSON.parse('{"collections":[{"name":"C","modes":["Light","__proto__"],"default":"Light"}],"variables":[{"name":"bg","type":"COLOR","collection":"C","values":{"Light":"#111111","__proto__":"#222222"}}]}');
+  const r = toResolver(ds2);
+  const ctx = r.resolver.modifiers.C.contexts;
+  const ref = Object.prototype.hasOwnProperty.call(ctx, "__proto__") && ctx["__proto__"][0].$ref;
+  return !!ref && r.files[ref].bg.$value.hex === "#222222" && ({}).bg === undefined
+    && JSON.parse(JSON.stringify(r.resolver)).modifiers.C.contexts["__proto__"] !== undefined;
+})());
+check("[R15] round-trip: base + context in resolutionOrder reproduces $extensions.modes exactly", (() => {
+  const d = toDTCG(ds);
+  const flat = (tree, prefix, out) => { for (const k of Object.keys(tree)) { const n = tree[k]; const p = prefix ? prefix + "." + k : k; if (n && n.$value !== undefined) out[p] = n.$value; else if (n && typeof n === "object") flat(n, p, out); } return out; };
+  const modes = ["Light", "Dark"];
+  return modes.every((mode) => {
+    const merged = {};
+    for (const item of rz.resolutionOrder) { // spec ordering: later entries override earlier ones
+      if (item.$ref.startsWith("#/sets/")) { const s = rz.sets[item.$ref.slice(7)]; for (const src of s.sources) Object.assign(merged, flat(rzFiles[src.$ref], "", {})); }
+      else { const m = rz.modifiers[item.$ref.slice(12)]; const ctx = m.contexts[mode] || m.contexts[m.default]; for (const src of ctx) Object.assign(merged, flat(rzFiles[src.$ref], "", {})); }
+    }
+    const expected = flat(d, "", {});
+    for (const p of Object.keys(expected)) {
+      const leaf = p.split(".").reduce((o, k) => o[k], d);
+      const ext = leaf.$extensions && leaf.$extensions["figma.com"];
+      const want = ext && ext.modes && ext.modes[mode] !== undefined ? ext.modes[mode] : expected[p];
+      if (JSON.stringify(merged[p]) !== JSON.stringify(want)) return false;
+    }
+    return Object.keys(merged).length === Object.keys(expected).length;
+  });
+})());
+check("[R16] resolver emits no NEW warnings on a clean design system", rw.length === 0 && lintTokens(ds).length === 0);
 
 // ---------- tokens: never-silent lint (H1/H3/H7/H8) ----------
 console.log("tokens — lint:");
@@ -252,15 +341,15 @@ check("[RD-narrow] explicit LINE_HEIGHT scope beats a name containing 'weight'",
 // The name heuristic is a GUESS, and every other rewrite in this file announces itself. A silent one
 // is only visible as surprising CSS downstream.
 check("[RD-say] a unit decided by NAME rather than scopes is reported by lintTokens",
-  lintTokens({ variables: [{ name: "Opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] })
+  lintTokens({ variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] })
     .some((w) => /Opacity\/disabled/.test(w) && /UNITLESS/.test(w)));
 check("[RD-say] but a token the SCOPES decided is not reported (no noise on an explicit signal)",
-  !lintTokens({ variables: [{ name: "opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] })
+  !lintTokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] })
     .some((w) => /UNITLESS/.test(w)));
 // numberUnit short-circuits on opts.unitless BEFORE the name heuristic, so a token the caller named
 // explicitly never reaches the guess. lintTokens has to take the same opts or it warns about a guess
 // that was never made — and tells the caller to go fix it in Figma when they already fixed it here.
-const nameGuessDs = { variables: [{ name: "Opacity/disabled", resolvedType: "FLOAT", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] };
+const nameGuessDs = { variables: [{ name: "Opacity/disabled", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 0.5 } }] };
 const overrideOpts = { unitless: new Set(["Opacity/disabled"]) };
 check("[RD-opts] a token overridden via opts.unitless is NOT reported as a name guess",
   !lintTokens(nameGuessDs, overrideOpts).some((w) => /UNITLESS/.test(w)));
@@ -268,7 +357,7 @@ check("[RD-opts] the same token IS reported when linted without those opts (the 
   lintTokens(nameGuessDs).some((w) => /UNITLESS/.test(w)));
 // The override must not swallow the OTHER warnings for that token — it only pre-empts the unit guess.
 check("[RD-opts] opts.unitless does not suppress unrelated warnings",
-  lintTokens({ variables: [{ name: "(Space 3)", resolvedType: "FLOAT", type: "FLOAT", values: { v: 12 } }] }, { unitless: new Set(["(Space 3)"]) })
+  lintTokens({ variables: [{ name: "(Space 3)", type: "FLOAT", values: { v: 12 } }] }, { unitless: new Set(["(Space 3)"]) })
     .some((w) => /illegal in a CSS custom property/.test(w)));
 // Emitter and linter must agree about which tokens the heuristic touched — same opts, same verdict.
 check("[RD-opts] emitter agrees: opts.unitless drops the px",

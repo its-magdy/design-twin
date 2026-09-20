@@ -1,0 +1,16 @@
+{
+  "description": "Gates the designtwin:screen-builder subagent with the same plan check build-screen runs. Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the gate has to be registered here. The script exits immediately when design/plan/ has no pending plan.",
+  "hooks": {
+    "SubagentStop": [
+      {
+        "matcher": "^(designtwin:)?screen-builder$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js\""
+          }
+        ]
+      }
+    ]
+  }
+}

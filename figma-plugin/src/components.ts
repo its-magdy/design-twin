@@ -2,6 +2,7 @@
 // design-system catalog (variables + styles + component/variant catalog + hygiene).
 import { Obj, propName, errMsg, nonEmpty, putNonEmpty, round, exportedAt } from "./util";
 import { warn, loadAllPages, runOpts } from "./state";
+import { checkCancelled, enterPage } from "./progress";
 import { simplifyFills, simplifyStrokes } from "./paint";
 import { simplifyEffects } from "./effects";
 import { simplifyGrid } from "./layout";
@@ -173,7 +174,16 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
   const prevSkip = (figma as any).skipInvisibleInstanceChildren;
   try {
     try { (figma as any).skipInvisibleInstanceChildren = true; } catch (e) {}
-    for (const page of figma.root.children) {
+    // This is the extractor's OTHER multi-page walk (findAllWithCriteria over every page), and on a
+    // design-system file it is the slow half of a --design-system pull, which has no page walk to
+    // report progress from at all. Same two safe-point rules as collect.ts: cancel between pages,
+    // announce the boundary unthrottled. `catalogPages` is read once — figma.root.children is a getter
+    // that materialises a fresh wrapper array on every read.
+    const catalogPages = figma.root.children;
+    let catalogIndex = 0;
+    for (const page of catalogPages) {
+      checkCancelled();
+      enterPage("design-system", ++catalogIndex, catalogPages.length, page.name, page.id, { components: components.length });
       let nodes: SceneNode[] = [];
       // A page that failed to load throws here (dynamic-page access) — report which page went missing.
       try {

@@ -1,17 +1,17 @@
 {
-  "skill_name": "connect",
+  "skill_name": "help",
   "evals": [
     {
       "id": 1,
       "prompt": "hey i just installed this design twin plugin in claude code, what does it actually do and how do i get claude talking to my figma file?",
-      "expected_output": "Explains both connection modes (dtwin CLI, figma-mcp server), what each lets Claude do, and the short steps to open a connection (plugin running in Figma, then pick CLI or MCP). Hands off to /designtwin:help for setup details and /designtwin:extract for actually pulling data, without reciting the full flag/tool reference inline.",
+      "expected_output": "Explains both connection modes (dtwin CLI, figma-mcp server), what each lets Claude do, and the short steps to open a connection (plugin running in Figma, then pick CLI or MCP). Hands off to /designtwin:extract for actually pulling data, without reciting the full flag/tool reference inline.",
       "files": [],
       "expectations": [
         "Mentions the dtwin CLI as one way to connect",
         "Mentions the figma-mcp / MCP server as the other way to connect",
         "States the Figma file must be open with the plugin running (not headless)",
         "Names at least one concrete next step to actually open a connection (e.g. import the plugin, run dtwin --list, register .mcp.json)",
-        "Points to /designtwin:extract and/or /designtwin:help for next steps rather than reciting the full CLI flag or MCP tool reference inline",
+        "Points to /designtwin:extract for actually pulling data rather than reciting the full CLI flag or MCP tool reference inline",
         "Does not fabricate commands, flags, or tool names that don't exist in the repo (dtwin flags, figma_* tool names)"
       ]
     },
@@ -39,6 +39,31 @@
         "Mentions it needs to be registered (.mcp.json) in the project being built, not in this repo",
         "Mentions at least one concrete capability it adds (live queries, pasting a Figma link, or safe writes)",
         "Does not claim the MCP server is required to use Design Twin at all"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "i ran dtwin --list and it just dies with EADDRINUSE, port 8787 already in use. what now?",
+      "expected_output": "Diagnoses from the troubleshooting reference: only one bridge can hold 8787. Tells the user to check dtwin --daemon-status first (a daemon means ordinary commands route through it), otherwise the MCP server or a stale node process holds the port; if the MCP server is the holder and files are wanted, use writeToDisk: true on the MCP export tools rather than killing it.",
+      "files": [],
+      "expectations": [
+        "Explains that only one bridge process can hold port 8787 at a time",
+        "Suggests dtwin --daemon-status as the first check",
+        "Names the MCP server (or a stale node process) as the likely holder",
+        "Mentions writeToDisk: true on the MCP export tools as the way to get files while the MCP server holds the port",
+        "Does not invent flags or tools that do not exist"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "the plugin in figma just says offline and my pull gets rejected with a 401",
+      "expected_output": "Identifies a bridge-token mismatch: run dtwin --token-status to see which token source is winning (a FIGMA_BRIDGE_TOKEN export shadowing the saved token is the usual surprise), then dtwin --show-token and re-paste it into the plugin's Bridge token field and Save. Mentions --rotate-token as a common cause.",
+      "files": [],
+      "expectations": [
+        "Identifies the cause as a bridge token mismatch between the plugin and the bridge",
+        "Recommends dtwin --token-status and/or dtwin --show-token",
+        "Tells the user to re-paste the token into the plugin's Bridge token field and Save",
+        "Does not suggest passing the token as a command-line value (there is no --token <value> flag)"
       ]
     }
   ]

@@ -1,8 +1,15 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
-import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, listPages, listChildren, CollectOpts } from "./collect";
+import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren, CollectOpts } from "./collect";
 import { applyWrites } from "./writes";
 import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
+import { RunInfo } from "./progress";
+
+// Every queued command announces itself to the plugin window under the SAME label the caller used, so
+// a designer watching Figma go busy can see that a CLI/MCP pull — and which one — is walking their
+// file, rather than being left to guess. Built from `cmd` rather than hand-written per case: a new
+// queued op then cannot ship without a label.
+const bridgeRun = (cmd: string): RunInfo => ({ source: "bridge", label: cmd });
 
 // Identity of THIS plugin run, minted once when the bundle is first evaluated. It is the only way to
 // tell two simultaneously-running instances apart from the bridge side: `fileKey` is gated to private
@@ -54,19 +61,24 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
     // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
     case "exportFull":
-      return await serializeRun(() => collectFull(args as CollectOpts));
+      return await serializeRun(() => collectFull(args as CollectOpts), bridgeRun(cmd));
     // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
     // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
     case "exportDesignSystem":
-      return await serializeRun(() => collectDesignSystemOnly(args as CollectOpts));
+      return await serializeRun(() => collectDesignSystemOnly(args as CollectOpts), bridgeRun(cmd));
     // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
     // the full catalog build and mutates the same per-run state they do.
     case "exportLibrary":
-      return await serializeRun(() => collectLibraryFile(args as CollectOpts & { asLibrary?: string }));
+      return await serializeRun(() => collectLibraryFile(args as CollectOpts & { asLibrary?: string }), bridgeRun(cmd));
     case "exportSelection":
-      return await serializeRun(() => collectSelection(args as CollectOpts));
+      return await serializeRun(() => collectSelection(args as CollectOpts), bridgeRun(cmd));
     case "exportNode":
-      return await serializeRun(() => collectNode(args && args.nodeId, args as CollectOpts));
+      return await serializeRun(() => collectNode(args && args.nodeId, args as CollectOpts), bridgeRun(cmd));
+    // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
+    // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
+    // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
+    case "screenshot":
+      return await serializeRun(() => collectScreenshot(args && args.nodeId, { scale: args && args.scale }), bridgeRun(cmd));
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
     // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
@@ -85,7 +97,7 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     case "listLibraries":
       return await listLibraries();
     case "write":
-      return await serializeRun(() => applyWrites(args && args.ops));
+      return await serializeRun(() => applyWrites(args && args.ops), bridgeRun(cmd));
     default:
       throw new Error("unknown cmd: " + cmd);
   }

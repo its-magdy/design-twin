@@ -908,6 +908,13 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
   ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(wNoFills.error));
 
+  // Dev Mode is read-only for plugins (manifest editorType now includes "dev"): the batch is refused
+  // up front with the fix, not left to throw an opaque Plugin-API error partway through.
+  sandbox.figma.editorType = "dev";
+  const wDev = await sandbox.applyWrites([{ op: "createFrame", name: "X" }]);
+  ok("write: refused as a whole in Dev Mode, with the fix in the error", wDev.ok === false && wDev.applied.length === 0 && wDev.failedAt === 0 && /Dev Mode/.test(wDev.error) && /Design mode/.test(wDev.error));
+  sandbox.figma.editorType = "figma";
+
   // Partial failure: ops 0-1 are already committed, so their ids must come back with the error.
   const wPartial = await sandbox.applyWrites([
     { op: "createFrame", name: "A" },
@@ -1394,6 +1401,102 @@ Object.assign(sandbox, sandbox.__designExport || {});
     ok("[LIB-FILE] default design-system pull emits NO publish status", !dsPlain.components.some((c) => c.publish) && !dsPlain.styles.paint.some((s) => s.publish));
     ok("[LIB-FILE] default design-system pull emits NO source block", dsPlain.source === undefined);
     ok("[LIB-FILE] but the style key fix applies there too", dsPlain.styles.paint[0].key === "paintkey123");
+  }
+
+  // ---------- [PROGRESS] / [CANCEL] a long export must be watchable AND stoppable ----------
+  // An --all-pages pull measured 10+ minutes on a real file, during which the plugin window said only
+  // "Exporting…" and offered no way out. Both halves are driven through serializeRun (the same entry
+  // point main.ts and bridge.ts use) because progress and cancellation only exist inside a bracketed
+  // run — a collector called directly must stay completely silent, which is asserted below.
+  {
+    const posted = [];
+    const prevPost = sandbox.figma.ui.postMessage;
+    sandbox.figma.ui.postMessage = (m) => { posted.push(m); };
+    const prevKidsPC = sandbox.figma.root.children;
+    const pcPage = (id, name, kids) => ({ id, name, children: kids || [], loadAsync: async () => {}, findAllWithCriteria: () => [] });
+    const pc1 = pcPage("p:pc1", "Home", [scrollFrame]);
+    const pc2 = pcPage("p:pc2", "Checkout", []);
+    const pc3 = pcPage("p:pc3", "Archive", []);
+    sandbox.figma.root.children = [pc1, pc2, pc3];
+
+    const run = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "ui", label: "test-full" });
+    ok("[PROGRESS] the export itself is unaffected — it still returns its layers", run.layersDoc.layers.length > 0);
+    ok("[PROGRESS] the run is bracketed by run-begin … run-end",
+      posted[0].type === "run-begin" && posted[posted.length - 1].type === "run-end");
+    ok("[PROGRESS] run-begin names WHO asked (so a bridge pull isn't mistaken for your own click)",
+      posted[0].source === "ui" && posted[0].label === "test-full");
+    const pageFrames = posted.filter((m) => m.type === "progress" && m.phase === "pages" && m.page);
+    // Page boundaries are the frames that must NEVER be dropped by the throttle — a missed one leaves
+    // the status line naming a page the walk already finished.
+    ok("[PROGRESS] one frame per page boundary, 1-based, with the total",
+      [1, 2, 3].every((i) => pageFrames.some((m) => m.page.index === i && m.page.of === 3)));
+    ok("[PROGRESS] the frame carries the page NAME for display…", pageFrames.some((m) => m.page.index === 2 && m.page.name === "Checkout"));
+    // Page names are NOT unique in Figma; the id is the identity. Same rule as the exported docs.
+    ok("[PROGRESS] …and the pageId, which is the actual identity", pageFrames.some((m) => m.page.pageId === "p:pc2"));
+    ok("[PROGRESS] running node/asset counters ride along", pageFrames.every((m) => typeof m.nodes === "number" && typeof m.assets === "number"));
+    ok("[PROGRESS] the design-system phase is announced (the walk going quiet reads as a hang otherwise)",
+      posted.some((m) => m.type === "progress" && m.phase === "design-system"));
+
+    posted.length = 0;
+    await sandbox.collectFull({ css: false });
+    ok("[PROGRESS] a collector driven OUTSIDE a bracketed run posts nothing at all", posted.length === 0);
+
+    // ---- cancel mid-export, on a BRIDGE-triggered run ----
+    // The trap page requests the cancel while its children are being read, so the very next safe point
+    // (the top-level frame loop) is where the walk aborts.
+    posted.length = 0;
+    let cancelHit = null;
+    const trapPage = { id: "p:trap", name: "Trap", loadAsync: async () => {}, findAllWithCriteria: () => [],
+      get children() { cancelHit = sandbox.requestCancel(); return [scrollFrame]; } };
+    sandbox.figma.root.children = [trapPage, pc2];
+    let cancelErr = null, cancelled = null;
+    try {
+      cancelled = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "bridge", label: "exportFull" });
+    } catch (e) { cancelErr = e; }
+    // (c): a cancelled run must REJECT. A partial layers doc returned as if complete is the silent
+    // truncation this codebase refuses everywhere else.
+    ok("[CANCEL] a cancelled run rejects — no partial doc is ever handed back", cancelled === null && !!cancelErr);
+    // (a): this exact string is what main.ts puts in `bridge-result.error`, so the CLI/MCP fails fast
+    // with a human cause instead of sitting out its request timeout.
+    ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(cancelErr.message));
+    ok("[CANCEL] the cancel was matched to the live run", cancelHit && cancelHit.source === "bridge" && cancelHit.label === "exportFull");
+    ok("[CANCEL] the bridge-triggered run was visible in the plugin window, and for whom",
+      posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportFull"));
+    ok("[CANCEL] the run is still closed out, so the UI cannot hang on a cancelled export",
+      posted[posted.length - 1].type === "run-end");
+
+    // ---- cancel INSIDE the component-catalog walk ----
+    // The one place a run flips a GLOBAL Figma toggle (skipInvisibleInstanceChildren). Its `finally`
+    // has to restore it on the cancellation path too, or every later export silently loses hidden
+    // instance children.
+    posted.length = 0;
+    sandbox.figma.skipInvisibleInstanceChildren = false;
+    const catA = { id: "p:catA", name: "Cat A", children: [], loadAsync: async () => {},
+      findAllWithCriteria: () => { sandbox.requestCancel(); return []; } };
+    sandbox.figma.root.children = [catA, pcPage("p:catB", "Cat B", [])];
+    let dsErr = null;
+    try { await sandbox.serializeRun(() => sandbox.collectDesignSystemOnly({}), { source: "ui", label: "exportDesignSystem" }); } catch (e) { dsErr = e; }
+    ok("[CANCEL] a cancel inside the component-catalog page walk aborts it as well",
+      !!dsErr && /export cancelled by the designer in Figma/.test(dsErr.message));
+    ok("[CANCEL] and skipInvisibleInstanceChildren is restored, not stranded on", sandbox.figma.skipInvisibleInstanceChildren === false);
+    delete sandbox.figma.skipInvisibleInstanceChildren;
+
+    // (b): the whole point of resetting state — the NEXT export has to work.
+    posted.length = 0;
+    sandbox.figma.root.children = [pc1, pc2];
+    const after = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "ui", label: "after-cancel" });
+    ok("[CANCEL] state is fully reset: the very next export runs to completion", after.layersDoc.layers.length > 0);
+    ok("[CANCEL] …and reports progress normally again", posted.some((m) => m.type === "progress" && m.phase === "pages"));
+
+    // (d): a cancel that landed on a run which finished before reaching a safe point must not carry
+    // over. The flag is cleared at the START of every run precisely so a stale one can't kill the next.
+    await sandbox.serializeRun(async () => { sandbox.requestCancel(); return "done"; }, { source: "ui", label: "stale" });
+    const survivor = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "ui", label: "next" });
+    ok("[CANCEL] a STALE cancel does not abort the following export", survivor.layersDoc.layers.length > 0);
+    ok("[CANCEL] a cancel with nothing running is refused outright, not armed for later", sandbox.requestCancel() === null);
+
+    sandbox.figma.root.children = prevKidsPC;
+    sandbox.figma.ui.postMessage = prevPost;
   }
 
   report();

@@ -19,10 +19,15 @@ Every API and behavior below was verified against official Figma / Claude Code d
   → Any network (a bridge WebSocket) **must live in the UI iframe**, relaying to `code.js` via
   `postMessage`. This is the single load-bearing fact of the bridge design.
 
-## Two planes, one plugin
+## Two front-ends, one bridge, one plugin
+
+Not "CLI = read, MCP = write". The CLI is read-only; the MCP server is **read and write** — 14 of its
+15 tools are reads (12 live `figma_*` reads that mirror the CLI, plus 2 `design_*` tools that read the
+export on disk), and `figma_write` is the only write surface anywhere. What actually separates the two
+is the calling convention, spelled out under the diagram.
 
 ```
-                         READ plane (design → code)  — you need this
+                         CLI front-end: batch reads → files on disk  — you need this
   Figma (file open)
     code.js (Plugin API reads) ──postMessage──► ui.html [hidden iframe, WS client]
                                                        │ ws://localhost:PORT
@@ -38,8 +43,10 @@ Every API and behavior below was verified against official Figma / Claude Code d
     figma-pull --serve (daemon)  ── holds the WS server open; later invocations become thin
           clients over a unix socket and skip the plugin reconnect ──►
 
-                         WRITE plane (code → design)  — optional
-  Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js (writes)
+                         MCP front-end: interactive reads + the only WRITE path  — optional
+  Claude Code ──MCP (stdio)──► figma-mcp [hosts persistent WS server] ⇄ ws ⇄ ui.html ⇄ code.js
+          same reads as the CLI (inline, or to disk via writeToDisk:true) · figma_write (code → design,
+          4 safe ops, dryRun preview, refused in read-only Dev Mode)
 ```
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
@@ -250,6 +257,15 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   (`exportAsync {format:PNG, constraint:{type:SCALE,value}}`, longest side capped ~2048px, downscales below
   1× for huge canvases). Emitted as an asset `{kind:"reference"}` + a `reference` path on the tree/screen —
   structural JSON is not ground truth; the codegen agent self-corrects against this image.
+- **On-demand single-node screenshot (`collectScreenshot()`, bridge cmd `screenshot`, CLI `--screenshot
+  <id>`, MCP `figma_screenshot`):** the same `collectReference()` render, called on ONE node addressed
+  by id instead of every exported root — skips `serialize()` and the recursive asset walk entirely, so
+  it stays cheap even on a node buried deep in a large tree. Exists for post-generation visual
+  validation of a specific component in a dense screen, where the one whole-frame reference PNG above is
+  too zoomed-out to be useful. Mirrors Figma's own Dev Mode MCP server (`get_screenshot`: single-node
+  scope, called on demand) rather than pre-rendering every node/instance up front — deliberately NOT a
+  bulk pass, which would pay the same O(nodes) cost `--no-assets` exists to avoid for a much bigger
+  payload (PNG > structural JSON).
 - **Token bindings beyond node level:** generalized `resolveBoundMap()` now resolves `boundVariables` on
   **text runs** (`getStyledTextSegments` + `boundVariables` field → `runs[].tokens`), **effects**
   (`effect.tokens`), **gradient stops** (`stop.tokens`), and **paints** (`fill.tokens`). Previously these
@@ -386,8 +402,11 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   project you point the bridge at, never in this repo.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
   (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`.
-- **Skill vs MCP:** the `build-screen` **skill orchestrates** (read files → map → build → self-correct);
-  MCP/CLI **provide the data**. Complementary.
+- **Skill vs MCP:** the skills **orchestrate** — `audit-design` reviews the export before code
+  (`design-to-code/audit.js` does the deterministic checks; the skill adds engineer judgment and
+  designer questions), `build-screen` gates on that audit → maps → builds → verifies by rendering;
+  MCP/CLI **provide the data**. Complementary. The audit is offline-only (reads `design/`), like
+  drift-lint.
 
 ## Reuse posture — Figma's skills & knowledge (verified 2026-07)
 
@@ -420,11 +439,13 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
    is the first test gate. See `figma-plugin/README.md`.
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
-   the same files, exits. Removes the manual click. No MCP. Shipped as the `designtwin` npm package;
-   `bridge/figma-pull.js` is its entry point.
-3. ✅ **`dtwin mcp` write server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin, for
-   code→design. Kept separate so the write surface never touches the read path. The write plane is
-   still a small fixed set of safe ops, not a general authoring API.
+   the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` npm package
+   (**not yet published** — until it is, run `node bridge/figma-pull.js` from a clone);
+   `bridge/figma-pull.js` is its entry point. `dtwin init` sets a consumer project up in one command.
+3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
+   interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
+   code→design path. Kept a separate process so the write surface never touches the CLI's read path.
+   Writes are still a small fixed set of safe ops with a `dryRun` preview, not a general authoring API.
 
 ## Security posture
 

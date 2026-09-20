@@ -112,16 +112,39 @@ function bootstrap(catalog, existing) {
 
 module.exports = { bootstrap };
 
-// CLI: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json]
+// CLI: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
 // manifest since the split and carries no `components` array (see bridge/design-system-layout.js).
+// Without --out the map goes to stdout. With --out it is written to that file; when the file already
+// exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
+// "never destroys human work" semantics above) instead of replacing it with fresh stubs.
 if (require.main === module) {
   const fs = require("fs");
   const { assertNotManifest } = require("./catalog-input.js");
-  const [catalogFile, existingFile] = process.argv.slice(2);
-  if (!catalogFile) { console.error("usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json]"); process.exit(1); }
+  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]";
+  const argv = process.argv.slice(2);
+  let outFile = null;
+  const o = argv.indexOf("--out");
+  if (o !== -1) {
+    outFile = argv[o + 1];
+    if (!outFile || outFile.startsWith("--")) { console.error("--out needs a file path\n" + usage); process.exit(1); }
+    argv.splice(o, 2);
+  }
+  const unknown = argv.find((a) => a.startsWith("--"));
+  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
+  const [catalogFile, existingArg] = argv;
+  if (!catalogFile) { console.error(usage); process.exit(1); }
   const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
+  const existingFile = existingArg || outFile;
   const existing = existingFile && fs.existsSync(existingFile) ? JSON.parse(fs.readFileSync(existingFile, "utf8")) : null;
-  process.stdout.write(JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n");
+  const json = JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n";
+  if (!outFile) {
+    process.stdout.write(json);
+  } else {
+    fs.writeFileSync(outFile, json);
+    const entries = Object.values(JSON.parse(json).components);
+    const review = entries.filter((e) => e.status === "needs-review").length;
+    console.error(`map-bootstrap: wrote ${outFile} — ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
+  }
 }

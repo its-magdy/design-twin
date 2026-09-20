@@ -16,12 +16,21 @@ if (require.main === module && process.argv[2] === "mcp") {
   });
   return;
 }
+// `dtwin init` — project setup (init.js). Routed here for the same reason `mcp` is: it must run before
+// server-core loads (which resolves the token and knows about ports) and it shares none of the pull
+// flags, so it gets its own tiny parser instead of a special case in parseArgs.
+if (require.main === module && process.argv[2] === "init") {
+  require("./init.js").main(process.argv.slice(3));
+  return;
+}
 // figma-pull — READ plane CLI.
 // Connects to the running Figma plugin over the localhost bridge, pulls the full
 // design system + all page frames (or the current selection), and writes them to
 // disk. The agent then Reads those files selectively (context-economical).
 //
 // Usage:
+//   dtwin init [--mcp]          # set up the project you are BUILDING: design/, target.json, the bridge
+//                               # token, (optionally) .mcp.json — then prints the steps left. See init --help
 //   dtwin [outDir]              # full: design-system.json + current-page frames + assets
 //   dtwin [outDir] --all-pages  # like full, but frame trees from EVERY page
 //   dtwin [outDir] --selection  # just the current selection
@@ -109,6 +118,8 @@ if (require.main === module && process.argv[2] === "mcp") {
 //                                     # "can two Figma files use the bridge at once?" — run it from
 //                                     # each open file and compare instanceId. Costs nothing (no page
 //                                     # load, no node walk, no assets) and writes no files.
+//   --json               # machine output for the two that print a TABLE (--list-clients, --list-libraries).
+//                        # The others above already print JSON; there it is accepted as a no-op.
 //   These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
 //   --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
 //   --timeout DOES apply to them.
@@ -120,7 +131,7 @@ if (require.main === module && process.argv[2] === "mcp") {
 // Keep the connection open (daemon):
 //   dtwin --serve          # hold the bridge open until stopped. Every command above then
 //                                       # routes through it automatically and skips the reconnect.
-//   node dtwin --stop           # stop it
+//   dtwin --stop           # stop it
 //   dtwin --daemon-status  # is one running, and is the plugin connected?
 //   Only ONE process can hold port 8787 — while a daemon (or the MCP server) is up, a second bridge
 //   exits with EADDRINUSE. That is exactly what routing through the daemon avoids.
@@ -141,6 +152,22 @@ if (require.main === module && process.argv[2] === "mcp") {
 
 const fs = require("fs");
 const path = require("path");
+
+// --help / -h: print the usage header above and exit 0. Handled HERE, before server-core is required,
+// so help has no side effects at all — no token minted, no port bound. The text is the header comment
+// itself (from "Usage:" down), read back from this file, so the help can never drift from the one
+// place the flags are documented.
+function usageText() {
+  const lines = fs.readFileSync(__filename, "utf8").split("\n");
+  const start = lines.findIndex((l) => l.startsWith("// Usage:"));
+  const out = [];
+  for (let i = start; i < lines.length && lines[i].startsWith("//"); i++) out.push(lines[i].replace(/^\/\/ ?/, ""));
+  return "dtwin — pull a design out of a running Figma file (Design Twin plugin) onto disk.\n\n" + out.join("\n");
+}
+if (require.main === module && process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
+  console.log(usageText());
+  process.exit(0);
+}
 
 // --token-file has to be honoured BEFORE server-core is required, because server-core resolves the
 // token at require time (so the test suite can set FIGMA_BRIDGE_TOKEN and require it). parseArgs
@@ -390,6 +417,39 @@ const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
 // rescue it, since --timeout only ever reached the export branch.
 const listTimeoutMs = overrideMs ?? TIMEOUTS.list;
 
+// Unknown flags are REFUSED, not absorbed. Every flag above is matched by exact `includes`, so a typo
+// (`--lsit`, `--al-pages`) used to match nothing and fall through to the default — a full pull that
+// then waits on the plugin: the wrong command, run silently. Same silent-loss class as the guards
+// below, one step earlier. Runs after every takeValues() call so a flag's VALUE is never judged.
+const BOOL_FLAGS = [
+  "--selection", "--all-pages", "--design-system", "--serve", "--stop", "--daemon-status",
+  "--token-status", "--show-token", "--rotate-token", "--forget-token",
+  "--list", "--list-pages", "--list-libraries", "--whoami", "--list-clients", "--help", "--json",
+  ...Object.keys(READ_OPT_FLAGS),
+];
+const VALUE_FLAGS = ["--children", "--node", "--screenshot", "--scale", "--page", "--as-library", "--client", "--token-file", "--timeout"];
+const KNOWN_FLAGS = [...BOOL_FLAGS, ...VALUE_FLAGS];
+const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consumedIdx.has(i)
+  && !BOOL_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a === f || a.startsWith(f + "=")));
+if (unknown.length) {
+  // "Did you mean": the nearest known flag by edit distance, offered only when it is a plausible typo.
+  const dist = (a, b) => {
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const next = [i];
+      for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      row = next;
+    }
+    return row[b.length];
+  };
+  const hints = unknown.map((u) => {
+    const name = u.split("=")[0];
+    const best = KNOWN_FLAGS.map((f) => [dist(name, f), f]).sort((x, y) => x[0] - y[0])[0];
+    return best[0] <= 2 ? `${u} (did you mean ${best[1]}?)` : u;
+  });
+  throw new UsageError(`unknown flag${unknown.length > 1 ? "s" : ""}: ${hints.join(", ")}. Run dtwin --help for the full list.`);
+}
+
 // The positional [outDir] — the first token that's neither a `--flag` nor a value a flag above already
 // claimed. Doing this AFTER parsing every value-taking flag is what keeps e.g. `--children 131:1879`
 // (no outDir given) from being misread as `outDir = "131:1879"`.
@@ -426,6 +486,16 @@ if (screenshotId && readOptFlagsGiven.length) {
   const many = readOptFlagsGiven.length > 1;
   const [are, they] = many ? ["are read options", "they"] : ["is a read option", "it"];
   throw new UsageError(`${readOptFlagsGiven.join(" / ")} ${are} for a full export — --screenshot only renders a PNG, so ${they} would be silently ignored.`);
+}
+
+// --json: machine output for the two index commands that print a TABLE for humans (--list-clients,
+// --list-libraries). The primary caller of this CLI is an agent, and scraping an aligned table is
+// how a column rename becomes a silent misread. --list / --list-pages / --children / --whoami already
+// print JSON, so the flag is accepted there as a no-op (one habit for every index command) and
+// refused everywhere else — an export writes files and prints no result to make JSON of.
+const json = args.includes("--json");
+if (json && !indexCmds.length) {
+  throw new UsageError("--json applies to the commands that PRINT (--list-clients, --list-libraries; --list / --list-pages / --children / --whoami are JSON already). An export writes files instead — read its _manifest.json.");
 }
 
 // Same class of silent loss: the list/peek commands print and exit(0) before any export runs, so an
@@ -515,7 +585,7 @@ if (tokenCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile };
+return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -618,7 +688,7 @@ try {
   console.error("[dtwin] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
 
 async function main() {
   // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
@@ -740,7 +810,7 @@ async function main() {
   // connected file is busy with a long export.
   if (listClients) {
     const rows = bridge ? bridge.listClients() : ((await daemon.status()) || {}).clients || [];
-    console.log(formatClients(rows));
+    console.log(json ? JSON.stringify({ clients: rows }, null, 2) : formatClients(rows));
     if (rows.length > 1) {
       console.error("[dtwin] " + rows.length + " files connected — pass --client <id|fileKey|name> " +
         "to pick one, or commands that need a target will refuse rather than guess.");
@@ -782,7 +852,7 @@ async function main() {
     // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
     // mistaken for part of the table.
     for (const w of (r && r.warnings) || []) console.error("[dtwin] warn  " + w);
-    console.log(formatLibraries(r));
+    console.log(json ? JSON.stringify(r, null, 2) : formatLibraries(r));
     console.error("[dtwin] next: dtwin --list   then   --page <id>   (pull only the pages you need)");
     return finish(); // see the close()-not-exit note below
   }

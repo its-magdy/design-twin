@@ -82,7 +82,27 @@ with per-platform install friction, and that is disproportionate for a loopback 
 authority beyond driving a Figma plugin you already have open. If that trade doesn't suit your
 environment, keep the token in your own secret manager and pass `--token-file`.
 
+## Set a project up: `dtwin init`
+
+Run in the root of the project you are **building** (not this repo):
+
+```
+dtwin init             # design/, design/target.json (detected stack), bridge token, next steps
+dtwin init --mcp       # …and register this MCP server in ./.mcp.json (merged, never overwritten)
+dtwin init --dry-run   # print what it would do; write nothing, mint no token
+```
+
+It needs no bridge, plugin or free port. It never overwrites: an existing `target.json`, an existing
+`figma` entry in `.mcp.json`, or an unparseable `.mcp.json` are all left alone and reported. `--mcp` is
+opt-in because a registered MCP server holds port 8787 while Claude Code runs, which rules out
+one-shot `dtwin` pulls in that project (use the export tools' `writeToDisk: true` instead). The two
+steps it cannot do — importing the plugin into Figma and pasting the token — it prints.
+
 ## Read: figma-pull (CLI) — recommended for bulk extraction
+
+`dtwin --help` (or `-h`) prints every flag below and exits — no bridge is started, no token minted.
+An unknown or mistyped flag is an error with a suggestion (`--lst` → "did you mean --list?"), never
+silently ignored: a typo used to fall through to a full pull.
 
 A full pull writes `design/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
 `files` pointers, `counts`) over the catalog split under `design/design-system/`, one file per Figma
@@ -436,7 +456,9 @@ Tools: `figma_status`, `figma_get_selection`, `figma_list_libraries`, `figma_lis
 `figma_screenshot` (an on-demand PNG of ONE node — the single-node visual-validation counterpart to the
 export tools' whole-frame reference PNG; see `--screenshot` above),
 `figma_write` (batch of safe ops — createFrame / createText / setFill / setText; **no arbitrary code
-execution**, unlike some community servers). The frame-walking export tools accept opt-in read flags
+execution**, unlike some community servers; `dryRun: true` returns a preview of what each op would
+create or overwrite without touching the file — there is no undo from the MCP side, so preview anything
+that overwrites; refused outright when the file is in read-only Dev Mode). The frame-walking export tools accept opt-in read flags
 `css` / `measurements` / `pluginData` / `motion` / `sharedData`; `figma_export_design_system` doesn't
 take them (it never walks a node — see below) but DOES take `variantVisuals`, since the component
 catalog it builds is exactly what that flag enriches.

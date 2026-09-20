@@ -16,13 +16,33 @@
   input { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
   #bridge { font-size: 11px; margin-top: 12px; padding: 6px 8px; border-radius: 6px; background: #f6f6f6; color: #888; }
   #bridge.on { background: #e7f7ec; color: #1a7f3c; }
+  /* `button { display: block }` above beats a bare [hidden], so the hide rule has to win explicitly —
+     otherwise the Cancel button is permanently visible. */
+  [hidden] { display: none !important; }
+  /* A PERSISTENT failure notice, deliberately not the #status line: status is overwritten by the very
+     next selection change or export, and "the browser delivered 0 of your 400 files" is precisely the
+     message that must still be on screen when you come back to the window. */
+  #banner { margin-bottom: 12px; padding: 8px; border: 1px solid #f0b4ae; border-radius: 6px;
+            background: #fdecea; color: #9b1c12; font-size: 12px; line-height: 1.4; }
+  #progress { height: 6px; margin-bottom: 12px; border-radius: 3px; background: #eee; overflow: hidden; }
+  #bar { height: 100%; width: 0; background: #0d99ff; }
+  /* Phases with no page count (the design-system catalog, per-asset ticks inside one huge frame) still
+     have to look ALIVE — a bar frozen at 0% reads as a hang. */
+  #progress.indet #bar { width: 30%; animation: indet 1.2s linear infinite; }
+  @keyframes indet { from { margin-left: -30%; } to { margin-left: 100%; } }
+  #cancel { border-color: #c0362c; color: #c0362c; }
 </style>
 
 <div id="status">Loading…</div>
+<div id="banner" hidden></div>
+<div id="progress" hidden><div id="bar"></div></div>
 
 <div class="label">Export</div>
 <button id="run-sel" disabled>Export current selection</button>
 <button id="run-full" class="primary">Export design system + all page frames</button>
+<!-- Shown only while a run is walking the file — INCLUDING one a CLI/MCP client started, which the
+     designer never clicked for and would otherwise have no way to stop. -->
+<button id="cancel" hidden>Cancel export</button>
 
 <div class="sep"></div>
 <div class="label">Downloads</div>
@@ -64,6 +84,11 @@
     var bridgeToken = "";
     var busy = false;        // an export is in flight — block a second run (the main thread serializes too)
     var lastSelCount = 0;    // last-known selection count, so we restore run-sel state after a run ends
+    // The run currently walking the file ({source,label}), or null. Driven by run-begin/run-end from
+    // the main thread rather than by our own button clicks, so a BRIDGE-triggered export — which no
+    // one clicked here — puts the window into exactly the same visible state.
+    var running = null;
+    var cancelSent = false;  // we asked to stop; don't let progress frames overwrite "Cancelling…"
 
     function $(id) { return document.getElementById(id); }
     // A batch button is enabled exactly when it has files AND no batch is running. DERIVED from that
@@ -87,6 +112,44 @@
       busy = b;
       var rf = $("run-full"); if (rf) rf.disabled = b;
       var rs = $("run-sel"); if (rs) rs.disabled = b || lastSelCount === 0;
+    }
+    // A persistent red notice. Pass "" to clear it — only a NEW export or a new batch does that, never
+    // an ordinary status update.
+    function setBanner(text) {
+      var b = $("banner");
+      if (!b) return;
+      b.textContent = text || "";
+      b.hidden = !text;
+    }
+    // 1204 -> "1,204". A node count is the main number on the progress line and unseparated six-digit
+    // counts are unreadable at a glance.
+    function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+    // `frac` null => indeterminate (a phase with no page count). The bar is never hidden mid-run, so
+    // "no page info yet" must still look like motion rather than a stall.
+    function setProgress(frac) {
+      var p = $("progress"), bar = $("bar");
+      if (!p || !bar) return;
+      if (frac == null) { p.className = "indet"; bar.style.width = ""; }
+      else { p.className = ""; bar.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + "%"; }
+    }
+    function runBegin(info) {
+      running = info;
+      cancelSent = false;
+      var c = $("cancel"); if (c) { c.hidden = false; c.disabled = false; c.textContent = "Cancel export"; }
+      var p = $("progress"); if (p) p.hidden = false;
+      setProgress(null);
+      setBusy(true);
+      setStatus(info.source === "bridge"
+        ? "Export in progress — requested over the bridge (" + info.label + ")…"
+        : "Exporting…");
+    }
+    // Tear the run chrome down. Deliberately does NOT clear `cancelSent`: the main thread sends
+    // run-end BEFORE the error that the cancellation produced, and both need to know it was a cancel.
+    function runEnd() {
+      running = null;
+      var c = $("cancel"); if (c) c.hidden = true;
+      var p = $("progress"); if (p) { p.hidden = true; p.className = ""; }
+      setBusy(false);
     }
 
     // Any uncaught UI-script error becomes visible text in the plugin window.
@@ -125,6 +188,9 @@
         lastSelCount = m.count;
         var rs = $("run-sel");
         if (rs && !busy) rs.disabled = m.count === 0;
+        // Figma fires selectionchange freely while an export runs (and collectNode selects the node it
+        // exported), so without this guard a selection event wipes the progress line mid-walk.
+        if (running) return;
         setStatus(
           m.count === 0
             ? "Select a frame for single-screen export, or use the blue button for the whole page."
@@ -132,10 +198,52 @@
         );
         return;
       }
-      if (m.type === "error") { setBusy(false); setStatus(m.message, true); return; }
+      // ---- run lifecycle + progress (both manual and bridge-triggered runs) ----
+      if (m.type === "run-begin") { runBegin(m); return; }
+      if (m.type === "run-end") {
+        var wasCancelled = cancelSent;
+        runEnd();
+        // Bridge-triggered runs never produce a `files`/`error` message here, so this is the ONLY
+        // place a designer learns their cancel took effect on one.
+        if (wasCancelled) setStatus("Export cancelled — nothing was delivered.", true);
+        return;
+      }
+      if (m.type === "progress") {
+        if (!running) runBegin(m); // a frame that outran its run-begin — never show progress with no chrome
+        if (cancelSent) return;    // "Cancelling…" must not be overwritten by in-flight frames
+        var pg = m.page;
+        setProgress(pg && pg.of ? pg.index / pg.of : null);
+        var bits = [];
+        if (typeof m.nodes === "number" && m.nodes) bits.push(fmt(m.nodes) + " nodes");
+        if (typeof m.assets === "number" && m.assets) bits.push(fmt(m.assets) + " assets");
+        var detail = bits.length ? " (" + bits.join(", ") + ")" : "";
+        var who = m.source === "bridge" ? " [bridge: " + m.label + "]" : "";
+        var line;
+        if (m.phase === "design-system") line = "Building the design system" + (pg ? " — page " + pg.index + " of " + pg.of + ", " + pg.name : "") + detail + "…";
+        else if (pg) line = "Exporting page " + pg.index + " of " + pg.of + " — " + pg.name + detail + "…";
+        else line = "Exporting" + detail + "…";
+        setStatus(line + who);
+        return;
+      }
+      if (m.type === "cancel-ack") {
+        // Refused (nothing was running) — say so and put the window back, rather than leaving a
+        // "Cancelling…" that will never resolve.
+        if (!m.accepted) { cancelSent = false; runEnd(); setStatus("Nothing to cancel — the export had already finished."); }
+        return;
+      }
+      if (m.type === "error") {
+        var errWasCancel = cancelSent;
+        runEnd();
+        setStatus(errWasCancel ? "Export cancelled — nothing was delivered." : m.message, true);
+        return;
+      }
       if (m.type === "files") {
-        setBusy(false);
-        setStatus("Ready: " + m.summary);
+        runEnd();
+        setBanner(""); // a fresh successful export clears the previous batch's failure notice
+        // The warnings COUNT, surfaced next to the summary. The list itself is in the export's own
+        // manifest; showing only `summary` meant a run with 40 unexported icons read as a clean one.
+        setStatus("Ready: " + m.summary
+          + (m.warnings ? " — " + fmt(m.warnings) + " warning" + (m.warnings === 1 ? "" : "s") + ", see manifest.warnings in the export" : ""));
         var wrap = $("downloads");
         if (wrap) {
           wrap.innerHTML = "";
@@ -260,6 +368,16 @@
       try {
         var rs = $("run-sel"); if (rs) rs.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-selection"); };
         var rf = $("run-full"); if (rf) rf.onclick = function () { if (busy) return; setBusy(true); setStatus("Exporting…"); send("run-full"); };
+        var cb = $("cancel"); if (cb) cb.onclick = function () {
+          if (!running || cancelSent) return;
+          cancelSent = true;
+          cb.disabled = true;
+          cb.textContent = "Cancelling…";
+          // Honest about the latency: the walk only aborts where it already awaits (between pages,
+          // between top-level frames, at each asset export), so the last exportAsync still finishes.
+          setStatus("Cancelling — the export stops at its next safe point…");
+          parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
+        };
         var st = $("save-token"); if (st) st.onclick = function () {
           var t = $("token"); bridgeToken = (t && t.value ? t.value : "").trim();
           parent.postMessage({ pluginMessage: { type: "set-token", token: bridgeToken } }, "*");
@@ -286,6 +404,7 @@
           if (!items.length) return;
           if (batchRunning) { setStatus("A download batch is already running — wait for it to finish.", true); return; }
           batchRunning = true;
+          setBanner(""); // this attempt's outcome replaces the last one's, never stacks on it
           syncBatchButtons();
           var done = function () {
             batchRunning = false;
@@ -301,8 +420,23 @@
               // threw away every remaining item over one bad blob, and a partial delivery that
               // announces itself as finished is the silent-truncation this file avoids everywhere
               // else. One bad asset should cost you that asset, not the other 399.
-              if (!failed.length) setStatus("Downloaded " + items.length + " " + label + " — if fewer arrived, allow “Automatic downloads” for figma.com and retry.");
-              else setStatus("Downloaded " + (items.length - failed.length) + "/" + items.length + " " + label + " — FAILED: " + failed.join(", "), true);
+              var delivered = items.length - failed.length;
+              if (!failed.length) {
+                setStatus("Downloaded " + items.length + " " + label + " — if fewer arrived, allow “Automatic downloads” for figma.com and retry.");
+              } else if (delivered === 0) {
+                // ZERO delivered is a different event from "3 of 400 failed": nothing landed on disk,
+                // and the cause is almost always Chrome's per-site "Automatic downloads" permission
+                // rather than the blobs themselves. It gets the persistent banner — a status line here
+                // is gone the moment the next selection change or export writes over it, which is how
+                // this failed silently before.
+                setBanner("Downloaded 0 of " + items.length + " " + label + " — nothing was saved. "
+                  + "Allow “Automatic downloads” for figma.com in your browser/desktop-app settings, then click the button again. "
+                  + "First failure: " + failed[0]);
+                setStatus("Download failed — see the notice above.", true);
+              } else {
+                setBanner("Downloaded " + delivered + " of " + items.length + " " + label + " — " + failed.length + " failed: " + failed.join(", "));
+                setStatus("Downloaded " + delivered + "/" + items.length + " " + label + " — see the notice above.", true);
+              }
               return;
             }
             var it = items[i++];

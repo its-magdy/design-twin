@@ -36,6 +36,8 @@ a lint**, plus a normalization pass for degraded input.
 
 ```
                          ┌─ tokens.dtcg.json ──▶ Style Dictionary (or built-in CSS emitter)
+                         │  + tokens.resolver.json + tokens/*.json (DTCG Resolver Module 2025.10:
+                         │    one modifier per multi-mode collection, one set file per mode)
 Figma ──▶ extractor ─────┤                        ──▶ per-stack tokens (CSS vars / Tailwind / Swift / Compose)
  (code.js, unchanged)    └─ codeconnect.local.json (authored) ─┐
                                                                ▼

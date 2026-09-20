@@ -22,8 +22,8 @@ Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 
 Four ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI, hold it
 open as a daemon (`--serve`) for several pulls in a row, or go through a registered `figma-mcp` server.
-What each is, when to reach for it, and how a connection actually gets opened is the **connect**
-skill's job, not this one — read there if the user hasn't got a connection working yet.
+What each is, when to reach for it, and how a connection actually gets opened is the **help**
+skill's job, not this one — use it if the user hasn't got a connection working yet.
 
 **Default to manual export when the bridge isn't already working.** It needs zero setup and always
 works; walking a user through CLI/token setup mid-task is worse than just clicking the buttons.
@@ -62,8 +62,9 @@ just that node to compare the output against — cheaper than re-exporting, and 
 one whole-frame reference PNG every export already carries (which is too zoomed-out to eyeball a small
 component inside a dense screen). MCP twin: `figma_screenshot`.
 
-**The full flag surface lives in `bridge/README.md`** — read it rather than guessing at flags. This
-skill owns the decision of *which* pull to run; that file owns *how*.
+**The full flag surface is `dtwin --help`** (and `bridge/README.md` in a clone of the Design Twin
+repo) — read it rather than guessing at flags; an unknown flag is refused with a suggestion. This
+skill owns the decision of *which* pull to run; that reference owns *how*.
 
 ## Through the MCP instead
 
@@ -80,9 +81,12 @@ silently isn't, so say so now rather than letting `build-screen` discover it hal
 Also confirm the shape on disk — `design/pages/index.json` (+ per-page dirs), or
 `design/<screen>.json`, plus `design/design-system/` and `design/assets/`.
 
-**The screenshot is not optional and the plugin cannot produce it.** Ask the user to export a PNG of
-the frame (Figma right-click → Export) to `design/<screen>.png`. `build-screen` validates against it,
-and without it fidelity checking is guesswork.
+**Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
+points at it from the screen JSON's root `reference` field (a path relative to `design/`, e.g.
+`assets/<id>_ref.png`). `build-screen` validates against it, and without it fidelity checking is
+guesswork — so confirm that file exists. Only if `reference` is absent (the manifest `warnings` will
+say "reference screenshot failed/empty") ask the user to export a PNG of the frame by hand (Figma
+right-click → Export) to `design/<screen>.png`.
 
 ## Then hand off
 
@@ -91,4 +95,4 @@ Report briefly: what landed, anything the manifest flagged, and whether the PNG 
 touch targets, designer questions), and **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
-in **`/designtwin:help`**. Don't debug it from memory.
+the **help** skill's `references/troubleshooting.md`. Load it; don't debug from memory.

@@ -120,9 +120,9 @@ function writeLibrary(dir, designSystem, log) {
   return { dir: built.dir, counts: built.counts, publish: built.manifest.publish, orphans };
 }
 
-function writeAssets(dir, assets, log) {
+function writeAssets(dir, assets, log, subdir) {
   if (!assets || !assets.length) return 0;
-  const adir = path.join(dir, "assets");
+  const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
   let n = 0;
   for (const a of assets) {
@@ -135,6 +135,17 @@ function writeAssets(dir, assets, log) {
   }
   if (log) log("wrote " + n + " asset(s) to " + adir);
   return n;
+}
+
+// A --screenshot/figma_screenshot result is a one-off visual-validation PNG, not a shipped design
+// asset (see the skills' docs: it's consumed once by whoever just generated code for that node, then
+// never read again) — so it gets its own subdir under outDir rather than landing in assets/ where it
+// could be mistaken for a persisted export artifact.
+function writeScreenshot(outDir, r, log) {
+  const dir = resolveOutDir(outDir);
+  fs.mkdirSync(dir, { recursive: true });
+  const assets = writeAssets(dir, r.assets, log, "screenshots");
+  return { outDir: dir, wrote: { screenshot: true, assets } };
 }
 
 // The whole-export write, shared by the CLI's default path and the MCP export tools' writeToDisk
@@ -190,7 +201,11 @@ function writeScreen(outDir, r, log) {
 // Dispatch on the RESULT shape, so each export tool forwards whatever the plugin sent without
 // having to know which writer its own command implies.
 function writeAny(outDir, r, log) {
-  return r && r.screen ? writeScreen(outDir, r, log) : writeExport(outDir, r, log);
+  if (r && r.screen) return writeScreen(outDir, r, log);
+  // A screenshot result has none of designSystem/layersDoc/screen, only id/name/type/reference/assets
+  // — `reference` is the tell that distinguishes it from a real export.
+  if (r && r.reference && !r.designSystem && !r.layersDoc) return writeScreenshot(outDir, r, log);
+  return writeExport(outDir, r, log);
 }
 
-module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeExport, writeScreen, writeAny };
+module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenshot, writeExport, writeScreen, writeAny };

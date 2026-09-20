@@ -2,6 +2,7 @@
 // so these module-level singletons are genuinely shared across the extractor.
 
 import { errMsg } from "./util";
+import { beginRun, endRun, RunInfo } from "./progress";
 import { readOptDefaults, ReadOptName } from "../../bridge/read-opts.js";
 
 export interface Asset {
@@ -178,11 +179,40 @@ export const getCollection = collectionLookup.obj as (id: string) => Promise<Var
 // output. Route each run through this tail-promise chain so they execute one at a time. fn is always
 // invoked with no args (the prior run's result must never leak in as an argument), and a failed run
 // still lets the next one proceed.
+//
+// This is ALSO where a run is bracketed for progress/cancel purposes (beginRun/endRun), because it is
+// the one place that knows a run is actually EXECUTING rather than merely queued — bracketing at the
+// dispatch sites instead would have a bridge pull queued behind a manual export announce itself as
+// in-progress for however long it waits, and would let two overlapping brackets clobber each other.
 let runChain: Promise<unknown> = Promise.resolve();
-export function serializeRun<T>(fn: () => Promise<T>): Promise<T> {
-  const next = runChain.then(() => fn(), () => fn());
+export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
+  const go = () => bracket(fn, run);
+  const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});
   return next;
+}
+
+// `run` is required, not optional: every caller genuinely knows who asked (the UI button, or the
+// bridge command name), and a default would quietly make new call sites invisible in the plugin window
+// — which is the exact gap progress exists to close.
+async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
+  beginRun(run);
+  try {
+    return await fn();
+  } catch (e) {
+    // A run that THREW — cancelled or crashed — still allocated asset payloads (tens of MB of base64
+    // PNG/SVG), and nobody downstream takes them off our hands: only a SUCCESSFUL collector returns
+    // assets.slice() for the caller to post. Dropping them here is what keeps "state is fully reset
+    // after a cancel" true, rather than leaving the whole aborted export resident until the next run.
+    releaseAssets();
+    throw e;
+  } finally {
+    // In `finally`, so the cancellation flag is cleared even on the path that threw BECAUSE of it.
+    // (The other per-run toggle a cancel could strand — figma.skipInvisibleInstanceChildren, set by
+    // the component-catalog and library walks — is already restored by their own `finally` blocks,
+    // which a thrown cancellation runs exactly like any other error.)
+    endRun();
+  }
 }
 
 // Drop the run's asset payloads once they've been handed to the caller. Every collector returns

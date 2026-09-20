@@ -25,6 +25,7 @@
   "files": [
     "figma-pull.js",
     "figma-mcp.mjs",
+    "init.js",
     "daemon.js",
     "design-system-layout.js",
     "errmsg.js",

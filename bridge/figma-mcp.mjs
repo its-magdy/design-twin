@@ -250,14 +250,57 @@ server.registerTool(
   })
 );
 server.registerTool(
+  "figma_screenshot",
+  {
+    description: "On-demand PNG of ONE node \u2014 the visual-validation counterpart to figma_export_* (which already attach a whole-frame reference PNG to every exported root). Use this to check a SPECIFIC component/instance buried in a dense screen against the code you generated for it, without re-exporting or walking the whole frame. Mirrors Figma's own get_screenshot tool (single-node scope, called on demand after get_metadata/figma_list_children, as a validation step) rather than pre-rendering every node up front. Pass writeToDisk:true to get the actual PNG file \u2014 REQUIRED, since asset bytes are never returned inline.",
+    inputSchema: {
+      ...clientShape,
+      nodeId: z.string().describe("A node id like '123:456' / '123-456', or a figma.com design URL containing ?node-id=..."),
+      scale: z.number().positive().optional().describe("Override the default render scale (auto, capped at 2048px on the longest side)."),
+      ...writeShape
+    },
+    annotations: READ_ONLY
+  },
+  guarded(async (a) => {
+    const nodeId = toNodeId(a.nodeId);
+    if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... \u2014 see figma_list_pages.");
+    return exportResult(a, await bridge.request("screenshot", { nodeId, scale: a.scale }, TIMEOUTS.export, a && a.client));
+  })
+);
+function previewWrites(ops) {
+  const steps = ops.map((o, i) => {
+    const creates = o.op === "createFrame" || o.op === "createText";
+    const missing = o.op === "createText" ? o.text == null ? ["text"] : [] : o.op === "setFill" ? ["nodeId", "color"].filter((k) => o[k] == null) : o.op === "setText" ? ["nodeId", "text"].filter((k) => o[k] == null) : [];
+    return {
+      index: i,
+      op: o.op,
+      effect: creates ? "creates" : "overwrites",
+      target: creates ? o.parentId ? `new node under ${o.parentId}` : "new node on the current page" : o.nodeId || null,
+      ...o.op === "setFill" ? { newFill: o.color } : {},
+      ...o.op === "setText" || o.op === "createText" ? { newText: o.text } : {},
+      ...missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}
+    };
+  });
+  return {
+    dryRun: true,
+    applied: false,
+    creates: steps.filter((s) => s.effect === "creates").length,
+    overwrites: steps.filter((s) => s.effect === "overwrites").length,
+    invalid: steps.filter((s) => "invalid" in s).length,
+    steps,
+    note: "Nothing was changed. Overwrites cannot be undone from here (only Cmd-Z in Figma). Re-call without dryRun to apply."
+  };
+}
+server.registerTool(
   "figma_write",
   {
-    description: "Apply a batch of safe write operations to the open Figma file. Each op: {op:'createFrame', name?, width?, height?, layoutMode?('HORIZONTAL'|'VERTICAL'), itemSpacing?, padding?[t,r,b,l], fill?(#hex), parentId?} | {op:'createText', text, fontSize?, fill?, parentId?} | {op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text}. Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied and their node ids are reported alongside the error so you can continue or clean up.",
+    description: "Apply a batch of safe write operations to the open Figma file. Each op: {op:'createFrame', name?, width?, height?, layoutMode?('HORIZONTAL'|'VERTICAL'), itemSpacing?, padding?[t,r,b,l], fill?(#hex), parentId?} | {op:'createText', text, fontSize?, fill?, parentId?} | {op:'setFill', nodeId, color(#hex)} | {op:'setText', nodeId, text}. Ops are applied in order and are NOT transactional: if one fails, the earlier ones stay applied and their node ids are reported alongside the error so you can continue or clean up. There is no undo from here (only the designer's own Cmd-Z) \u2014 so for anything that OVERWRITES (setFill/setText), call once with dryRun:true, show the user the preview, and only then apply.",
     inputSchema: {
       ...clientShape,
       // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
       // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
-      ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough()).describe("Ordered list of write operations (each must have an `op` field).")
+      ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough()).describe("Ordered list of write operations (each must have an `op` field)."),
+      dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection).")
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
     // performs only additive updates" — but setFill/setText OVERWRITE properties on nodes the user
@@ -268,6 +311,7 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
   },
   guarded(async (a) => {
+    if (a.dryRun) return textResult(previewWrites(a.ops || []));
     const r = await bridge.request("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
     if (r && r.ok === false) {
       const applied = Array.isArray(r.applied) ? r.applied : [];

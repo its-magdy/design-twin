@@ -376,6 +376,58 @@
   var import_pages_layout2 = __toESM(require_pages_layout());
   var import_design_system_layout = __toESM(require_design_system_layout());
 
+  // src/progress.ts
+  var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
+  var CANCELLED = "__designTwinCancelled";
+  function cancelledError() {
+    const e = new Error(CANCELLED_MESSAGE);
+    e[CANCELLED] = true;
+    return e;
+  }
+  var running = null;
+  var cancelRequested = false;
+  var lastPost = 0;
+  var page;
+  var MIN_INTERVAL_MS = 250;
+  function post(m) {
+    try {
+      if (figma && figma.ui && typeof figma.ui.postMessage === "function") figma.ui.postMessage(m);
+    } catch (e) {
+    }
+  }
+  function beginRun(info) {
+    running = info;
+    cancelRequested = false;
+    page = void 0;
+    lastPost = 0;
+    post({ type: "run-begin", source: info.source, label: info.label });
+  }
+  function endRun() {
+    running = null;
+    cancelRequested = false;
+    page = void 0;
+    post({ type: "run-end" });
+  }
+  function requestCancel() {
+    if (!running) return null;
+    cancelRequested = true;
+    return running;
+  }
+  function checkCancelled() {
+    if (cancelRequested) throw cancelledError();
+  }
+  function progress(phase, extra, force) {
+    if (!running) return;
+    const now = Date.now();
+    if (!force && now - lastPost < MIN_INTERVAL_MS) return;
+    lastPost = now;
+    post({ type: "progress", phase, source: running.source, label: running.label, page, ...extra });
+  }
+  function enterPage(phase, index, of, name, pageId, extra) {
+    page = { index, of, name, pageId };
+    progress(phase, extra, true);
+  }
+
   // src/state.ts
   var import_read_opts = __toESM(require_read_opts());
   var assets = [];
@@ -445,12 +497,24 @@
   var collectionLookup = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null));
   var getCollection = collectionLookup.obj;
   var runChain = Promise.resolve();
-  function serializeRun(fn) {
-    const next = runChain.then(() => fn(), () => fn());
+  function serializeRun(fn, run) {
+    const go = () => bracket(fn, run);
+    const next = runChain.then(go, go);
     runChain = next.then(() => {
     }, () => {
     });
     return next;
+  }
+  async function bracket(fn, run) {
+    beginRun(run);
+    try {
+      return await fn();
+    } catch (e) {
+      releaseAssets();
+      throw e;
+    } finally {
+      endRun();
+    }
   }
   function releaseAssets() {
     assets.length = 0;
@@ -844,6 +908,10 @@
       stats.assetsSkipped++;
       return { skipped: true };
     }
+    if (isVector || iconLike || hasImage) {
+      checkCancelled();
+      progress("assets", { nodes: stats.nodes, assets: assets.length });
+    }
     if (isVector || iconLike) {
       if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
         stats.assetsSkippedInvisible++;
@@ -884,12 +952,11 @@
     }
     return void 0;
   }
-  async function collectReference(node) {
+  async function collectReference(node, opts) {
     const n = node;
     if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
     try {
-      const maxDim = Math.max(n.width || 0, n.height || 0) || 1;
-      const value = Math.min(2, 2048 / maxDim);
+      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
       const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
       if (!bytes || !bytes.length) {
         warn("reference screenshot empty: " + node.name);
@@ -1335,11 +1402,11 @@
         figma.skipInvisibleInstanceChildren = true;
       } catch (e) {
       }
-      for (const page of figma.root.children) {
+      for (const page2 of figma.root.children) {
         try {
-          out.push(...page.findAllWithCriteria({ types: ["INSTANCE"] }));
+          out.push(...page2.findAllWithCriteria({ types: ["INSTANCE"] }));
         } catch (e) {
-          sink("library scan: page '" + page.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its library components are missing");
+          sink("library scan: page '" + page2.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its library components are missing");
         }
       }
     } finally {
@@ -1664,12 +1731,16 @@
         figma.skipInvisibleInstanceChildren = true;
       } catch (e) {
       }
-      for (const page of figma.root.children) {
+      const catalogPages = figma.root.children;
+      let catalogIndex = 0;
+      for (const page2 of catalogPages) {
+        checkCancelled();
+        enterPage("design-system", ++catalogIndex, catalogPages.length, page2.name, page2.id, { components: components.length });
         let nodes = [];
         try {
-          nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
+          nodes = page2.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
         } catch (e) {
-          warn("component catalog: page '" + page.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its components are missing");
+          warn("component catalog: page '" + page2.name + "' could not be traversed (" + (0, import_errmsg.errMsg)(e) + ") \u2014 its components are missing");
           continue;
         }
         for (const n of nodes) {
@@ -1681,7 +1752,7 @@
             }
             continue;
           }
-          const entry = { name: n.name, id: n.id, type: n.type, page: page.name, pageId: page.id };
+          const entry = { name: n.name, id: n.id, type: n.type, page: page2.name, pageId: page2.id };
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
           if (n.key) entry.key = n.key;
@@ -2341,29 +2412,29 @@
     if (nd.visible === false) o.hidden = true;
     return o;
   }
-  async function loadPageSafely(page, sink, what) {
-    if (typeof page.loadAsync !== "function") return false;
+  async function loadPageSafely(page2, sink, what) {
+    if (typeof page2.loadAsync !== "function") return false;
     try {
-      await page.loadAsync();
+      await page2.loadAsync();
     } catch (e) {
-      sink("page '" + page.name + "' failed to load" + (what ? " " + what : "") + ": " + (0, import_errmsg.errMsg)(e));
+      sink("page '" + page2.name + "' failed to load" + (what ? " " + what : "") + ": " + (0, import_errmsg.errMsg)(e));
       return false;
     }
     return true;
   }
-  function pageChildren(page, sink, consequence) {
+  function pageChildren(page2, sink, consequence) {
     try {
-      return page.children;
+      return page2.children;
     } catch (e) {
-      sink("page '" + page.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + (0, import_errmsg.errMsg)(e));
+      sink("page '" + page2.name + "' could not be read (not loaded) \u2014 " + consequence + ": " + (0, import_errmsg.errMsg)(e));
       return null;
     }
   }
   async function findNodeById(nodeId, sink) {
     let node = await figma.getNodeByIdAsync(nodeId);
     if (!node) {
-      for (const page of figma.root.children) {
-        if (!await loadPageSafely(page, sink, "during node lookup")) continue;
+      for (const page2 of figma.root.children) {
+        if (!await loadPageSafely(page2, sink, "during node lookup")) continue;
         node = await figma.getNodeByIdAsync(nodeId);
         if (node) break;
       }
@@ -2423,8 +2494,8 @@
   function isDefaultBg(f) {
     return !f || f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1;
   }
-  async function pageBackground(page) {
-    const p = page;
+  async function pageBackground(page2) {
+    const p = page2;
     const out = {};
     const bg = await simplifyFills(p.backgrounds);
     if (!isDefaultBg(bg)) out.background = bg;
@@ -2442,21 +2513,21 @@
     if (!runOpts.measurements) return void 0;
     const targets = pages && pages.length ? pages : [figma.currentPage];
     const out = [];
-    for (const page of targets) {
-      const p = page;
+    for (const page2 of targets) {
+      const p = page2;
       if (typeof p.getMeasurements !== "function") continue;
       try {
         const ms = p.getMeasurements();
         if (!Array.isArray(ms) || !ms.length) continue;
         const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
         for (const m of ms) {
-          const o = { page: page.name, pageId: page.id, start: side(m.start), end: side(m.end) };
+          const o = { page: page2.name, pageId: page2.id, start: side(m.start), end: side(m.end) };
           if (m.freeText) o.text = m.freeText;
           if (m.offset != null) o.offset = m.offset;
           out.push(o);
         }
       } catch (e) {
-        warn("measurements unavailable for page '" + page.name + "': " + (0, import_errmsg.errMsg)(e));
+        warn("measurements unavailable for page '" + page2.name + "': " + (0, import_errmsg.errMsg)(e));
       }
     }
     return out.length ? out : void 0;
@@ -2485,8 +2556,8 @@
     const node = await findNodeById(nodeId, warn);
     applyOpts(autoCss(opts, node));
     try {
-      const page = pageOf(node);
-      if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
+      const page2 = pageOf(node);
+      if (page2 && page2 !== figma.currentPage) await figma.setCurrentPageAsync(page2);
       if ("visible" in node && node.parent) figma.currentPage.selection = [node];
       if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
     } catch (e) {
@@ -2494,6 +2565,17 @@
     const tree = await rootTree(node);
     if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
     return screenResult(node.name, node.name, [tree]);
+  }
+  async function collectScreenshot(rawId, opts) {
+    resetRun();
+    const nodeId = (0, import_node_id.toNodeId)(rawId);
+    if (!nodeId) throw new Error("No node id provided.");
+    const node = await findNodeById(nodeId, warn);
+    const reference = await collectReference(node, opts);
+    if (!reference) {
+      throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed \u2014 see warnings).");
+    }
+    return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
   }
   var TOP_LEVEL_TYPES = /* @__PURE__ */ new Set([
     "FRAME",
@@ -2523,11 +2605,11 @@
     if (depth >= 2) {
       await Promise.all(roots.map((p) => loadPageSafely(p, sink, "\u2014 its frames may be missing")));
     }
-    for (const page of roots) {
-      const entry = { name: page.name, id: page.id };
-      if (page.id === currentId) entry.current = true;
+    for (const page2 of roots) {
+      const entry = { name: page2.name, id: page2.id };
+      if (page2.id === currentId) entry.current = true;
       if (depth >= 2) {
-        const children = pageChildren(page, sink, "its frames are NOT listed");
+        const children = pageChildren(page2, sink, "its frames are NOT listed");
         if (!children) {
           entry.unreadable = true;
           pages.push(entry);
@@ -2622,35 +2704,42 @@
     const index = [];
     const flows = [];
     const pageSettings = [];
-    for (const page of pages) {
-      const children = pageChildren(page, warn, "its frames are missing from this export");
+    let pageIndex = 0;
+    for (const page2 of pages) {
+      checkCancelled();
+      enterPage("pages", ++pageIndex, pages.length, page2.name, page2.id, { nodes: stats.nodes, assets: assets.length });
+      const children = pageChildren(page2, warn, "its frames are missing from this export");
       if (!children) continue;
-      const bg = await pageBackground(page);
-      if (bg) pageSettings.push({ page: page.name, pageId: page.id, ...bg });
-      if (Array.isArray(page.flowStartingPoints)) {
-        for (const fp of page.flowStartingPoints) flows.push({ page: page.name, pageId: page.id, nodeId: fp.nodeId, name: fp.name });
+      const bg = await pageBackground(page2);
+      if (bg) pageSettings.push({ page: page2.name, pageId: page2.id, ...bg });
+      if (Array.isArray(page2.flowStartingPoints)) {
+        for (const fp of page2.flowStartingPoints) flows.push({ page: page2.name, pageId: page2.id, nodeId: fp.nodeId, name: fp.name });
       }
       const frames = [];
       for (const nd of children) {
         if (TOP_LEVEL_TYPES.has(nd.type)) frames.push(nd);
-        else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page.name + "' not exported (unhandled top-level type)");
+        else if (nd.visible !== false) warn("top-level " + nd.type + " '" + nd.name + "' on page '" + page2.name + "' not exported (unhandled top-level type)");
       }
       for (const f of frames) {
+        checkCancelled();
         const { tree, ref, dev } = await serializeWithRefs(f);
         if (tree) {
-          layers.push({ name: f.name, id: f.id, page: page.name, pageId: page.id, tree, reference: ref, devResources: dev });
+          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, reference: ref, devResources: dev });
           index.push({
             name: f.name,
             id: f.id,
             type: f.type,
-            page: page.name,
-            pageId: page.id,
+            page: page2.name,
+            pageId: page2.id,
             nodes: countNodes(tree),
             bytes: JSON.stringify(tree).length
           });
         }
+        progress("pages", { nodes: stats.nodes, assets: assets.length });
       }
     }
+    checkCancelled();
+    progress("design-system", { nodes: stats.nodes, assets: assets.length }, true);
     const designSystem = await buildDesignSystem(void 0, serialize);
     const measurements = collectMeasurements(pages);
     const layersDoc = {
@@ -2759,6 +2848,15 @@
   async function applyWrites(ops) {
     const list = Array.isArray(ops) ? ops : [];
     const applied = [];
+    if (list.length && figma.editorType === "dev") {
+      return {
+        ok: false,
+        applied,
+        failedAt: 0,
+        failedOp: list[0] && list[0].op,
+        error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
+      };
+    }
     for (let i = 0; i < list.length; i++) {
       try {
         applied.push(await applyWrite(list[i]));
@@ -2776,6 +2874,7 @@
   }
 
   // src/bridge.ts
+  var bridgeRun = (cmd) => ({ source: "bridge", label: cmd });
   var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var INSTANCE_STARTED_AT = Date.now();
   async function handleBridge(cmd, args) {
@@ -2822,19 +2921,24 @@
       // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
       // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
       case "exportFull":
-        return await serializeRun(() => collectFull(args));
+        return await serializeRun(() => collectFull(args), bridgeRun(cmd));
       // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
       case "exportDesignSystem":
-        return await serializeRun(() => collectDesignSystemOnly(args));
+        return await serializeRun(() => collectDesignSystemOnly(args), bridgeRun(cmd));
       // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
       // the full catalog build and mutates the same per-run state they do.
       case "exportLibrary":
-        return await serializeRun(() => collectLibraryFile(args));
+        return await serializeRun(() => collectLibraryFile(args), bridgeRun(cmd));
       case "exportSelection":
-        return await serializeRun(() => collectSelection(args));
+        return await serializeRun(() => collectSelection(args), bridgeRun(cmd));
       case "exportNode":
-        return await serializeRun(() => collectNode(args && args.nodeId, args));
+        return await serializeRun(() => collectNode(args && args.nodeId, args), bridgeRun(cmd));
+      // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
+      // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
+      // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
+      case "screenshot":
+        return await serializeRun(() => collectScreenshot(args && args.nodeId, { scale: args && args.scale }), bridgeRun(cmd));
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
       // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
@@ -2853,37 +2957,38 @@
       case "listLibraries":
         return await listLibraries();
       case "write":
-        return await serializeRun(() => applyWrites(args && args.ops));
+        return await serializeRun(() => applyWrites(args && args.ops), bridgeRun(cmd));
       default:
         throw new Error("unknown cmd: " + cmd);
     }
   }
 
   // src/main.ts
-  globalThis.__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
+  globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
   figma.showUI(__html__, { width: 360, height: 380 });
   console.log("[export] main.ts loaded (main thread)");
-  async function runExport(collect, toFiles) {
+  async function runExport(label, collect, toFiles) {
     let r;
     try {
-      r = await serializeRun(collect);
+      r = await serializeRun(collect, { source: "ui", label });
     } catch (e) {
       figma.ui.postMessage({ type: "error", message: (0, import_errmsg.errMsg)(e) });
       return;
     }
-    const { files, layerFiles, summary } = toFiles(r);
-    figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary });
+    const { files, layerFiles, summary, warnings: warnings2 } = toFiles(r);
+    figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
     releaseAssets();
   }
-  var runSelection = () => runExport(collectSelection, (r) => ({
+  var runSelection = () => runExport("current selection", collectSelection, (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) }
     ],
-    summary: `${r.screenName} \u2014 ${r.assets.length} asset(s)`
+    summary: `${r.screenName} \u2014 ${r.assets.length} asset(s)`,
+    warnings: r.screen.manifest && r.screen.manifest.warnings
   }));
   var SEP = "__";
-  var runFull = () => runExport(collectFull, (r) => {
+  var runFull = () => runExport("design system + page frames", collectFull, (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = (0, import_pages_layout2.buildPageLayout)(r.layersDoc, SEP);
     const ds = (0, import_design_system_layout.buildDesignSystemLayout)(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
@@ -2894,7 +2999,8 @@
         { name: rootIndex, content: JSON.stringify(meta, null, 2) }
       ],
       layerFiles: batch,
-      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`
+      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`,
+      warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings
     };
   });
   function notifySelection() {
@@ -2920,6 +3026,9 @@
       await runSelection();
     } else if (msg.type === "run-full") {
       await runFull();
+    } else if (msg.type === "cancel") {
+      const hit = requestCancel();
+      figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
     } else if (msg.type === "bridge") {
       let result;
       let error;

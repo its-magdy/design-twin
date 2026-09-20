@@ -1,10 +1,18 @@
 # Profile: web-css-modules (React + CSS Modules)
 
+## Contents
+Layout · Grid · Scroll/clip/sticky · Prototype reactions · Theming · Native controls ·
+Idiomatic web (patterns by structure) · Hints, not output · Component reuse ·
+Effects · Text metrics · Strokes · Fills · Text overflow · Images · Interaction states ·
+Accessibility & RTL · Accessibility naming · Motion · Vector fallback · Tokens · Components · Assets ·
+Output
+
 **Layout (IR → CSS in `<screen>.module.css`)**
 - `display:flex` → `display:flex`; `flexDirection` → `flex-direction`.
 - `gap:N` → `gap:Npx`; `flexWrap:"wrap"` → `flex-wrap:wrap`.
 - `padding:[t,r,b,l]` → `padding: t r b l` (px).
-- `justifyContent` → `justify-content`; `alignItems` → `align-items`.
+- `justifyContent` → `justify-content`; `alignItems` → `align-items` (incl. `"baseline"` →
+  `align-items: baseline`).
 - `widthMode:"fill"` → `flex:1` or `width:100%`; `"hug"` → `width:auto`/omit; `"fixed"` → `width:Npx` (avoid if possible).
 
 **Grid (`layout.display:"grid"`) → `display:grid`**
@@ -50,24 +58,82 @@
   properties, instead of hardcoding its resolved colors inline.
 - Keep both mode's values as CSS custom properties scoped by selector, not two copies of the component.
 
+**Native controls, not rebuilt ones** — a Figma widget maps to the HTML element that already has the
+behaviour, keyboard handling and accessibility; style it, don't rebuild it from `div`s. Checkbox →
+`<input type="checkbox">`; radio group → `<input type="radio">` sharing a `name` inside `<fieldset>`/
+`<legend>`; switch/toggle → `<input type="checkbox" role="switch">`; slider → `<input type="range">`;
+text field → `<input>` with the right `type`/`inputmode`/`autocomplete` inferred from the field (email,
+tel, password, one-time-code) and a real `<label>`; multi-line → `<textarea>`; dropdown/picker →
+`<select>` unless the design needs rich options; date → `<input type="date">`; progress → `<progress>`;
+modal/dialog → `<dialog>` + `showModal()` (focus trap, Esc and backdrop come free); menu/tooltip/
+popover → the `popover` attribute; accordion/disclosure → `<details><summary>`. No native element:
+spinner (CSS animation + `role="status"`), tabs and segmented controls (`role="tablist"` pattern with
+arrow-key handling), combobox/autocomplete. **The project's own component or an installed headless
+library (Radix, React Aria, Headless UI…) beats all of the above** — check `codeconnect.local.json` and
+`package.json` before writing either.
+
+**Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
+- Full-width bar pinned to the top of the root frame (`fixedChildren`, or first child with logo/title/
+  actions) → `<header>`, `position: sticky`/`fixed` per the scroll section; a row of destinations inside it →
+  `<nav>`. The main scrolling column → `<main>`; a bottom bar of links/legal → `<footer>`. One of each
+  per page — if the app already has a layout/shell route, the screen renders INSIDE it, so don't emit
+  a second header.
+- A bottom bar of 3–5 icon+label destinations (mobile web) → `<nav>` with `<a aria-current="page">`,
+  fixed to the bottom with `padding-bottom: env(safe-area-inset-bottom)`.
+- N siblings with the same structure → `<ul><li>` rendered by ONE `.map()` over sample data with a
+  stable `key`, never N pasted blocks. Rows of aligned cells under column labels → a real `<table>`.
+  A wrapping set of equal cards → CSS grid (`repeat(auto-fill, minmax(…))`), not fixed columns copied
+  from one frame width.
+- A row that navigates → the whole row is one `<a>`; a card with one primary action → a single link/
+  button (stretch it over the card with a pseudo-element), not nested interactive elements.
+- A labelled group of inputs with a submit action → `<form>` with `onSubmit` (Enter submits, password
+  managers work), not a `div` with a click handler on the button.
+- **Don't double-inset**: the browser pads nothing, but the app's layout/container usually does. If a
+  shell already applies the page gutter or max-width, drop the root frame's own horizontal padding
+  instead of adding both. Drawn browser chrome, status bars, scrollbars and on-screen keyboards in
+  the frame are never elements.
+- The frame's width is ONE viewport, not a fixed canvas: the root is `width:100%` with a
+  `max-width` when the design is centred, and fills are fluid. Add breakpoints only where the project
+  already uses them or a second frame shows the other size.
+
 **Hints, not output** — `layoutGrids`, `measurements`, `devStatus`/`devStatusNote`, `devResources` inform
 your column structure and let you sanity-check spacing; never render them as visible UI.
 
 **Component reuse** — before generating markup for an instance's sublayer, check `exposedInstances`,
 `propRefs`, `overrides` on the node: a prop-driven or overridden sublayer maps to a **prop/variant** on
-the already-mapped component (from `components.json`), not new markup. `detachedFrom` (`{key}` or
+the already-mapped component (from `codeconnect.local.json`), not new markup. `detachedFrom` (`{key}` or
 `{componentId}`) means the node used to be an instance of a component that may still exist in
-`components.json` — look it up and reuse it unless the detach looks deliberate (genuinely bespoke).
+`codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate (genuinely bespoke).
 
 **Effects → CSS**
-- `background_blur` effect → `backdrop-filter: blur(Npx)` (+ `-webkit-backdrop-filter` for Safari) with a
-  translucent background so the blur is visible; `layer_blur` → `filter: blur(Npx)` (foreground).
+- Figma blur ≈ 2× CSS blur (community-derived — verify visually): `background_blur` → `backdrop-filter:
+  blur(radius/2 px)` (+ `-webkit-backdrop-filter`) with a translucent background; `layer_blur` → `filter:
+  blur(radius/2 px)`. `blurType:"progressive"` → `mask-image` gradient over the blurred layer (approx) or asset.
+- `drop_shadow` → `box-shadow: x y radius spread color` (Figma `radius` == CSS blur radius); `inner_shadow` →
+  `inset`; multiple → comma list; on a TEXT node → `text-shadow: x y radius color` (no spread).
 - `noise`/`glass`/`texture`/`shader` effect types have no direct CSS equivalent. For a subtle `noise`,
   approximate with a repeating SVG-noise `background-image`; otherwise **use the exported `asset`** (the
   flattened render) instead of trying to reproduce the effect in CSS — don't invent a shader.
-- `blendMode` → `mix-blend-mode`; `rotation` (radians) → `transform: rotate(rad)`; `flipped` →
-  `transform: scaleX(-1)` (check axis against the `.png`); `skew` (DEGREES, unlike `rotation`) →
-  `transform: skewX(Ndeg)`.
+- Node `blendMode` → `mix-blend-mode`; paint `blend` → `background-blend-mode`; `pass_through`/`normal` → omit.
+  `rotation` (DEGREES, Figma positive = counter-clockwise) → `transform: rotate(-{rotation}deg)`; `flipped` →
+  `transform: scaleX(-1)` (check axis against the `.png`); `skew` (degrees) → `transform: skewX(Ndeg)`.
+
+**Text metrics** — `font-size` in rem (px/16) so user zoom works; fluid type → `clamp()` with rem bounds.
+- `font.lineHeight`: `percent` → unitless `line-height: pct/100`; `px` → px/rem; `auto` → `normal`.
+- `font.letterSpacing`: `percent` → `(pct/100)em`; `px` → px; absent = 0.
+- `font.leadingTrim:"cap_height"` → `text-box: trim-both cap alphabetic` (Baseline 2026: Chrome 133,
+  Safari 18.2, Firefox 154). `font.weight` is the verbatim style string — emit `font-weight: {weightValue}`.
+
+**Strokes** (`strokes.{weight|weights,align,dash,colors}`)
+- `align:"inside"` → `border` with `box-sizing: border-box` (or `box-shadow: inset 0 0 0 w color`);
+  `"outside"` → `outline: w solid` / `box-shadow: 0 0 0 w color` (no layout); `"center"` → `outline` +
+  `outline-offset: -w/2`. Per-side `weights` → `border-top` etc. `dash` → `border-style: dashed` (approx) or SVG.
+
+**Fills** — gradient: compute the angle from `transform` `[[a,c,e],[b,d,f]]` (don't assume 180deg);
+`GRADIENT_RADIAL` → `radial-gradient`, `ANGULAR` → `conic-gradient`, `DIAMOND` → no CSS equivalent (asset).
+Image `scaleMode`: `fill` → `object-fit: cover`, `fit` → `contain`, `crop` → derive `object-position`/size from
+`transform` (or a wrapper), `tile` → `background-repeat` + `background-size` from `scale`. Hex is 8-bit sRGB
+even if `colorProfile` is display-p3 → `color(display-p3 r g b)` with a hex fallback.
 
 **Text overflow**
 - `truncate:true` → `text-overflow: ellipsis; white-space: nowrap; overflow: hidden;` (single line), or
@@ -87,7 +153,31 @@ before the image loads; always set explicit width+height on the container.
 **Interaction states** — look up the component in `design/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `:focus-visible` rule even if the Figma design only shows a `:hover` state — it's the most
-commonly missed a11y requirement.
+commonly missed a11y requirement. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
+`[aria-disabled="true"]`.
+
+**Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
+target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).
+`padding` is PHYSICAL `[t,r,b,l]` → emit `padding-inline-start/end`, `margin-inline` so RTL mirrors.
+
+**Accessibility naming — semantic element FIRST, ARIA only to patch**
+- Pick the element from what the node *does*, not how it looks: `<button>` for anything clickable that
+  isn't navigation, `<a href>` for navigation, `<nav>`/`<header>`/`<main>`/`<footer>` for the shell,
+  `<ul><li>` for repeated rows, `<label for>` + a real `<input>` for fields. A styled `div` with
+  `onClick` needs `role`, `tabIndex={0}` and key handlers — use the right element instead.
+- Headings track document order: one `<h1>` per screen, then `h2`/`h3` with no skipped level. Figma's
+  font size sets the CSS class, never the heading level.
+- `aria-label` is for **icon-only** controls; never relabel a control that has visible text. Prefer a
+  visually-hidden span (clip-path/`1px` idiom, not `display:none`) over `aria-label`.
+- Images: meaningful → real `alt`; decorative/duplicated by adjacent text → `alt=""` (an inline
+  decorative `<svg>` gets `aria-hidden="true"` + `focusable="false"`). Never omit `alt`.
+- State goes through ARIA, not class names: `aria-expanded`, `aria-current="page"`, `aria-selected`,
+  `aria-disabled` — and style off those attributes (`[aria-current="page"] { … }`) so they can't drift.
+- Touch target ≥24×24 CSS px (WCAG 2.5.8 AA), 44×44 recommended — grow it with padding or a
+  pseudo-element overlay, not by scaling the icon.
+
+**Motion** — `transition.duration` is SECONDS → ms; `easing.cubicBezier{x1,y1,x2,y2}` → `cubic-bezier()`;
+`spring` → `linear()` approximation or JS. Honor `@media (prefers-reduced-motion: reduce)`.
 
 **Vector fallback** — a `geometry` field (`fills`/`strokes`: arrays of SVG path `d` strings, plus `w`/`h`)
 appears on a vector node whose SVG export failed. Render it inline as
@@ -96,10 +186,12 @@ appears on a vector node whose SVG export failed. Render it inline as
 **Tokens** — the right-hand value in `tokens.json` is a CSS custom property (e.g. `var(--color-primary)`).
 Use it inside the module CSS (`color: var(--color-text)`), not inline literals.
 
-**Components** — import per `components.json`; `className={styles.x}`; pass Figma `props` through.
+**Components** — import per `codeconnect.local.json`; `className={styles.x}`; pass Figma `props` through
+(see **Component reuse** above before generating markup for an instance's sublayer).
 
-**Text** — semantic element + a CSS class using type-scale custom properties.
-
-**Assets** — `<img src>` for PNG; inline `<svg>` or an icon component for vectors.
+**Assets** — use the exported files in `design/assets/`: `<img src>` for PNG, and for a vector either
+`<img src="….svg">` or an icon component wrapping that file (SVGR import). **Never hand-write
+`<svg><path d="…">` markup** — the only exception is the `geometry` vector fallback above, where no asset
+file exists. Size every asset explicitly (see **Images**).
 
 **Output** — React function component `.tsx` + colocated `.module.css`, one screen per folder under `outputDir`.

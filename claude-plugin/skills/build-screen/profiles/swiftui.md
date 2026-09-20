@@ -1,20 +1,34 @@
 # Profile: swiftui (iOS / SwiftUI)
 
+## Contents
+Layout · Grid · Scroll/clip/sticky · Theming · Vector fallback · Units · Tokens · Components · Text ·
+Assets · Idiomatic iOS (system patterns by structure) · HIG semantic colors · Dynamic Type · Shapes,
+corners & aspect · Multi-screen navigation · SF Symbols · Native controls · Don't double-inset ·
+Interactions · Text metrics · Effects · Strokes · Fills & images · Safe area & insets ·
+Accessibility & RTL · Accessibility naming · Motion · Assets (detail) · Output
+
 **Layout (IR → stacks)**
 - `flexDirection:"row"` → `HStack`; `"column"` → `VStack`.
 - `gap:N` → `HStack(spacing: N)` / `VStack(spacing: N)`.
-- `padding:[t,r,b,l]` → `.padding(EdgeInsets(top: t, leading: l, bottom: b, trailing: r))`.
+- `padding:[t,r,b,l]` → `.padding(EdgeInsets(top: t, leading: l, bottom: b, trailing: r))`. The
+  left→`leading` / right→`trailing` mapping is **deliberate**: Figma's insets are physical, SwiftUI's are
+  directional, so this is what mirrors the layout under RTL. Only use `.padding(.leading, …)` — never
+  reach for a physical-left equivalent.
 - `justifyContent:"center"` → center in stack (add `Spacer()`s or set frame alignment);
   `"space-between"` → `Spacer()` between children.
-- `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`).
+- `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`);
+  `"baseline"` → `HStack(alignment: .firstTextBaseline)`.
 - `widthMode:"fill"` → `.frame(maxWidth: .infinity)`; `"hug"` → natural size; `"fixed"` → `.frame(width: N)`.
 
-**Grid (`layout.display:"grid"`) → `LazyVGrid`/`LazyHGrid`.** `columns`/`columnSizes` (per-track
-`{type:"flex"|"fixed"|"hug", value}`) → a `[GridItem]` array: `flex`→`GridItem(.flexible())`,
-`fixed`→`GridItem(.fixed(value))`, `hug`→`GridItem(.adaptive(minimum:...))`; `columnGap`/`rowGap` →
-`GridItem(spacing:)`/the grid's `spacing:`. `gridColumnSpan`/`gridRowSpan` → wrap that child in
-`.gridCellColumns(N)` (iOS 16+). `gridJustifySelf`/`gridAlignSelf` → the item's `.gridColumnAlignment`/
-frame alignment.
+**Grid (`layout.display:"grid"`).** Pick the container by whether any child spans:
+- **No spans** → `LazyVGrid`/`LazyHGrid`. `columns`/`columnSizes` (per-track `{type:"flex"|"fixed"|"hug",
+  value}`) → a `[GridItem]` array: `flex`→`GridItem(.flexible())`, `fixed`→`GridItem(.fixed(value))`,
+  `hug`→`GridItem(.adaptive(minimum:...))`; `columnGap`/`rowGap` → `GridItem(spacing:)`/the grid's `spacing:`.
+- **Any `gridColumnSpan`/`gridRowSpan` > 1** → the eager `Grid`/`GridRow` (iOS 16+), one `GridRow` per row,
+  and `.gridCellColumns(N)` on the spanning child. Lazy grids have **no** span mechanism — `gridCellColumns`
+  is a `Grid`/`GridRow`-only modifier and is ignored inside a `LazyVGrid`. Use lazy grids only for uniform,
+  long, scrolling content.
+- `gridJustifySelf`/`gridAlignSelf` → the item's `.gridColumnAlignment` (`Grid`) / frame alignment.
 
 **Scroll, clip & sticky** — `clip:true` → `.clipped()`; `layout.scroll` → `ScrollView` (`.horizontal` when
 `"horizontal"`). `fixedChildren` **if present** (count of leading children pinned while the rest scrolls)
@@ -35,7 +49,7 @@ coordinate space rather than a bitmap `Image` — there is no asset file for tha
 **Tokens** — the right-hand value in `tokens.json` is a Swift reference (e.g. `Color("Primary")` from an
 asset catalog, or `Theme.spacing.md`). Emit these, not literals.
 
-**Components** — your SwiftUI `View`s per `components.json`; pass Figma `props` via init params/modifiers.
+**Components** — your SwiftUI `View`s per `codeconnect.local.json`; pass Figma `props` via init params/modifiers.
 
 **Text** — `Text(...)` with `.font(...)`; map `font.size/weight` to your type scale.
 
@@ -95,5 +109,52 @@ standard — if a Figma edge inset is ~16pt or the standard row inset, omit the 
 `smart_animate` → `matchedGeometryEffect` + `withAnimation`; `move_in`/`slide_in`+direction → `.transition(.move(edge:))`;
 easing `custom_cubic_bezier` → `.timingCurve(...)`, spring → `.spring(...)` (never approximate a spring as a bezier).
 Always honor Reduce Motion.
+
+**Text metrics** — custom fonts `.custom(name, size:, relativeTo:)`; spacing tied to text → `@ScaledMetric`.
+AX sizes reach ~310%: reflow `HStack`→`VStack` when `dynamicTypeSize.isAccessibilitySize`. `font.letterSpacing`
+`percent` → `.tracking(pct/100*size)`, `px` → `.tracking(px)` (tracking, not kerning; SF has automatic
+tracking — usually omit). `font.lineHeight` (call the Figma value LH; `percent` → LH = size*pct/100; `auto` → omit): iOS 26+
+`.lineHeight(...)`; earlier `.lineSpacing(LH − natural)` + vertical padding of half that to recover
+Figma's outer half-leading, where **natural is the rendered font's own line height —
+`UIFont.lineHeight`, NOT the IR field** (SF 16pt ≈ 19.1, so LH 24 → `.lineSpacing(4.9)`; subtracting
+the IR value from itself gives 0 and the text renders too tight). UIKit exact: `NSParagraphStyle`
+`minimumLineHeight` = `maximumLineHeight` = LH, plus `baselineOffset` = (LH − natural)/4.
+
+**Effects** — `.shadow(color:radius:x:y:)` has no spread; Figma blur radius ≈ 2× SwiftUI/CALayer
+`shadowRadius` (community-derived — tune by eye). Put it on a background shape, `.compositingGroup()` to
+avoid shadowing every child; UIKit: set `shadowPath`. `background_blur` → `.background(.ultraThinMaterial)`
+family; `glass` → iOS 26 `.glassEffect`. `rotation` is DEGREES, Figma positive = counter-clockwise →
+`.rotationEffect(.degrees(-rotation))`.
+
+**Strokes** — `align:"inside"` → `.strokeBorder`, `"center"` → `.stroke`, `"outside"` → `.overlay` of a
+stroke with `.padding(-w/2)`. `dash` → `StrokeStyle(lineWidth:, dash:)`; per-side `weights` → edge overlays.
+
+**Fills & images** — gradients → `LinearGradient`/`RadialGradient`/`AngularGradient` (points from
+`transform`); diamond → asset. Image `scaleMode` `fill` → `.scaledToFill()` + `.clipped()`, `fit` →
+`.scaledToFit()`, `tile` → `Image("name").resizable(resizingMode: .tile)` (it's a modifier on `Image`,
+not an `Image` initializer). Hex is 8-bit sRGB; display-p3 files →
+`Color(.displayP3, red:green:blue:opacity:)`.
+
+**Safe area & insets** — never build a fake status bar/home-indicator frame; SwiftUI respects the safe
+area, backgrounds `.ignoresSafeArea()`; keyboard avoidance is automatic.
+
+**Accessibility & RTL** — touch target 44×44pt (`.frame(minWidth:44, minHeight:44)` + `.contentShape`).
+Use leading/trailing (padding is PHYSICAL `[t,r,b,l]`); directional images
+`.flipsForRightToLeftLayoutDirection(true)`.
+
+**Accessibility naming (do this, don't just "add semantics")**
+- Native controls (`Button`, `Toggle`, `NavigationLink`) carry their label already — don't re-label them.
+- Icon-only control → `.accessibilityLabel("Close")`; an SF Symbol name is not a label.
+- Decorative shape/image/divider → `.accessibilityHidden(true)`, never an empty label.
+- A card/row of several `Text`s VoiceOver should read as one item →
+  `.accessibilityElement(children: .combine)` (or `.ignore` + your own label).
+- Roles/traits Figma implies but SwiftUI can't infer → `.accessibilityAddTraits(.isHeader)` on section
+  titles, `.isButton` on a tappable non-`Button` (and prefer making it a real `Button`).
+- Live/changing values → `.accessibilityValue(_)`; group state → `.accessibilityAddTraits(.isSelected)`.
+
+**Motion** — `transition.duration` is SECONDS; `easing.cubicBezier` → `.timingCurve(x1,y1,x2,y2,
+duration:)`; `spring` → `.spring(...)` / `Spring(mass:stiffness:damping:)`.
+
+**Assets (detail)** — PDF/SVG with "Preserve Vector Data", @2x/@3x rasters, SF Symbols where they match.
 
 **Output** — a `View` struct per screen (`.swift`) under `outputDir`, with a `#Preview`.

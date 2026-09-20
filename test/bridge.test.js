@@ -360,8 +360,73 @@ async function disconnectErr(code, reason) {
   ok("[args] --timeout 600 -> 600000ms", parse(["--timeout", "600"]).exportTimeoutMs === 600000);
   ok("[args] --timeout=600 -> 600000ms (= form)", parse(["--timeout=600"]).exportTimeoutMs === 600000);
   // A near-miss flag must not be read as this one: `startsWith("--timeout")` used to swallow it.
+  // It is now refused outright (unknown flag) — stronger than "parsed, but not as --timeout".
   ok("[args] an unrelated --timeout-ish flag is not consumed as --timeout",
-    parse(["--timeout-ms", "5"]).exportTimeoutMs === 300000);
+    /unknown flag: --timeout-ms/.test(usage(["--timeout-ms", "5"]) || ""));
+  // Unknown flags: a typo used to match nothing and fall through to a FULL PULL that waits on the
+  // plugin — the wrong command, silently. Refused, with the nearest real flag offered.
+  ok("[args] a typo'd flag is an ERROR with a did-you-mean, not a silent full pull",
+    /unknown flag: --lst \(did you mean --list\?\)/.test(usage(["--lst"]) || ""));
+  ok("[args] several unknown flags are all named", (() => {
+    const m = usage(["--al-pages", "--frobnicate"]) || "";
+    return /unknown flags:/.test(m) && /--al-pages \(did you mean --all-pages\?\)/.test(m) && /--frobnicate/.test(m);
+  })());
+  ok("[args] an unknown --flag=value form is refused too", /unknown flag: --pgae=Foo \(did you mean --page\?\)/.test(usage(["--pgae=Foo"]) || ""));
+  ok("[args] a flag's VALUE is never judged as a flag", parse(["--page", "-weird-name"]).pageSel[0] === "-weird-name");
+  ok("[args] every documented flag still parses", (() => {
+    for (const a of [["--list"], ["--list-pages"], ["--list-libraries"], ["--whoami"], ["--list-clients"], ["--serve"], ["--show-token"],
+      ["--selection", "--css", "--no-assets"], ["--design-system", "--variant-visuals"], ["--client", "c1", "--node", "1:2"], ["--screenshot", "1:2", "--scale", "2"]]) parse(a);
+    return true;
+  })());
+  // ---------------------------------------------------------------- dtwin init
+  {
+    const init = require("../bridge/init.js");
+    const os = require("os");
+    const mk = (files) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-init-")); for (const [f, b] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), b); } return d; };
+    const tok = { created: false, source: "file", path: "/x/bridge-token" };
+    const entry = { command: "node", args: ["/abs/figma-mcp.mjs"] };
+    ok("[init] detects the stack the way build-screen step 0 does", init.detectProfile(mk({ "package.json": '{"dependencies":{"react-native":"1"}}' })).profile === "react-native"
+      && init.detectProfile(mk({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}' })).profile === "web-tailwind"
+      && init.detectProfile(mk({ "pubspec.yaml": "dependencies:\n  flutter:\n    sdk: flutter\n" })).profile === "flutter"
+      && init.detectProfile(mk({ "Package.swift": "" })).profile === "swiftui"
+      && init.detectProfile(mk({ "app/build.gradle.kts": "implementation(libs.androidx.compose.ui)" })).profile === "android-compose"
+      && init.detectProfile(mk({})) === null);
+    ok("[init] fresh project: creates design/ + target.json, no .mcp.json unless asked", (() => {
+      const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return JSON.parse(fs.readFileSync(path.join(d, "design/target.json"), "utf8")).profile === "web-tailwind" && !fs.existsSync(path.join(d, ".mcp.json"));
+    })());
+    ok("[init] never overwrites an existing target.json", (() => {
+      const d = mk({ "design/target.json": '{"profile":"mine"}', "package.json": "{}" });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return fs.readFileSync(path.join(d, "design/target.json"), "utf8") === '{"profile":"mine"}';
+    })());
+    ok("[init] --mcp MERGES into an existing .mcp.json and keeps other servers", (() => {
+      const d = mk({ ".mcp.json": '{"mcpServers":{"other":{"command":"x"}}}' });
+      init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      const m = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")).mcpServers;
+      return m.other.command === "x" && m.figma.args[0] === "/abs/figma-mcp.mjs";
+    })());
+    ok("[init] --mcp leaves an existing figma entry, and an invalid .mcp.json, untouched", (() => {
+      const a = mk({ ".mcp.json": '{"mcpServers":{"figma":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
+      init.apply(a, init.plan(a, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      return JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")).mcpServers.figma.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
+    })());
+    ok("[init] warns when .gitignore would swallow the hand-authored maps", init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).some((a) => a.kind === "note" && /un-ignore/.test(a.note)));
+    ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {
+      const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
+      const run = (args) => require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
+      const r = run(["--dry-run", "--mcp"]);
+      return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
+    })());
+  }
+  ok("[args] --json is accepted on the printing commands", parse(["--list-clients", "--json"]).json === true && parse(["--list-libraries", "--json"]).json === true && parse(["--list", "--json"]).json === true && parse(["--list"]).json === false);
+  ok("[args] --json on an export is refused (it writes files, prints no result)", /--json applies to the commands that PRINT/.test(usage(["--all-pages", "--json"]) || "") && /--json applies/.test(usage(["--json"]) || ""));
+  ok("[args] --help prints the usage header and exits 0 without starting a bridge", (() => {
+    const r = require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "--help"], { encoding: "utf8", timeout: 5000 });
+    return r.status === 0 && /Usage:/.test(r.stdout) && /--list-libraries/.test(r.stdout) && !/listening/.test(r.stderr);
+  })());
   ok("[args] default timeout scales with the work (selection < page < all-pages)", (() => {
     const s = parse(["--selection"]).exportTimeoutMs, p = parse([]).exportTimeoutMs, a = parse(["--all-pages"]).exportTimeoutMs;
     return s === 120000 && p === 300000 && a === 900000 && s < p && p < a;

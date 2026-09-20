@@ -48,14 +48,18 @@ above — to learn the system before building.
   pointer with the **`design_get_component`** MCP tool (`{handle:"<key|id|name>"}` — no Figma connection
   needed, it reads the export on disk), or on the command line:
   ```
-  node design-to-code/get-component.js design/design-system/components.local.json <key|id|name>
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/get-component.js" design/design-system/components.local.json <key|id|name>
   ```
 - **`design-system/components.library.json`** — the same shape for components consumed from a
   published LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a
   SAMPLE of what this file uses, not the component's full API — don't treat an absent prop as
   nonexistent.
-- **`design-system/hygiene.json`** — `hygiene`, design-system smells (unbound values, variant
-  explosion, broken aliases).
+- **`design-system/hygiene.json`** — `hygiene`, design-system smells at the CATALOG level: variables
+  with ALL_SCOPES, semantic variables holding raw values, broken aliases, variant explosion (>30
+  combos), unnamed/duplicate components. It does **not** check whether individual nodes use unbound
+  raw values — `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js"` (the audit-design skill) does that per screen.
+- **`design/audit/<screen>.{md,json}`** — the pre-build audit, if one was run (`/designtwin:audit-design`):
+  verdict, findings, component state coverage, designer questions and the defaults assumed.
 
 ## `libraries/` — a separately pulled LIBRARY file
 
@@ -113,15 +117,17 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 
 - `design/<screen>.json` — a single screen exported on its own (same tree shape), when not using
   `design/pages/`.
-- `design/<screen>.png` — reference screenshot (visual ground truth). **Always read it** — JSON gives
-  exact values, the image tells you if the result *looks* right.
+- The reference screenshot (visual ground truth) — the screen JSON's root `reference` field holds its
+  path relative to `design/` (e.g. `assets/<id>_ref.png`); a hand-exported `design/<screen>.png` is
+  the fallback when that field is absent. **Always read it** — JSON gives exact values, the image
+  tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
-- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node design-to-code/tokens.js`),
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js"`),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
   token, in the form your target uses.
 - `codeconnect.local.json` (repo ROOT, not `design/`) — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
-  unmap it. Scaffold from the Figma side with `node design-to-code/map-bootstrap.js`, or auto-seed the code
+  unmap it. Scaffold from the Figma side with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json --out codeconnect.local.json`, or auto-seed the code
   side from **Code Connect files** in the repo with `node bridge/seed-components.js`. Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(A legacy `design/components.json` keyed by component NAME exists in older projects; it cannot

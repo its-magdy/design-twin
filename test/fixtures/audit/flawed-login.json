@@ -1,0 +1,80 @@
+{
+  "exportedAt": "2026-09-13T10:00:00.000Z",
+  "screen": "Login",
+  "manifest": { "nodes": 14, "skipped": 0, "truncated": 0, "assetsFailed": 0, "warnings": [] },
+  "nodes": [
+    {
+      "type": "FRAME", "name": "Login", "id": "1:1",
+      "box": { "w": 393, "h": 852, "x": 0, "y": 0 },
+      "devStatus": "ready_for_dev",
+      "layout": { "display": "flex", "flexDirection": "column", "gap": 16, "padding": [0, 24, 34, 24] },
+      "fills": [{ "type": "solid", "color": "#ffffff", "tokens": { "color": "color/surface" } }],
+      "annotations": [{ "label": "Email must be validated on blur" }],
+      "children": [
+        {
+          "type": "INSTANCE", "name": "Status Bar", "id": "1:2", "component": "Status Bar",
+          "mainComponent": { "id": "9:1", "key": "KEY_STATUS", "setName": "Status Bar", "remote": true },
+          "box": { "w": 393, "h": 54 }
+        },
+        {
+          "type": "TEXT", "name": "Title", "id": "1:3", "text": "Welcome back",
+          "autoResize": "height",
+          "font": { "size": 28, "family": "Inter", "weight": "Bold", "weightValue": 700, "lineHeight": { "value": 120, "unit": "percent" }, "letterSpacing": { "value": -2, "unit": "percent" }, "color": "#111111" },
+          "styles": { "text": "Heading/H1" },
+          "textTokens": { "fills": "color/text-primary" }
+        },
+        {
+          "type": "TEXT", "name": "Subtitle", "id": "1:4", "text": "Sign in to continue",
+          "font": { "size": 14, "family": "Inter", "weight": "Regular", "lineHeight": { "unit": "auto" }, "color": "#bbbbbb" },
+          "box": { "w": 345, "h": 20 }
+        },
+        {
+          "type": "FRAME", "name": "Form", "id": "1:5",
+          "layout": { "display": "flex", "flexDirection": "column", "gap": 10, "padding": [13, 0, 0, 0] },
+          "children": [
+            {
+              "type": "INSTANCE", "name": "Email input", "id": "1:6", "component": "Text Field",
+              "mainComponent": { "id": "5:1", "key": "KEY_FIELD_V", "setKey": "KEY_FIELD", "setName": "Text Field" },
+              "box": { "w": 345, "h": 48 },
+              "fills": [{ "type": "solid", "color": "#f4f4f5" }],
+              "strokes": { "colors": ["#e4e4e7"], "weight": 1, "align": "inside" },
+              "radius": 8
+            },
+            {
+              "type": "INSTANCE", "name": "Primary Button", "id": "1:7", "component": "Button",
+              "mainComponent": { "id": "6:1", "key": "KEY_BTN_V", "setKey": "KEY_BTN", "setName": "Button" },
+              "box": { "w": 345, "h": 48 },
+              "fills": [{ "type": "solid", "color": "#4f46e5", "tokens": { "color": "color/primary" } }],
+              "effects": [{ "type": "drop_shadow", "color": "#0000001a", "offset": { "x": 0, "y": 4 }, "radius": 12, "spread": 2 }],
+              "radius": 12,
+              "cornerSmoothing": 0.6,
+              "reactions": [{ "trigger": "on_click", "actions": [{ "type": "node", "navigation": "navigate", "destinationId": "2:1" }] }]
+            },
+            {
+              "type": "FRAME", "name": "Close", "id": "1:8",
+              "box": { "w": 32, "h": 32 },
+              "reactions": [{ "trigger": "on_click", "actions": [{ "type": "back" }] }],
+              "children": [{ "type": "VECTOR", "name": "x", "id": "1:9", "asset": "assets/x.svg", "box": { "w": 16, "h": 16 } }]
+            }
+          ]
+        },
+        {
+          "type": "FRAME", "name": "Footer", "id": "1:10",
+          "fills": [{ "type": "solid", "color": "#4f46e6" }],
+          "children": [
+            { "type": "TEXT", "name": "Forgot", "id": "1:11", "text": "Forgot password?", "autoResize": "width_and_height", "font": { "size": 14, "color": "#ffffff" }, "missingFont": true }
+          ]
+        },
+        {
+          "type": "FRAME", "name": "Detached card", "id": "1:12", "detachedFrom": { "key": "KEY_CARD" },
+          "layout": { "mode": "absolute", "width": 300, "height": 120 },
+          "children": [
+            { "type": "RECTANGLE", "name": "bg", "id": "1:13", "x": 0, "y": 0, "fills": [{ "type": "image", "scaleMode": "crop", "transform": [[1, 0, 0], [0, 1, 0]] }] },
+            { "type": "TEXT", "name": "Caption", "id": "1:14", "text": "Promo", "autoResize": "height", "font": { "size": 12, "color": "#ffffff" } }
+          ]
+        },
+        { "type": "RECTANGLE", "name": "Home Indicator", "id": "1:15", "box": { "w": 134, "h": 5 } }
+      ]
+    }
+  ]
+}

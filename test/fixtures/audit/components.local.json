@@ -1,0 +1,21 @@
+{
+  "exportedAt": "2026-09-13T10:00:00.000Z",
+  "file": "Audit fixture",
+  "colorProfile": "srgb",
+  "components": [
+    {
+      "name": "Button", "id": "6:0", "type": "COMPONENT_SET", "key": "KEY_BTN",
+      "props": {
+        "Property 1": { "key": "Property 1", "type": "VARIANT", "options": ["Default", "hover"], "default": "Default" },
+        "Label": { "key": "Label#1:2", "type": "TEXT", "default": "Button" }
+      }
+    },
+    {
+      "name": "Text Field", "id": "5:0", "type": "COMPONENT_SET", "key": "KEY_FIELD",
+      "props": {
+        "State": { "key": "State", "type": "VARIANT", "options": ["Default", "Focused", "Error", "Disabled"], "default": "Default" }
+      }
+    },
+    { "name": "Card", "id": "7:0", "type": "COMPONENT", "key": "KEY_CARD", "props": {} }
+  ]
+}

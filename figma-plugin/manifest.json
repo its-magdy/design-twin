@@ -5,7 +5,8 @@
   "main": "code.js",
   "ui": "ui.html",
   "editorType": [
-    "figma"
+    "figma",
+    "dev"
   ],
   "documentAccess": "dynamic-page",
   "permissions": [
@@ -22,6 +23,6 @@
       "ws://localhost:8788",
       "ws://localhost:8789"
     ],
-    "reasoning": "Loopback only. The plugin connects to a WebSocket bridge the user runs on their own machine (the open-source figma-pull CLI / designtwin MCP server) to hand design data to their local coding agent. No internet domain is listed and none is reachable: design data never leaves the user's computer. Three ports are declared only so the bridge can fall back if 8787 is taken."
+    "reasoning": "Loopback only. The plugin connects to a WebSocket bridge the user runs on their own machine (the open-source dtwin CLI / Design Twin MCP server) to hand design data to their local coding agent. No internet domain is listed and none is reachable: design data never leaves the user's computer. Three ports are declared only so the bridge can fall back if 8787 is taken."
   }
 }

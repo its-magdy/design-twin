@@ -2,6 +2,7 @@
 // and Dev-Mode resource links.
 import { Obj, safe, toBase64, errMsg, round } from "./util";
 import { assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
+import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
 // tree, and stores the identical basename on the asset record — so figma-pull / the UI download write
@@ -161,6 +162,15 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
     stats.assetsSkipped++;
     return { skipped: true };
   }
+  // The finest safe abort point, and the only one INSIDE a single frame. exportAsync is the one
+  // per-node await in the whole walk, so a dense screen of 600 icons is otherwise a multi-minute
+  // stretch with no page/frame boundary to check at — a Cancel pressed there would appear ignored.
+  // Gated on "this node really is going to render something" so the phase label isn't a lie and the
+  // throttle isn't consumed by the thousands of plain layout nodes that pass through here.
+  if (isVector || iconLike || hasImage) {
+    checkCancelled();
+    progress("assets", { nodes: stats.nodes, assets: assets.length });
+  }
   if (isVector || iconLike) {
     // The paint pre-check is for VECTOR-ish LEAVES only: an icon CONTAINER paints nothing itself —
     // its children do — so asking it the same question would skip every real icon frame.
@@ -208,13 +218,18 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   return undefined;
 }
 
-// Render a whole top-level frame to a PNG the codegen agent can self-correct against.
-export async function collectReference(node: SceneNode): Promise<string | undefined> {
+// Render a whole top-level frame to a PNG the codegen agent can self-correct against. Also the
+// on-demand single-node screenshot op (collectScreenshot in collect.ts) reuses this unchanged — same
+// render, just called on a component/instance instead of a root. `opts.scale` lets that caller override
+// the auto-capped default (a small icon rendered at the same 2048px cap as a full page would come out
+// tiny); root callers never pass it, so their behavior is untouched.
+export async function collectReference(node: SceneNode, opts?: { scale?: number }): Promise<string | undefined> {
   const n = node as any;
   if (!node || !("exportAsync" in node) || !("width" in node)) return undefined;
   try {
-    const maxDim = Math.max(n.width || 0, n.height || 0) || 1;
-    const value = Math.min(2, 2048 / maxDim);
+    const value = opts && typeof opts.scale === "number" && opts.scale > 0
+      ? opts.scale
+      : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
     const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
     if (!bytes || !bytes.length) {
       warn("reference screenshot empty: " + node.name);

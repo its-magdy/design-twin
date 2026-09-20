@@ -9,7 +9,7 @@ imports into Figma with **zero build** for consumers. You only build when you ed
 ```
 src/
   main.ts        entry: showUI, message + bridge wiring, test surface
-  collect.ts     collectSelection / collectNode / collectFull (+ read options)
+  collect.ts     collectSelection / collectNode / collectFull / collectScreenshot (+ read options)
   serialize.ts   the recursive SceneNode -> compact JSON serializer
   paint.ts       fills & strokes (Paint union)
   effects.ts     shadows / blur / noise / glass / texture / shader (Effect union)
@@ -18,13 +18,22 @@ src/
   variables.ts   design tokens, style refs, variable modes, boundVariables resolution
   prototype.ts   reactions / actions / transitions (the free interaction layer)
   components.ts   instances, component-prop refs/overrides, whole-file design-system catalog
-  assets.ts      vector/icon -> SVG, image -> PNG, reference PNG, dev-resource links
+  assets.ts      vector/icon -> SVG, image -> PNG, reference PNG (whole-frame + on-demand single-node), dev-resource links
   writes.ts      minimal, explicit, no-eval write ops (code -> design)
   state.ts       per-run mutable state + id->name memo caches + read options
+  progress.ts    export progress frames + the cancellation flag/error (main thread -> ui.html)
   util.ts        pure helpers (hex, base64, rounding)
 figma-augment.d.ts  local typing shims for API newer than the pinned typings (empty by default)
 build.js         esbuild bundle script
 ```
+
+## Dev Mode
+
+The manifest's `editorType` is `["figma", "dev"]`, so the plugin also appears in **Dev Mode's** plugin
+list — where the developers who consume the export actually work. Every read and export works there.
+Dev Mode is read-only for plugins, so the MCP `figma_write` ops are refused with a message to switch
+to Design mode (`applyWrites` in `src/writes.ts`). After pulling this change, **re-import the plugin
+from its manifest** — Figma reads `editorType` only at import.
 
 ## Develop
 
@@ -51,6 +60,30 @@ After a rebuild, close & reopen the plugin window (a stale window runs stale `co
   `node` broadly and uses `(node as any)` for dynamic-key loops and beta props; the **value-level**
   typing (Paint/Effect/text/variable shapes) lives in the helper modules, which is where the
   historical silent-drop bugs actually were.
+
+## Progress & cancel
+
+A whole-file (`allPages`) pull can run 10+ minutes, so every **queued** run — manual *and*
+bridge-triggered — is bracketed by `serializeRun` (`src/state.ts`) and reports itself to `ui.html`:
+
+| main → UI | when |
+| --- | --- |
+| `{type:"run-begin", source:"ui"\|"bridge", label}` | the run actually starts executing (not when it was queued) |
+| `{type:"progress", phase:"pages"\|"assets"\|"design-system", source, label, page:{index,of,name,pageId}, nodes, assets}` | page boundaries + phase changes (unthrottled) and at most every ~250ms within a page |
+| `{type:"run-end"}` | success, failure or cancellation alike |
+| `{type:"cancel-ack", accepted, label}` | answer to a Cancel click (`accepted:false` = nothing was running) |
+
+| UI → main | |
+| --- | --- |
+| `{type:"cancel"}` | the Cancel button |
+
+`source:"bridge"` is what lets a designer see that a CLI/MCP pull — and which command — is walking
+their file, and stop it. Cancelling only **sets a flag**: an in-flight `exportAsync` cannot be
+interrupted, so the walk aborts itself at its next safe point (between pages, between top-level
+frames, at each per-node asset export) by throwing `progress.ts`'s cancellation error. That throw is
+the guarantee no partial export is ever delivered as a complete one; on a bridge-triggered run it
+rides out as `bridge-result.error` so the CLI/MCP **fails fast** instead of waiting out its timeout.
+The flag is cleared at the *start* of every run, so a stale cancel cannot kill the next export.
 
 ## Read options (opt-in)
 

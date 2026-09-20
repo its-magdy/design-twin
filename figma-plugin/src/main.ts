@@ -15,7 +15,8 @@ import { errMsg } from "./util";
 import { buildPageLayout } from "../../bridge/pages-layout.js";
 import { buildDesignSystemLayout } from "../../bridge/design-system-layout.js";
 import { releaseAssets, serializeRun } from "./state";
-import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, listPages, listChildren } from "./collect";
+import { requestCancel } from "./progress";
+import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { serialize } from "./serialize";
 import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
@@ -25,7 +26,10 @@ import { applyWrites } from "./writes";
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.js) can drive them. Harmless in
 // the isolated plugin realm; not referenced by the UI or bridge.
-(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents };
+// serializeRun/requestCancel ride along because progress + cancellation only exist INSIDE a bracketed
+// run (see progress.ts): a harness that called a collector directly would see neither, so the test
+// surface has to be the same entry point main.ts and bridge.ts use.
+(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
 
 figma.showUI(__html__, { width: 360, height: 380 });
 console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > Development > Use Developer VM
@@ -36,31 +40,38 @@ console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > 
 // (see ui.html's "Download layers" button) rather than one download button per layer — a real
 // design-system export has dozens of top-level layers, and a button-per-layer list doesn't scale the UI.
 // Exclusive to runFull — runSelection never populates it (a hand-picked selection is a "screen", singular).
+// `label` names the run in the plugin window while it walks (and is what the Cancel button reports
+// back), so the designer can always tell a manual click from a CLI/MCP pull.
 async function runExport(
+  label: string,
   collect: () => Promise<any>,
-  toFiles: (r: any) => { files: Array<{ name: string; content: string; copyable?: boolean }>; layerFiles?: Array<{ name: string; content: string }>; summary: string }
+  toFiles: (r: any) => { files: Array<{ name: string; content: string; copyable?: boolean }>; layerFiles?: Array<{ name: string; content: string }>; summary: string; warnings?: string[] }
 ): Promise<void> {
   let r: any;
   try {
-    r = await serializeRun(collect);
+    r = await serializeRun(collect, { source: "ui", label });
   } catch (e) {
     figma.ui.postMessage({ type: "error", message: errMsg(e) });
     return;
   }
-  const { files, layerFiles, summary } = toFiles(r);
+  const { files, layerFiles, summary, warnings } = toFiles(r);
+  // The warning COUNT, not the warnings themselves. They already ride to disk inside the doc's own
+  // manifest and a real export produces dozens, so the plugin window's job is only to say the list is
+  // non-empty and name where to read it — otherwise "Ready: …" reads as a clean export and nobody looks.
   // Post the collector's OWN asset list (it already returned a copy), then drop the module-level one.
   // Otherwise every base64 PNG/SVG of this export stays resident until the next run's resetRun().
-  figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary });
+  figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings ? warnings.length : 0 });
   releaseAssets();
 }
 
 const runSelection = (): Promise<void> =>
-  runExport(collectSelection, (r) => ({
+  runExport("current selection", collectSelection, (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) },
     ],
     summary: `${r.screenName} — ${r.assets.length} asset(s)`,
+    warnings: r.screen.manifest && r.screen.manifest.warnings,
   }));
 
 // The browser-download twin of bridge/figma-pull.js's writePages: same pages/ layout, built by the
@@ -69,7 +80,7 @@ const runSelection = (): Promise<void> =>
 // (rationale in pages-layout.js's header, where the layout lives).
 const SEP = "__";
 const runFull = (): Promise<void> =>
-  runExport(collectFull, (r) => {
+  runExport("design system + page frames", collectFull, (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     // Per-page index.json files ride in `layerFiles` (the batch bucket), NOT `files` — `files` gets
     // one download BUTTON per entry, and 19+ pages would mean 19+ buttons, the exact non-scaling this
@@ -88,6 +99,7 @@ const runFull = (): Promise<void> =>
       ],
       layerFiles: batch,
       summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`,
+      warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings,
     };
   });
 
@@ -120,12 +132,25 @@ figma.ui.onmessage = async (msg: any) => {
     await runSelection();
   } else if (msg.type === "run-full") {
     await runFull();
+  } else if (msg.type === "cancel") {
+    // The designer pressed Cancel. All this does is SET a flag: there is no way to interrupt an
+    // in-flight exportAsync, so the walk aborts itself at its next safe point (progress.ts
+    // checkCancelled) by throwing — which is also what guarantees no partial doc is ever delivered,
+    // since every caller's error path posts an error instead of files.
+    // Acknowledged either way: a click that hit nothing (the run finished a moment earlier) must read
+    // as a no-op in the UI rather than leave a Cancel button spinning forever.
+    const hit = requestCancel();
+    figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
   } else if (msg.type === "bridge") {
     let result: any;
     let error: string | undefined;
     try {
       result = await handleBridge(msg.cmd, msg.args);
     } catch (e) {
+      // A CANCELLED bridge run lands here like any other failure, which is exactly what we want: the
+      // cancellation message (progress.ts CANCELLED_MESSAGE) rides out as `error`, the iframe forwards
+      // it to the socket, and the CLI/MCP fails FAST with "export cancelled by the designer in Figma"
+      // instead of sitting out its request timeout wondering whether Figma is still working.
       error = errMsg(e);
     }
     figma.ui.postMessage({ type: "bridge-result", id: msg.id, ok: !error, result, error });

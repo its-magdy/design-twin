@@ -1,0 +1,43 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install (bridge, figma-plugin)
+        run: |
+          npm ci --prefix bridge
+          npm ci --prefix figma-plugin
+
+      - name: Typecheck
+        run: |
+          npm run typecheck --prefix bridge
+          npm run typecheck --prefix figma-plugin
+
+      # Committed build artifacts must match their sources: rebuild all three, then fail on any diff.
+      # (claude-plugin/scripts/ is also checked byte-for-byte by test/verify-build.test.js.)
+      - name: Committed build artifacts are in sync
+        run: |
+          npm run build --prefix bridge
+          npm run build --prefix figma-plugin
+          node claude-plugin/build-scripts.js
+          git diff --exit-code -- bridge/figma-mcp.mjs figma-plugin/code.js claude-plugin/scripts
+
+      - name: Test
+        run: |
+          node test/harness.js
+          node test/bridge.test.js
+          node test/design-to-code.test.js
+          node test/audit.test.js
+          node test/verify-build.test.js
+          node test/mcp-smoke.test.js
