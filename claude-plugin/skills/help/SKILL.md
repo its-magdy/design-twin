@@ -1,6 +1,6 @@
 ---
 name: help
-description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design) or write code (that's build-screen).
+description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design), write code (that's build-screen) or update built code after a design change (that's sync-design).
 argument-hint: "[question or symptom]"
 ---
 
@@ -128,3 +128,6 @@ plugin are the reference.
 - **Check the design is buildable first (states, tokens, a11y, designer questions):** `/designtwin:audit-design <screen>`.
 - **Build a screen from it:** `/designtwin:build-screen <screen>` — it handles multi-screen fan-out
   itself (one layer per subagent, so each screen's large JSON stays out of the main context).
+- **The design changed after you built it:** `/designtwin:sync-design <screen>` — diffs the old and
+  new export and patches only what moved, keeping your hand edits. Commit `design/` so there is
+  always a previous export to diff against.

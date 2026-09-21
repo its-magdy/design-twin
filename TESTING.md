@@ -47,6 +47,7 @@ node test/verify-build.test.js         # expect: 48/48 checks passed, exit 0 —
                                        # (stale? run: node claude-plugin/build-scripts.js)
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
+node test/design-diff.test.js          # expect: 11/11 checks passed, exit 0 — the sync-design change list (node-id diff, snapshot CLI)
 node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.js            # expect: 9/9 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun
