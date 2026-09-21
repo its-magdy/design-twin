@@ -607,4 +607,46 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ---------- native token files (tokens-native.js) ----------
+(() => {
+  const { toNative, platformOf } = require("../design-to-code/tokens");
+  const nds = {
+    collections: [{ name: "Theme", modes: ["Light", "Dark"], default: "Light" }, { name: "Primitive", modes: ["Mode 1"], default: "Mode 1" }, { name: "Font Sizes", modes: ["Mode 1"], default: "Mode 1" }],
+    variables: [
+      { name: "Blue/500", type: "COLOR", collection: "Primitive", values: { "Mode 1": "#1A2B3C" }, scopes: ["ALL_SCOPES"] },
+      { name: "Blue/200", type: "COLOR", collection: "Primitive", values: { "Mode 1": "#AABBCC80" }, scopes: ["ALL_SCOPES"] },
+      { name: "Space/MD", type: "FLOAT", collection: "Primitive", values: { "Mode 1": 16 }, scopes: ["GAP"] },
+      { name: "opacity/disabled", type: "FLOAT", collection: "Primitive", values: { "Mode 1": 0.4 }, scopes: ["OPACITY"] },
+      { name: "Body", type: "FLOAT", collection: "Font Sizes", values: { "Mode 1": 14 }, scopes: ["ALL_SCOPES"] },
+      { name: "Primary/Primary", type: "COLOR", collection: "Theme", values: { Light: { aliasOf: "Blue/500" }, Dark: { aliasOf: "Blue/200" } }, scopes: ["ALL_SCOPES"] },
+      { name: "class", type: "COLOR", collection: "Theme", values: { Light: "#ffffff", Dark: "#000000" }, scopes: ["ALL_SCOPES"] },
+      { name: "light", type: "COLOR", collection: "Theme", values: { Light: "#ffffff", Dark: "#000000" }, scopes: ["ALL_SCOPES"] },
+      { name: "Primary primary", type: "COLOR", collection: "Theme", values: { Light: "#111111", Dark: "#222222" }, scopes: ["ALL_SCOPES"] },
+      { name: "From/Library", type: "COLOR", collection: "Theme", values: { Light: { aliasOf: "Not/Exported" }, Dark: "#000000" }, scopes: ["ALL_SCOPES"] },
+      { name: "Loop/A", type: "COLOR", collection: "Theme", values: { Light: { aliasOf: "Loop/A" }, Dark: { aliasOf: "Loop/A" } }, scopes: ["ALL_SCOPES"] },
+    ],
+  };
+  const kt = toNative(nds, "android-compose", { package: "com.acme.ui" }), sw = toNative(nds, "swiftui"), da = toNative(nds, "flutter"), ts = toNative(nds, "react-native");
+  check("[native] profile names resolve; an unknown platform throws", platformOf("android-compose") === "compose" && platformOf("nope") === null && (() => { try { toNative(nds, "nope"); return false; } catch { return true; } })());
+  check("[native] file names per platform", kt.file === "DesignTokens.kt" && sw.file === "DesignTokens.swift" && da.file === "design_tokens.dart" && ts.file === "designTokens.ts");
+  check("[native] aliases resolve PER MODE into concrete values (Light→Blue/500, Dark→Blue/200 with alpha as AARRGGBB)",
+    /ThemeTokensLightMode = ThemeTokens\([\s\S]*?primaryPrimary = Color\(0xFF1A2B3C\)/.test(kt.text) && /ThemeTokensDark = ThemeTokens\([\s\S]*?primaryPrimary = Color\(0x80AABBCC\)/.test(kt.text)
+    && !/ThemeTokensDark = ThemeTokens\([\s\S]*?primaryPrimary = Color\(0xFF1A2B3C\)/.test(kt.text));
+  check("[native] compose: data class + CompositionLocal defaulting to the collection's default mode, package honoured",
+    /^package com\.acme\.ui$/m.test(kt.text) && /@Immutable\ndata class ThemeTokens\(/.test(kt.text) && /val LocalThemeTokens = staticCompositionLocalOf \{ ThemeTokensLightMode \}/.test(kt.text));
+  check("[native] compose units: spacing → dp, font size → sp (by name under ALL_SCOPES), opacity → unitless Float",
+    /val spaceMD: Dp = 16\.dp/.test(kt.text) && /val body: TextUnit = 14\.sp/.test(kt.text) && /val opacityDisabled: Float = 0\.4f/.test(kt.text));
+  check("[native] a single-mode collection is plain constants, not a themed type", /^object PrimitiveTokens \{/m.test(kt.text) && /^public enum PrimitiveTokens \{/m.test(sw.text) && /^abstract final class PrimitiveTokens \{/m.test(da.text) && /^export const primitiveTokens = \{/m.test(ts.text));
+  check("[native] reserved words and duplicate identifiers are renamed, with a warning for the duplicate",
+    /val classToken: Color/.test(kt.text) && /val primaryPrimary2: Color/.test(kt.text) && kt.warnings.some((w) => /Primary primary.*primaryPrimary2/.test(w)));
+  check("[native] a token named like a mode does not collide with the mode instance", /public static let lightMode = ThemeTokens\(/.test(sw.text) && /public let light: Color/.test(sw.text));
+  check("[native] an alias that leaves the file, or loops, is skipped with a warning — never guessed",
+    !/fromLibrary|loopA/.test(kt.text) && kt.warnings.filter((w) => /From\/Library|Loop\/A/.test(w)).length === 2);
+  check("[native] swiftui: struct + static modes + EnvironmentValues entry", /public struct ThemeTokens \{/.test(sw.text) && /static let defaultValue = ThemeTokens\.lightMode/.test(sw.text) && /var themeTokens: ThemeTokens \{/.test(sw.text)
+    && /Color\(\.sRGB, red: 0\.102, green: 0\.1686, blue: 0\.2353, opacity: 1\)/.test(sw.text));
+  check("[native] flutter: ThemeExtension with copyWith + lerp", /class ThemeTokens extends ThemeExtension<ThemeTokens> \{/.test(da.text) && /ThemeTokens copyWith\(\{/.test(da.text) && /primaryPrimary: Color\.lerp\(primaryPrimary, other\.primaryPrimary, t\)!/.test(da.text));
+  check("[native] react-native: typed per-mode record, colors as hex strings, numbers unitless", /export const themeTokens: Record<ThemeTokensMode, ThemeTokens> = \{/.test(ts.text) && /primaryPrimary: "#1a2b3c"/.test(ts.text) && /spaceMD: 16,/.test(ts.text));
+  check("[native] prototype-named modes/tokens cannot break the emitter", (() => { try { toNative({ collections: [{ name: "__proto__", modes: ["__proto__", "constructor"], default: "__proto__" }], variables: [{ name: "__proto__", type: "COLOR", collection: "__proto__", values: { __proto__: "#fff", constructor: "#000" } }] }, "flutter"); return true; } catch { return false; } })());
+})();
+
 report();

@@ -8,6 +8,277 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
+// design-to-code/tokens-native.js
+var require_tokens_native = __commonJS({
+  "design-to-code/tokens-native.js"(exports2, module2) {
+    module2.exports = function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2 }) {
+      const PLATFORMS = {
+        swiftui: { file: "DesignTokens.swift" },
+        compose: { file: "DesignTokens.kt" },
+        flutter: { file: "design_tokens.dart" },
+        "react-native": { file: "designTokens.ts" }
+      };
+      const PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
+      const RESERVED = new Set("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break,continue,true,false,null,nil,self,super,this,new,static,final,const,enum,struct,extension,protocol,init,internal,public,private,open,operator,typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete,export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description".split(","));
+      const words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
+      function camel(parts) {
+        const w = parts.flatMap(words);
+        let id = w.map((x, i) => i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1)).join("");
+        if (!id) id = "token";
+        if (/^[0-9]/.test(id)) id = "n" + id;
+        if (RESERVED.has(id)) id += "Token";
+        return id;
+      }
+      const pascal = (parts) => {
+        const c = camel(parts);
+        return c.charAt(0).toUpperCase() + c.slice(1);
+      };
+      function isFontSize(v) {
+        const scopes = v.scopes || [];
+        if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
+        return /font.?size|text.?size|type.?size/i.test(v.collection + "/" + v.name);
+      }
+      function kindOf(v, opts) {
+        if (v.type === "COLOR") return "color";
+        if (v.type === "BOOLEAN") return "bool";
+        if (v.type === "STRING") return "string";
+        if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
+        return null;
+      }
+      function resolve(byName, collections, v, mode, seen) {
+        const values = v.values || {};
+        let raw = values[mode];
+        if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
+        if (!isAlias2(raw)) return raw;
+        const target = byName.get(raw.aliasOf);
+        if (!target || seen && seen.has(target.name)) return void 0;
+        const next = new Set(seen || []).add(v.name);
+        const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
+        return resolve(byName, collections, target, tMode, next);
+      }
+      function model(designSystem, warnings, opts) {
+        const collections = designSystem && designSystem.collections || [];
+        const vars = designSystem && designSystem.variables || [];
+        const byName = new Map(vars.map((v) => [v.name, v]));
+        const typeNames = /* @__PURE__ */ new Set();
+        const out = [];
+        for (const c of collections) {
+          const mine = vars.filter((v) => v.collection === c.name);
+          const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
+          if (!mine.length || !modeNames.length) continue;
+          let type = pascal([c.name]) + "Tokens";
+          for (let n = 2; typeNames.has(type); n++) type = pascal([c.name]) + "Tokens" + n;
+          typeNames.add(type);
+          const ids = /* @__PURE__ */ new Set();
+          const fields = [];
+          for (const v of mine) {
+            const kind = kindOf(v, opts);
+            if (!kind || !segs2(v.name).length) continue;
+            const values = {};
+            let ok = true;
+            for (const m of modeNames) {
+              const r = resolve(byName, collections, v, m);
+              if (r === void 0 || kind === "color" && !normHex2(r)) {
+                ok = false;
+                break;
+              }
+              values[m] = r;
+            }
+            if (!ok) {
+              warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
+              continue;
+            }
+            let id = camel(segs2(v.name));
+            if (ids.has(id)) {
+              let n = 2;
+              while (ids.has(id + n)) n++;
+              warnings.push(`${v.name}: "${id}" is already taken in ${type} \u2014 emitted as "${id + n}"`);
+              id += n;
+            }
+            ids.add(id);
+            fields.push({ id, kind, source: v.name, values });
+          }
+          if (!fields.length) continue;
+          if (modeNames.length > 1 && fields.length > 250) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection \u2014 the Compose data class would exceed the JVM's 255-parameter limit; split the collection in Figma`);
+          const modeIds = /* @__PURE__ */ new Set();
+          const modes = modeNames.map((name) => {
+            let id = camel([name]);
+            if (ids.has(id)) id += "Mode";
+            for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
+            modeIds.add(id);
+            return { name, id };
+          });
+          const def = modeNames.includes(String(c.default)) ? String(c.default) : modeNames[0];
+          out.push({ name: c.name, type, modes, default: def, fields });
+        }
+        return out;
+      }
+      const num = (raw) => {
+        const n = Number(raw);
+        return Number.isFinite(n) ? String(Math.round(n * 1e4) / 1e4) : "0";
+      };
+      const str = (raw) => JSON.stringify(String(raw));
+      const argb = (raw) => {
+        const h = normHex2(raw);
+        return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase();
+      };
+      const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
+      function compose(cols, opts) {
+        const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
+        const lit = (k, r) => k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? String(r === true || r === "true") : str(r).replace(/\$/g, "\\$");
+        const L = [
+          `// ${HEADER}`,
+          `package ${opts && opts.package || "design.tokens"}`,
+          "",
+          "import androidx.compose.runtime.Immutable",
+          "import androidx.compose.runtime.staticCompositionLocalOf",
+          "import androidx.compose.ui.graphics.Color",
+          "import androidx.compose.ui.unit.Dp",
+          "import androidx.compose.ui.unit.TextUnit",
+          "import androidx.compose.ui.unit.dp",
+          "import androidx.compose.ui.unit.sp"
+        ];
+        for (const c of cols) {
+          L.push("", `// Figma collection "${c.name}"`);
+          if (c.modes.length === 1) {
+            L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
+            continue;
+          }
+          L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
+          for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, f.values[m.name])},`), ")");
+          L.push(
+            "",
+            `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default).id])}) { \u2026 }`,
+            `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.modes.find((m) => m.name === c.default).id])} }`
+          );
+        }
+        return L.join("\n") + "\n";
+      }
+      function swiftui(cols) {
+        const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
+        const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
+        const lit = (k, r) => {
+          if (k === "color") {
+            const h = normHex2(r);
+            return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`;
+          }
+          return k === "bool" ? String(r === true || r === "true") : k === "string" ? str(r) : num(r);
+        };
+        const L = [`// ${HEADER}`, "import SwiftUI"];
+        for (const c of cols) {
+          L.push("", `// Figma collection "${c.name}"`);
+          if (c.modes.length === 1) {
+            L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
+            continue;
+          }
+          L.push(`public struct ${c.type} {`, ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`));
+          for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, f.values[m.name])}`).join(",\n"), "    )");
+          const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+          const defId = c.modes.find((m) => m.name === c.default).id;
+          L.push(
+            "}",
+            "",
+            `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
+            "public extension EnvironmentValues {",
+            `    // Set once near the root: .environment(\\.${env}, colorScheme == .dark ? .dark : .light); read with @Environment(\\.${env}).`,
+            `    var ${env}: ${c.type} {`,
+            `        get { self[${c.type}Key.self] }`,
+            `        set { self[${c.type}Key.self] = newValue }`,
+            "    }",
+            "}"
+          );
+        }
+        return L.join("\n") + "\n";
+      }
+      function flutter(cols) {
+        const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
+        const lit = (k, r) => k === "color" ? `Color(${argb(r)})` : k === "bool" ? String(r === true || r === "true") : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
+        const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
+        const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
+        for (const c of cols) {
+          L.push("", `/// Figma collection "${c.name}"`);
+          if (c.modes.length === 1) {
+            L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, f.values[c.modes[0].name])}; // ${f.source}`), "}");
+            continue;
+          }
+          L.push(
+            `/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`,
+            "@immutable",
+            `class ${c.type} extends ThemeExtension<${c.type}> {`,
+            `  const ${c.type}({`,
+            ...c.fields.map((f) => `    required this.${f.id},`),
+            "  });",
+            "",
+            ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`)
+          );
+          for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  );");
+          L.push(
+            "",
+            "  @override",
+            `  ${c.type} copyWith({`,
+            ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`),
+            "  }) {",
+            `    return ${c.type}(`,
+            ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`),
+            "    );",
+            "  }",
+            "",
+            "  @override",
+            `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`,
+            `    if (other is! ${c.type}) return this;`,
+            `    return ${c.type}(`,
+            ...c.fields.map((f) => `      ${f.id}: ${lerp(f)},`),
+            "    );",
+            "  }",
+            "}"
+          );
+        }
+        return L.join("\n") + "\n";
+      }
+      function reactNative(cols) {
+        const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
+        const lit = (k, r) => k === "color" ? str("#" + normHex2(r)) : k === "bool" ? String(r === true || r === "true") : k === "string" ? str(r) : num(r);
+        const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
+        for (const c of cols) {
+          const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
+          L.push("", `/** Figma collection "${c.name}" */`);
+          if (c.modes.length === 1) {
+            L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, f.values[c.modes[0].name])}, // ${f.source}`), "} as const;");
+            continue;
+          }
+          L.push(
+            `export interface ${c.type} {`,
+            ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`),
+            "}",
+            "",
+            `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`,
+            `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.modes.find((m) => m.name === c.default).id)};`,
+            "",
+            `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`
+          );
+          for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  },");
+          L.push("};");
+        }
+        return L.join("\n") + "\n";
+      }
+      const EMIT = { compose, swiftui, flutter, "react-native": reactNative };
+      function platformOf(name) {
+        const key = String(name || "").toLowerCase();
+        const p = PROFILE_ALIASES[key] || key;
+        return PLATFORMS[p] ? p : null;
+      }
+      function toNative(designSystem, platform, opts) {
+        const p = platformOf(platform);
+        if (!p) throw new Error(`unknown native platform "${platform}" \u2014 use one of: ${Object.keys(PLATFORMS).join(", ")}`);
+        const warnings = [];
+        const cols = model(designSystem, warnings, opts);
+        return { file: PLATFORMS[p].file, text: EMIT[p](cols, opts), warnings };
+      }
+      return { toNative, platformOf, PLATFORMS };
+    };
+  }
+});
+
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
@@ -411,14 +682,32 @@ function emitTokens(designSystem, opts) {
   return { dtcg, css, resolver, resolverFiles: files, warnings };
 }
 module.exports = { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName };
+Object.assign(module.exports, require_tokens_native()({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision }));
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
   const { assertNotManifest } = require_catalog_input();
-  const input = process.argv[2];
-  const outDir = process.argv[3] || ".";
+  const args = process.argv.slice(2);
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    if (i < 0) return void 0;
+    const v = args[i + 1];
+    args.splice(i, 2);
+    return v === void 0 ? "" : v;
+  };
+  const native = flag("--native");
+  const kotlinPackage = flag("--package");
+  const input = args[0];
+  const outDir = args[1] || ".";
+  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>]";
   if (!input) {
-    console.error("usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir]");
+    console.error(USAGE);
+    process.exit(1);
+  }
+  const { toNative, platformOf } = module.exports;
+  if (native !== void 0 && !platformOf(native)) {
+    console.error(`--native: unknown platform "${native}"
+${USAGE}`);
     process.exit(1);
   }
   const ds = JSON.parse(fs.readFileSync(input, "utf8"));
@@ -433,6 +722,13 @@ if (require.main === module) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
   }
+  let nativeNote = "";
+  if (native !== void 0) {
+    const n = toNative(ds, native, { package: kotlinPackage || void 0 });
+    fs.writeFileSync(path.join(outDir, n.file), n.text);
+    warnings.push(...n.warnings);
+    nativeNote = ` + ${n.file}`;
+  }
   warnings.forEach((w) => console.error("warn  " + w));
-  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
+  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/)${nativeNote} (${(ds.variables || []).length} variables)`);
 }

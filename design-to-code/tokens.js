@@ -621,17 +621,30 @@ function emitTokens(designSystem, opts) {
 }
 
 module.exports = { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName };
+// tokens-native.js must agree with this file on names, default modes, aliases and units, so it is
+// built FROM these helpers (see the note at its top on why it does not require this file back).
+Object.assign(module.exports, require("./tokens-native.js")({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision }));
 
-// CLI: node design-to-code/tokens.js <design-system/tokens.json> [outDir]
+// CLI: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
+// --native swiftui | compose | flutter | react-native (a build-screen profile name works too) also
+// writes ONE native token file next to the others — move it into the app's source tree and import it
+// from every screen (see tokens-native.js for why and for the shape of each file).
 // The input is the SPLIT token file — design-system.json is a slim pointer manifest since the split
 // and has no `variables` array (see bridge/design-system-layout.js).
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
   const { assertNotManifest } = require("./catalog-input.js");
-  const input = process.argv[2];
-  const outDir = process.argv[3] || ".";
-  if (!input) { console.error("usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir]"); process.exit(1); }
+  const args = process.argv.slice(2);
+  const flag = (name) => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined ? "" : v; };
+  const native = flag("--native");
+  const kotlinPackage = flag("--package");
+  const input = args[0];
+  const outDir = args[1] || ".";
+  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>]";
+  if (!input) { console.error(USAGE); process.exit(1); }
+  const { toNative, platformOf } = module.exports;
+  if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
   const ds = JSON.parse(fs.readFileSync(input, "utf8"));
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
@@ -648,6 +661,13 @@ if (require.main === module) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
   }
+  let nativeNote = "";
+  if (native !== undefined) {
+    const n = toNative(ds, native, { package: kotlinPackage || undefined });
+    fs.writeFileSync(path.join(outDir, n.file), n.text);
+    warnings.push(...n.warnings);
+    nativeNote = ` + ${n.file}`;
+  }
   warnings.forEach((w) => console.error("warn  " + w));
-  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
+  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/)${nativeNote} (${(ds.variables || []).length} variables)`);
 }

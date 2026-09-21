@@ -206,5 +206,14 @@ build(tmp).then(() => {
     const r = spawnSync(process.execPath, [path.join(out, "drift-lint.js")], { encoding: "utf8" });
     return /usage:/.test(r.stdout + r.stderr);
   })());
+  // A require cycle once made esbuild wrap tokens.js as an inner module: `require.main === module`
+  // was then false, and the shipped script exited 0 having written nothing.
+  check("the bundled tokens.js CLI really writes its files (incl. --native)", (() => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
+    const input = path.join(out, "tokens.json");
+    fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    return r.status === 0 && fs.existsSync(path.join(out, "tokens.dtcg.json")) && /static let aB: Color/.test(fs.readFileSync(path.join(out, "DesignTokens.swift"), "utf8"));
+  })());
   report();
 });
