@@ -38,12 +38,17 @@ A full pull on a real design file is enormous and most of it is irrelevant to th
 cheap calls to find the one page you actually need:
 
 ```
-dtwin --list-libraries   # which design libraries this file draws on
-dtwin --list             # pages + their top-level frames, WITH IDS
-dtwin --children <id>    # peek inside one node before committing
-dtwin design --page <id> # then deep-pull only that page
-dtwin design --node <id> # or just ONE node (a link someone pasted, a single component)
+dtwin list libraries          # which design libraries this file draws on
+dtwin list                    # pages + their top-level frames, WITH IDS
+dtwin list children <id>      # peek inside one node before committing
+dtwin pull design --page <id> # then deep-pull only that page
+dtwin pull design --node <id> # or just ONE node (a link someone pasted, a single component)
 ```
+
+Each command is shorthand for a flag that still works (`dtwin --list-libraries`, `--list`,
+`--children <id>`, `dtwin design --page <id>`) — an older install without the commands takes those.
+If a command hangs or times out, run **`dtwin doctor`** before anything else: it says whether the
+cause is the token, the port, the daemon or the plugin.
 
 **`dtwin` comes from the `designtwin` npm package.** If it isn't on PATH, you are probably working
 inside a clone of the Design Twin repo itself — there, every `dtwin` above is
@@ -57,12 +62,12 @@ Two narrower pulls worth knowing: `design --design-system` gets tokens/styles/co
 page walk and no assets; `design --as-library "<name>"` gets a library file's complete catalog (run it
 with the *library* open, not the file consuming it).
 
-**After `build-screen` generates code for one component**, `dtwin --screenshot <id>` gets a fresh PNG of
+**After `build-screen` generates code for one component**, `dtwin screenshot <id>` gets a fresh PNG of
 just that node to compare the output against — cheaper than re-exporting, and a tighter check than the
 one whole-frame reference PNG every export already carries (which is too zoomed-out to eyeball a small
 component inside a dense screen). MCP twin: `figma_screenshot`.
 
-**The full flag surface is `dtwin --help`** (and `bridge/README.md` in a clone of the Design Twin
+**The full command + flag surface is `dtwin help`** (and `bridge/README.md` in a clone of the Design Twin
 repo) — read it rather than guessing at flags; an unknown flag is refused with a suggestion. This
 skill owns the decision of *which* pull to run; that reference owns *how*.
 

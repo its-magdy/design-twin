@@ -2,6 +2,15 @@
 
 Loaded from the `help` skill. Find the symptom, give the fix — don't debug from memory.
 
+**Connection-shaped problem (hangs, timeouts, `EADDRINUSE`, token rejected, "nothing connected")? Run
+`dtwin doctor` first.** It checks Node, the token (incl. an env var shadowing the saved one), the
+daemon, the port and who holds it, whether the plugin connects — and if a plugin is running with the
+*wrong* token it says so with both fingerprints — then the project (`design/`, export age, maps,
+`.mcp.json`). Each check is ✓ / ! / ✗ with the next step; it changes nothing (mints no token, writes no
+file). `--wait 30` waits longer for the plugin; `--json` for machine output. The entries below are the
+detail behind its findings, and everything it can't see. (Commands below are written as flags; the
+verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … — are the same commands.)
+
 - **Plugin isn't in the menu / a manifest change didn't take** → re-import via *Import plugin from
   manifest…*. It lives under **Plugins → Development**, not the main plugin list.
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
@@ -9,10 +18,16 @@ Loaded from the `help` skill. Find the symptom, give the fix — don't debug fro
   through it and nothing needs stopping, so this means something *else* holds the port (usually the
   MCP server, or a stale `node`). If the MCP is the holder and you wanted files, use `writeToDisk:
   true` rather than killing it.
-- **Bridge stays "offline" in the plugin** → either no token pasted (the plugin says
-  `offline — paste the bridge token above` and won't dial until you paste + Save), or no server is
-  running yet — the plugin UI is a WS *client*. Fix the token, start a server, it auto-connects (3s retry).
-- **Connection rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
+- **The plugin isn't connecting** → open its **Connect to Claude Code (optional)** section (collapsed by
+  default; the pill in its header always shows the state) and read which of these it says:
+  - `not set up` — no token pasted. It won't dial until you paste one into **Bridge token** + Save.
+  - `not running` — every allowed port was tried and nothing answered: no server is up. The plugin UI
+    is a WS *client* — start one (`dtwin --serve`, any `dtwin` pull, or the MCP server); it
+    auto-connects (3s retry).
+  - `waiting` — it WAS connected and the bridge went away. Normal after a one-shot `dtwin` pull ends.
+  - `token rejected` (red, and the section opens itself) — a bridge is running but refused the token;
+    see the next entry.
+- **Token rejected / 401** → token mismatch: the plugin's **Bridge token** field doesn't equal
   the bridge's. Run `dtwin --token-status` (says which source is winning — a saved token *shadowed* by
   a `FIGMA_BRIDGE_TOKEN` export is the usual surprise), then `dtwin --show-token` and re-paste + Save.
   The bridge also logs the mismatch itself, with both fingerprints. Most common cause: someone ran

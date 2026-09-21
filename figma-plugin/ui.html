@@ -1,40 +1,71 @@
 <style>
-  body { font: 13px -apple-system, sans-serif; margin: 0; padding: 14px; color: #222; }
-  #status { margin-bottom: 12px; color: #555; min-height: 18px; }
-  #status.err { color: #c0362c; }
-  button { display: block; width: 100%; margin: 6px 0; padding: 8px; border: 1px solid #ccc;
-           border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+  /* Colors come from Figma's own theme variables (injected because main.ts passes themeColors:true),
+     so the window follows the user's light/dark setting. Every var() carries the old light-theme
+     literal as its fallback — if the variables are ever absent the UI still renders, just light. */
+  body { font: 13px -apple-system, sans-serif; margin: 0; padding: 14px;
+         color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  #status { margin-bottom: 12px; color: var(--figma-color-text-secondary, #555); min-height: 18px; }
+  #status.err { color: var(--figma-color-text-danger, #c0362c); }
+  button { display: block; width: 100%; margin: 6px 0; padding: 8px; border: 1px solid var(--figma-color-border-strong, #ccc);
+           border-radius: 6px; background: var(--figma-color-bg, #fff); color: var(--figma-color-text, #222);
+           cursor: pointer; font-size: 13px; }
   button:disabled { opacity: 0.4; cursor: default; }
-  button:not(:disabled):hover { background: #f4f4f4; }
-  .primary { background: #0d99ff; color: #fff; border-color: #0d99ff; font-weight: 600; }
-  .primary:not(:disabled):hover { background: #0a86e0; }
-  .sep { height: 1px; background: #eee; margin: 12px 0; }
-  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #999; margin: 4px 0; }
-  .hint { margin-top: 12px; font-size: 11px; color: #999; }
+  button:not(:disabled):hover { background: var(--figma-color-bg-hover, #f4f4f4); }
+  .primary { background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #fff);
+             border-color: var(--figma-color-bg-brand, #0d99ff); font-weight: 600; }
+  .primary:not(:disabled):hover { background: var(--figma-color-bg-brand-hover, #0a86e0); }
+  /* Keyboard focus must be visible in both themes — the browser default ring is near-invisible on the
+     dark background. */
+  button:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--figma-color-border-selected, #0d99ff); outline-offset: 1px; }
+  .sep { height: 1px; background: var(--figma-color-border, #eee); margin: 12px 0; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--figma-color-text-tertiary, #999); margin: 4px 0; }
+  label.label { display: block; }
+  .hint { margin-top: 12px; font-size: 11px; color: var(--figma-color-text-tertiary, #999); line-height: 1.45; }
+  .hint code, #bridge code { font-size: 11px; color: var(--figma-color-text-secondary, #555); }
   .row { display: flex; gap: 6px; }
   .row button { margin: 6px 0; }
-  input { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
-  #bridge { font-size: 11px; margin-top: 12px; padding: 6px 8px; border-radius: 6px; background: #f6f6f6; color: #888; }
-  #bridge.on { background: #e7f7ec; color: #1a7f3c; }
+  input { flex: 1; box-sizing: border-box; padding: 8px; border: 1px solid var(--figma-color-border-strong, #ccc); border-radius: 6px;
+          font-size: 13px; color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+  input::placeholder { color: var(--figma-color-text-tertiary, #999); }
+  /* The connection section is collapsed by default: exporting by hand needs none of it, and a designer
+     who never opens a terminal should not be greeted by "bridge token". Its one-line state stays
+     visible in the summary either way. */
+  details#connect > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+                              font-size: 12px; color: var(--figma-color-text-secondary, #555); padding: 2px 0; border-radius: 4px; }
+  details#connect > summary::-webkit-details-marker { display: none; }
+  details#connect > summary::before { content: "▸"; font-size: 10px; color: var(--figma-color-text-tertiary, #999); }
+  details#connect[open] > summary::before { content: "▾"; }
+  #pill { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 9px;
+          background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-tertiary, #888); }
+  #pill.on { background: var(--figma-color-bg-success-tertiary, #e7f7ec); color: var(--figma-color-text-success, #1a7f3c); }
+  #pill.bad { background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12); }
+  #bridge { font-size: 11px; margin-top: 10px; padding: 6px 8px; border-radius: 6px; line-height: 1.45;
+            background: var(--figma-color-bg-secondary, #f6f6f6); color: var(--figma-color-text-secondary, #888); }
+  #bridge.on { background: var(--figma-color-bg-success-tertiary, #e7f7ec); color: var(--figma-color-text-success, #1a7f3c); }
+  #bridge.bad { background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12); }
   /* `button { display: block }` above beats a bare [hidden], so the hide rule has to win explicitly —
      otherwise the Cancel button is permanently visible. */
   [hidden] { display: none !important; }
   /* A PERSISTENT failure notice, deliberately not the #status line: status is overwritten by the very
      next selection change or export, and "the browser delivered 0 of your 400 files" is precisely the
      message that must still be on screen when you come back to the window. */
-  #banner { margin-bottom: 12px; padding: 8px; border: 1px solid #f0b4ae; border-radius: 6px;
-            background: #fdecea; color: #9b1c12; font-size: 12px; line-height: 1.4; }
-  #progress { height: 6px; margin-bottom: 12px; border-radius: 3px; background: #eee; overflow: hidden; }
-  #bar { height: 100%; width: 0; background: #0d99ff; }
+  #banner { margin-bottom: 12px; padding: 8px; border: 1px solid var(--figma-color-border-danger, #f0b4ae); border-radius: 6px;
+            background: var(--figma-color-bg-danger-tertiary, #fdecea); color: var(--figma-color-text-danger, #9b1c12);
+            font-size: 12px; line-height: 1.4; }
+  #progress { height: 6px; margin-bottom: 12px; border-radius: 3px; background: var(--figma-color-bg-tertiary, #eee); overflow: hidden; }
+  #bar { height: 100%; width: 0; background: var(--figma-color-bg-brand, #0d99ff); }
   /* Phases with no page count (the design-system catalog, per-asset ticks inside one huge frame) still
      have to look ALIVE — a bar frozen at 0% reads as a hang. */
   #progress.indet #bar { width: 30%; animation: indet 1.2s linear infinite; }
   @keyframes indet { from { margin-left: -30%; } to { margin-left: 100%; } }
-  #cancel { border-color: #c0362c; color: #c0362c; }
+  #cancel { border-color: var(--figma-color-border-danger-strong, #c0362c); color: var(--figma-color-text-danger, #c0362c); }
 </style>
 
-<div id="status">Loading…</div>
-<div id="banner" hidden></div>
+<!-- role=status / role=alert: a screen-reader user otherwise never hears that a long export finished
+     or that a download batch failed. -->
+<div id="status" role="status" aria-live="polite">Loading…</div>
+<div id="banner" role="alert" hidden></div>
 <div id="progress" hidden><div id="bar"></div></div>
 
 <div class="label">Export</div>
@@ -50,15 +81,20 @@
 <button id="layers" disabled>Download layers (<span id="lcount">0</span>)</button>
 <button id="assets" disabled>Download assets (<span id="acount">0</span>)</button>
 
-<div class="sep"></div>
-<div class="label">Bridge token</div>
-<div class="row">
-  <input id="token" type="password" placeholder="paste token from the bridge console" title="The bridge prints this once, the first time it starts. Lost it? Run: dtwin --show-token" />
-  <button id="save-token" style="flex: 0 0 60px">Save</button>
-</div>
+<div class="hint">Save the downloads into your project's <code>design/</code> folder (assets into <code>design/assets/</code>).</div>
 
-<div id="bridge">Bridge: offline (start figma-pull or the MCP to connect)</div>
-<div class="hint">Save into <code>design/</code> (assets into <code>design/assets/</code>). Bridge is localhost-only; the token authenticates it. Printed once on first start — <code>dtwin --show-token</code> reprints it.</div>
+<div class="sep"></div>
+<!-- Optional. Closed by default; opened automatically only when it needs the user (a rejected token). -->
+<details id="connect">
+  <summary>Connect to Claude Code (optional) <span id="pill">not set up</span></summary>
+  <label class="label" for="token" style="margin-top: 10px">Bridge token</label>
+  <div class="row">
+    <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="paste the token here" />
+    <button id="save-token" style="flex: 0 0 60px">Save</button>
+  </div>
+  <div id="bridge" role="status" aria-live="polite">Not set up.</div>
+  <div class="hint">Lets the <code>dtwin</code> command line or the Design Twin MCP server pull this file directly, instead of you downloading it. It runs on your own computer only (localhost) — nothing is sent over the internet. Get the token by running <code>dtwin --show-token</code> in a terminal; you paste it once.</div>
+</details>
 
 <script>
   // Everything is wrapped so a single init error can NEVER leave the UI silently frozen:
@@ -293,7 +329,7 @@
             page: idn.page || null
           }));
         }
-        if (idn.file) setBridge(true, "connected as " + JSON.stringify(idn.file));
+        if (idn.file) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");
         return;
       }
       if (m.type === "bridge-result") {
@@ -305,21 +341,45 @@
     };
 
     // ---- the localhost bridge (WebSocket client) ----
-    function setBridge(on, text) {
-      var el = $("bridge");
-      if (!el) return;
-      el.className = on ? "on" : "";
-      el.textContent = "Bridge: " + text;
+    // One connection state, shown twice: a short `pill` in the (usually collapsed) section header and
+    // a full sentence inside it. `kind` is "on" | "bad" | "" (neutral). "bad" is reserved for states
+    // the USER has to fix — a bridge that simply isn't running right now is neutral, not an error:
+    // one-shot `dtwin` commands start and stop a bridge on every run, so "nothing listening" is the
+    // normal resting state between pulls.
+    function setBridge(kind, pill, text) {
+      var el = $("bridge"), p = $("pill");
+      if (el) { el.className = kind; el.textContent = text; }
+      if (p) { p.className = kind; p.textContent = pill; }
     }
+    // Application close code the bridge uses for "the handshake was fine but the TOKEN is wrong"
+    // (bridge/server-core.js). A browser WebSocket can never read an HTTP 401 — a refused handshake is
+    // an opaque 1006, identical to "nothing is listening" — so the bridge admits a plugin with a bad
+    // token just long enough to say so with a code we CAN read.
+    var CLOSE_BAD_TOKEN = 4401;
+    var everOpened = false;   // has ANY socket opened since the token was last saved?
+    var failsSinceOpen = 0;   // consecutive failed attempts; >= ports.length means "tried them all"
+    // The last answer was "wrong token". Held until a socket opens or a new token is saved, so the
+    // background retry cannot replace the one instruction the user needs with "connecting…".
+    var tokenRejected = false;
     // Reconnect discipline. Every handler below is guarded by `s === ws` so only the CURRENT socket
     // can drive state, and reconnects go through a single shared timer. Without both, each retired
     // socket kept its own live reconnect chain: saving the token closed a socket AND called connect()
     // immediately, then 3s later the closed socket's onclose connected again — so sockets multiplied
     // with every save (and with every stale-socket terminate() from the bridge).
     var reconnectTimer = null;
-    function scheduleReconnect() {
+    function scheduleReconnect(ms) {
       if (reconnectTimer) return; // one pending reconnect at a time, ever
-      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, 3000);
+      reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, ms || 3000);
+    }
+    // Nothing answered. Which sentence depends on history: a bridge that WAS here and went away is the
+    // ordinary end of a one-shot `dtwin` pull; one that was never found (after every allowed port has
+    // been tried) more likely was never started.
+    function showOffline() {
+      if (everOpened) {
+        setBridge("", "waiting", "Disconnected — the last dtwin command finished, or Claude Code closed. Nothing to do: this reconnects by itself the next time one starts.");
+      } else if (failsSinceOpen >= BRIDGE_PORTS.length) {
+        setBridge("", "not running", "No bridge found on this computer (tried ports " + BRIDGE_PORTS.join(", ") + "). Start one — run a dtwin command such as  dtwin --serve  in a terminal, or open Claude Code in a project with the Design Twin MCP server enabled. This keeps retrying.");
+      }
     }
     function dropSocket() {
       if (!ws) return;
@@ -329,7 +389,7 @@
       try { old.close(); } catch (e) {}
     }
     function connect() {
-      if (!bridgeToken) { setBridge(false, "offline — paste the bridge token above"); return; }
+      if (!bridgeToken) { setBridge("", "not set up", "Not set up. Paste the bridge token above and press Save."); return; }
       if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; // already CONNECTING/OPEN
       // Try each allowed port in turn rather than only 8787. A bridge that lost the race for 8787 to
       // some unrelated local process is otherwise invisible to the plugin, and the user has no way to
@@ -339,21 +399,44 @@
       var s;
       try {
         s = new WebSocket("ws://localhost:" + port + "/?token=" + encodeURIComponent(bridgeToken));
-      } catch (e) { setBridge(false, "offline"); scheduleReconnect(); return; }
+      } catch (e) { failsSinceOpen++; showOffline(); scheduleReconnect(); return; }
       ws = s;
+      if (!tokenRejected && !everOpened && failsSinceOpen < BRIDGE_PORTS.length) setBridge("", "connecting…", "Looking for the bridge on this computer…");
       s.onopen = function () {
         if (s !== ws) return;
         // Stick to whatever answered: the next reconnect should retry the LIVE bridge's port first,
         // not resume walking the ladder past it.
         portIdx = BRIDGE_PORTS.indexOf(port);
-        setBridge(true, "connected (localhost:" + port + ")");
+        everOpened = true;
+        tokenRejected = false;
+        failsSinceOpen = 0;
+        setBridge("on", "connected", "Connected to the bridge on this computer (localhost:" + port + ").");
         // Announce which FILE this is, every time the socket opens — including each reconnect. The
         // bridge accepts several plugin instances at once (one per open Figma file) and routes
         // commands by identity, so a connection that never says who it is can only be addressed by
         // its raw connection id.
         parent.postMessage({ pluginMessage: { type: "get-identity" } }, "*");
       };
-      s.onclose = function () { if (s !== ws) return; ws = null; setBridge(false, "offline"); scheduleReconnect(); };
+      s.onclose = function (ev) {
+        if (s !== ws) return;
+        ws = null;
+        if (ev && ev.code === CLOSE_BAD_TOKEN) {
+          // A bridge IS there — stay on its port instead of walking on to the next one — and this is
+          // the one state only the user can fix, so open the section and say exactly what to do. Retry
+          // slowly: the same token will be refused again until it is re-pasted (Save reconnects at once).
+          portIdx = BRIDGE_PORTS.indexOf(port);
+          failsSinceOpen = 0;
+          tokenRejected = true;
+          setBridge("bad", "token rejected", "The bridge is running, but it rejected this token — it was probably replaced (dtwin --rotate-token) or this is a different computer's token. Run  dtwin --show-token  in a terminal, paste the result above and press Save.");
+          var d = $("connect"); if (d) d.open = true;
+          scheduleReconnect(15000);
+          return;
+        }
+        tokenRejected = false; // that bridge is gone; whatever answers next gets a fresh diagnosis
+        failsSinceOpen++;
+        showOffline();
+        scheduleReconnect();
+      };
       s.onerror = function () { try { s.close(); } catch (e) {} };
       s.onmessage = function (ev) {
         if (s !== ws) return;
@@ -382,6 +465,8 @@
           var t = $("token"); bridgeToken = (t && t.value ? t.value : "").trim();
           parent.postMessage({ pluginMessage: { type: "set-token", token: bridgeToken } }, "*");
           dropSocket(); // retires handlers first, so the old socket can't schedule its own reconnect
+          if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // a pending 15s bad-token retry must not delay this
+          everOpened = false; failsSinceOpen = 0; tokenRejected = false;
           connect();
         };
         // Source images keep their ORIGINAL container format (png/jpg/webp/gif, detected from magic

@@ -42,9 +42,11 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 ```
 node test/design-to-code.test.js       # expect: 241/241 checks passed, exit 0
 node test/audit.test.js                # expect: 61/61 checks passed, exit 0
-node test/verify-build.test.js         # expect: 32/32 checks passed, exit 0 — the build-screen Stop-hook gate,
+node test/verify-build.test.js         # expect: 42/42 checks passed, exit 0 — the build-screen Stop-hook gate,
                                        # and that claude-plugin/scripts/ is in sync with design-to-code/
                                        # (stale? run: node claude-plugin/build-scripts.js)
+node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
+                                       # DOM + WebSocket: connection states, theming, the ids/ports it depends on
 node test/mcp-smoke.test.js            # expect: 9/9 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun
 node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js
@@ -75,9 +77,16 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
 
+`verbs.js` (`dtwin <verb>` → flags) is tested as the pure argv → argv function it is, plus subprocess
+runs proving a verb and its flag are the same command. `doctor.js` is tested three ways: its pure
+check functions directly; its probes against real sockets on spare ports (a plain HTTP server, a real
+bridge answering `426`, and plugin-shaped clients with the right and the wrong token); and one
+subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the plugin probe is skipped
+and the run never binds a port, while proving doctor mints nothing.
+
 ```
-node test/bridge.test.js        # expect: 419/419 checks passed, exit 0
-node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js
+node test/bridge.test.js        # expect: 478/478 checks passed, exit 0
+node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```
 
 `verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed

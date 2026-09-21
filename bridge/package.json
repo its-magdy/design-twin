@@ -26,6 +26,8 @@
     "figma-pull.js",
     "figma-mcp.mjs",
     "init.js",
+    "verbs.js",
+    "doctor.js",
     "daemon.js",
     "design-system-layout.js",
     "errmsg.js",

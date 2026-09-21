@@ -106,10 +106,14 @@ function safeEqual(a, b) {
 //     runaway client can't spin the handshake path, and so the log stays readable.
 let authFailures = 0;
 let lastAuthLog = 0;
+// The most recent refused token, by fingerprint only — what `dtwin doctor` reads to tell "no plugin is
+// running" apart from "a plugin is running with the WRONG token", which look identical from outside.
+let lastBadToken = null;
 const AUTH_LOG_INTERVAL_MS = 30000;
 
 function rejectBadToken(presented) {
   authFailures++;
+  lastBadToken = { at: Date.now(), fingerprint: presented ? tokenStore.fingerprint(presented) : null };
   const now = Date.now();
   if (now - lastAuthLog > AUTH_LOG_INTERVAL_MS) {
     lastAuthLog = now;
@@ -124,6 +128,8 @@ function rejectBadToken(presented) {
   }
   return "bad or missing token";
 }
+
+const authStats = () => ({ failures: authFailures, lastBadToken, expected: tokenStore.fingerprint(TOKEN) });
 
 // Runs during the WS handshake, before the connection is accepted.
 function verifyClient(info, done) {
@@ -147,13 +153,35 @@ function verifyClient(info, done) {
   done(true);
 }
 
+// A browser WebSocket can never see an HTTP status: a handshake refused with 401 surfaces in the
+// plugin as an opaque close 1006, byte-identical to "nothing is listening". So the plugin could not
+// tell "start the bridge" from "re-paste the token", and showed one useless "offline" for both.
+//
+// For the plugin ONLY (its sandboxed iframe sends Origin "null"; a Node client sends none and CAN read
+// the 401), a handshake that passed Origin + Host and failed on the TOKEN alone is admitted, flagged,
+// and closed at once with an application close code the iframe can read. It is never registered as a
+// client and gets no message handler, so it can neither receive a command nor send a result — what
+// an unauthenticated caller gains over the 401 is one bit it already had ("a bridge is here").
+// Origin/Host failures are still refused outright at the HTTP layer.
+const CLOSE_BAD_TOKEN = 4401; // 4000-4999 is the range RFC 6455 reserves for applications
+
+function admit(info, done) {
+  verifyClient(info, (ok, code, msg) => {
+    if (!ok && code === 401 && info.origin === "null") {
+      info.req._dtwinBadToken = true;
+      return done(true);
+    }
+    done(ok, code, msg);
+  });
+}
+
 function createBridge(port = PORT) {
   // host: "127.0.0.1" keeps it strictly loopback. verifyClient authenticates every handshake
   // (Origin + Host + shared token). maxPayload bounds a single frame so a malformed/huge payload
   // can't OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large
   // file can raise it via FIGMA_BRIDGE_MAX_PAYLOAD_MB.
   const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
-  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient });
+  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient: admit });
 
   // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
   // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
@@ -216,7 +244,15 @@ function createBridge(port = PORT) {
   let takeovers = 0; // kept ONLY for the historical whoami field; nothing displaces anything now.
   let lastTakeoverAt = 0;
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
+    // Admitted only to be told why it is refused (see `admit`). Before anything else: no registry
+    // entry, no listeners. terminate() backs the close up in case the peer never completes it.
+    if (req && req._dtwinBadToken) {
+      ws.on("error", () => {});
+      ws.close(CLOSE_BAD_TOKEN, "bad token");
+      setTimeout(() => { try { ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
+      return;
+    }
     // Every connection is kept. The previous single-socket rule terminated the incumbent here, which
     // made two open Figma files fight: the displaced plugin's 3s auto-reconnect immediately stole the
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
@@ -463,4 +499,4 @@ function createBridge(port = PORT) {
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore };
+module.exports = { createBridge, verifyClient, admit, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore };

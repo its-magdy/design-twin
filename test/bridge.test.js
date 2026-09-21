@@ -205,6 +205,36 @@ async function disconnectErr(code, reason) {
     !!pErr && /Open Console/i.test(pErr.message));
   ok("[dc-plain] and still reports the close code", !!pErr && /1001/.test(pErr.message));
 
+  // ------------------------------------------------- server-core: a bad token the PLUGIN can diagnose
+  // A browser socket cannot read an HTTP 401 (it sees an opaque 1006, same as "nothing listening"), so
+  // the plugin's iframe (Origin "null") is admitted and closed with 4401 instead. The properties that
+  // make that safe are what is tested: it is never a client, and everyone else still gets the 401.
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(port);
+    const closed = (url, opts) => new Promise((res) => {
+      const c = new WebSocket(url, opts);
+      let opened = false;
+      c.on("open", () => { opened = true; c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
+      c.on("unexpected-response", (_req, r) => res({ opened, http: r.statusCode }));
+      c.on("close", (code) => res({ opened, code, clients: bridge.listClients().length }));
+      c.on("error", () => {});
+    });
+    const plugin = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "null" });
+    ok("[bad-token] the plugin iframe (Origin null) gets close code 4401 it can read, not an opaque refusal",
+      plugin.opened === true && plugin.code === core.CLOSE_BAD_TOKEN && core.CLOSE_BAD_TOKEN === 4401);
+    ok("[bad-token] and was never registered as a client, even though it sent a hello", plugin.clients === 0 && !bridge.isConnected());
+    const node = await closed(`ws://127.0.0.1:${port}/?token=wrong`, {});
+    ok("[bad-token] a non-browser client (no Origin) is still refused at the HTTP layer with 401", node.opened === false && node.http === 401);
+    const site = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "https://evil.example" });
+    ok("[bad-token] a real website Origin is refused 403 — never admitted for diagnosis", site.opened === false && site.http === 403);
+    const good = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
+    await new Promise((res, rej) => { good.on("open", res); good.on("error", rej); });
+    ok("[bad-token] the right token still connects normally afterwards", bridge.listClients().length === 1);
+    good.close();
+    bridge.close();
+  }
+
   // ------------------------------------------------- server-core: MULTI-CLIENT routing (two files)
   // The bridge used to keep ONE plugin socket and terminate the incumbent, which made two open Figma
   // files ping-pong: the displaced plugin's 3s auto-reconnect stole the bridge straight back, forever
@@ -1657,6 +1687,153 @@ async function disconnectErr(code, reason) {
   ok("[token-cli] and deletes the file", !fs.existsSync(path.join(cliDir, "bridge-token")));
   ok("[token-cli] and forgetting twice is not an error",
     runCli(["--forget-token"]).status === 0);
+
+  // ---------------------------------------------------------------- verbs
+  console.log("\nverbs — `dtwin <verb>` is a pure argv → argv translation:");
+  const { translate, VerbError, VERBS } = require("../bridge/verbs.js");
+  const tr = (...a) => translate(a).join(" ");
+  ok("[verbs] flags pass through untouched", tr("--list", "--json") === "--list --json" && tr() === "");
+  ok("[verbs] `dtwin design` is still a positional outDir, not a verb", tr("design", "--page", "Screens") === "design --page Screens");
+  ok("[verbs] pull strips itself and keeps everything after", tr("pull", "design", "--page", "Screens") === "design --page Screens" && tr("pull") === "");
+  ok("[verbs] `pull list` is how an outDir spelled like a verb is written", tr("pull", "list") === "list");
+  ok("[verbs] a verb is only recognised as the FIRST argument", tr("design", "list") === "design list");
+  ok("[verbs] list → --list, with the sub-nouns mapped",
+    tr("list") === "--list" && tr("list", "pages") === "--list-pages" && tr("list", "libraries", "--json") === "--list-libraries --json"
+    && tr("list", "clients") === "--list-clients" && tr("list", "--timeout", "600") === "--list --timeout 600");
+  ok("[verbs] list children <id> → --children <id>", tr("list", "children", "12:34", "--timeout", "9") === "--children 12:34 --timeout 9");
+  ok("[verbs] screenshot <id> [outDir] [flags] → --screenshot <id> …", tr("screenshot", "12:34", "design", "--scale", "2") === "--screenshot 12:34 design --scale 2");
+  ok("[verbs] whoami / serve / stop / status / help",
+    tr("whoami") === "--whoami" && tr("serve") === "--serve" && tr("stop") === "--stop" && tr("status") === "--daemon-status" && tr("help") === "--help");
+  ok("[verbs] token [status|show|rotate|forget]",
+    tr("token") === "--token-status" && tr("token", "status") === "--token-status" && tr("token", "show") === "--show-token"
+    && tr("token", "rotate") === "--rotate-token" && tr("token", "forget") === "--forget-token");
+  const verbErr = (...a) => { try { translate(a); return null; } catch (e) { return e; } };
+  ok("[verbs] an unknown sub-noun is a VerbError that names the valid ones",
+    verbErr("list", "bogus") instanceof VerbError && /pages\|libraries\|clients/.test(verbErr("list", "bogus").message)
+    && verbErr("token", "bogus") instanceof VerbError);
+  ok("[verbs] a verb missing its required id is a VerbError, not a silent full pull",
+    verbErr("screenshot") instanceof VerbError && verbErr("screenshot", "--scale") instanceof VerbError
+    && verbErr("list", "children") instanceof VerbError && verbErr("list", "children", "--json") instanceof VerbError);
+  ok("[verbs] doctor / init / mcp are left for figma-pull.js to route", tr("doctor", "--json") === "doctor --json" && VERBS.includes("doctor"));
+
+  // End to end: the verb and the flag it stands for must be the SAME command.
+  ok("[verbs-cli] `dtwin token status` = `dtwin --token-status`",
+    runCli(["token", "status"]).stdout === runCli(["--token-status"]).stdout && runCli(["token", "status"]).status === 0);
+  const helpVerb = runCli(["help"]);
+  ok("[verbs-cli] `dtwin help` = `dtwin --help`, exit 0", helpVerb.status === 0 && helpVerb.stdout === runCli(["--help"]).stdout);
+  ok("[verbs-cli] help leads with the quick start, before the full flag reference",
+    helpVerb.stdout.indexOf("Quick start") > 0 && helpVerb.stdout.indexOf("Quick start") < helpVerb.stdout.indexOf("dtwin doctor")
+    && helpVerb.stdout.indexOf("dtwin doctor") < helpVerb.stdout.indexOf("Full reference"));
+  ok("[verbs-cli] help still has no side effects (no token minted)", !fs.existsSync(path.join(cliDir, "bridge-token")));
+  const badVerb = runCli(["list", "bogus"]);
+  ok("[verbs-cli] a VerbError is a one-line `[dtwin] error:` + exit 1, before any bridge starts",
+    badVerb.status === 1 && /^\[dtwin\] error: unknown `dtwin list bogus`/.test(badVerb.stderr.trim()) && !badVerb.stderr.includes("[bridge]"));
+
+  // ---------------------------------------------------------------- doctor
+  console.log("\ndoctor — pure checks:");
+  const doctor = require("../bridge/doctor.js");
+  ok("[doctor] its port list matches server-core's (restated there on purpose)",
+    JSON.stringify(doctor.ALLOWED_PORTS) === JSON.stringify(core.ALLOWED_PORTS));
+  ok("[doctor] node: new enough is ok, too old is a failure, unreadable range is only a note",
+    doctor.checkNode("v22.1.0", ">=18").status === "ok" && doctor.checkNode("v16.20.0", ">=18").status === "fail"
+    && doctor.checkNode("v22.1.0", null).status === "warn");
+  const tokS = { path: "/x/bridge-token", stored: true, envSet: false, activeSource: "file", fingerprint: "abcd1234", loosePerms: false, shadowed: false };
+  ok("[doctor] token: saved is ok and shows the fingerprint, never a token", doctor.checkToken(tokS).status === "ok" && doctor.checkToken(tokS).detail.includes("abcd1234"));
+  ok("[doctor] token: none saved is a note pointing at init", doctor.checkToken({ ...tokS, stored: false, activeSource: "ephemeral", fingerprint: null }).status === "warn");
+  ok("[doctor] token: env shadowing a saved token is named", /OVERRIDING/.test(doctor.checkToken({ ...tokS, envSet: true, activeSource: "env", shadowed: true }).detail));
+  ok("[doctor] token: loose permissions get the chmod", /chmod 600/.test(doctor.checkToken({ ...tokS, loosePerms: true }).next));
+  ok("[doctor] daemon: none running is ok, not a problem", doctor.checkDaemon(null, 8787).status === "ok");
+  ok("[doctor] daemon: a running one reports its connected file names",
+    doctor.checkDaemon({ pid: 1, port: 8787, pluginConnected: true, clients: [{ file: "App — Base" }] }, 8787).detail.includes("App — Base"));
+  ok("[doctor] port: unset → 8787; an allowed value is kept", doctor.resolvePort(undefined).port === 8787 && doctor.resolvePort("8789").port === 8789);
+  ok("[doctor] port: a value outside the manifest's three is a failure", doctor.resolvePort("9999").problem.status === "fail");
+  ok("[doctor] port: free is ok; held by our daemon is ok; held by a ws server is a note; by anything else a failure",
+    doctor.checkPort(8787, { free: true }, null).status === "ok" && doctor.checkPort(8787, { free: false, holder: "websocket" }, { pid: 7 }).status === "ok"
+    && doctor.checkPort(8787, { free: false, holder: "websocket" }, null).status === "warn"
+    && doctor.checkPort(8787, { free: false, holder: "http", detail: "x" }, null).status === "fail");
+  const wrongTok = doctor.checkPlugin({ clients: [], badToken: { fingerprint: "11111111" }, expected: "22222222" }, 10);
+  ok("[doctor] plugin: a refused token reads as 'running, wrong token' with both fingerprints and the fix",
+    wrongTok.status === "fail" && wrongTok.detail.includes("11111111") && wrongTok.detail.includes("22222222") && /--show-token/.test(wrongTok.next));
+  ok("[doctor] plugin: connected / nobody came / skipped",
+    doctor.checkPlugin({ clients: [{ file: "F" }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
+    && doctor.checkPlugin({ skipped: "why" }, 10).status === "warn");
+
+  const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-"));
+  const byId = (checks, id) => checks.find((c) => c.id === id);
+  ok("[doctor] project: an empty directory is a note (never a failure) pointing at init",
+    byId(doctor.checkProject(projDir), "project").status === "warn" && !doctor.checkProject(projDir).some((c) => c.status === "fail"));
+  fs.mkdirSync(path.join(projDir, "design"));
+  fs.writeFileSync(path.join(projDir, "design", "target.json"), "{}");
+  const exportedAt = Date.parse("2026-01-01T00:00:00Z");
+  fs.writeFileSync(path.join(projDir, "design", "design-system.json"), JSON.stringify({ exportedAt: new Date(exportedAt).toISOString(), file: "My File" }));
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { figma: { command: "node", args: ["/x/bridge/figma-mcp.mjs"] } } }));
+  const fresh = doctor.checkProject(projDir, exportedAt + 3600000);
+  ok("[doctor] project: design/ + target.json is ok; a 1h-old export is ok and names its source file",
+    byId(fresh, "project").status === "ok" && byId(fresh, "export").status === "ok" && byId(fresh, "export").detail.includes("My File"));
+  ok("[doctor] project: an export past 24h is flagged stale", byId(doctor.checkProject(projDir, exportedAt + 3 * 86400000), "export").status === "warn");
+  ok("[doctor] project: no codeconnect.local.json is a note", byId(fresh, "map").status === "warn");
+  ok("[doctor] project: a legacy `figma` MCP key pointing at figma-mcp.mjs still works, and is told about `designtwin`",
+    byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next));
+  fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
+  ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
+
+  console.log("\ndoctor — probes (real sockets, spare ports):");
+  const httpSrv = require("http").createServer((q, s) => s.end("hi"));
+  await new Promise((r) => httpSrv.listen(0, "127.0.0.1", r));
+  const httpProbe = await doctor.probePort(httpSrv.address().port);
+  ok("[doctor] probePort: a plain HTTP server is identified as not-a-bridge", httpProbe.free === false && httpProbe.holder === "http");
+  const freed = httpSrv.address().port;
+  await new Promise((r) => httpSrv.close(r));
+  ok("[doctor] probePort: a free port is free, and the probe leaves nothing listening",
+    (await doctor.probePort(freed)).free === true && (await doctor.probePort(freed)).free === true);
+  const held = core.createBridge(nextPort);
+  await new Promise((r) => setTimeout(r, 50));
+  const wsProbe = await doctor.probePort(nextPort);
+  ok("[doctor] probePort: a bridge is recognised by its 426 to a plain GET — no WebSocket opened", wsProbe.holder === "websocket" && held.listClients().length === 0);
+  held.close();
+  nextPort++;
+
+  // probePlugin against the REAL handshake: a plugin-shaped client (Origin "null") with each token.
+  const pluginLike = (port, tok) => setTimeout(() => { const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${tok}`, { origin: "null" }); c.on("error", () => {}); }, 150);
+  pluginLike(nextPort, "not-the-token");
+  const refusedProbe = await doctor.probePlugin(nextPort++, 3000);
+  ok("[doctor] probePlugin: a wrong-token plugin is reported by fingerprint, not as 'nothing running'",
+    refusedProbe.clients.length === 0 && refusedProbe.badToken && refusedProbe.badToken.fingerprint === store.fingerprint("not-the-token")
+    && refusedProbe.expected === store.fingerprint(TOKEN));
+  pluginLike(nextPort, TOKEN);
+  const goodProbe = await doctor.probePlugin(nextPort++, 3000);
+  ok("[doctor] probePlugin: a right-token plugin is reported connected", goodProbe.clients.length === 1 && !goodProbe.badToken);
+  const t0 = Date.now();
+  const nobody = await doctor.probePlugin(nextPort, 400);
+  ok("[doctor] probePlugin: nobody there → empty after the wait, and a stale refusal from an earlier probe is not blamed",
+    nobody.clients.length === 0 && !nobody.badToken && Date.now() - t0 >= 400);
+  ok("[doctor] probePlugin always closes its bridge (the port is free again)", (await doctor.probePort(nextPort++)).free === true);
+
+  console.log("\ndoctor — end to end (subprocess):");
+  // Fresh config dir → no token → the plugin probe is skipped, so this never binds a port and cannot
+  // collide with a real bridge on the developer's machine.
+  const docDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-cfg-"));
+  const runDoctor = (argv, extraEnv = {}) => {
+    const env = { ...process.env, DESIGNTWIN_CONFIG_DIR: docDir, ...extraEnv };
+    delete env.FIGMA_BRIDGE_TOKEN;
+    delete env.FIGMA_BRIDGE_TOKEN_FILE;
+    if (!extraEnv.FIGMA_BRIDGE_PORT) delete env.FIGMA_BRIDGE_PORT;
+    return spawnSync(process.execPath, [cli, "doctor", ...argv], { encoding: "utf8", env, cwd: projDir, timeout: 20000 });
+  };
+  const docJson = runDoctor(["--json"]);
+  const docReport = (() => { try { return JSON.parse(docJson.stdout); } catch (e) { return { checks: [] }; } })();
+  ok("[doctor-cli] --json prints one parseable report and nothing else on stdout", docReport.checks.length >= 6);
+  ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));
+  ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
+    byId(docReport.checks, "plugin").status === "warn" && byId(docReport.checks, "token").status === "warn");
+  ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
+  const docHuman = runDoctor([]);
+  ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Node\.js:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
+  const badPort = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "9999" });
+  ok("[doctor-cli] a bad FIGMA_BRIDGE_PORT is a reported ✗ (exit 1), not a crash inside server-core",
+    badPort.status === 1 && byId(JSON.parse(badPort.stdout).checks, "port").status === "fail" && !badPort.stderr.includes("[bridge]"));
+  ok("[doctor-cli] unknown arguments are refused", runDoctor(["--nope"]).status === 1 && runDoctor(["--wait", "x"]).status === 1);
+  ok("[doctor-cli] doctor --help exits 0", runDoctor(["--help"]).status === 0);
 
   // ---------------------------------------------------------------- report
   report();

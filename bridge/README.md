@@ -101,9 +101,66 @@ opt-in because a registered MCP server holds port 8787 while Claude Code runs, w
 one-shot `dtwin` pulls in that project (use the export tools' `writeToDisk: true` instead). The two
 steps it cannot do — importing the plugin into Figma and pasting the token — it prints.
 
+## Commands at a glance
+
+```
+dtwin list                        # what is in the file: pages + top-level frames, with ids
+dtwin pull design --page Screens  # export ONE page into ./design
+dtwin screenshot 12:34            # a reference PNG of one node
+dtwin doctor                      # something not working? start here
+```
+
+Every command is shorthand for a flag, and **the flags keep working unchanged** — the rest of this
+README documents the flags, and either spelling is fine everywhere:
+
+| Command | Same as |
+|---|---|
+| `dtwin pull [outDir] [flags]` | `dtwin [outDir] [flags]` |
+| `dtwin list` · `list pages` · `list libraries` · `list clients` | `--list` · `--list-pages` · `--list-libraries` · `--list-clients` |
+| `dtwin list children <id\|url>` | `--children <id\|url>` |
+| `dtwin screenshot <id\|url> [--scale N]` | `--screenshot <id\|url>` |
+| `dtwin whoami` | `--whoami` |
+| `dtwin serve` · `stop` · `status` | `--serve` · `--stop` · `--daemon-status` |
+| `dtwin token` · `token show` · `token rotate` · `token forget` | `--token-status` · `--show-token` · `--rotate-token` · `--forget-token` |
+| `dtwin help` | `--help` |
+| `dtwin doctor` · `dtwin init` · `dtwin mcp` | their own entry points (no flag form) |
+
+A command is only recognised as the **first** argument, so `dtwin design` still means "pull into
+`./design`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+
+## Something not working: `dtwin doctor`
+
+Every failure looks the same from outside — a pull that waits, then times out. `doctor` tells the
+causes apart, marks each check ✓ / ! / ✗, and gives the one next step:
+
+```
+dtwin doctor            # exit code 1 only if a check is ✗ (a note, !, is not a failure)
+dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s; it retries every 3s)
+dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
+```
+
+1. **Node.js** version against this package's `engines`.
+2. **Bridge token** — saved or not, where, loose file permissions, and whether `FIGMA_BRIDGE_TOKEN` is
+   shadowing the saved one. Fingerprint only, never the token.
+3. **Daemon** — running or not, and which files are connected to it.
+4. **Port** (`FIGMA_BRIDGE_PORT`, one of 8787/8788/8789) — free, held by the daemon, held by another
+   bridge (almost always the MCP server), or held by something unrelated.
+5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
+   says so with both fingerprints, instead of the "nothing connected" that case otherwise looks like.
+6. **Project** (the current directory) — `design/`, `design/target.json`, the age of the last export,
+   `codeconnect.local.json`, and the `.mcp.json` registration (a legacy `figma` key still works; new
+   setups use `designtwin`).
+
+It changes nothing: no token is created, no file written. Check 5 opens a bridge for a few seconds,
+so it only runs when the port is free **and** a token already exists; when a daemon is up doctor asks
+the daemon instead, and when something else holds the port it identifies the holder with a plain HTTP
+request (a bridge answers `426`) rather than a WebSocket — a WebSocket client would be registered as a
+plugin and disturb whoever owns that bridge.
+
 ## Read: figma-pull (CLI) — recommended for bulk extraction
 
-`dtwin --help` (or `-h`) prints every flag below and exits — no bridge is started, no token minted.
+`dtwin help` (or `--help` / `-h`) prints the quick start, the command table and every flag below, and
+exits — no bridge is started, no token minted.
 An unknown or mistyped flag is an error with a suggestion (`--lst` → "did you mean --list?"), never
 silently ignored: a typo used to fall through to a full pull.
 
@@ -138,15 +195,17 @@ dtwin design --node <id>      # ONE node, fully exported (properties + assets) �
 cheap questions to expensive ones, which is also what Figma's own agent guidance recommends
 (discover first, then scope by library):
 ```
-dtwin --whoami              # 0. (optional) which file am I actually connected to?
-dtwin --list-libraries      # 1. WHICH libraries does this file draw on?
-dtwin --list-pages          # 1b. page NAMES only (near-free — loads no page)
-dtwin --list                # 2. WHERE is what — pages + top-level frames (ids)
-dtwin --children <id>       # 3. (optional) peek inside one frame
-dtwin design --page <id>    # 4. pull only what you need — or just ONE node:
-dtwin design --node <id>    # 4b. (optional) just that ONE node, real export + its own assets
-dtwin --screenshot <id>     # 5. (optional) visually check ONE component after generating code for it
+dtwin whoami                   # 0. (optional) which file am I actually connected to?
+dtwin list libraries           # 1. WHICH libraries does this file draw on?
+dtwin list pages               # 1b. page NAMES only (near-free — loads no page)
+dtwin list                     # 2. WHERE is what — pages + top-level frames (ids)
+dtwin list children <id>       # 3. (optional) peek inside one frame
+dtwin pull design --page <id>  # 4. pull only what you need — or just ONE node:
+dtwin pull design --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
+dtwin screenshot <id>          # 5. (optional) visually check ONE component after generating code for it
 ```
+(The flag spellings — `--whoami`, `--list-libraries`, `--list-pages`, `--list`, `--children`,
+`--screenshot` — are the same commands; the sections below are titled by flag.)
 
 ### `--node <id>` — one node, fully exported
 

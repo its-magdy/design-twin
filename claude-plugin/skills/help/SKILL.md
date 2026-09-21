@@ -42,16 +42,22 @@ Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to qu
 ## What each one lets Claude actually do
 
 **Through the CLI**, Claude runs `dtwin` (inside a clone of the Design Twin repo: `node
-bridge/figma-pull.js`). `dtwin --help` prints every flag; a mistyped flag is refused, not ignored.
-- Discover structure cheaply before pulling anything heavy: `--whoami` (which file am I on),
-  `--list-clients`, `--list-libraries`, `--list-pages` / `--list` (pages + frame ids),
-  `--children <id>` (peek one frame).
-- Pull a real export: `dtwin design` (current page), `--all-pages`, `--selection`, `--page <id>`,
-  `--node <id|figma-url>`, `--design-system` (tokens/styles/components only, no page walk),
-  `--as-library "<name>"` (a whole library file's catalog — run with the *library* open).
-- Visually check ONE component after generating code for it: `--screenshot <id>` — an on-demand PNG,
+bridge/figma-pull.js`). `dtwin help` prints a quick start, the commands and every flag; a mistyped
+flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages` =
+`dtwin --list-pages`) and the flag spellings keep working — use either.
+- **Anything not working → `dtwin doctor` first.** It checks the token, the port, the daemon, whether
+  the plugin can connect (and whether it has the *right* token) and the project, changes nothing, and
+  prints the next step for each problem.
+- Discover structure cheaply before pulling anything heavy: `dtwin whoami` (which file am I on),
+  `dtwin list clients`, `dtwin list libraries`, `dtwin list pages` / `dtwin list` (pages + frame ids),
+  `dtwin list children <id>` (peek one frame).
+- Pull a real export: `dtwin pull design` (current page; `dtwin design` is the same), `--all-pages`,
+  `--selection`, `--page <id>`, `--node <id|figma-url>`, `--design-system` (tokens/styles/components
+  only, no page walk), `--as-library "<name>"` (a whole library file's catalog — run with the *library* open).
+- Visually check ONE component after generating code for it: `dtwin screenshot <id>` — an on-demand PNG,
   cheaper than re-exporting and tighter than the one whole-frame reference PNG every export carries.
-- Keep the connection warm across several pulls with `dtwin --serve` instead of reconnecting every time.
+- Keep the connection warm across several pulls with `dtwin serve` (`dtwin stop` / `dtwin status`)
+  instead of reconnecting every time.
 
 **Through the MCP server**, once registered in the target project (as `designtwin`, so each tool's full
 name is `mcp__designtwin__<tool>`), Claude gets live tools instead of shelling out: `figma_status`, `figma_whoami`, `figma_list_clients`, `figma_get_selection`,
@@ -77,8 +83,10 @@ without overwriting anything, and prints the steps that are clicks in Figma. The
      hand: the first bridge start generates one, saves it per-user
      (`~/.config/design-twin/bridge-token`, `0600`; `%APPDATA%` on Windows) and prints it once — paste
      it into the plugin's **Bridge token** field (Save) and neither side asks again.
-     `dtwin --show-token` reprints it, `--rotate-token` replaces it, `--token-status` says which token
-     is in play without disclosing it. Then `dtwin --list` to see what's there.
+     `dtwin token show` reprints it, `dtwin token rotate` replaces it, `dtwin token` says which token
+     is in play without disclosing it (flag forms: `--show-token` / `--rotate-token` /
+     `--token-status`). Then `dtwin doctor` to confirm the plugin connects, and `dtwin list` to see
+     what's there.
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
      that project* pointing at the absolute path of `bridge/figma-mcp.mjs` (`dtwin init --mcp` writes
      it); enable it via `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.

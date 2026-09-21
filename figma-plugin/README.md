@@ -111,3 +111,18 @@ The flag is cleared at the *start* of every run, so a stale cancel cannot kill t
 the join key back to the component catalog — always on, no flag. Reachable from the bridge: MCP tool
 args (`css`/`measurements`/`pluginData`/`motion`/`sharedData`/`variantVisuals`) and the `figma-pull`
 CLI flags (`--css` / `--measurements` / `--plugin-data` / `--motion` / `--shared-data` / `--variant-visuals`).
+
+## The plugin window
+
+- **Follows Figma's theme.** `showUI` passes `themeColors: true` and `ui.html` takes every color from
+  Figma's `--figma-color-*` variables (the old light literals are only `var()` fallbacks).
+- **Exporting by hand needs no setup.** The connection controls live in a collapsed **Connect to
+  Claude Code (optional)** section; the pill in its header shows the state without opening it:
+  `not set up` · `connecting…` · `connected` · `waiting` (the bridge went away — normal after a
+  one-shot pull) · `not running` (every allowed port tried, nothing answered) · `token rejected`
+  (red; the section opens itself and says to run `dtwin --show-token`).
+- **Why "token rejected" is possible at all:** a browser socket cannot read an HTTP 401, so the bridge
+  admits the plugin's iframe just long enough to close it with code `4401` — see `admit` in
+  `bridge/server-core.js`. It is never registered as a client.
+- `test/ui.test.js` runs `ui.html`'s script against a fake DOM + WebSocket and covers these states.
+

@@ -23,12 +23,56 @@ if (require.main === module && process.argv[2] === "init") {
   require("./init.js").main(process.argv.slice(3));
   return;
 }
+// `dtwin doctor` — diagnose the setup (doctor.js). Routed like `init`, and for a sharper reason: doctor
+// must decide for ITSELF whether it is safe to require server-core (a bad FIGMA_BRIDGE_PORT exits the
+// process at require time, and a held port exits it in createBridge) — those are findings to report,
+// not ways for the diagnostic to die.
+if (require.main === module && process.argv[2] === "doctor") {
+  require("./doctor.js").main(process.argv.slice(3));
+  return;
+}
+// `dtwin <verb>` — verbs.js rewrites a leading verb into the flags parsed below (`dtwin list pages` →
+// `--list-pages`), so there is still ONE parser and one set of guards. Done here, before the --help
+// check and the --token-file pre-scan, so both see the translated argv. verbs.js is pure (no requires,
+// no I/O), so `dtwin help` keeps --help's zero-side-effects guarantee.
+if (require.main === module) {
+  const { translate, VerbError } = require("./verbs.js");
+  try {
+    process.argv.splice(2, process.argv.length - 2, ...translate(process.argv.slice(2)));
+  } catch (e) {
+    if (!(e instanceof VerbError)) throw e;
+    console.error("[dtwin] error: " + e.message);
+    process.exit(1);
+  }
+}
 // figma-pull — READ plane CLI.
 // Connects to the running Figma plugin over the localhost bridge, pulls the full
 // design system + all page frames (or the current selection), and writes them to
 // disk. The agent then Reads those files selectively (context-economical).
 //
 // Usage:
+// Quick start (Figma file open, the "Design Twin" plugin running):
+//   dtwin list                        # what is in the file: pages + top-level frames, with ids
+//   dtwin pull design --page Screens  # export ONE page into ./design (tokens, frames, assets)
+//   dtwin screenshot 12:34            # a reference PNG of one node (an id from `list`, or a Figma URL)
+//   dtwin doctor                      # something not working? checks token, port, daemon, plugin, project
+//
+// Commands (each is shorthand for a flag documented below — the flags keep working unchanged):
+//   dtwin pull [outDir] [flags]              = dtwin [outDir] [flags]
+//   dtwin list [pages|libraries|clients]     = --list | --list-pages | --list-libraries | --list-clients
+//   dtwin list children <id|url>             = --children <id|url>
+//   dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>
+//   dtwin whoami                             = --whoami
+//   dtwin serve | stop | status              = --serve | --stop | --daemon-status
+//   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | --rotate-token | --forget-token
+//   dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
+//   dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
+//   dtwin mcp                                # run the MCP server (what .mcp.json points at)
+//   dtwin help                               = --help
+//   A command is only recognised as the FIRST argument: `dtwin design` still pulls into ./design.
+//   For an outDir spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+//
+// Full reference:
 //   dtwin init [--mcp]          # set up the project you are BUILDING: design/, target.json, the bridge
 //                               # token, (optionally) .mcp.json — then prints the steps left. See init --help
 //   dtwin [outDir]              # full: design-system.json + current-page frames + assets

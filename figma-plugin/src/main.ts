@@ -31,7 +31,9 @@ import { applyWrites } from "./writes";
 // surface has to be the same entry point main.ts and bridge.ts use.
 (globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
 
-figma.showUI(__html__, { width: 360, height: 380 });
+// themeColors: Figma injects its --figma-color-* variables and a figma-light/figma-dark class into the
+// iframe, which is what lets ui.html follow the user's theme instead of being a white box in dark mode.
+figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
 console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > Development > Use Developer VM
 
 // ---------- messaging ----------

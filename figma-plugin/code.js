@@ -2965,7 +2965,7 @@
 
   // src/main.ts
   globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
-  figma.showUI(__html__, { width: 360, height: 380 });
+  figma.showUI(__html__, { width: 360, height: 380, themeColors: true });
   console.log("[export] main.ts loaded (main thread)");
   async function runExport(label, collect, toFiles) {
     let r;
