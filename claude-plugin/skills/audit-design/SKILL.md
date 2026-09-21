@@ -49,7 +49,10 @@ Copy this checklist into your working notes and tick it off:
 - [ ] 7. Handed back: blockers + top questions summarized to the user
 ```
 
-1. **Scope.** Find the screen: `design/pages/index.json` → page `index` → layer `file`, or
+1. **Scope.** The screen to audit is whatever was passed to this skill (the `ARGUMENTS` line at the
+   end of this prompt). This skill runs in its own context and cannot see the conversation that
+   invoked it, so if no screen was passed and `design/` holds more than one, don't guess — return
+   the list of candidates and ask which. Find the screen: `design/pages/index.json` → page `index` → layer `file`, or
    `design/<screen>.json` for a single-screen export. If it isn't exported, hand off to
    `/designtwin:extract` — don't audit a screenshot alone. Resolve the platform the same way
    build-screen does: `design/target.json` `profile`, else detect from the repo (`package.json` with

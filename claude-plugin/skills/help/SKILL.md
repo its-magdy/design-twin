@@ -128,6 +128,9 @@ plugin are the reference.
 - **Check the design is buildable first (states, tokens, a11y, designer questions):** `/designtwin:audit-design <screen>`.
 - **Build a screen from it:** `/designtwin:build-screen <screen>` — it handles multi-screen fan-out
   itself (one layer per subagent, so each screen's large JSON stays out of the main context).
+- **Only check a built screen against its design (no code changes):** type
+  `@agent-designtwin:visual-verifier` and name the screen — an @-mention runs that agent for certain,
+  where a plain "does this match?" leaves the choice to Claude.
 - **The design changed after you built it:** `/designtwin:sync-design <screen>` — diffs the old and
   new export and patches only what moved, keeping your hand edits. Commit `design/` so there is
   always a previous export to diff against.

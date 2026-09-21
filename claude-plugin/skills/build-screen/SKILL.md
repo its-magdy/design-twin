@@ -1,6 +1,6 @@
 ---
 name: build-screen
-description: Build a front-end screen as real, production-quality code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, Flutter, or a custom target). Use this whenever the user wants a design turned into code — "implement the login screen", "build this frame", "code up the settings page", "make this design real", "match the Figma" — or points at a design/ export or a Figma frame, even if they don't say which stack. Resolves the target stack, audits the design for missing states and untranslatable values, maps every node to existing components and tokens before coding, builds leaf-first with exact unit conversions per platform, then verifies by rendering and comparing against the reference screenshot. If design/ is empty or stale, use the extract skill first; if the screen is ALREADY built and the design changed, use sync-design — rebuilding would discard the hand edits made since.
+description: Build a front-end screen as real, production-quality code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, Flutter, or a custom target). Use this whenever the user wants a design turned into code — "implement the login screen", "build this frame", "code up the settings page", "make this design real", "match the Figma" — or points at a design/ export or a Figma frame, even if they don't say which stack. Resolves the target stack, audits the design for missing states and untranslatable values, maps every node to existing components and tokens before coding, builds leaf-first with exact unit conversions per platform, then verifies by rendering and comparing against the reference screenshot. If design/ is empty or stale, use extract first. If the screen is ALREADY built and the design changed, use sync-design (a rebuild discards hand edits). To only CHECK a built screen against its design, use the visual-verifier agent instead.
 argument-hint: "[screen name | design/<screen>.json | Figma frame URL]"
 hooks:
   Stop:
@@ -122,8 +122,9 @@ Copy this checklist into your notes and keep it updated:
      design/design-system/components.local.json --out design/audit/<screen> --gate --grid <N>`, where
      `<N>` is the design's real spacing step from `design/design-system/tokens.json`/`layoutGrids`, not
      the 4px default (which silently under-flags an 8px-grid system) (or invoke
-     the `designtwin:audit-design` skill for a full review on a big or unfamiliar screen — it runs in
-     its own context and hands back the verdict and `design/audit/<screen>.md`). This command
+     the `designtwin:audit-design` skill for a full review on a big or unfamiliar screen, passing the
+     screen name as its argument — it runs in its own context, sees nothing of this conversation,
+     and hands back the verdict and `design/audit/<screen>.md`). This command
      **is not optional and is not "by hand" if it's missing** — `${CLAUDE_PLUGIN_ROOT}/scripts/` ships
      with this plugin. `--gate` makes the process exit non-zero on any blocker; a non-zero exit **stops
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
