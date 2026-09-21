@@ -111,7 +111,9 @@ Copy this checklist into your notes and keep it updated:
      against it; heed a stale-snapshot warning. No `codeconnect.local.json` at all → **stop**: run
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json
      --out codeconnect.local.json` and have the user confirm the stub
-     entries before continuing. Building without a map means every component instance is legitimately
+     entries before continuing. After any hand edit to the map, check its shape with
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" codeconnect.local.json` — drift-lint
+     assumes a well-formed map. Building without a map means every component instance is legitimately
      "new" — that's the failure this skill exists to prevent, not an edge case to shrug past.
    - Read the `.png`, then skim the tree top-down. Collect every `annotations[]` and `devStatusNote`.
      Theme first: `variableModes`/`resolvedModes` tell you which mode this frame shows.

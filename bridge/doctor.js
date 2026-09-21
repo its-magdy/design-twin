@@ -200,8 +200,13 @@ async function probePlugin(port, waitMs) {
 
 // ---------------------------------------------------------------- run + report
 
-async function run({ cwd = process.cwd(), waitSec = 10 } = {}) {
+// `onCheck` sees each result the moment it is known, and `onWait` fires before the one slow step (the
+// plugin wait). Printing only at the end meant a caller with a short timeout — an agent shelling out —
+// got NOTHING, not even the instant Node/token answers, if the plugin wait outlived it.
+async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) {
   const checks = [];
+  const push = checks.push.bind(checks);
+  checks.push = (...cs) => { for (const c of cs) { push(c); if (onCheck) onCheck(c); } return checks.length; };
   const engines = (() => { try { return require("./package.json").engines.node; } catch (e) { return null; } })();
   checks.push(checkNode(process.version, engines));
 
@@ -227,6 +232,7 @@ async function run({ cwd = process.cwd(), waitSec = 10 } = {}) {
     } else if (tok.activeSource === "ephemeral") {
       checks.push(checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" }));
     } else {
+      if (onWait) onWait(waitSec);
       checks.push(checkPlugin(await probePlugin(port, waitSec * 1000), waitSec));
     }
   }
@@ -237,16 +243,12 @@ async function run({ cwd = process.cwd(), waitSec = 10 } = {}) {
 
 const MARK = { ok: "✓", warn: "!", fail: "✗" };
 
-function format(report) {
-  const lines = [];
-  for (const c of report.checks) {
-    lines.push(`${MARK[c.status]} ${c.title}: ${c.detail}`);
-    if (c.next) lines.push(`    → ${c.next}`);
-  }
+const formatCheck = (c) => `${MARK[c.status]} ${c.title}: ${c.detail}` + (c.next ? `\n    → ${c.next}` : "");
+function verdict(report) {
   const n = (s) => report.checks.filter((c) => c.status === s).length;
-  lines.push("", n("fail") ? `${n("fail")} problem(s) to fix${n("warn") ? `, ${n("warn")} note(s)` : ""}.` : n("warn") ? `No blocking problems; ${n("warn")} note(s) above.` : "All good.");
-  return lines.join("\n");
+  return n("fail") ? `${n("fail")} problem(s) to fix${n("warn") ? `, ${n("warn")} note(s)` : ""}.` : n("warn") ? `No blocking problems; ${n("warn")} note(s) above.` : "All good.";
 }
+const format = (report) => [...report.checks.map(formatCheck), "", verdict(report)].join("\n");
 
 async function main(argv) {
   let waitSec = 10;
@@ -264,8 +266,13 @@ async function main(argv) {
       if (!v || !Number.isFinite(waitSec) || waitSec < 0) { console.error(`[dtwin doctor] error: --wait needs a number of seconds. ${usage}`); process.exit(1); }
     } else { console.error(`[dtwin doctor] error: unknown argument: ${a}. ${usage}`); process.exit(1); }
   }
-  const report = await run({ waitSec });
-  console.log(json ? JSON.stringify(report, null, 2) : format(report));
+  // Human output streams; --json stays one document at the end (a consumer parses it whole).
+  const report = await run(json ? { waitSec } : {
+    waitSec,
+    onCheck: (c) => console.log(formatCheck(c)),
+    onWait: (sec) => console.log(`… waiting up to ${sec}s for the Figma plugin to connect (run it in Figma now; --wait 0 skips)`),
+  });
+  console.log(json ? JSON.stringify(report, null, 2) : "\n" + verdict(report));
   // exitCode, not exit(): let stdout drain (a piped --json would otherwise be cut short).
   process.exitCode = report.ok ? 0 : 1;
 }

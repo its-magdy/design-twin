@@ -560,7 +560,11 @@ server.registerTool(
       ...clientShape,
       // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
       // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
-      ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough()).describe("Ordered list of write operations (each must have an `op` field)."),
+      ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough())
+        // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
+        // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
+        .max(50, "at most 50 ops per call — split a larger job into several calls (writes cannot be undone from here)")
+        .describe("Ordered list of write operations (each must have an `op` field). At most 50 per call."),
       dryRun: z.boolean().optional().describe("true = validate the batch and return a preview of what each op would create/overwrite, WITHOUT touching the Figma file (needs no plugin connection)."),
     },
     // destructiveHint MUST stay true. Per the MCP schema it asserts, when false, that "the tool
