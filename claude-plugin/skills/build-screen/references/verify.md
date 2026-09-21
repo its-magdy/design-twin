@@ -35,6 +35,19 @@ installing dependencies.
 | React Native | Detox/Maestro screenshot on a simulator/emulator at the frame's size; or react-native-web + Playwright for layout-only checks | `toJSON()` from react-test-renderer; accessibility props |
 | Flutter | Golden tests: `tester.view.physicalSize = Size(w, h) * dpr`, `matchesGoldenFile`; `flutter run` screenshot | `debugDumpApp()` / `find.*` semantics |
 
+**These tools are used here as renderers, not as regression tests.** Their own pass/fail compares
+against a previously recorded image, which is not the Figma reference — and with nothing recorded yet
+they fail by design: Flutter's `matchesGoldenFile` fails until `flutter test --update-goldens` writes
+the golden, swift-snapshot-testing records the image and fails that first run, Playwright's
+`toHaveScreenshot` writes the "actual" and reports the missing snapshot. So run them in record mode
+(`--update-goldens`, `recordRoborazziDebug`, `recordPaparazzi`, `record: .all`) or take a plain
+screenshot, then compare the image they wrote against the reference yourself. A red first run is not
+a finding, and a green later run says only that nothing changed since the recording — neither is
+evidence the screen matches the design. Android's Compose Preview Screenshot Testing is still alpha;
+prefer Roborazzi or Paparazzi when the project has either.
+A native screen needs something addressable to render: emit the stack's preview (`#Preview`,
+`@Preview`, a widget test pumping the screen, a Storybook story) as part of the build.
+
 ## Compare in layers
 Work top-down; a structural miss makes pixel diffs meaningless.
 
@@ -50,7 +63,8 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    alignment and spacing, then color and effects. When a pixel-diff tool is available, align the images
    before diffing so a 1px global offset doesn't drown real differences; prefer a perceptual/SSIM
    score plus the numeric checks over raw pixel equality.
-4. **Accessibility.** Web: axe-core, keyboard tab-through with visible focus. iOS: Accessibility
+4. **Accessibility.** Web: axe-core through `@axe-core/playwright` (Playwright's own accessibility
+   guide uses it) on the same page you screenshotted, keyboard tab-through with visible focus. iOS: Accessibility
    Inspector / VoiceOver labels, Dynamic Type at AX sizes. Android: accessibility scanner / semantics
    tree, font scale 2.0. Touch targets at platform minimums.
 
@@ -66,6 +80,11 @@ Render at least once each, when the stack supports it:
 - The other theme mode, if tokens have one.
 - RTL, if the app ships an RTL locale.
 - A narrow and a wide width (small phone / tablet, or web breakpoints) for fill/hug behavior.
+
+Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
+why}]}` — and, when an accessibility check ran, `verification.a11y` — `{tool, violations}`. One
+rendered frame is a legitimate result; an unstated one is not, because the report would then read as
+"verified" for states nobody looked at. The Stop hook only warns when these are missing.
 
 ## The fix loop
 - Fix the largest structural or numeric delta first, re-render, re-compare. Keep a one-line log per

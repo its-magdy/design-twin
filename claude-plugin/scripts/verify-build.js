@@ -139,6 +139,15 @@ function checkPlan({ plan }, cwd) {
   problems.push(...checkVerification(plan, cwd));
   return problems;
 }
+function verificationWarnings(plan) {
+  const v = plan.verification;
+  if (!v || v.mode !== "rendered") return [];
+  const out = [];
+  const c = v.coverage;
+  if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
+  if (!v.a11y) out.push("verification.a11y is missing \u2014 no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  return out;
+}
 function passedStatus(plan) {
   return plan.verification && plan.verification.mode === "rendered" ? "verified" : "static-only";
 }
@@ -177,10 +186,11 @@ function main() {
     process.exit(2);
   }
   for (const { file, plan } of plans) {
+    for (const w of verificationWarnings(plan)) console.error(`verify-build: warning (${path.basename(file)}): ${w}`);
     plan.status = passedStatus(plan);
     fs.writeFileSync(file, JSON.stringify(plan, null, 2) + "\n");
   }
   process.exit(0);
 }
-module.exports = { ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
 if (require.main === module) main();

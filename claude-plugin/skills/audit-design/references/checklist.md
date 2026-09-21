@@ -2,7 +2,7 @@
 
 Walk every section for the screen(s) in scope. Each item: **check** → where the export answers it →
 what to do when it doesn't. "Ask" means: add a question with a default (see `questions.md`).
-Field names are exact; units and shapes are in `field-map.md`.
+Field names are exact; units and shapes are in `../../build-screen/references/ir-fields.md` (linked from SKILL.md).
 
 ## Contents
 1. [Handoff metadata](#1-handoff-metadata)

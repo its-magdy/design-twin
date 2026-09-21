@@ -43,6 +43,8 @@
 //     "components": [{ "name": "Button", "key": "...", "mapModule": "@/ui/Button"|null, "verdict": "reused"|"new"|"missing" }],
 //     "allowedLiterals": [{ "value": "#5B5FC7", "reason": "theme.ts defines brand-600" }],
 //     "verification": { "mode": "rendered", "renderer": "playwright", "artifacts": ["design/verify/login.png"], "deltas": ["title 1px low"] }
+//                       (+ optional "coverage": { "rendered": ["default","dark"], "notChecked": [{ "what": "rtl", "why": "app ships no RTL locale" }] },
+//                          "a11y": { "tool": "axe-core", "violations": 0 } — absent → a WARNING, never a block)
 //                   | { "mode": "static-only", "reason": "no dev server or simulator available (checked package.json)" }
 //   }
 // The hook sets status itself: "verified" only for mode "rendered" with an artifact on disk,
@@ -219,6 +221,19 @@ function checkPlan({ plan }, cwd) {
   return problems;
 }
 
+// Evidence worth having that must not block: a build verified on one frame is legitimate, but the
+// report should be able to say which states nobody looked at. Printed on a passing run (exit 0), so
+// the agent sees it and the turn still ends.
+function verificationWarnings(plan) {
+  const v = plan.verification;
+  if (!v || v.mode !== "rendered") return [];
+  const out = [];
+  const c = v.coverage;
+  if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
+  if (!v.a11y) out.push("verification.a11y is missing — no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  return out;
+}
+
 // status the hook grants once every check passes — never "verified" without render evidence.
 function passedStatus(plan) {
   return plan.verification && plan.verification.mode === "rendered" ? "verified" : "static-only";
@@ -269,12 +284,13 @@ function main() {
 
   // All plans check out — close them so re-runs later this session stay on the fast path.
   for (const { file, plan } of plans) {
+    for (const w of verificationWarnings(plan)) console.error(`verify-build: warning (${path.basename(file)}): ${w}`);
     plan.status = passedStatus(plan);
     fs.writeFileSync(file, JSON.stringify(plan, null, 2) + "\n");
   }
   process.exit(0);
 }
 
-module.exports = { ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
 
 if (require.main === module) main();

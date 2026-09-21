@@ -2,8 +2,9 @@
 
 Every field here is **optional**; absent usually means the Figma default. Read this before mapping a
 screen, when a node has a key you don't recognise, or before building anything interactive, scrolling,
-themed or animated. For *which file to open*, see `export-layout.md`. For how a value becomes code on
-your stack, see the profile.
+themed or animated. The audit-design skill reads it too — it is the one field reference, so a field is
+described (and corrected) in exactly one place. For *which file to open*, see `export-layout.md`. For
+how a value becomes code on your stack, see the profile.
 
 ## Contents
 - [Handoff: annotations, status, visibility](#handoff-annotations-status-visibility)
@@ -18,6 +19,8 @@ your stack, see the profile.
 - [Navigation, prototypes and motion](#navigation-prototypes-and-motion)
 - [Images and vectors](#images-and-vectors)
 - [Agent-only hints — never render these](#agent-only-hints--never-render-these)
+- [Catalog files: states, styles, smells](#catalog-files-states-styles-smells)
+- [Not in the export at all](#not-in-the-export-at-all)
 
 ## Handoff: annotations, status, visibility
 
@@ -54,7 +57,7 @@ your stack, see the profile.
   half above, half below each line.
 - **`font.letterSpacing`** — `{value, unit:"px"|"percent"}`; percent is of font size (−2 → −0.02em).
   Absent = 0.
-- **`font.color`** — first solid fill, hex.
+- **`font.color`** — first solid fill, hex (8-digit when alpha < 1).
 - **`font.case`** (`upper`/`lower`/`title`/`small_caps`…) → a text transform, not rewritten characters.
   **`font.decoration`** + `decorationStyle/Color/Thickness/Offset/SkipInk`. **`font.openType[]`** —
   enabled features (`TNUM` tabular numbers, `SMCP`, `LIGA`…).
@@ -173,14 +176,15 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 
 ## Navigation, prototypes and motion
 
-- **`reactions[]`** — `{trigger, timeout, delay, keyCodes, actions[]}`. `trigger`: `on_click`,
+- **`reactions[]`** — `{trigger, timeout, delay, keyCodes, device, actions[]}`. `trigger`: `on_click`,
   `on_hover`, `on_press`, `on_drag`, `after_timeout` (+`timeout`), `mouse_enter`/`mouse_leave`/
   `mouse_up`/`mouse_down` (+`delay`), `on_key_down` (+`keyCodes`), `on_media_hit`/`on_media_end`.
 - **`actions[]`** — `navigation`: `navigate` (route change) / `overlay` (modal/sheet/popover, with
   `overlayOffset`) / `swap` (replace overlay) / `scroll_to` / `change_to` (variant swap), with
   `destinationId`/`destination`. Or `type`: `back` / `close` / `url` (+`url`) / `set_variable`
   (`variable`, `value`) / `set_variable_mode` (`collection`, `mode` — a theme toggle) / `conditional`
-  (`conditionalBlocks[{condition, actions}]`). `preserveScroll`/`resetScroll` flags when set.
+  (`conditionalBlocks[{condition, actions}]`) / `update_media_runtime`. `preserveScroll`/`resetScroll`
+  flags when set.
 - **`transition`** — `type` (`dissolve`, `smart_animate`, `move_in`/`move_out`/`push`/`slide_in`/
   `slide_out` + `direction`), **`duration` in SECONDS**, `easing` (`ease_in`, `ease_out`,
   `ease_in_and_out`, `linear`, `ease_in_back`/`ease_out_back`/`ease_in_and_out_back`, `gentle`, `quick`,
@@ -212,6 +216,26 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 - **`measurements`** (Dev Mode redlines `start`/`end`/`offset`/`text`) → cross-check spacing.
 - **`css`** — Figma's computed CSS for the node. A strong hint and a verification oracle; reconcile
   against tokens rather than pasting verbatim.
-- **`devResources`** — linked Jira/Storybook/GitHub URLs; handoff context.
+- **`devResources`** (root, `{name, url, nodeId}`) — linked Jira/Storybook/GitHub URLs; handoff context.
 - **`sharedData.tokens`** — Tokens Studio applied tokens (property → token name) on files that don't
   use native variables.
+
+## Catalog files: states, styles, smells
+
+| Concern | File → field |
+|---|---|
+| Variant states | `design-system/components.local.json` `components[].props[*] {key, type:"VARIANT", options[], default}` — states are option VALUES (property often "Property 1") |
+| Per-variant trees | entry `variantsFile` / `nodeFile` (opt-in `--variant-visuals`) |
+| Library components | `components.library.json` — props SAMPLED from instances in this file |
+| Token catalog | `design-system/tokens.json` — `collections[] {name, modes, default, theming}`, `variables[] {name, type, collection, tier, values{mode: hex \| number \| {aliasOf}}, scopes, codeSyntax{WEB,ANDROID,iOS}, key}` |
+| Text/paint/effect/grid styles | `design-system/styles.{text,paint,effect,grid}.json` |
+| Smells | `design-system/hygiene.json` `hygiene[]` — ALL_SCOPES, raw semantic values, broken aliases, variant explosion (>30), unnamed/duplicate components. It does NOT check per-node unbound values — `audit.js` does. |
+| Color profile | `design-system.json` `colorProfile` (`srgb`/`display-p3`/`legacy`) — hex is always 8-bit sRGB-clamped |
+
+## Not in the export at all
+
+Designer intent that no field carries — it must come from annotations, other frames, or a question to
+the designer: loading/empty/error/offline screens (unless drawn as layers), accessibility
+labels/roles/focus order, font-scaling and localization behavior, breakpoints and other device sizes,
+keyboard behavior, gestures and haptics, validation rules, data formats, analytics, platform-control
+preferences, and exact P3 color values.

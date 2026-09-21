@@ -42,7 +42,7 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 ```
 node test/design-to-code.test.js       # expect: 241/241 checks passed, exit 0
 node test/audit.test.js                # expect: 61/61 checks passed, exit 0
-node test/verify-build.test.js         # expect: 46/46 checks passed, exit 0 — the build-screen Stop-hook gate,
+node test/verify-build.test.js         # expect: 47/47 checks passed, exit 0 — the build-screen Stop-hook gate,
                                        # and that claude-plugin/scripts/ is in sync with design-to-code/
                                        # (stale? run: node claude-plugin/build-scripts.js)
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake

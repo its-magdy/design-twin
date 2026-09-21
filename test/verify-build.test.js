@@ -111,6 +111,14 @@ check("fan-out: the session transcript is never used to scope a SUBAGENT's stop"
   fs.writeFileSync(main, "design/plan/login.json");
   return runHook(root, { cwd: root, agent_id: "a1", transcript_path: main }).status === 2 && runHook(root, { cwd: root, transcript_path: main }).status === 0;
 })());
+check("missing coverage / a11y evidence WARNS on a passing rendered plan — exit 0, still verified", (() => {
+  const files = { "a.tsx": "", "design/verify/login.png": "png" };
+  const bare = project(files, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
+  const full = project(files, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } });
+  const r1 = runHook(bare), r2 = runHook(full);
+  return r1.status === 0 && /coverage is missing/.test(r1.stderr) && /a11y is missing/.test(r1.stderr) && planOf(bare).status === "verified"
+    && r2.status === 0 && !/warning/.test(r2.stderr);
+})());
 check("abandoned / already-closed plans are skipped (fast path)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "abandoned", files: ["a.tsx"], tokens: [brand] });
   return runHook(root).status === 0 && planOf(root).status === "abandoned";
