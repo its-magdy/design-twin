@@ -142,12 +142,29 @@ function checkPlan({ plan }, cwd) {
 function passedStatus(plan) {
   return plan.verification && plan.verification.mode === "rendered" ? "verified" : "static-only";
 }
+function ownPlans(pending, input) {
+  if (pending.length < 2) return pending;
+  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
+  if (!file) return pending;
+  let text;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return pending;
+  }
+  const mine = pending.filter((p) => {
+    const base = path.basename(p.file);
+    return text.includes("plan/" + base) || text.includes("plan\\\\" + base);
+  });
+  return mine.length ? mine : pending;
+}
 function main() {
   const input = readStdinJson();
   if (input.stop_hook_active) process.exit(0);
   const cwd = input.cwd || process.cwd();
-  const plans = findPlans(cwd).filter((p) => (p.plan.status || "pending") === "pending" && !isStale(p.file));
-  if (!plans.length) process.exit(0);
+  const pending = findPlans(cwd).filter((p) => (p.plan.status || "pending") === "pending" && !isStale(p.file));
+  if (!pending.length) process.exit(0);
+  const plans = ownPlans(pending, input);
   const allProblems = [];
   for (const p of plans) {
     const problems = checkPlan(p, cwd);
@@ -155,7 +172,7 @@ function main() {
   }
   if (allProblems.length) {
     console.error("verify-build: build-screen check failed \u2014 do not report this screen as done until these are resolved");
-    console.error('(a plan that will not be finished: set its status to "abandoned"):\n');
+    console.error('(a plan that will not be finished: set its status to "abandoned"; a build paused on a question for the user: "awaiting-user", then ask):\n');
     console.error(allProblems.join("\n"));
     process.exit(2);
   }
@@ -165,5 +182,5 @@ function main() {
   }
   process.exit(0);
 }
-module.exports = { checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
 if (require.main === module) main();

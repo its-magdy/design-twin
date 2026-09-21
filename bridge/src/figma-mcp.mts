@@ -53,7 +53,48 @@ const { parseNodeId, toNodeId } = require("./node-id.js") as {
   toNodeId: (s?: string) => string;
 };
 
-const bridge = createBridge();
+// WHO holds the bridge. Port 8787 has one owner at a time, and this server used to insist on being
+// it: with `dtwin serve` running, or a second Claude Code session open, createBridge() hit
+// EADDRINUSE and the MCP server simply died. Now it does what the dtwin CLI has always done — route
+// through a live daemon when there is one — and, when it opens the bridge itself, serves the same
+// daemon socket so the NEXT session (or a `dtwin pull`) shares it instead of fighting for the port.
+// Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
+const daemon = require("./daemon.js") as {
+  connect: (port?: number) => Promise<null | { sock: string; request: (msg: unknown, timeoutMs?: number) => Promise<any> }>;
+  status: (port?: number) => Promise<any>;
+  serve: (bridge: unknown, opts: { log?: (m: string) => void; idleMin?: number; signals?: boolean }) => Promise<unknown>;
+};
+let own: Bridge | null = null;
+async function holder(): Promise<{ own: Bridge } | { via: NonNullable<Awaited<ReturnType<typeof daemon.connect>>> }> {
+  if (own) return { own };
+  const via = await daemon.connect();
+  if (via) return { via };
+  const mine = createBridge();
+  own = mine;
+  // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
+  // talking to a closed server.
+  const shared = Object.assign(Object.create(mine), { close: () => { own = null; (mine as any).close(); } });
+  daemon.serve(shared, { idleMin: 0, signals: false, log: (m) => console.error("[figma-mcp] " + m) })
+    .catch((e) => console.error("[figma-mcp] not sharing the bridge with other sessions: " + errMsg(e)));
+  return { own: mine };
+}
+const bridge = {
+  async request(cmd: string, args?: unknown, timeoutMs: number = TIMEOUTS.command, target?: string) {
+    const h = await holder();
+    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target);
+    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000);
+  },
+  async listClients(): Promise<any[]> {
+    const h = await holder();
+    return "own" in h ? h.own.listClients() : ((await daemon.status()) || {}).clients || [];
+  },
+  async connectionInfo() {
+    const h = await holder();
+    if ("own" in h) return h.own.connectionInfo();
+    const st = (await daemon.status()) || {};
+    return { via: "shared bridge (pid " + st.pid + ")", port: st.port, pluginConnected: st.pluginConnected };
+  },
+};
 
 // ---- result helpers ----
 function textResult(obj: unknown) {
@@ -170,7 +211,7 @@ server.registerTool(
   },
   guarded(async (a: any) => {
     const snapshot = readSnapshotInfo();
-    const clients = bridge.listClients();
+    const clients = await bridge.listClients();
     if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
     // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
     // failing. "Which files can I talk to?" is exactly what this tool is for.
@@ -204,7 +245,7 @@ server.registerTool(
     annotations: READ_ONLY,
   },
   guarded(async () => {
-    const clients = bridge.listClients();
+    const clients = await bridge.listClients();
     return textResult({
       clients,
       count: clients.length,
@@ -238,7 +279,7 @@ server.registerTool(
   },
   guarded(async (a: any) => textResult({
     plugin: await bridge.request("whoami", {}, TIMEOUTS.command, a && a.client),
-    connection: bridge.connectionInfo(),
+    connection: await bridge.connectionInfo(),
   }))
 );
 
@@ -675,7 +716,10 @@ async function main() {
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[figma-mcp] MCP server up (stdio). Bridge listening on ws://localhost:" + bridge.port + ".");
+  const h = await holder(); // resolve the bridge up front, so a port problem is reported at startup
+  console.error("[figma-mcp] MCP server up (stdio). " + ("own" in h
+    ? "Bridge listening on ws://localhost:" + h.own.port + "."
+    : "Sharing the bridge already running at " + h.via.sock + "."));
 }
 
 main().catch((e) => {

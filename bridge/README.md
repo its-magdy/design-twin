@@ -97,8 +97,8 @@ It needs no bridge, plugin or free port. It never overwrites: an existing `targe
 unparseable `.mcp.json` are all left alone and reported. The server is registered as `designtwin`,
 never `figma` — that is the name Figma's own MCP server usually has, and Claude Code loads one server
 per name, so the two sit side by side. `--mcp` is
-opt-in because a registered MCP server holds port 8787 while Claude Code runs, which rules out
-one-shot `dtwin` pulls in that project (use the export tools' `writeToDisk: true` instead). The two
+opt-in because a registered MCP server holds port 8787 for as long as Claude Code runs (`dtwin`
+commands still work — they route through it, see "One bridge, shared" below). The two
 steps it cannot do — importing the plugin into Figma and pasting the token — it prints.
 
 ## Commands at a glance
@@ -542,10 +542,13 @@ Use it for anything past a quick look. Two things make it not optional:
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
 building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.
 
-> **One bridge at a time.** `figma-pull` and `figma-mcp` both call `createBridge()` and bind port
-> 8787; whichever starts second hits `EADDRINUSE` and exits. So the CLI **cannot** run while the MCP
-> server is up — that's what `writeToDisk` exists to make unnecessary. Set `FIGMA_BRIDGE_PORT` if you
-> genuinely need both.
+> **One bridge, shared.** Port 8787 has one owner at a time. The MCP server and `dtwin serve` both
+> publish the bridge they own on a local socket, and everything that starts later — a `dtwin` command,
+> a second Claude Code session's MCP server — routes through it instead of binding the port again.
+> When the owner exits, the next MCP call opens the bridge itself (the plugin reconnects on its own).
+> The one holder that does NOT share is a plain one-shot `dtwin pull` with no daemon: while it runs,
+> anything else that needs the port exits with `EADDRINUSE`. `writeToDisk` is still the simplest way
+> to get files from inside an MCP session.
 
 **Look before you pull.** `figma_list_pages` (and `figma_list_children` to drill into one frame) return
 a cheap structural index — ids, names, types, sizes; no recursion, no assets, no node properties. Every
@@ -591,8 +594,9 @@ Pre-approve tools in `.claude/settings.json`:
 
 ## Notes / limits
 - The Figma file must be **open** with the plugin running for either path (never headless).
-- Only one of {figma-pull, figma-mcp} can hold port 8787 at a time — the second process now
-  exits immediately with a clear `EADDRINUSE` message instead of hanging.
+- One process owns port 8787 at a time. `figma-mcp` and `dtwin serve` share the bridge they own
+  (later `dtwin` commands and MCP servers route through it); only a one-shot pull does not, and a
+  process that then finds the port taken exits immediately with a clear `EADDRINUSE` message.
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").

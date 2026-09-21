@@ -41,4 +41,5 @@ jobs:
           node test/audit.test.js
           node test/verify-build.test.js
           node test/mcp-smoke.test.js
+          node test/mcp-share.test.js
           node test/ui.test.js

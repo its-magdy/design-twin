@@ -1711,6 +1711,12 @@ async function disconnectErr(code, reason) {
   ok("[verbs] an unknown sub-noun is a VerbError that names the valid ones",
     verbErr("list", "bogus") instanceof VerbError && /pages\|libraries\|clients/.test(verbErr("list", "bogus").message)
     && verbErr("token", "bogus") instanceof VerbError);
+  ok("[verbs] a near-miss of a verb is a VerbError with a suggestion, not a pull into ./whomai",
+    verbErr("whomai") instanceof VerbError && /dtwin whoami/.test(verbErr("whomai").message) && /dtwin pull whomai/.test(verbErr("whomai").message)
+    && verbErr("serv") instanceof VerbError && verbErr("lists") instanceof VerbError && verbErr("docter") instanceof VerbError);
+  ok("[verbs] ordinary folder names, paths and existing folders are never mistaken for a typo",
+    ["design", "out", "dist", "app", "build", "src", "figma", "./serv", "exports/list2"].every((d) => tr(d) === d)
+    && translate(["serv"], () => true).join(" ") === "serv" && tr("pull", "serv") === "serv");
   ok("[verbs] a verb missing its required id is a VerbError, not a silent full pull",
     verbErr("screenshot") instanceof VerbError && verbErr("screenshot", "--scale") instanceof VerbError
     && verbErr("list", "children") instanceof VerbError && verbErr("list", "children", "--json") instanceof VerbError);

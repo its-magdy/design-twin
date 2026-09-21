@@ -38,7 +38,7 @@ if (require.main === module && process.argv[2] === "doctor") {
 if (require.main === module) {
   const { translate, VerbError } = require("./verbs.js");
   try {
-    process.argv.splice(2, process.argv.length - 2, ...translate(process.argv.slice(2)));
+    process.argv.splice(2, process.argv.length - 2, ...translate(process.argv.slice(2), (p) => require("fs").existsSync(p)));
   } catch (e) {
     if (!(e instanceof VerbError)) throw e;
     console.error("[dtwin] error: " + e.message);
@@ -69,6 +69,7 @@ if (require.main === module) {
 //   dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
 //   dtwin mcp                                # run the MCP server (what .mcp.json points at)
 //   dtwin help                               = --help
+//   dtwin --version                          print the installed version
 //   A command is only recognised as the FIRST argument: `dtwin design` still pulls into ./design.
 //   For an outDir spelled like a command, write `dtwin pull list` or `dtwin ./list`.
 //
@@ -207,6 +208,10 @@ function usageText() {
   const out = [];
   for (let i = start; i < lines.length && lines[i].startsWith("//"); i++) out.push(lines[i].replace(/^\/\/ ?/, ""));
   return "dtwin — pull a design out of a running Figma file (Design Twin plugin) onto disk.\n\n" + out.join("\n");
+}
+if (require.main === module && ["--version", "-v", "version"].includes(process.argv[2])) {
+  console.log(require("./package.json").version);
+  process.exit(0);
 }
 if (require.main === module && process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
   console.log(usageText());

@@ -48,7 +48,7 @@ function framer(onFrame) {
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
 // existing caller was written against.
-function serve(bridge, { port, log } = {}) {
+function serve(bridge, { port, log, idleMin, signals = true } = {}) {
   const sock = sockPath(port);
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
@@ -63,7 +63,9 @@ function serve(bridge, { port, log } = {}) {
     // Deliberately generous: this exists to reap ABANDONED daemons, not to punish thinking time. The
     // clock resets on every request, and a request in flight holds it off entirely (a 15-minute
     // --all-pages export must never be shot in the back by its own daemon). 0 disables it.
-    const idleMs = Math.max(0, Number(process.env.FIGMA_DAEMON_IDLE_MIN ?? 120)) * 60000;
+    // `idleMin` lets a host that has its OWN lifetime (the MCP server lives as long as its Claude
+    // session) serve the socket without being reaped from under that session.
+    const idleMs = Math.max(0, Number(idleMin ?? process.env.FIGMA_DAEMON_IDLE_MIN ?? 120)) * 60000;
     let lastActivity = Date.now();
     let inFlight = 0;
     const touch = () => { lastActivity = Date.now(); };
@@ -144,7 +146,10 @@ function serve(bridge, { port, log } = {}) {
     }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
     // socket nobody is listening on.
-    for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { shutdown(); process.exit(0); });
+    if (signals) for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { shutdown(); process.exit(0); });
+    // A host that exits some other way (the MCP server ends when its stdio closes) still must not
+    // leave the socket file behind for the next probe to trip over.
+    else process.on("exit", () => { try { fs.unlinkSync(sock); } catch (e) {} });
 
     return new Promise((resolve, reject) => {
       server.once("error", reject);

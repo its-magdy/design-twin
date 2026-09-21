@@ -15,9 +15,9 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   manifest…*. It lives under **Plugins → Development**, not the main plugin list.
 - **`EADDRINUSE` / bridge hangs on connect** → port 8787 is held; only one bridge at a time. Check
   `dtwin --daemon-status` first — if a daemon is up, ordinary commands route
-  through it and nothing needs stopping, so this means something *else* holds the port (usually the
-  MCP server, or a stale `node`). If the MCP is the holder and you wanted files, use `writeToDisk:
-  true` rather than killing it.
+  through it and nothing needs stopping, so this means something *else* holds the port: a one-shot
+  `dtwin pull` still running, a stale `node`, or an MCP server from an older install (current ones
+  share the bridge and show up in `dtwin status`). Wait for the pull, or stop the stale process.
 - **The plugin isn't connecting** → open its **Connect to Claude Code (optional)** section (collapsed by
   default; the pill in its header always shows the state) and read which of these it says:
   - `not set up` — no token pasted. It won't dial until you paste one into **Bridge token** + Save.

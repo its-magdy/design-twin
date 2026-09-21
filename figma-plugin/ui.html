@@ -71,6 +71,7 @@
 <div class="label">Export</div>
 <button id="run-sel" disabled>Export current selection</button>
 <button id="run-full" class="primary">Export design system + all page frames</button>
+<div class="hint" style="margin-top:6px">The full export walks every page — on a large file it can take several minutes. You can cancel it.</div>
 <!-- Shown only while a run is walking the file — INCLUDING one a CLI/MCP client started, which the
      designer never clicked for and would otherwise have no way to stop. -->
 <button id="cancel" hidden>Cancel export</button>
@@ -93,7 +94,7 @@
     <button id="save-token" style="flex: 0 0 60px">Save</button>
   </div>
   <div id="bridge" role="status" aria-live="polite">Not set up.</div>
-  <div class="hint">Lets the <code>dtwin</code> command line or the Design Twin MCP server pull this file directly, instead of you downloading it. It runs on your own computer only (localhost) — nothing is sent over the internet. Get the token by running <code>dtwin --show-token</code> in a terminal; you paste it once.</div>
+  <div class="hint">Lets the <code>dtwin</code> command line or the Design Twin MCP server pull this file directly, instead of you downloading it. It runs on your own computer only (localhost) — nothing is sent over the internet. Get the token by running <code>dtwin token show</code> in a terminal — or ask whoever set this up to send it to you. You paste it once.</div>
 </details>
 
 <script>

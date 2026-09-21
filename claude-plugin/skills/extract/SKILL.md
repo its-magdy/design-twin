@@ -1,6 +1,7 @@
 ---
 name: extract
 description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, synced, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "re-sync the tokens", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen.
+argument-hint: "[what to pull: page, frame name, node id or Figma URL]"
 ---
 
 # Extract a design from Figma

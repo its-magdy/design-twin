@@ -8,7 +8,38 @@ const require2 = createRequire(import.meta.url);
 const { READ_OPTS } = require2("./read-opts.js");
 const { createBridge, TIMEOUTS, exportTimeout, errMsg } = require2("./server-core.js");
 const { parseNodeId, toNodeId } = require2("./node-id.js");
-const bridge = createBridge();
+const daemon = require2("./daemon.js");
+let own = null;
+async function holder() {
+  if (own) return { own };
+  const via = await daemon.connect();
+  if (via) return { via };
+  const mine = createBridge();
+  own = mine;
+  const shared = Object.assign(Object.create(mine), { close: () => {
+    own = null;
+    mine.close();
+  } });
+  daemon.serve(shared, { idleMin: 0, signals: false, log: (m) => console.error("[figma-mcp] " + m) }).catch((e) => console.error("[figma-mcp] not sharing the bridge with other sessions: " + errMsg(e)));
+  return { own: mine };
+}
+const bridge = {
+  async request(cmd, args, timeoutMs = TIMEOUTS.command, target) {
+    const h = await holder();
+    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target);
+    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 3e4);
+  },
+  async listClients() {
+    const h = await holder();
+    return "own" in h ? h.own.listClients() : (await daemon.status() || {}).clients || [];
+  },
+  async connectionInfo() {
+    const h = await holder();
+    if ("own" in h) return h.own.connectionInfo();
+    const st = await daemon.status() || {};
+    return { via: "shared bridge (pid " + st.pid + ")", port: st.port, pluginConnected: st.pluginConnected };
+  }
+};
 function textResult(obj) {
   return { content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
 }
@@ -63,7 +94,7 @@ server.registerTool(
   },
   guarded(async (a) => {
     const snapshot = readSnapshotInfo();
-    const clients = bridge.listClients();
+    const clients = await bridge.listClients();
     if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
     if (clients.length > 1 && !(a && a.client)) {
       return textResult({
@@ -83,7 +114,7 @@ server.registerTool(
     annotations: READ_ONLY
   },
   guarded(async () => {
-    const clients = bridge.listClients();
+    const clients = await bridge.listClients();
     return textResult({
       clients,
       count: clients.length,
@@ -107,7 +138,7 @@ server.registerTool(
   },
   guarded(async (a) => textResult({
     plugin: await bridge.request("whoami", {}, TIMEOUTS.command, a && a.client),
-    connection: bridge.connectionInfo()
+    connection: await bridge.connectionInfo()
   }))
 );
 server.registerTool(
@@ -416,7 +447,8 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[figma-mcp] MCP server up (stdio). Bridge listening on ws://localhost:" + bridge.port + ".");
+  const h = await holder();
+  console.error("[figma-mcp] MCP server up (stdio). " + ("own" in h ? "Bridge listening on ws://localhost:" + h.own.port + "." : "Sharing the bridge already running at " + h.via.sock + "."));
 }
 main().catch((e) => {
   console.error("[figma-mcp] fatal:", errMsg(e));

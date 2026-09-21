@@ -75,25 +75,42 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
     of truth).
 
 ## One-time setup
-**Shortcut:** `cd bridge && npm install`, then in the project you are building run
-`node /path/to/design-twin/bridge/figma-pull.js init` (`dtwin init` once the npm package is published;
-add `--mcp` to register the MCP server, `--dry-run` to preview). It creates `design/`, writes
-`design/target.json` for the detected stack, makes sure a bridge token exists, and prints the steps
-that are clicks in Figma (import the plugin, paste the token). It never overwrites a file. By hand:
+> Needs the Figma **desktop app** — a browser tab cannot import a development plugin. Nothing here is
+> published yet (npm, Figma Community), so everything runs from a clone of this repo.
 
-`design/` starts empty (or absent) — the plugin export / `figma-pull` creates it and its generated
-files. You only author the config maps below.
-1. Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so no build is needed to use it. To edit the extractor, see `figma-plugin/README.md` — TypeScript source lives in `figma-plugin/src/`, `npm run build` regenerates `code.js`.)
-2. Create `design/target.json` for your stack (or let the skill auto-detect from the repo on first run
-   and offer to write it). If your stack isn't in `claude-plugin/skills/build-screen/profiles/`, copy its
-   `_template.md` to a root-level `profiles/<name>.md` in your project and fill it in — it overrides
-   the skill's bundled profiles.
-3. Create `design/tokens.json` and `design/components.json` for your project. Shapes:
-   - `tokens.json` — `{ "color": { "color/primary": "<your token>" }, "spacing": {…}, "radius": {…}, "typography": {…} }`
-     (left = Figma variable path from `variables.json`; right = your stack's token form).
-   - `components.json` — `{ "Button": { "import": "import { Button } from '@yourorg/ui'", "component": "Button", "props": { "Variant": "variant" } } }`.
-   These are optional but recommended: without them the skill auto-detects the stack, regenerates
-   components instead of reusing yours, and the token drift check has nothing to compare against.
+1. **Get the tools.** `git clone` this repo, then `cd bridge && npm install`. For a `dtwin` command
+   on your PATH run `npm link` there as well; otherwise spell it `node /path/to/design-twin/bridge/figma-pull.js`.
+2. **Import the Figma plugin.** Figma desktop app → **Plugins → Development → Import plugin from
+   manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so there is
+   nothing to build. To edit the extractor see `figma-plugin/README.md`.)
+3. **Install the Claude Code plugin** — this is what provides `/designtwin:extract`,
+   `/designtwin:audit-design` and `/designtwin:build-screen`:
+   `claude plugin marketplace add /path/to/design-twin` then
+   `claude plugin install designtwin@designtwin-marketplace`
+   (or, for one session only, `claude --plugin-dir /path/to/design-twin/claude-plugin`).
+4. **Set up the project you are building.** In its root run **`dtwin init`** (add `--mcp` to register
+   the MCP server, `--dry-run` to preview). It creates `design/`, writes `design/target.json` for the
+   detected stack, makes sure a bridge token exists, and prints the steps left. Paste the token into
+   the plugin's **Bridge token** field once (`dtwin token show` prints it). It never overwrites a file.
+5. **Check it.** Open the Figma file, run the plugin, then `dtwin doctor` — it says exactly which of
+   token / port / plugin / project is not right yet.
+
+No terminal at all? Skip 1, 4 and 5: the plugin's export buttons produce download links, and you save
+those into `design/` by hand (step 2 of the loop below).
+
+**Tell it about your code (recommended).** Without these the skill regenerates components instead of
+reusing yours, and the token drift check has nothing to compare against:
+- **`codeconnect.local.json`** (project root) — Figma component → your code component, keyed by the
+  component's stable publish `key`. `/designtwin:build-screen` scaffolds it on the first build
+  (`map-bootstrap.js`) and asks you to confirm the stubs; `drift-lint` then flags entries the design
+  has moved away from. *(An older name-keyed `design/components.json` is still read, but it cannot
+  detect drift — prefer `codeconnect.local.json`.)*
+- **`design/tokens.json`** (optional overrides) — `{ "color": { "color/primary": "<your token>" }, … }`:
+  left is the Figma variable path, right is your stack's token. Variables that carry a `codeSyntax`
+  in Figma need no entry.
+- **`design/target.json`** — which stack profile to emit (written by `dtwin init`, or auto-detected).
+  If your stack isn't in `claude-plugin/skills/build-screen/profiles/`, copy its `_template.md` to a
+  root-level `profiles/<name>.md` in your project and fill it in — it overrides the bundled profiles.
 
 ## Per-screen loop
 1. In Figma, select the frame → run **Plugins → Development → Design Twin** →
@@ -171,7 +188,7 @@ are committed bundles: after editing `design-to-code/*.js` run `node claude-plug
 `.mcp.json`: the MCP server is registered in the project you point it at, not here.
 
 To try it locally: `claude --plugin-dir /path/to/this/repo/claude-plugin`. To hand it to a teammate: they run
-`claude plugin marketplace add <you>/Figma` then `claude plugin install designtwin@designtwin-marketplace`
+`claude plugin marketplace add <your-git-host>/<you>/design-twin` then `claude plugin install designtwin@designtwin-marketplace`
 (or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
 for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate ./claude-plugin`
 checks the plugin manifest before you publish (`validate .` checks the *marketplace* manifest instead). The Figma-side plugin import (`figma-plugin/manifest.json`)

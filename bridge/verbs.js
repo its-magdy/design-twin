@@ -25,7 +25,7 @@ const VERBS = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status"
 
 const isFlag = (a) => typeof a === "string" && a.startsWith("-");
 
-function translate(argv) {
+function translate(argv, exists = () => false) {
   const [verb, ...rest] = argv;
   if (!verb || isFlag(verb)) return argv;
   if (verb === "pull") return rest;
@@ -49,7 +49,41 @@ function translate(argv) {
     // `dtwin screenshot <id> [outDir] [flags]` — the id is the flag's value, the rest passes through.
     return ["--screenshot", rest[0], ...rest.slice(1)];
   }
-  return argv; // not a verb: a positional outDir, exactly as before
+  // Not a verb: a positional outDir, exactly as before — unless it is a near-miss of one. `dtwin whomai`
+  // used to start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
+  // a typo than a folder. A path (`./serv`), an existing folder (`exists`), or `dtwin pull serv` opts out.
+  if (VERBS.includes(verb)) return argv; // doctor | init | mcp: routed by figma-pull.js, not translated here
+  const near = nearestVerb(verb);
+  if (near && !/[\\/.]/.test(verb) && !exists(verb))
+    throw new VerbError(`unknown command \`${verb}\` — did you mean \`dtwin ${near}\`? (to export into a folder named "${verb}": dtwin pull ${verb})`);
+  return argv;
+}
+
+function distance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
+}
+
+// Two edits for the longer verbs. A short verb ("pull", "list", "stop", "mcp" …) is one edit from real
+// folder names ("dist" ↔ "list"), so there only a dropped or extra LAST letter counts ("lis", "lists").
+function nearestVerb(word) {
+  const w = String(word).toLowerCase();
+  let best = null;
+  for (const v of VERBS) {
+    const d = distance(w, v);
+    const ok = v.length >= 5 ? d <= (v.length >= 6 ? 2 : 1) : d === 1 && (w.startsWith(v) || v.startsWith(w));
+    if (ok && (!best || d < best.d)) best = { v, d };
+  }
+  return best && best.v;
 }
 
 module.exports = { translate, VerbError, VERBS };

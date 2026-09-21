@@ -1,6 +1,7 @@
 ---
 name: help
 description: Orientation, connection, one-time setup and troubleshooting for Design Twin, the free-plan Figma→code workflow. Use this whenever the user asks a discovery-shaped question — "how does this work", "what can this plugin do", "how do I connect Claude to Figma", "is there a CLI", "what's the MCP server for", "how do I set this up", which export path to use — even if they don't name a command; when they are about to try a Figma task but have no connection set up yet; and whenever something is broken (plugin won't import, port 8787 busy / EADDRINUSE, bridge token / 401, plugin stays offline, MCP not connecting, empty library list, stale snapshot, scripts not found). It orients, routes and diagnoses; it does not export (that's extract), review a design (that's audit-design) or write code (that's build-screen).
+argument-hint: "[question or symptom]"
 ---
 
 # Design Twin — what it is, how to connect, what to do when it breaks
@@ -30,12 +31,13 @@ Twin" plugin running** (Figma desktop → Plugins → Development → Design Twi
 **Default to manual export for a brand-new user** — it needs nothing installed and always works.
 Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to query Figma live.
 
-**The one thing to say up front: the CLI, its `--serve` daemon and the MCP server all bind port 8787
-(loopback), so exactly one can hold it at a time.** Whichever starts second exits with `EADDRINUSE`.
-- While the **MCP server** runs, `dtwin` cannot. Use `writeToDisk: true` on the MCP export tools
-  instead — that is the MCP path's way to get files, and the **only** way to get asset bytes.
-- While a **daemon** (`dtwin --serve`) runs, ordinary `dtwin` commands work normally — they detect
-  it and route through it. Nothing changes in how you invoke them.
+**The one thing to say up front: port 8787 (loopback) has one owner at a time, and the owner shares.**
+- While the **MCP server** or a **daemon** (`dtwin serve`) holds it, ordinary `dtwin` commands and a
+  second Claude Code session's MCP server work normally — they detect the owner and route through
+  it. Nothing changes in how you invoke them. Inside an MCP session, `writeToDisk: true` on the
+  export tools is still the simplest way to get files, and the **only** MCP way to get asset bytes.
+- The exception is a plain one-shot `dtwin pull` with no daemon: it does not share, so an MCP server
+  or second pull started while it runs exits with `EADDRINUSE`. Wait for it, or use `dtwin serve`.
 - To run two bridges deliberately, set `FIGMA_BRIDGE_PORT` on one (`8788` or `8789` — the only other
   ports the plugin can dial).
 

@@ -37,7 +37,7 @@
 // Plan file shape (written by build-screen step 2, see SKILL.md):
 //   {
 //     "screen": "login",
-//     "status": "pending" | "verified" | "static-only" | "abandoned",
+//     "status": "pending" | "awaiting-user" | "verified" | "static-only" | "abandoned",
 //     "files": ["src/screens/Login.tsx", ...],
 //     "tokens": [{ "value": "#5B5FC7", "kind": "color", "codeToken": "brand-600"|null, "verdict": "exact"|"missing"|"decided", "decision": "..."?}],
 //     "components": [{ "name": "Button", "key": "...", "mapModule": "@/ui/Button"|null, "verdict": "reused"|"new"|"missing" }],
@@ -49,6 +49,13 @@
 // "static-only" otherwise — so a report can never claim a rendered match the plan does not evidence.
 // Set status "abandoned" by hand to retire a plan that will not be finished (otherwise it nags on
 // every stop for the rest of the session).
+//
+// "awaiting-user" is a build PAUSED on a question only the user can answer (an unresolved MISSING
+// token, an audit blocker). The skill tells the agent to end the turn and ask at exactly those
+// points; a half-written plan (files: []) would otherwise fail here and push the agent to keep
+// building instead of asking. The hook skips such a plan and never closes it: the agent sets it back
+// to "pending" when it resumes, and only a pending plan that passes every check becomes
+// "verified"/"static-only" — so pausing cannot be used to get a build approved.
 //
 // A pending plan nobody has touched for STALE_HOURS is left alone: it is a leftover from an earlier
 // session, not this turn's work, and blocking today's unrelated stops on it helps no one. The plan
@@ -217,14 +224,35 @@ function passedStatus(plan) {
   return plan.verification && plan.verification.mode === "rendered" ? "verified" : "static-only";
 }
 
+// Several screens build in parallel (one screen-builder agent each), and every one of them lands
+// here when it stops. Judging ALL pending plans then blocks agent A on agent B's half-written plan —
+// problems A was never given and cannot fix. So narrow to the plans the stopping agent itself worked
+// on: the ones whose path appears in ITS transcript (a subagent's own transcript when the payload
+// names one, else the session's). Narrowing only ever happens on positive evidence — no readable
+// transcript, or none of the pending plans mentioned, keeps every plan, exactly as before. A plan
+// left out is not approved: it stays "pending" for its own agent's stop.
+function ownPlans(pending, input) {
+  if (pending.length < 2) return pending;
+  const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
+  if (!file) return pending;
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch { return pending; }
+  const mine = pending.filter((p) => {
+    const base = path.basename(p.file);
+    return text.includes("plan/" + base) || text.includes("plan\\\\" + base);
+  });
+  return mine.length ? mine : pending;
+}
+
 function main() {
   const input = readStdinJson();
   if (input.stop_hook_active) process.exit(0); // avoid re-entrant loops on the same turn
 
   const cwd = input.cwd || process.cwd();
   // Only "pending" is open work. A plan with no status at all is treated as pending (older plans).
-  const plans = findPlans(cwd).filter((p) => (p.plan.status || "pending") === "pending" && !isStale(p.file));
-  if (!plans.length) process.exit(0); // fast path: no pending build-screen work this session
+  const pending = findPlans(cwd).filter((p) => (p.plan.status || "pending") === "pending" && !isStale(p.file));
+  if (!pending.length) process.exit(0); // fast path: no pending build-screen work this session
+  const plans = ownPlans(pending, input);
 
   const allProblems = [];
   for (const p of plans) {
@@ -234,7 +262,7 @@ function main() {
 
   if (allProblems.length) {
     console.error("verify-build: build-screen check failed — do not report this screen as done until these are resolved");
-    console.error("(a plan that will not be finished: set its status to \"abandoned\"):\n");
+    console.error("(a plan that will not be finished: set its status to \"abandoned\"; a build paused on a question for the user: \"awaiting-user\", then ask):\n");
     console.error(allProblems.join("\n"));
     process.exit(2);
   }
@@ -247,6 +275,6 @@ function main() {
   process.exit(0);
 }
 
-module.exports = { checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
 
 if (require.main === module) main();

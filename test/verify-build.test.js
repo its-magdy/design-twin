@@ -89,6 +89,28 @@ check("passing rendered plan → status \"verified\"", (() => {
   const root = project({ "a.tsx": "", "design/verify/login.png": "png" }, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
   return runHook(root).status === 0 && planOf(root).status === "verified";
 })());
+check("a plan paused on a user question (awaiting-user) does not block the stop, and is never closed", (() => {
+  const root = project({}, { status: "awaiting-user", files: [], tokens: [{ value: "#123456", kind: "color", codeToken: null, verdict: "missing" }] });
+  return runHook(root).status === 0 && planOf(root).status === "awaiting-user";
+})());
+check("fan-out: an agent is judged on the plan ITS transcript mentions, not a sibling's half-written one — which stays pending", (() => {
+  const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  const sibling = path.join(root, "design", "plan", "settings.json");
+  fs.writeFileSync(sibling, JSON.stringify({ status: "pending", files: [] }));
+  const mine = path.join(root, "agent-a.jsonl"), none = path.join(root, "none.jsonl");
+  fs.writeFileSync(mine, JSON.stringify({ tool: "Write", file_path: root + "/design/plan/login.json" }));
+  fs.writeFileSync(none, "{}");
+  const unscoped = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: none }).status; // no evidence → all plans → blocked
+  const r = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: mine });
+  return unscoped === 2 && r.status === 0 && planOf(root).status === "static-only" && JSON.parse(fs.readFileSync(sibling, "utf8")).status === "pending";
+})());
+check("fan-out: the session transcript is never used to scope a SUBAGENT's stop", (() => {
+  const root = project({ "a.tsx": "text-brand-600" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  fs.writeFileSync(path.join(root, "design", "plan", "settings.json"), JSON.stringify({ status: "pending", files: [] }));
+  const main = path.join(root, "main.jsonl");
+  fs.writeFileSync(main, "design/plan/login.json");
+  return runHook(root, { cwd: root, agent_id: "a1", transcript_path: main }).status === 2 && runHook(root, { cwd: root, transcript_path: main }).status === 0;
+})());
 check("abandoned / already-closed plans are skipped (fast path)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "abandoned", files: ["a.tsx"], tokens: [brand] });
   return runHook(root).status === 0 && planOf(root).status === "abandoned";
@@ -150,6 +172,21 @@ check("every entry is a committed REAL file (a symlink out of the plugin dir is 
 }));
 check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n) =>
   !/require\(["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
+
+// A skill that tells the agent to run one of these with no arguments hands it a usage error in the
+// gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
+{
+  const NEEDS_ARGS = ["drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate"];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
+  const bare = [];
+  for (const f of [...walk(path.join(SCRIPTS, "..", "skills")), ...walk(path.join(SCRIPTS, "..", "agents"))]) {
+    const text = fs.readFileSync(f, "utf8");
+    for (const m of text.matchAll(/scripts\/([a-z-]+)\.js"(\s*)(\S)/g))
+      if (NEEDS_ARGS.includes(m[1]) && (m[3] === "`" || m[3] === ")")) bare.push(`${path.basename(path.dirname(f))}/${path.basename(f)}: ${m[1]}.js`);
+  }
+  check("skill docs never invoke an argument-taking script bare" + (bare.length ? " — " + bare.join(", ") : ""), bare.length === 0);
+}
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 build(tmp).then(() => {

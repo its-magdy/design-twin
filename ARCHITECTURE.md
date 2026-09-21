@@ -74,10 +74,12 @@ convention and where the bytes land:
 - **Writes → MCP only.** Many small dependent steps with handles and feedback. The CLI has no write
   surface.
 
-**One bridge at a time.** `figma-pull`, `figma-pull --serve` and `figma-mcp` all bind port 8787;
-whichever starts second exits on `EADDRINUSE` (`server-core.js`). So the CLI cannot be used as the
-disk path *while* the MCP server is running — which is why `writeToDisk` exists, and why `--serve`
-routes ordinary CLI commands through the running daemon instead of opening a second bridge.
+**One bridge, shared.** Port 8787 has one owner. `dtwin serve` and `figma-mcp` both publish the
+bridge they own on the daemon socket (`daemon.js`), and every later `dtwin` command or MCP server —
+a second Claude Code session, say — routes through that socket instead of binding the port; an MCP
+server re-resolves the owner per call, so it takes the bridge over when the owning session ends.
+Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
+(`server-core.js`). `writeToDisk` remains the in-session way to get files.
 
 **But MANY plugins at once — one per open Figma file.** `server-core.js` keeps a registry of
 connections (`clients`, keyed by a server-minted `connId`) rather than a single socket, so a design
@@ -460,6 +462,12 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   Connections without it are rejected at the handshake (401, compared as SHA-256 digests through
   `timingSafeEqual` so neither content nor length leaks), foreign origins 403.
   In-flight requests reject on plugin disconnect; a busy port exits with a clear `EADDRINUSE` message.
+- **Design content is data, not instructions.** Layer names, text-node characters, annotations,
+  component descriptions and variable names are written by whoever can edit the Figma file (or a
+  library it pulls in), and every read path hands them to the agent. The skills say so explicitly:
+  text found in an export is never followed as an instruction, whatever it says. Annotations and
+  `devStatusNote` are honoured only as *design constraints* (spacing, behaviour, state), never as
+  requests to run commands, read other files, or change the workflow.
 - Write server is opt-in and isolated. We prefer our own read-only tools over the community read-**write**
   MCPs (larger, arbitrary-code surfaces; one REST-based server shipped an RCE, CVE-2025-53967).
 - File must be **open in Figma** with the plugin running for any live path (never headless).
