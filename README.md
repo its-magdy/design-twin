@@ -43,35 +43,47 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
   conversions (e.g. Figma letter-spacing % → em on Compose/CSS, points on iOS); add
   your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
   overrides the skill's bundled set).
-- `design/` — a **generated, untracked drop-target** (does not exist until you create it or run an
-  export). It holds two kinds of files:
-  - **Generated exports** (regenerable — recreated on every plugin export / `figma-pull` run):
-    `<screen>.json`, `variables.json`, `assets/` (icons/images **plus** a full-frame reference PNG
-    per frame, referenced from the JSON's `reference` field — plus, on demand, a single-node reference
-    PNG for one component via `dtwin --screenshot <id>` / `figma_screenshot`, see `bridge/README.md`),
-    and for full pulls `design-system.json`
-    — a slim manifest (`exportedAt`/`file`/`colorProfile` + pointers + counts) over the catalog split
-    under `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections →
-    modes → variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json`
-    (the separate, older style system, one file per style type),
-    `components.local.json` (component sets/variants that are real nodes in this file — each
-    COMPONENT_SET's own heavy per-variant node tree, or a standalone COMPONENT's own node tree, lives
-    in a sibling `components/<name>__<id>.json`, pointed at by that entry's `variantsFile`/`nodeFile`;
-    `design-to-code/get-component.js` resolves one and follows it),
-    `components.library.json` (entries flagged `remote: true` — consumed from a published library,
-    recovered from instances, **not** nodes here) and `hygiene.json` (the lint report)
-    and, when you pull a LIBRARY file with `--as-library`, `libraries/index.json` + one
-    `libraries/<slug>-<fileKey8>/` per library (same taxonomy as `design-system/`, plus `index.json`
-    and a `source` block naming the library; a library catalog is the COMPLETE contents of that library
-    file, whereas `design-system/` is the design file's own — the two join on `key`, never on names)
-    + `pages/index.json` + one `pages/<page>/index.json` + `pages/<page>/<name>__<id>.json` per **layer**
-    — split per-page, per-file rather than one combined `screens.json` (a real export can be tens of
-    MB), mirroring Figma's own Page > Frame containment (a page holds many layers, never the reverse).
-    ("Layer" is Figma's own term for any object in a file; "screen" here stays reserved for a single
-    node you deliberately selected — `<screen>.json` above — not everything a full-page walk sweeps up.)
-  - **Your config maps** (hand-authored — **not** regenerable, so back them up): `target.json`
-    (which stack; auto-detected if absent), `tokens.json` (Figma variable → your code token; styling
-    source of truth), `components.json` (Figma component → your code component + import; reuse source
+- `design/` — the project's design directory, laid out in two halves so the line between
+  "regenerable" and "irreplaceable" is visible rather than remembered:
+
+  **`design/export/` — `dtwin` writes here and nowhere else.** Delete it and re-pull and you lose
+  nothing.
+  - `pages/index.json` → `pages/<Page>/index.json` → `pages/<Page>/<Name>__<node-id>.json` — **one
+    file per layer, and per screen**. A `--node` pull and a `--page` pull file into the same tree, so
+    nothing downstream needs to know which produced a file. The node id is in the name because a
+    frame NAME does not identify a frame (two `Popup`s on one page are two screens). Split per-page,
+    per-file rather than one combined JSON — a real export is tens of MB. ("Layer" is Figma's own term
+    for any object in a file; "screen" stays reserved for a node you deliberately selected.)
+  - Beside each screen: `…__<id>.vars.json` (exactly the variables it binds) and `…__<id>.assets.json`
+    (its assets with content hashes, plus `duplicates`, `monochrome` and `heavy`).
+  - `variables.json` — the **union** of every screen pulled here. It merges, keyed on each variable's
+    Figma key, so pulling a second screen does not delete the first's tokens.
+  - `assets/` — icons/images named after their Figma layer and deduped by content, **plus** a
+    full-frame reference PNG per frame (referenced from the JSON's `reference` field), and any
+    single-node reference shot by `dtwin screenshot <id>` / `figma_screenshot`.
+  - `design-system.json` (full or `--design-system` pulls) — a slim manifest
+    (`exportedAt`/`file`/`colorProfile` + pointers + counts) over the catalog split under
+    `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections → modes →
+    variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` (the
+    separate, older style system, one file per type), `components.local.json` (component
+    sets/variants that are real nodes in this file — each COMPONENT_SET's heavy per-variant node
+    tree, or a standalone COMPONENT's own tree, lives in a sibling `components/<name>__<id>.json`
+    pointed at by that entry's `variantsFile`/`nodeFile`; `design-to-code/get-component.js` resolves
+    one and follows it), `components.library.json` (`remote: true` — consumed from a published
+    library, recovered from instances, **not** nodes here) and `hygiene.json` (the lint report).
+  - `libraries/index.json` + one `libraries/<slug>-<fileKey8>/` per library pulled with
+    `--as-library` (same taxonomy as `design-system/`, plus a `source` block naming the library). A
+    library catalog is the COMPLETE contents of that library file, whereas `design-system/` is the
+    design file's own — the two join on `key`, never on names.
+
+  **Everything else under `design/` is yours** — hand-authored or written by a skill, and **not
+  regenerable**: `README.md` (says exactly this, where someone about to delete files will see it),
+  `target.json` (which stack), `tokens.json` (Figma variable → your code token),
+  `codeconnect.local.json` (Figma component → your code component + import), and `plan/`, `audit/`,
+  `verify/`, `sync/` — the decisions and evidence each skill produces. Commit them.
+
+  Projects created before this split keep their export directly in `design/`; everything still finds
+  it, and `dtwin doctor` reports which layout it found.
     of truth).
 
 ## One-time setup
@@ -89,8 +101,10 @@ and the right-hand values in `tokens.json`/`components.json`. One plugin, any fr
    `claude plugin install designtwin@designtwin-marketplace`
    (or, for one session only, `claude --plugin-dir /path/to/design-twin/claude-plugin`).
 4. **Set up the project you are building.** In its root run **`dtwin init`** (add `--mcp` to register
-   the MCP server, `--dry-run` to preview). It creates `design/`, writes `design/target.json` for the
-   detected stack, makes sure a bridge token exists, and prints the steps left. Paste the token into
+   the MCP server, `--dry-run` to preview). It creates `design/` and `design/export/`, writes
+   `design/README.md` and `design/target.json` (the detected stack, or `profile: null` for
+   build-screen to fill in on its first run), makes sure a bridge token exists, and prints the steps
+   left. Paste the token into
    the plugin's **Bridge token** field once (`dtwin token show` prints it). It never overwrites a file.
 5. **Check it.** Open the Figma file, run the plugin, then `dtwin doctor` — it says exactly which of
    token / port / plugin / project is not right yet.
@@ -100,11 +114,11 @@ those into `design/` by hand (step 2 of the loop below).
 
 **Tell it about your code (recommended).** Without these the skill regenerates components instead of
 reusing yours, and the token drift check has nothing to compare against:
-- **`codeconnect.local.json`** (project root) — Figma component → your code component, keyed by the
+- **`design/codeconnect.local.json`** — Figma component → your code component, keyed by the
   component's stable publish `key`. `/designtwin:build-screen` scaffolds it on the first build
   (`map-bootstrap.js`) and asks you to confirm the stubs; `drift-lint` then flags entries the design
-  has moved away from. *(An older name-keyed `design/components.json` is still read, but it cannot
-  detect drift — prefer `codeconnect.local.json`.)*
+  has moved away from. *(Older projects keep it at the repo root; `dtwin doctor` finds either. An
+  older name-keyed `design/components.json` is still read, but it cannot detect drift.)*
 - **`design/tokens.json`** (optional overrides) — `{ "color": { "color/primary": "<your token>" }, … }`:
   left is the Figma variable path, right is your stack's token. Variables that carry a `codeSyntax`
   in Figma need no entry.
@@ -115,21 +129,26 @@ reusing yours, and the token drift check has nothing to compare against:
 ## Per-screen loop
 1. In Figma, select the frame → run **Plugins → Development → Design Twin** →
    click **Export current selection** (or **Export design system + all page frames** for a full pull).
-2. Save the resulting **Download …** links into `design/`:
-   - "Download <screen>.json" → `design/<screen>.json`
-   - "Download variables.json" → `design/variables.json`
-   - "Download assets (N)" → `design/assets/` — this now includes a **full-frame reference PNG**
-     per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The `<screen>.json`
-     points at it via a `reference` field, and `/designtwin:build-screen` self-corrects against it. No manual
-     screenshot step needed anymore.
+2. Save the resulting **Download …** links into `design/export/` (the CLI writes there directly):
+   - "Download <screen>.json" → the screen tree
+   - "Download variables.json" → `design/export/variables.json`
+   - "Download assets (N)" → `design/export/assets/` — this includes a **full-frame reference PNG**
+     per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The screen JSON
+     points at it via a `reference` field, and `/designtwin:build-screen` self-corrects against it. No
+     manual screenshot step needed.
 3. In Claude Code, review it first: `/designtwin:audit-design <screen>` (or: "is this design ready to
-   build?") → `design/audit/<screen>.md` with blockers, missing states, and questions for the designer.
-   Standalone: `node design-to-code/audit.js design/<screen>.json --platform ios --catalog
-   design/design-system/components.local.json --out design/audit/<screen>`.
-4. Build: `/designtwin:build-screen <screen>` (or: "build <screen> from design/<screen>.json"). It reads
-   the audit (or runs the script itself) and records every default it had to assume.
-5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?") — renders
-   it, compares it with the export, lists the differences. It changes no code.
+   build?") → `design/audit/<screen>.md` with blockers, missing states, questions for the designer,
+   and — the part no single file can answer — whether this screen actually comes from the design
+   system sitting beside it. Standalone:
+   `node design-to-code/audit.js design/export/pages/<Page>/<Screen>__<id>.json --platform ios
+   --design-system design/export/design-system --out design/audit/<screen>`.
+4. Build: `/designtwin:build-screen <screen>`. It reads the audit (or runs the script itself) and
+   records every default it had to assume.
+5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?") — it
+   renders the screen, measures every node's computed style against the design's own numbers, checks
+   that every component on the frame was actually built and that every designed interaction works,
+   and writes `design/verify/<Screen>.report.json`. The verdict is computed from that file, so a
+   "pass" is never something anyone asserts. It changes no code.
 6. When the design changes later: `/designtwin:sync-design <screen>`. It keeps the previous export,
    re-pulls, diffs the two by node id (`design-to-code/design-diff.js`) and patches only what moved —
    a rebuild would throw away every hand edit since step 4. Commit `design/` so a previous export
@@ -174,7 +193,7 @@ plugin announces which file it is on connect; commands are then addressed:
 ```
 node bridge/figma-pull.js --list-clients            # which files are connected (connId, name, fileKey)
 node bridge/figma-pull.js design/base --client "App"      # pull one
-node bridge/figma-pull.js design/lib --client "NERA" --as-library "NERA"
+node bridge/figma-pull.js design/lib --client "Acme UI" --as-library "Acme UI"
 ```
 MCP twins: `figma_list_clients`, and a `client` argument on every tool.
 

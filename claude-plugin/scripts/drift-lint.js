@@ -25,6 +25,91 @@ var require_errmsg = __commonJS({
   }
 });
 
+// bridge/project-layout.js
+var require_project_layout = __commonJS({
+  "bridge/project-layout.js"(exports2, module2) {
+    "use strict";
+    var fs = require("fs");
+    var path = require("path");
+    var DESIGN_DIR = "design";
+    var EXPORT_SUBDIR = "export";
+    var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+    var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+    var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+    var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+    var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+    var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+    var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
+    function looksLikeExportDir(dir) {
+      try {
+        if (!fs.statSync(dir).isDirectory()) return false;
+      } catch {
+        return false;
+      }
+      return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+    }
+    function findExportDir(cwd) {
+      const modern = path.join(cwd, EXPORT_DIR);
+      if (looksLikeExportDir(modern)) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR };
+      const legacy = path.join(cwd, DESIGN_DIR);
+      if (looksLikeExportDir(legacy)) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
+      return { dir: modern, layout: "none", rel: EXPORT_DIR };
+    }
+    function findMapFile(cwd) {
+      const modern = path.join(cwd, MAP_FILE);
+      if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+      const legacy = path.join(cwd, "codeconnect.local.json");
+      if (fs.existsSync(legacy)) return { file: legacy, rel: "codeconnect.local.json", legacy: true };
+      return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
+    }
+    var README = `# design/
+
+Two kinds of file live here, and the difference matters.
+
+## design/export/ \u2014 dtwin owns this
+
+Everything \`dtwin pull\` writes lands under \`export/\` and nowhere else. It is a snapshot of Figma:
+delete the whole directory and re-pull and you lose nothing.
+
+    export/pages/<Page>/<Screen>__<node-id>.json   one exported screen
+    export/pages/<Page>/<Screen>__<node-id>.vars.json    the tokens THAT screen binds
+    export/pages/<Page>/<Screen>__<node-id>.assets.json  which assets it uses, with content hashes
+    export/pages/index.json                        every screen pulled, whatever the pull shape
+    export/design-system/                          tokens.json, styles.*.json, components.*.json
+    export/variables.json                          the union of every screen's slice (merged, never replaced)
+    export/assets/                                 shared and cumulative across screens
+
+## Everything else here \u2014 you own it
+
+These are decisions and evidence. They are not regenerable, and a re-pull never touches them.
+
+    target.json              which stack you are building for
+    codeconnect.local.json   Figma component key -> your code component. Hand-maintained.
+    plan/<Screen>.json       what build-screen decided, and why
+    audit/<Screen>.{md,json} the pre-build design review
+    verify/<Screen>.report.json  the measured per-node comparison behind any "pass"
+
+Commit both halves. If your .gitignore ignores \`design/\`, un-ignore this half \u2014
+\`!design/target.json\`, \`!design/codeconnect.local.json\`, \`!design/plan/\` \u2014 or the work is lost
+with the next clone.
+`;
+    module2.exports = {
+      DESIGN_DIR,
+      EXPORT_SUBDIR,
+      EXPORT_DIR,
+      TARGET_FILE,
+      MAP_FILE,
+      PLAN_DIR,
+      AUDIT_DIR,
+      VERIFY_DIR,
+      README,
+      looksLikeExportDir,
+      findExportDir,
+      findMapFile
+    };
+  }
+});
+
 // bridge/snapshot-meta.js
 var require_snapshot_meta = __commonJS({
   "bridge/snapshot-meta.js"(exports2, module2) {
@@ -66,7 +151,7 @@ var require_snapshot_meta = __commonJS({
       return out.concat(rest.map((r) => ({ f: r.f, named: false })));
     }
     function readSnapshotInfo(outDir) {
-      const dir = outDir || process.env.FIGMA_EXPORT_DIR || "design";
+      const dir = outDir || process.env.FIGMA_EXPORT_DIR || require_project_layout().findExportDir(process.cwd()).dir;
       const cands = snapshotCandidates(dir);
       let file = null, doc = null, parseError = null, fallback = null;
       for (const { f: cand, named } of cands) {
@@ -273,7 +358,52 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
   const aheadOfSnapshot = exportedAt ? Date.parse(lastModified) > Date.parse(exportedAt) : void 0;
   return { lastModified, aheadOfSnapshot };
 }
-module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+function screenCoverage(map, catalog, screenDocs) {
+  const entries = map && map.components || {};
+  const mapKeys = /* @__PURE__ */ new Set();
+  for (const k of Object.keys(entries)) {
+    const f = entries[k].figma || {};
+    if (f.key) mapKeys.add(f.key);
+    if (f.id) mapKeys.add(f.id);
+    mapKeys.add(k);
+  }
+  const catKeys = new Set((catalog && catalog.components || []).map((c) => c.key).filter(Boolean));
+  const used = /* @__PURE__ */ new Map();
+  const walk = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent;
+      const id = mc.setKey || mc.key;
+      if (id) {
+        if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, key: id, variantKey: mc.key });
+        used.get(id).instances++;
+      }
+    }
+    for (const c of n.children || []) walk(c);
+  };
+  for (const doc of screenDocs || []) {
+    const roots = Array.isArray(doc && doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
+    for (const r of roots) walk(r);
+  }
+  const rows = [...used.values()].map((u) => ({
+    ...u,
+    inCatalog: catKeys.has(u.key) || catKeys.has(u.variantKey),
+    inMap: mapKeys.has(u.key) || mapKeys.has(u.variantKey)
+  }));
+  const instances = rows.reduce((n, r) => n + r.instances, 0);
+  const inCatalog = rows.filter((r) => r.inCatalog).length;
+  const inMap = rows.filter((r) => r.inMap).length;
+  return {
+    distinct: rows.length,
+    instances,
+    inCatalog,
+    inMap,
+    catalogPct: rows.length ? Math.round(inCatalog / rows.length * 100) : null,
+    mapPct: rows.length ? Math.round(inMap / rows.length * 100) : null,
+    unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances }))
+  };
+}
+module.exports = { driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 if (require.main === module) {
   const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
   const argv = process.argv.slice(2);
@@ -294,9 +424,21 @@ if (require.main === module) {
     }
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 36e5 : void 0;
+  const screenFiles = [];
+  for (; ; ) {
+    const i = argv.indexOf("--screen");
+    if (i === -1) break;
+    const v = argv[i + 1];
+    if (!v) {
+      console.error("--screen expects a path to a screen export");
+      process.exit(2);
+    }
+    screenFiles.push(v);
+    argv.splice(i, 2);
+  }
   const [mapFile, catalogFile] = argv;
   if (!mapFile || !catalogFile) {
-    console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]");
+    console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]");
     process.exit(2);
   }
   const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
@@ -308,6 +450,36 @@ if (require.main === module) {
   const s = res.summary;
   console.error(`
 ${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
+  console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
+  let screenFail = false;
+  if (screenFiles.length) {
+    const docs = screenFiles.map((f) => readJsonFile(f, "screen export"));
+    const cov = screenCoverage(map, catalog, docs);
+    if (!cov.distinct) {
+      console.error(`
+SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 nothing to reuse either way.`);
+    } else {
+      console.error(
+        `
+SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the components on this screen are in your map \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total`
+      );
+      if (cov.mapPct === 0) {
+        screenFail = true;
+        console.error(
+          `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.
+       The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
+       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,
+       then export it with \`dtwin pull design --as-library "<name>"\`. Until then build every instance as new.`
+        );
+      } else if (cov.unmapped.length) {
+        console.error(
+          `warn   [screen-coverage] ${cov.unmapped.length} component(s) on this screen have no map entry: ` + cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", \u2026" : "")
+        );
+      }
+    }
+  } else {
+    console.error(`note   pass --screen <screen.json> to get the number that matters: how much of THAT screen your map covers.`);
+  }
   const fileKey = process.env.FIGMA_FILE_KEY;
   const token = process.env.FIGMA_TOKEN;
   const run = async () => {
@@ -319,7 +491,7 @@ ${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(
         console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
       }
     }
-    process.exit(res.errors.length ? 1 : 0);
+    process.exit(res.errors.length || screenFail ? 1 : 0);
   };
   run();
 }

@@ -77,7 +77,40 @@
         const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
         return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
       }
-      module.exports = { buildPageLayout: buildPageLayout2, safe: safe2 };
+      var NO_PAGE_DIR = "_unfiled";
+      function screenPaths(screenDoc, sep) {
+        const join = (...parts) => ["pages"].concat(parts).join(sep);
+        const page2 = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
+        const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
+        const dir = page2 ? safe2(page2) : NO_PAGE_DIR;
+        const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
+        const base = safe2(screenDoc.screenName || "screen") + (nodeId ? "__" + safe2(nodeId) : "");
+        return {
+          page: page2 || null,
+          pageId: pageId || null,
+          nodeId: nodeId || null,
+          dir,
+          base,
+          screen: join(dir, base + ".json"),
+          variables: join(dir, base + ".vars.json"),
+          assets: join(dir, base + ".assets.json"),
+          index: join(dir, "index.json"),
+          rootIndex: join("index.json")
+        };
+      }
+      function mergeScreenIndex(prev, entry) {
+        const base = prev && typeof prev === "object" ? prev : {};
+        const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+        layers.push(entry);
+        return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
+      }
+      function mergeRootIndex(prev, paths, layerCount) {
+        const base = prev && typeof prev === "object" ? prev : {};
+        const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
+        pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
+        return Object.assign({}, base, { pageDirs });
+      }
+      module.exports = { buildPageLayout: buildPageLayout2, screenPaths, mergeScreenIndex, mergeRootIndex, safe: safe2, NO_PAGE_DIR };
     }
   });
 
@@ -193,11 +226,14 @@
             stylesGrid: join(STYLES_GRID),
             componentsLocal: join(COMPONENTS_LOCAL),
             componentsLibrary: join(COMPONENTS_LIBRARY),
-            componentsDir: DIR + (sep || "/") + COMPONENTS_DIR,
             hygiene: join(HYGIENE)
           },
           counts
         };
+        const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
+        if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
+          manifest2.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+        }
         files.push({ path: MANIFEST, data: manifest2 });
         return { files, manifest: manifest2, counts, dir: DIR };
       }
@@ -428,6 +464,226 @@
     progress(phase, extra, true);
   }
 
+  // src/assets.ts
+  var ASSET_DIR = "assets/";
+  function contentHash(a) {
+    const src = a.text != null ? a.text : a.base64 != null ? a.base64 : "";
+    let h = 2166136261;
+    for (let i = 0; i < src.length; i++) {
+      h ^= src.charCodeAt(i);
+      h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+    }
+    return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
+  }
+  var byContent = /* @__PURE__ */ new Map();
+  var byName = /* @__PURE__ */ new Map();
+  function resetAssetNames() {
+    byContent.clear();
+    byName.clear();
+  }
+  function assetSafe(x) {
+    return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
+  }
+  function baseNameFor(a) {
+    if (a.kind === "reference") return (0, import_pages_layout.safe)(a.id.replace(/:ref$/, "")) + "_ref";
+    if (a.kind === "source") return (0, import_pages_layout.safe)(a.id);
+    const last = String(a.name || "").split("/").pop() || "";
+    const cleaned = assetSafe(last.trim()).replace(/^[-_]+|[-_]+$/g, "");
+    return cleaned || (0, import_pages_layout.safe)(a.id);
+  }
+  function register(a) {
+    const fmt = (0, import_pages_layout.safe)(a.format);
+    const dedupable = a.kind !== "reference";
+    const hash = contentHash(a);
+    if (dedupable) {
+      const hit = byContent.get(hash + "." + fmt);
+      if (hit) {
+        (hit.asset.from || (hit.asset.from = [hit.asset.id])).push(a.id);
+        return ASSET_DIR + hit.file;
+      }
+    }
+    const base = baseNameFor(a);
+    let file = base + "." + fmt;
+    const taken = byName.get(file);
+    if (taken !== void 0 && taken !== hash) {
+      file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
+    }
+    byName.set(file, hash);
+    const asset = { ...a, file, hash };
+    assets.push(asset);
+    if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
+    return ASSET_DIR + file;
+  }
+  function imageFormat(b) {
+    if (b.length >= 8 && b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return "png";
+    if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "jpg";
+    if (b.length >= 12 && b[0] === 82 && b[1] === 73 && b[8] === 87 && b[9] === 69 && b[10] === 66 && b[11] === 80) return "webp";
+    if (b.length >= 6 && b[0] === 71 && b[1] === 73 && b[2] === 70) return "gif";
+    return "bin";
+  }
+  function collectSourceImage(hash) {
+    const f = figma;
+    if (!hash || typeof f.getImageByHash !== "function") return Promise.resolve(void 0);
+    let p = imageSizeCache.get(hash);
+    if (!p) {
+      p = readSourceImage(f, hash);
+      imageSizeCache.set(hash, p);
+    }
+    return p;
+  }
+  async function readSourceImage(f, hash) {
+    let size;
+    try {
+      const img = f.getImageByHash(hash);
+      if (img) {
+        if (typeof img.getSizeAsync === "function") {
+          const s = await img.getSizeAsync();
+          if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
+        }
+        if (typeof img.getBytesAsync === "function") {
+          try {
+            const bytes = await img.getBytesAsync();
+            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+          } catch (e) {
+          }
+        }
+      }
+    } catch (e) {
+      warn("source image unavailable for hash " + hash + " (" + (0, import_errmsg.errMsg)(e) + ")");
+    }
+    return size;
+  }
+  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+  var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+  function paints(v) {
+    return Array.isArray(v) ? v : null;
+  }
+  function hasVisiblePaint(n, fills) {
+    if (fills && fills.some((p) => p.visible !== false)) return true;
+    const s = paints(n.strokes);
+    return !!s && s.some((p) => p.visible !== false);
+  }
+  function hasArea(n) {
+    if (typeof n.width !== "number" || typeof n.height !== "number") return true;
+    return n.width > 0 && n.height > 0;
+  }
+  function geometryOf(n) {
+    const ds = (g) => Array.isArray(g) ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
+    const fills = ds(n.fillGeometry);
+    const strokes = ds(n.strokeGeometry);
+    if (!fills.length && !strokes.length) return void 0;
+    const out = {};
+    if (fills.length) out.fills = fills;
+    if (strokes.length) out.strokes = strokes;
+    if (typeof n.width === "number") {
+      out.w = round(n.width);
+      out.h = round(n.height);
+    }
+    return out;
+  }
+  async function collectAsset(node) {
+    const isVector = VECTOR_TYPES.has(node.type);
+    const n = node;
+    const fills = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
+    const kids = "children" in node && Array.isArray(n.children) ? n.children : null;
+    const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
+    let iconLike = false;
+    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
+      try {
+        iconLike = !n.findOne((x) => x.type === "TEXT");
+      } catch (e) {
+        iconLike = false;
+      }
+    }
+    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+      try {
+        iconLike = !n.findOne((x) => x.type === "TEXT");
+      } catch (e) {
+        iconLike = false;
+      }
+    }
+    if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
+      stats.assetsSkipped++;
+      return { skipped: true };
+    }
+    if (isVector || iconLike || hasImage) {
+      checkCancelled();
+      progress("assets", { nodes: stats.nodes, assets: assets.length });
+    }
+    if (isVector || iconLike) {
+      if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      let svg = null;
+      let reason = "empty/invalid SVG";
+      try {
+        svg = await node.exportAsync({ format: "SVG_STRING" });
+      } catch (e) {
+        reason = (0, import_errmsg.errMsg)(e);
+      }
+      if (svg && svg.indexOf("<svg") !== -1) {
+        return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
+      }
+      const geo = geometryOf(n);
+      if (geo) {
+        stats.assetsGeometry++;
+        return { geometry: geo };
+      }
+      stats.assetsFailed++;
+      warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
+      return void 0;
+    }
+    try {
+      if (hasImage) {
+        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
+        if (!bytes || !bytes.length) {
+          stats.assetsFailed++;
+          warnKind("image asset export empty", node.name + " (" + node.id + ")");
+          return void 0;
+        }
+        return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
+      }
+    } catch (e) {
+      stats.assetsFailed++;
+      warnKind("image asset export failed", node.name + " (" + node.id + "): " + (0, import_errmsg.errMsg)(e));
+    }
+    return void 0;
+  }
+  async function collectReference(node, opts) {
+    const n = node;
+    if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
+    try {
+      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
+      const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
+      if (!bytes || !bytes.length) {
+        warn("reference screenshot empty: " + node.name);
+        return void 0;
+      }
+      return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
+    } catch (e) {
+      warn("reference screenshot failed: " + node.name + " (" + (0, import_errmsg.errMsg)(e) + ")");
+      return void 0;
+    }
+  }
+  async function devResources(node) {
+    const n = node;
+    if (!node || typeof n.getDevResourcesAsync !== "function") return void 0;
+    try {
+      const rs = await n.getDevResourcesAsync({ includeChildren: true });
+      if (!Array.isArray(rs) || !rs.length) return void 0;
+      return rs.map((r) => {
+        const o = { name: r.name, url: r.url };
+        if (r.nodeId) o.nodeId = r.nodeId;
+        if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;
+        return o;
+      });
+    } catch (e) {
+      warn("dev resources unavailable for '" + node.name + "' (" + (0, import_errmsg.errMsg)(e) + ")");
+      return void 0;
+    }
+  }
+
   // src/state.ts
   var import_read_opts = __toESM(require_read_opts());
   var assets = [];
@@ -466,7 +722,8 @@
   function manifest() {
     const note = runOpts.skipAssets && stats.assetsSkipped ? SKIP_ASSETS_NOTE(stats.assetsSkipped) : null;
     const all = warnings.concat(groupedWarnings());
-    return { ...stats, skipped: stats.truncated, warnings: note ? all.concat(note) : all };
+    const reads = Object.keys(runOpts).filter((k) => runOpts[k]);
+    return { ...stats, skipped: stats.truncated, reads, warnings: note ? all.concat(note) : all };
   }
   function memoName(fetch) {
     const cache = /* @__PURE__ */ new Map();
@@ -529,6 +786,7 @@
   }
   function resetRun() {
     releaseAssets();
+    resetAssetNames();
     warnings = [];
     grouped = /* @__PURE__ */ new Map();
     stats = newStats();
@@ -807,183 +1065,6 @@
       variables,
       hygiene
     };
-  }
-
-  // src/assets.ts
-  var ASSET_DIR = "assets/";
-  function register(a) {
-    const file = (0, import_pages_layout.safe)(a.id) + "." + (0, import_pages_layout.safe)(a.format);
-    assets.push({ ...a, file });
-    return ASSET_DIR + file;
-  }
-  function imageFormat(b) {
-    if (b.length >= 8 && b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return "png";
-    if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return "jpg";
-    if (b.length >= 12 && b[0] === 82 && b[1] === 73 && b[8] === 87 && b[9] === 69 && b[10] === 66 && b[11] === 80) return "webp";
-    if (b.length >= 6 && b[0] === 71 && b[1] === 73 && b[2] === 70) return "gif";
-    return "bin";
-  }
-  function collectSourceImage(hash) {
-    const f = figma;
-    if (!hash || typeof f.getImageByHash !== "function") return Promise.resolve(void 0);
-    let p = imageSizeCache.get(hash);
-    if (!p) {
-      p = readSourceImage(f, hash);
-      imageSizeCache.set(hash, p);
-    }
-    return p;
-  }
-  async function readSourceImage(f, hash) {
-    let size;
-    try {
-      const img = f.getImageByHash(hash);
-      if (img) {
-        if (typeof img.getSizeAsync === "function") {
-          const s = await img.getSizeAsync();
-          if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-        }
-        if (typeof img.getBytesAsync === "function") {
-          try {
-            const bytes = await img.getBytesAsync();
-            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-          } catch (e) {
-          }
-        }
-      }
-    } catch (e) {
-      warn("source image unavailable for hash " + hash + " (" + (0, import_errmsg.errMsg)(e) + ")");
-    }
-    return size;
-  }
-  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
-  var ICON_CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
-  function paints(v) {
-    return Array.isArray(v) ? v : null;
-  }
-  function hasVisiblePaint(n, fills) {
-    if (fills && fills.some((p) => p.visible !== false)) return true;
-    const s = paints(n.strokes);
-    return !!s && s.some((p) => p.visible !== false);
-  }
-  function hasArea(n) {
-    if (typeof n.width !== "number" || typeof n.height !== "number") return true;
-    return n.width > 0 && n.height > 0;
-  }
-  function geometryOf(n) {
-    const ds = (g) => Array.isArray(g) ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
-    const fills = ds(n.fillGeometry);
-    const strokes = ds(n.strokeGeometry);
-    if (!fills.length && !strokes.length) return void 0;
-    const out = {};
-    if (fills.length) out.fills = fills;
-    if (strokes.length) out.strokes = strokes;
-    if (typeof n.width === "number") {
-      out.w = round(n.width);
-      out.h = round(n.height);
-    }
-    return out;
-  }
-  async function collectAsset(node) {
-    const isVector = VECTOR_TYPES.has(node.type);
-    const n = node;
-    const fills = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
-    const kids = "children" in node && Array.isArray(n.children) ? n.children : null;
-    const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
-    let iconLike = false;
-    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
-      try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
-      } catch (e) {
-        iconLike = false;
-      }
-    }
-    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
-      try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
-      } catch (e) {
-        iconLike = false;
-      }
-    }
-    if (runOpts.skipAssets && (isVector || iconLike || hasImage)) {
-      stats.assetsSkipped++;
-      return { skipped: true };
-    }
-    if (isVector || iconLike || hasImage) {
-      checkCancelled();
-      progress("assets", { nodes: stats.nodes, assets: assets.length });
-    }
-    if (isVector || iconLike) {
-      if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
-        stats.assetsSkippedInvisible++;
-        return void 0;
-      }
-      let svg = null;
-      let reason = "empty/invalid SVG";
-      try {
-        svg = await node.exportAsync({ format: "SVG_STRING" });
-      } catch (e) {
-        reason = (0, import_errmsg.errMsg)(e);
-      }
-      if (svg && svg.indexOf("<svg") !== -1) {
-        return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
-      }
-      const geo = geometryOf(n);
-      if (geo) {
-        stats.assetsGeometry++;
-        return { geometry: geo };
-      }
-      stats.assetsFailed++;
-      warnKind("asset export failed (no geometry to fall back on)", node.name + " (" + node.id + "): " + reason);
-      return void 0;
-    }
-    try {
-      if (hasImage) {
-        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
-        if (!bytes || !bytes.length) {
-          stats.assetsFailed++;
-          warnKind("image asset export empty", node.name + " (" + node.id + ")");
-          return void 0;
-        }
-        return { path: register({ id: node.id, name: node.name, format: "png", base64: toBase64(bytes) }) };
-      }
-    } catch (e) {
-      stats.assetsFailed++;
-      warnKind("image asset export failed", node.name + " (" + node.id + "): " + (0, import_errmsg.errMsg)(e));
-    }
-    return void 0;
-  }
-  async function collectReference(node, opts) {
-    const n = node;
-    if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
-    try {
-      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
-      const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
-      if (!bytes || !bytes.length) {
-        warn("reference screenshot empty: " + node.name);
-        return void 0;
-      }
-      return register({ id: node.id + ":ref", name: node.name + " (reference)", format: "png", base64: toBase64(bytes), kind: "reference" });
-    } catch (e) {
-      warn("reference screenshot failed: " + node.name + " (" + (0, import_errmsg.errMsg)(e) + ")");
-      return void 0;
-    }
-  }
-  async function devResources(node) {
-    const n = node;
-    if (!node || typeof n.getDevResourcesAsync !== "function") return void 0;
-    try {
-      const rs = await n.getDevResourcesAsync({ includeChildren: true });
-      if (!Array.isArray(rs) || !rs.length) return void 0;
-      return rs.map((r) => {
-        const o = { name: r.name, url: r.url };
-        if (r.nodeId) o.nodeId = r.nodeId;
-        if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;
-        return o;
-      });
-    } catch (e) {
-      warn("dev resources unavailable for '" + node.name + "' (" + (0, import_errmsg.errMsg)(e) + ")");
-      return void 0;
-    }
   }
 
   // src/paint.ts
@@ -1530,7 +1611,9 @@
       return byLibrary;
     }
     if (!collections || !collections.length) {
-      sink("no team libraries are enabled for this file \u2014 enable them in Figma (Assets > Libraries); an empty list here is normal, not a failure");
+      sink(
+        "no team libraries are enabled for this file, so no library VARIABLE collections are listed \u2014 any rows below come from this file itself or from components it consumes. Enable libraries in Figma (Assets > Libraries) if you expected more; an empty list here is normal, not a failure"
+      );
       return byLibrary;
     }
     const counts = await Promise.all(
@@ -2074,6 +2157,16 @@
     ["bottomRightRadius", "br"],
     ["bottomLeftRadius", "bl"]
   ];
+  var RADIUS_SENTINEL = 1e4;
+  function radiusOut(out, raw) {
+    if (raw < RADIUS_SENTINEL) return round(raw);
+    out.radiusFull = true;
+    const box = out.box;
+    const w = box && typeof box.w === "number" ? box.w : void 0;
+    const h = box && typeof box.h === "number" ? box.h : void 0;
+    if (w === void 0 && h === void 0) return round(raw);
+    return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
+  }
   function pluginData(node) {
     const n = node;
     if (typeof n.getPluginDataKeys !== "function") return void 0;
@@ -2224,11 +2317,11 @@
     if ("strokesIncludedInLayout" in node && n.strokesIncludedInLayout) out.strokesInLayout = true;
     if (effects) out.effects = effects;
     if ("cornerRadius" in node) {
-      if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = n.cornerRadius;
+      if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = radiusOut(out, n.cornerRadius);
       else if (n.cornerRadius === figma.mixed) {
         const corners = {};
         for (const [k, s] of CORNER_KEYS) {
-          if (k in node && typeof n[k] === "number" && n[k]) corners[s] = n[k];
+          if (k in node && typeof n[k] === "number" && n[k]) corners[s] = radiusOut(out, n[k]);
         }
         putNonEmpty(out, "radius", corners);
       }
@@ -2397,11 +2490,23 @@
     if (dev) tree.devResources = dev;
     return tree;
   }
-  async function screenResult(title, fileBase, nodes) {
+  async function screenResult(title, fileBase, nodes, origin) {
     const screen = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
+    const page2 = origin && origin.page;
+    if (page2) {
+      screen.page = page2.name;
+      screen.pageId = page2.id;
+    }
+    if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
     const measurements = collectMeasurements();
     if (measurements) screen.measurements = measurements;
-    return { screenName: (0, import_pages_layout.safe)(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+    const out = { screenName: (0, import_pages_layout.safe)(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+    if (page2) {
+      out.page = page2.name;
+      out.pageId = page2.id;
+    }
+    if (origin && origin.nodeId) out.nodeId = origin.nodeId;
+    return out;
   }
   function summarize(nd) {
     const o = { name: nd.name, id: nd.id, type: nd.type };
@@ -2542,7 +2647,7 @@
       const tree = await rootTree(nd);
       if (tree) nodes.push(tree);
     }
-    return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes);
+    return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes, { page: figma.currentPage, nodeId: sel[0].id });
   }
   function pageOf(node) {
     let n = node;
@@ -2564,7 +2669,7 @@
     }
     const tree = await rootTree(node);
     if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
-    return screenResult(node.name, node.name, [tree]);
+    return screenResult(node.name, node.name, [tree], { page: pageOf(node), nodeId });
   }
   async function collectScreenshot(rawId, opts) {
     resetRun();

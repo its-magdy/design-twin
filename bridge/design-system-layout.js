@@ -169,11 +169,20 @@ function buildDesignSystemLayout(ds, sep) {
       stylesGrid: join(STYLES_GRID),
       componentsLocal: join(COMPONENTS_LOCAL),
       componentsLibrary: join(COMPONENTS_LIBRARY),
-      componentsDir: DIR + (sep || "/") + COMPONENTS_DIR,
       hygiene: join(HYGIENE),
     },
     counts,
   };
+  // componentsDir is a POINTER, and a pointer that resolves to nothing is worse than an absent key:
+  // a tool walking `files` verbatim got ENOENT on the one entry of nine that had never been written
+  // (live finding 27). The directory only exists when a COMPONENT_SET actually produced a detail file
+  // (variantVisuals is opt-in), so the key only exists then too.
+  // Note the trailing separator: without it `design-system/components.local.json` — which is ALWAYS
+  // written — matches the prefix `design-system/components` and the key never gets omitted.
+  const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
+  if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
+    manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+  }
   files.push({ path: MANIFEST, data: manifest }); // the manifest itself stays at the export ROOT
   return { files, manifest, counts, dir: DIR };
 }

@@ -41,6 +41,29 @@ const CORNER_KEYS: Array<[string, string]> = [
   ["bottomLeftRadius", "bl"],
 ];
 
+// A corner radius, made safe to transcribe.
+//
+// Two things reach this field that must not land verbatim in generated code. Figma's "fully rounded"
+// corner exports as a literal 1000000000 — a sentinel, not a measurement, and `border-radius:
+// 1000000000px` is nobody's intent (live finding 30). And an unrounded float arrives as
+// 60.00000762939453 / 34.000003814697266, float dust from a resize that a builder then copies into
+// CSS (finding 45).
+//
+// So: round to 2dp like every other number this serializer emits, and replace the sentinel with what
+// Figma ACTUALLY renders — half the shorter side — while setting `radiusFull` so the builder can emit
+// the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) instead of a
+// number. The value stays faithful to the render; the intent stays recoverable.
+const RADIUS_SENTINEL = 10000;
+function radiusOut(out: Obj, raw: number): number {
+  if (raw < RADIUS_SENTINEL) return round(raw) as number;
+  out.radiusFull = true;
+  const box = out.box as { w?: number; h?: number } | undefined;
+  const w = box && typeof box.w === "number" ? box.w : undefined;
+  const h = box && typeof box.h === "number" ? box.h : undefined;
+  if (w === undefined && h === undefined) return round(raw) as number; // no box to clamp against — keep it honest and let the flag carry the meaning
+  return round(Math.min(w === undefined ? Infinity : w, h === undefined ? Infinity : h) / 2) as number;
+}
+
 // Own-scope plugin data (getPluginData) written by THIS plugin — round-trip metadata (e.g. a future
 // Code-Connect mapping our write plane stamps). Shared namespaces can't be enumerated by the API, so
 // only own-scope keys are read. Opt-in via runOpts.pluginData.
@@ -229,12 +252,12 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if (effects) out.effects = effects;
 
   if ("cornerRadius" in node) {
-    if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = n.cornerRadius;
+    if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = radiusOut(out, n.cornerRadius);
     else if (n.cornerRadius === figma.mixed) {
       // Per-corner fallback (pills/cards with asymmetric corners).
       const corners: Obj = {};
       for (const [k, s] of CORNER_KEYS) {
-        if (k in node && typeof n[k] === "number" && n[k]) corners[s] = n[k];
+        if (k in node && typeof n[k] === "number" && n[k]) corners[s] = radiusOut(out, n[k]);
       }
       putNonEmpty(out, "radius", corners);
     }

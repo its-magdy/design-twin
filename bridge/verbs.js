@@ -31,6 +31,55 @@ const ALIASES = { export: "pull", get: "pull", fetch: "pull", download: "pull", 
 
 const isFlag = (a) => typeof a === "string" && a.startsWith("-");
 
+// Per-verb help. `dtwin screenshot --help` used to hit translate's "needs a node id" refusal, because
+// the verb's own argument check ran before the global --help handler (live finding 5) — a help probe
+// is the one thing that must never be answered with an error. Every verb with real sub-structure gets
+// a real answer here; the rest fall through to the full `dtwin --help`.
+const HELP = {
+  screenshot:
+    "dtwin screenshot <id|figma-url> [outDir] [--scale N] [--client <file>]\n\n" +
+    "  Render ONE node to a reference PNG and write it to <outDir>/assets/<id>_ref.png.\n" +
+    "  Cheap: no serialize(), no asset walk — typically under a second once the plugin is warm.\n\n" +
+    "  Use it to tell two same-named frames apart BEFORE paying for a full pull: shoot each\n" +
+    "  candidate, look, then pull the one you meant.\n\n" +
+    "  --scale N   override the render scale (default: auto, capped at 2048px on the longest side)\n" +
+    "  outDir      default design/export; the PNG lands in its assets/ subdirectory, which is exactly\n" +
+    "              where a later `pull --node` of the same frame writes its own reference — so shooting\n" +
+    "              first costs nothing and leaves no duplicate.",
+  list:
+    "dtwin list [pages|libraries|clients]      # structural indexes — cheap, write nothing\n" +
+    "dtwin list children <id|figma-url>        # the direct children of one node\n\n" +
+    "  dtwin list             pages + their top-level LAYERS (frames, but also sections, groups,\n" +
+    "                         instances, text) with ids. On a sectioned file the screens are one\n" +
+    "                         level deeper — use `list children <section id>` to reach them.\n" +
+    "  dtwin list pages       just the page list\n" +
+    "  dtwin list libraries   enabled libraries + their variable collections. The SLOWEST read\n" +
+    "                         there is (5-15s on a real file); it prints progress while it works.\n" +
+    "  dtwin list clients     which Figma files are on the bridge right now, with their connIds\n\n" +
+    "  --json                 machine output for the two that print a table (libraries, clients)\n" +
+    "  --client <file>        WHICH connected Figma file, when more than one is open\n\n" +
+    "  These take no read options (--css/--measurements/…): they emit structural fields only, so\n" +
+    "  those flags are refused rather than silently ignored.",
+  token:
+    "dtwin token [status|show|rotate|forget]\n\n" +
+    "  status   (default) which token is in play, and from where — never prints the token itself\n" +
+    "  show     print the token, to paste into the plugin's \"Bridge token\" field\n" +
+    "  rotate   mint a new one (you must re-paste it into the plugin)\n" +
+    "  forget   delete the saved token\n\n" +
+    "  FIGMA_BRIDGE_TOKEN in the environment overrides the saved file. `dtwin token` says which won.",
+  pull:
+    "dtwin pull [outDir] --node <id> | --page <id|name> | --selection | --design-system | --as-library <name>\n\n" +
+    "  Exactly one scope. Everything lands under outDir (default design/export):\n" +
+    "    --node <id>        ONE frame, fully serialized, with its assets. Writes\n" +
+    "                       pages/<Page>/<Screen>__<id>.json plus .vars.json and .assets.json beside it,\n" +
+    "                       merges its tokens into variables.json, and indexes it in pages/index.json.\n" +
+    "    --page <id|name>   every top-level layer on one page (repeatable)\n" +
+    "    --selection        whatever is selected in Figma right now\n" +
+    "    --design-system    tokens, styles and component catalogs — no page walk, no assets\n" +
+    "    --as-library <n>   the same, from INSIDE a library file, into libraries/<slug>/\n\n" +
+    "  Run `dtwin --help` for the full flag reference (read options, timeouts, the daemon).",
+};
+
 function translate(argv, exists = () => false) {
   const [verb, ...rest] = argv;
   if (!verb || isFlag(verb)) return argv;
@@ -68,6 +117,14 @@ function translate(argv, exists = () => false) {
   return argv;
 }
 
+// The verb whose help a given argv is asking for, or null. Exported so figma-pull can answer BEFORE
+// translate runs its per-verb argument checks.
+function verbHelp(argv) {
+  if (!Array.isArray(argv) || !argv.some((a) => a === "--help" || a === "-h")) return null;
+  const verb = argv[0];
+  return (verb && HELP[verb]) || null;
+}
+
 function distance(a, b) {
   const row = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
@@ -95,4 +152,4 @@ function nearestVerb(word) {
   return best && best.v;
 }
 
-module.exports = { translate, VerbError, VERBS, distance };
+module.exports = { translate, verbHelp, VerbError, VERBS, HELP, distance };

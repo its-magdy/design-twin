@@ -34,6 +34,8 @@
 
 const SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 
+const omit = (o, keys) => { const out = {}; for (const k of Object.keys(o)) if (!keys.includes(k)) out[k] = o[k]; return out; };
+
 // Minimum hit-area per platform. web = WCAG 2.5.8 AA (24 CSS px); 44 is the recommended AAA target.
 const TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
 const PLATFORMS = Object.keys(TOUCH_MIN);
@@ -439,11 +441,47 @@ function audit(input, opts = {}) {
   for (const c of components.filter((c) => c.missing && c.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design — use the design-system default, or is there a spec?`);
   if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size — at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
 
+  // ---- the cross-FILE pass
+  // Everything above reasons inside one screen's own JSON, which is why the live run's audit reported
+  // "96% of colors bound" on a screen whose tokens came from an entirely different library than the
+  // design system beside it (finding 56). "Bound" meant "resolves to some variable in its own file",
+  // never "matches what you exported" — and a reader reasonably read it as the latter. The join lives
+  // in cross-check.js; its findings are merged in here so one report answers both questions.
+  let crossFile = null;
+  if (opts.designSystem || opts.variables) {
+    const { crossCheck } = require("./cross-check.js");
+    crossFile = crossCheck({
+      screens: docs.map((d, i) => ({ doc: d && d.doc !== undefined ? d.doc : d, label: (d && d.label) || `input${i}` })),
+      variables: opts.variables || null,
+      tokens: (opts.designSystem && opts.designSystem.tokens) || null,
+      components: (opts.designSystem && opts.designSystem.components) || opts.catalog || null,
+      componentsLibrary: (opts.designSystem && opts.designSystem.componentsLibrary) || null,
+      stylesText: (opts.designSystem && opts.designSystem.stylesText) || null,
+    });
+    for (const f of crossFile.findings) {
+      if (f.severity === "info") continue; // the coverage table below carries the informational half
+      findings.push(Object.assign({ severity: f.severity, code: f.code, message: f.message, crossFile: true }, omit(f, ["severity", "code", "message"])));
+    }
+  } else {
+    crossFile = {
+      summary: { blockers: 0, warnings: 0, info: 0 },
+      findings: [],
+      coverage: null,
+      notChecked: [
+        "the whole cross-FILE pass — no design system was given. Every token-binding percentage below means " +
+          "\"resolves to some variable in this screen's own file\", NOT \"matches your design system\". " +
+          "Re-run with --design-system design/design-system to tell the two apart.",
+      ],
+      inputs: {},
+    };
+  }
+
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   const count = (s) => findings.filter((f) => f.severity === s).length;
   return {
     platform,
     platformAssumed,
+    crossFile,
     grid,
     screenStatesScope,
     screens: roots.map((r) => r.label),
@@ -468,7 +506,39 @@ function toMarkdown(res) {
       `> those findings is wrong. Confirm it, then re-run with \`--platform ios|android|react-native|flutter\``,
       `> (or write \`design/target.json\`, which both this audit and build-screen read).`, "");
   }
-  L.push("## Token binding", "", "| Category | Bound | Total | % |", "|---|---|---|---|");
+  const cf = res.crossFile;
+  if (cf) {
+    L.push("## Does this screen come from that design system?", "");
+    if (cf.coverage && cf.coverage.distinct) {
+      const c = cf.coverage;
+      L.push(
+        `**${c.matchedByLocalKey}/${c.distinct} (${c.localPct}%)** of the components on this screen resolve to ` +
+          `\`components.local.json\` **by key**` +
+          (c.matchedByName ? `; ${c.matchedByName} more match by NAME only and are unverified` : "") +
+          (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
+        ""
+      );
+    }
+    const cfBlock = cf.findings.filter((f) => f.severity !== "info");
+    if (cfBlock.length) {
+      for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}`);
+      L.push("");
+    } else if (cf.inputs && cf.inputs.tokens) {
+      L.push("No cross-file problem found: the screen's tokens, text styles and components all trace to the design system you exported.", "");
+    }
+    if (cf.notChecked && cf.notChecked.length) {
+      L.push("*Not checked — these are gaps in the INPUT, not clean results:*", "");
+      for (const n of cf.notChecked) L.push(`- ${n}`);
+      L.push("");
+    }
+  }
+  L.push("## Token binding", "");
+  L.push(
+    "*\"Bound\" means the node binds SOME variable — read it together with the section above, which says whether",
+    "that variable is one the design system defines.*",
+    "",
+    "| Category | Bound | Total | % |", "|---|---|---|---|"
+  );
   for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "–" : v.pct + "%"} |`);
   L.push("", "## Screen states", "");
   const scope = res.screenStatesScope || {};
@@ -514,11 +584,18 @@ if (require.main === module) {
   const take = (flag) => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
   const platform = take("--platform");
   const catalogFile = take("--catalog");
+  const dsDir = take("--design-system");
+  const varsFile = take("--variables");
   const gridArg = take("--grid");
   const out = take("--out");
   const strip = (flag) => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
   const jsonOnly = strip("--json"), gate = strip("--gate");
-  const USAGE = "usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter] [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]";
+  const USAGE =
+    "usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]\n" +
+    "       [--design-system design/design-system] [--variables design/variables.json]\n" +
+    "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]\n" +
+    "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
+    "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".";
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = argv.filter((a) => a.startsWith("-"));
   if (stray.length || !argv.length) { console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
@@ -527,7 +604,26 @@ if (require.main === module) {
   const read = (f, what) => readJsonFile(f, what);
   const inputs = argv.map((f) => ({ doc: read(f, "screen export"), label: path.basename(f, ".json") }));
   const catalog = catalogFile ? read(catalogFile, "component catalog") : undefined;
-  const res = audit(inputs, { platform, catalog, grid: gridArg ? Number(gridArg) : undefined });
+  // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
+  // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
+  const maybe = (f) => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
+  const designSystem = dsDir
+    ? {
+        tokens: maybe(path.join(dsDir, "tokens.json")),
+        components: maybe(path.join(dsDir, "components.local.json")) || catalog,
+        componentsLibrary: maybe(path.join(dsDir, "components.library.json")),
+        stylesText: maybe(path.join(dsDir, "styles.text.json")),
+      }
+    : undefined;
+  // The screen's own token slice sits beside the screen file in the pages/ tree; the merged union is
+  // at the export root. Prefer whatever the user named, then the union, then the slice.
+  const exportRoot = path.resolve(path.dirname(argv[0]), "..", "..");
+  const variables =
+    maybe(varsFile) ||
+    maybe(path.join(exportRoot, "variables.json")) ||
+    maybe(argv[0].replace(/\.json$/, ".vars.json")) ||
+    maybe(path.join(path.dirname(argv[0]), "variables.json"));
+  const res = audit(inputs, { platform, catalog, designSystem, variables, grid: gridArg ? Number(gridArg) : undefined });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
@@ -542,5 +638,6 @@ if (require.main === module) {
   // On stderr too: --json callers never render the markdown, and a piped run shows only this line.
   if (res.platformAssumed) console.error("warn  no --platform given — assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
+  for (const n of (res.crossFile && res.crossFile.notChecked) || []) console.error(`note  not checked: ${n}`);
   process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
 }

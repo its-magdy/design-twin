@@ -456,7 +456,41 @@ async function disconnectErr(code, reason) {
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       return JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")).mcpServers.designtwin.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
-    ok("[init] warns when .gitignore would swallow the hand-authored maps", init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).some((a) => a.kind === "note" && /un-ignore/.test(a.note)));
+    ok("[init] warns when .gitignore would swallow the hand-authored maps, and names the narrower pattern",
+    (() => {
+      const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
+      return !!note && /NOT regenerable/.test(note.note) && /design\/export\//.test(note.note);
+    })());
+  // The layout split, asserted where it is decided: dtwin writes only under design/export/, and
+  // everything a re-pull must not destroy sits beside it (see bridge/project-layout.js).
+  ok("[init] scaffolds design/ AND design/export/, so the split is visible before the first pull",
+    (() => {
+      const d = mk({});
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return fs.existsSync(path.join(d, "design", "export")) && fs.existsSync(path.join(d, "design", "README.md"));
+    })());
+  ok("[init] the README says which half a re-pull is allowed to destroy",
+    (() => {
+      const d = mk({});
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const r = fs.readFileSync(path.join(d, "design", "README.md"), "utf8");
+      return /dtwin owns this/.test(r) && /you own it/.test(r) && /codeconnect\.local\.json/.test(r);
+    })());
+  // target.json used to be SKIPPED when no stack was detected, making `init --help`'s own promise
+  // false and leaving every later step reading a file that was not there (findings 8/90).
+  ok("[init] target.json is written even when no stack is detected, with profile:null",
+    (() => {
+      const d = mk({});
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const t = JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8"));
+      return t.profile === null && /build-screen asks/.test(t.note);
+    })());
+  ok("[init] and it still records a DETECTED stack rather than null",
+    (() => {
+      const d = mk({ "package.json": JSON.stringify({ dependencies: { tailwindcss: "^4" } }) });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8")).profile === "web-tailwind";
+    })());
     ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {
       const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
       const run = (args) => require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
@@ -1233,8 +1267,17 @@ async function disconnectErr(code, reason) {
     (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8"));
       return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants.length === 2 &&
         d.variants[0].node.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
-  ok("[component-split] design-system.json's manifest points at the components/ dir",
+  ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
     JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).files.componentsDir === "design-system/components");
+  // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
+  // key: a tool walking `files` verbatim got ENOENT on one entry of nine (live finding 27).
+  ok("[component-split] and omits componentsDir entirely when no detail file was produced",
+    (() => {
+      const d2 = path.join(wdir, "nodetail");
+      OUT.writeExport(d2, { designSystem: { exportedAt: "2026-08-12T00:00:00.000Z", file: "F", components: [{ name: "Button", key: "k1", type: "COMPONENT" }] } });
+      const m = JSON.parse(fs.readFileSync(path.join(d2, "design-system.json"), "utf8"));
+      return m.files.componentsDir === undefined && !fs.existsSync(path.join(d2, "design-system", "components"));
+    })());
   ok("[ds-split] components.library.json holds only remote:true entries — inferred from instances, not nodes here",
     (() => { const c = readDS("components.library.json").components;
       return c.length === 1 && c[0].key === "k2" && c[0].remote === true && c[0].id === undefined; })());
@@ -1281,12 +1324,161 @@ async function disconnectErr(code, reason) {
   // The selection/node shape takes the other writer — dispatched on the RESULT, so a tool never has
   // to know which writer its own command implies.
   const sel = OUT.writeAny(path.join(wdir, "sel"), {
-    screenName: "Login/Screen", screen: { id: "2:1" }, variables: { a: 1 }, assets: [],
+    screenName: "Login/Screen", page: "Flows", pageId: "0:3", nodeId: "2:1",
+    screen: { id: "2:1", nodes: [{ id: "2:1", type: "FRAME" }] }, variables: { a: 1 }, assets: [],
   });
-  ok("[write-out] the selection shape writes a screen file named with safe()",
-    fs.existsSync(path.join(wdir, "sel", "Login_Screen.json")));
-  ok("[write-out] and variables.json alongside it", fs.existsSync(path.join(wdir, "sel", "variables.json")));
+  ok("[write-out] the selection shape files into the pages/ tree, named with safe() + the node id",
+    fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Login_Screen__2_1.json")));
+  ok("[write-out] and the merged variables.json at the export root", fs.existsSync(path.join(wdir, "sel", "variables.json")));
+  ok("[write-out] plus this pull's own slice beside the screen",
+    fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Login_Screen__2_1.vars.json")));
   ok("[write-out] writeAny dispatched on shape, not on the caller's command", !!sel.wrote.screen);
+
+  // The whole point of the nested layout: ONE index a consumer opens without knowing which pull shape
+  // produced the tree, and two same-named frames that cannot overwrite each other (finding 63).
+  OUT.writeAny(path.join(wdir, "sel"), {
+    screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20170:132666",
+    screen: { id: "20170:132666", nodes: [{ id: "20170:132666", type: "FRAME" }] }, assets: [],
+  });
+  OUT.writeAny(path.join(wdir, "sel"), {
+    screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20173:142455",
+    screen: { id: "20173:142455", nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
+  });
+  ok("[write-out] two frames with the SAME name land in two files, not one",
+    fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20170_132666.json")) &&
+    fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20173_142455.json")));
+  const pageIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8"));
+  ok("[write-out] the page index accumulates every screen pulled into it", pageIdx.layers.length === 3);
+  ok("[write-out] and keeps the page's real name beside the sanitised dir", pageIdx.page === "Flows" && pageIdx.pageId === "0:3");
+  ok("[write-out] re-pulling one screen REPLACES its row rather than appending a duplicate",
+    (() => {
+      OUT.writeAny(path.join(wdir, "sel"), {
+        screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20173:142455",
+        screen: { id: "20173:142455", nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
+      });
+      return JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")).layers.length === 3;
+    })());
+  const rootIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "index.json"), "utf8"));
+  ok("[write-out] the root pages/index.json points at the page dir with a live layer count",
+    rootIdx.pageDirs.length === 1 && rootIdx.pageDirs[0].layers === 3 && rootIdx.pageDirs[0].index === "pages/Flows/index.json");
+  // An export written before the plugin emitted page identity still has to land somewhere predictable.
+  OUT.writeAny(path.join(wdir, "sel"), { screenName: "Legacy", screen: { id: "9:9", nodes: [] }, assets: [] });
+  ok("[write-out] a page-less export files under _unfiled rather than guessing a page",
+    fs.existsSync(path.join(wdir, "sel", "pages", "_unfiled", "Legacy.json")));
+
+  // Per-screen asset index: which of the shared, cumulative assets/ belong to THIS screen, and which
+  // of them are byte-identical (the same icon exported once per instance path — finding 97).
+  const withAssets = OUT.writeAny(path.join(wdir, "sel"), {
+    screenName: "Icons", page: "Flows", pageId: "0:3", nodeId: "5:5",
+    screen: { id: "5:5", nodes: [{ id: "5:5", type: "FRAME" }] },
+    assets: [
+      { id: "a", file: "I1_2_3.svg", text: "<svg><path d='M0 0'/></svg>" },
+      { id: "b", file: "I4_5_6.svg", text: "<svg><path d='M0 0'/></svg>" },
+      { id: "c", file: "I7_8_9.svg", text: "<svg><path d='M1 1'/></svg>" },
+    ],
+  });
+  const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8"));
+  ok("[write-out] the asset index lists every asset this screen references", aIdx.files.length === 3);
+  ok("[write-out] and names the byte-identical duplicates under one hash",
+    aIdx.duplicates.length === 1 && aIdx.duplicates[0].files.length === 2);
+  ok("[write-out] the returned summary reports the duplicate count too", withAssets.wrote.assetIndex.duplicates === 1);
+
+  // Which icons are safe to recolour. Figma exports the frame as it LOOKS, so a Dark-mode glyph
+  // arrives with its stroke baked in and cannot serve a Light theme (finding 73) — but a red trash
+  // icon carries meaning and must keep its colour. One colour throughout is the tell.
+  OUT.writeAny(path.join(wdir, "sel"), {
+    screenName: "Glyphs", page: "Flows", pageId: "0:3", nodeId: "6:6",
+    screen: { id: "6:6", nodes: [{ id: "6:6", type: "FRAME" }] },
+    assets: [
+      { id: "g1", file: "arrow-down.svg", text: '<svg><path stroke="#D4D4D4" d="M0 0"/><path stroke="#d4d4d4" d="M1 1"/></svg>' },
+      { id: "g2", file: "trash.svg", text: '<svg><path fill="#FF6767" d="M0 0"/><path fill="none" stroke="#ffffff" d="M1 1"/></svg>' },
+    ],
+  });
+  const gIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Glyphs__6_6.assets.json"), "utf8"));
+  ok("[write-out] a single-coloured glyph is marked monochrome — safe to swap for currentColor",
+    gIdx.monochrome.length === 1 && gIdx.monochrome[0] === "assets/arrow-down.svg");
+  ok("[write-out] a two-coloured glyph is NOT, because its colour may be semantic",
+    gIdx.files.find((f) => f.file === "assets/trash.svg").monochrome === false);
+  ok("[write-out] and fill=\"none\" is not counted as a colour",
+    gIdx.files.find((f) => f.file === "assets/trash.svg").colors.length === 2);
+  ok("[write-out] the index says outright not to edit an exported asset in place", /re-pull will overwrite/.test(gIdx.note));
+
+  // ------------------------------------------------ variables.json MERGES across single-screen pulls
+  // The bug this replaces: each --node pull wrote its own slice over design/variables.json, so pulling
+  // screen B silently deleted screen A's tokens and A's theme stopped resolving — with no warning,
+  // because the screen JSON carries raw hex beside every binding (live-test findings 35/64).
+  const vdir = path.join(wdir, "vars");
+  const V = (name, key, values, collection) => ({ name, key, collection: collection || "Sem", type: "COLOR", values });
+  OUT.writeAny(vdir, {
+    screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { id: "1:1", nodes: [] }, assets: [],
+    variables: {
+      collections: [{ name: "Sem", key: "ck1", modes: ["Dark"] }],
+      variables: [V("Text/Main", "k1", { Dark: "#fff" }), V("Bg/Page", "k2", { Dark: "#111" })],
+      hygiene: ["one"],
+    },
+  });
+  OUT.writeAny(vdir, {
+    screenName: "Filter", page: "P", pageId: "0:1", nodeId: "2:2", screen: { id: "2:2", nodes: [] }, assets: [],
+    variables: {
+      collections: [{ name: "Sem", key: "ck1", modes: ["Light"] }, { name: "Space", key: "ck2", modes: ["Desktop"] }],
+      variables: [V("Bg/Page", "k2", { Dark: "#111" }), V("Border/Soft", "k3", { Dark: "#222" })],
+      hygiene: ["two"],
+    },
+  });
+  const merged = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
+  const byName = (n) => merged.variables.filter((v) => v.name === n);
+  ok("[write-out/vars] the earlier screen's tokens SURVIVE the next pull",
+    byName("Text/Main").length === 1);
+  ok("[write-out/vars] the new screen's tokens are added", byName("Border/Soft").length === 1);
+  ok("[write-out/vars] a token both screens bind appears ONCE, not twice", byName("Bg/Page").length === 1);
+  ok("[write-out/vars] the union is 3, not the last slice's 2", merged.variables.length === 3);
+  ok("[write-out/vars] collections union by key too", merged.collections.length === 2);
+  ok("[write-out/vars] and a collection's modes union across slices",
+    (() => { const c = merged.collections.find((c) => c.key === "ck1"); return c.modes.includes("Dark") && c.modes.includes("Light"); })());
+  ok("[write-out/vars] hygiene lines from both slices are kept, deduped",
+    merged.hygiene.includes("one") && merged.hygiene.includes("two"));
+  ok("[write-out/vars] provenance records BOTH contributing screens",
+    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Job_roles__1_1,Filter__2_2");
+  ok("[write-out/vars] the note says the file accumulates", /UNION/.test(merged._note));
+  ok("[write-out/vars] each pull's raw slice is kept verbatim beside its screen",
+    fs.existsSync(path.join(vdir, "pages", "P", "Job_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
+  ok("[write-out/vars] a slice file holds ONLY that screen's variables",
+    JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")).variables.length === 2);
+
+  // A token that resolves differently in two screens is a REAL disagreement between two libraries
+  // (finding 69) — the newest wins, but it is recorded rather than silently applied.
+  const conf = OUT.writeAny(vdir, {
+    screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
+    variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] },
+  });
+  const merged2 = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
+  ok("[write-out/vars] a value conflict is reported, not swallowed",
+    conf.wrote.variablesMerge.conflicts === 1 && merged2._conflicts.length === 1);
+  ok("[write-out/vars] the conflicting token keeps the NEWEST value",
+    merged2.variables.find((v) => v.key === "k2").values.Dark === "#999");
+  ok("[write-out/vars] and the conflict is spelled out in hygiene, where a reader will see it",
+    merged2.hygiene.some((h) => /CONFLICT: 'Bg\/Page'/.test(h)));
+  ok("[write-out/vars] re-pulling the SAME screen replaces its slice entry rather than appending",
+    (() => {
+      OUT.writeAny(vdir, { screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
+        variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] } });
+      const m = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
+      return m._slices.length === 3 && m._slices.filter((s) => s.screen === "Popup__3_3").length === 1;
+    })());
+
+  // ------------------------------------------------------------- reference PNGs land in ONE place
+  // Three docs used to give three different answers and the printed path found nothing (20/31/34).
+  const shot = OUT.writeAny(path.join(wdir, "shot"), {
+    id: "7410:12299", name: "Job Role Details", type: "FRAME",
+    reference: "assets/7410_12299_ref.png",
+    assets: [{ id: "7410:12299", file: "7410_12299_ref.png", base64: Buffer.from("png").toString("base64") }],
+  });
+  ok("[write-out/shot] a screenshot lands in assets/ — where a --node pull puts the same PNG",
+    fs.existsSync(path.join(wdir, "shot", "assets", "7410_12299_ref.png")));
+  ok("[write-out/shot] and there is no second copy under screenshots/",
+    !fs.existsSync(path.join(wdir, "shot", "screenshots")));
+  ok("[write-out/shot] the returned reference is the path actually written",
+    shot.reference === "assets/7410_12299_ref.png");
 
   // outDir resolves against the CWD — for the MCP server that is the project Claude Code started in,
   // so an export lands in the project being built, not next to the bridge's own source.

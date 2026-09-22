@@ -19,7 +19,7 @@ Describe how to translate the neutral export IR into this stack. Keep it short a
 **Behavior & theming** — `reactions`/`flows` (prototype interactions) → navigation/state, not markup;
 `resolvedModes`/`variableModes` → light/dark theming. `layoutGrids`/`measurements`/`devStatus`/
 `devResources` are hints for you, never rendered output. `exposedInstances`/`propRefs`/`overrides`/
-`detachedFrom` → reuse the mapped component via `codeconnect.local.json` instead of regenerating markup.
+`detachedFrom` → reuse the mapped component via `design/codeconnect.local.json` instead of regenerating markup.
 Effects (`noise`/`glass`/`texture`/`shader`/backdrop blur) → nearest native filter, or the exported
 `asset` when there's no equivalent. `truncate`/`maxLines`/`autoResize` → ellipsis/line-clamp (Figma line
 breaks are not authoritative — different text engine than browsers). `intrinsicSize` → aspect ratio for
@@ -30,11 +30,11 @@ images. `blendMode`/`rotation`/`flipped` → the stack's blend-mode/transform eq
 **Tokens** — what form the right-hand value in `tokens.json` takes for this stack (CSS var, class,
 Swift/Kotlin constant, theme reference) and how to emit it.
 
-**Components** — how to import and instantiate from `codeconnect.local.json`, and how Figma `props` map.
+**Components** — how to import and instantiate from `design/codeconnect.local.json`, and how Figma `props` map.
 
 **Text** — element/widget + how `font.size/weight/lineHeight` map to the type scale.
 
-**Assets** — how to consume `design/assets/*` (SVG/PNG), including any conversion the user must do.
+**Assets** — how to consume `design/export/assets/*` (SVG/PNG), including any conversion the user must do.
 Also say what a path-heavy vector costs on this stack (`references/export-layout.md`, heavy vector
 assets): Figma exports a noise texture as thousands of separate paths, and every vector pipeline pays
 for that differently — say whether yours degrades in fidelity, in frame time, or at build time, so

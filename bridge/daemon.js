@@ -106,6 +106,11 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
               // Guarded because `bridge` here is any object with the bridge shape (the test suite
               // passes a minimal fake): a status call must never be the thing that kills the daemon.
               clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
+              // The socket stats too. `dtwin whoami` documents "socket uptime, and how many times a
+              // new connection displaced an earlier one" and then told the reader to go and run a
+              // different command, because with a daemon in front the CLI has no bridge of its own
+              // (live finding 14). The daemon does. One extra field and the documented output is real.
+              connection: typeof bridge.connectionInfo === "function" ? bridge.connectionInfo() : null,
               // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
               // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
               idleMs: idleMs || null,

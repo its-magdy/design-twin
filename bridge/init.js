@@ -22,6 +22,11 @@
 const fs = require("fs");
 const path = require("path");
 const tokenStore = require("./token-store.js");
+const LAYOUT = require("./project-layout.js");
+
+// The profiles build-screen ships. Named in target.json when detection finds nothing, so the user can
+// fill it in without going to look for the list.
+const PROFILES = ["web-tailwind", "web-css-modules", "react-native", "swiftui", "android-compose", "flutter"];
 
 // The key the MCP server is registered under in .mcp.json — matches the server's own name
 // (bridge/src/figma-mcp.mts), so its tools surface as mcp__designtwin__figma_status etc.
@@ -58,22 +63,47 @@ function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
   const actions = [];
   const rel = (p) => path.relative(cwd, p) || ".";
 
-  const designDir = path.join(cwd, "design");
-  actions.push(fs.existsSync(designDir) ? { kind: "skip", path: rel(designDir), note: "exists" } : { kind: "mkdir", path: rel(designDir), note: "where exports land" });
+  const designDir = path.join(cwd, LAYOUT.DESIGN_DIR);
+  actions.push(fs.existsSync(designDir) ? { kind: "skip", path: rel(designDir), note: "exists" } : { kind: "mkdir", path: rel(designDir), note: "your decisions live here" });
 
-  const targetFile = path.join(designDir, "target.json");
+  // design/export/ is created up front, empty, precisely so the split is visible BEFORE the first
+  // pull rather than discovered after one. dtwin writes only here.
+  const exportDir = path.join(cwd, LAYOUT.EXPORT_DIR);
+  actions.push(fs.existsSync(exportDir) ? { kind: "skip", path: rel(exportDir), note: "exists" } : { kind: "mkdir", path: rel(exportDir), note: "where every pull lands — safe to delete and re-pull" });
+
+  // The README is the only thing that can tell a future reader which half of design/ a re-pull is
+  // allowed to destroy. A comment in our source cannot; a directory name alone only hints.
+  const readme = path.join(designDir, "README.md");
+  if (fs.existsSync(readme)) actions.push({ kind: "skip", path: rel(readme), note: "exists — left as is" });
+  else actions.push({ kind: "write", path: rel(readme), content: LAYOUT.README, note: "what dtwin owns vs what you own" });
+
+  // target.json is written ALWAYS, even when no stack could be detected.
+  //
+  // It used to be skipped in that case, which made `dtwin init --help`'s own promise ("Creates design/
+  // and design/target.json") false, and left every later step reading a file that was simply not there
+  // — the verify skill's step 1 `cat`s it and moved on in silence (live findings 8/90). A file that
+  // says "nobody has decided yet" is a far better artifact than an absent one: build-screen can fill
+  // it in, and everything downstream has one place to look.
+  const targetFile = path.join(cwd, LAYOUT.TARGET_FILE);
   if (fs.existsSync(targetFile)) actions.push({ kind: "skip", path: rel(targetFile), note: "exists — left as is" });
   else {
     const d = detectProfile(cwd);
-    if (d) actions.push({ kind: "write", path: rel(targetFile), content: JSON.stringify({ profile: d.profile }, null, 2) + "\n", note: `stack detected: ${d.profile} (${d.because})` });
-    else actions.push({ kind: "skip", path: rel(targetFile), note: "no stack detected here — build-screen will ask on first run" });
+    const doc = d
+      ? { profile: d.profile, detectedFrom: d.because }
+      : { profile: null, note: "No stack was detected in this directory. build-screen asks on its first run and writes the answer here; audit-design reads it to pick touch-target minimums. Set it by hand if you already know: one of " + PROFILES.join(", ") + "." };
+    actions.push({
+      kind: "write",
+      path: rel(targetFile),
+      content: JSON.stringify(doc, null, 2) + "\n",
+      note: d ? `stack detected: ${d.profile} (${d.because})` : "no stack detected here — written with profile:null so build-screen has somewhere to record the answer",
+    });
   }
 
-  // design/ holds regenerable exports; the hand-authored maps in it are NOT regenerable. Say so where
-  // the user will see it, rather than editing their .gitignore for them.
+  // design/ holds regenerable exports AND hand-owned decisions; only the second kind is lost forever.
+  // Say so where the user will see it, rather than editing their .gitignore for them.
   const gi = path.join(cwd, ".gitignore");
   const ignored = fs.existsSync(gi) && /^\/?design\/?\s*$/m.test(fs.readFileSync(gi, "utf8"));
-  if (ignored) actions.push({ kind: "note", note: ".gitignore ignores design/ — target.json and your token/component maps in it are hand-authored; un-ignore them (!design/target.json) or they won't be committed" });
+  if (ignored) actions.push({ kind: "note", note: ".gitignore ignores design/ — target.json, codeconnect.local.json, plan/ and audit/ under it are hand-authored and are NOT regenerable. Ignore only the export: replace `design/` with `design/export/`" });
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
@@ -117,7 +147,18 @@ function main(argv) {
   const bad = argv.filter((a) => !known.includes(a));
   if (bad.length) { console.error(`[dtwin init] error: unknown argument${bad.length > 1 ? "s" : ""}: ${bad.join(", ")}. Usage: dtwin init [--mcp] [--dry-run]`); process.exit(1); }
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.log("dtwin init [--mcp] [--dry-run]\n\n  Run in the root of the project you are BUILDING. Creates design/ and design/target.json\n  (detected stack), makes sure a bridge token exists, and prints the remaining steps.\n  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten)\n  --dry-run  print what would happen; write nothing (no token is created either)\n\n  Never overwrites an existing file.");
+    console.log(
+      "dtwin init [--mcp] [--dry-run]\n\n" +
+      "  Run in the root of the project you are BUILDING. Creates:\n" +
+      "    design/                  your decisions (target.json, codeconnect.local.json, plan/, audit/, verify/)\n" +
+      "    design/export/           where every dtwin pull lands — safe to delete and re-pull\n" +
+      "    design/README.md         which half of design/ a re-pull is allowed to destroy\n" +
+      "    design/target.json       the detected stack, or profile:null for build-screen to fill in\n" +
+      "  …makes sure a bridge token exists, and prints the remaining steps.\n\n" +
+      "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten)\n" +
+      "  --dry-run  print what would happen; write nothing (no token is created either)\n\n" +
+      "  Never overwrites an existing file."
+    );
     process.exit(0);
   }
   const dry = argv.includes("--dry-run");
@@ -133,13 +174,46 @@ function main(argv) {
   else apply(cwd, actions, log);
 
   const manifest = path.join(__dirname, "..", "figma-plugin", "manifest.json");
+  // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
+  // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
+  // marker is there, saying "install the plugin" is noise at best and confusing at worst.
+  const pluginInstalled = (() => {
+    const home = process.env.HOME || process.env.USERPROFILE;
+    if (!home) return false;
+    const root = path.join(home, ".claude", "plugins");
+    // installed_plugins.json is the authoritative record; the per-plugin directories under data/ and
+    // repos/ are the fallback for older layouts. Any of them naming designtwin means step 3 is done.
+    try {
+      if (/designtwin/i.test(fs.readFileSync(path.join(root, "installed_plugins.json"), "utf8"))) return true;
+    } catch { /* absent — try the directories */ }
+    for (const p of ["data", "repos", "marketplaces", "."]) {
+      try {
+        if (fs.readdirSync(path.join(root, p)).some((d) => /designtwin/i.test(d))) return true;
+      } catch { /* not there — fall through */ }
+    }
+    return false;
+  })();
+
   const steps = [
     "In Figma DESKTOP: Plugins → Development → Import plugin from manifest… → " + (fs.existsSync(manifest) ? manifest : "figma-plugin/manifest.json from a clone of the Design Twin repo (the npm package does not include it)"),
     "Run the plugin (Plugins → Development → Design Twin), paste the bridge token into its \"Bridge token\" field, Save:  dtwin --show-token | pbcopy",
-    "In Claude Code, once:  claude plugin marketplace add <path-or-repo of Design Twin>  then  claude plugin install designtwin@designtwin-marketplace",
-    "Then, with the Figma file open and the plugin running:  dtwin --list   →  /designtwin:extract  →  /designtwin:audit-design <screen>  →  /designtwin:build-screen <screen>",
   ];
-  console.log("\nNext — the steps only you can do:\n" + steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n") + "\n");
+  if (!pluginInstalled) {
+    steps.push("In Claude Code, once:  claude plugin marketplace add <path-or-repo of Design Twin>  then  claude plugin install designtwin@designtwin-marketplace");
+  }
+  steps.push(
+    "Then, with the Figma file open and the plugin running:  dtwin list   →  /designtwin:extract  →  /designtwin:audit-design <screen>  →  /designtwin:build-screen <screen>"
+  );
+  console.log("\nNext — the steps only you can do:\n" + steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n"));
+  // The one refusal a first command reliably hits. doctor names it after the fact; saying it here, in
+  // the output whose whole job is "the steps left", is what stops `dtwin list` failing on step 4
+  // for anyone with two Figma files open (live finding 9).
+  console.log(
+    "\n  If more than one Figma file is connected, every command needs to say which:\n" +
+    "    dtwin list clients                 # the address book\n" +
+    "    dtwin list --client <part of the file name>\n" +
+    "  `dtwin doctor` tells you how many are connected and lists them.\n"
+  );
 }
 
 module.exports = { detectProfile, plan, apply, main, isOurMcpEntry };

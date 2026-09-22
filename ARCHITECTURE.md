@@ -32,12 +32,15 @@ is the calling convention, spelled out under the diagram.
     code.js (Plugin API reads) ──postMessage──► ui.html [hidden iframe, WS client]
                                                        │ ws://localhost:PORT
     figma-pull (CLI)  ── hosts WS server, requests export, writes files, exits ──►
-          design/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
+          design/export/design-system.json (manifest) · design-system/{tokens,styles.paint,styles.text,
           styles.effect,styles.grid,components.local,components.library,hygiene}.json ·
           design-system/components/<name>__<id>.json (one per COMPONENT_SET or standalone COMPONENT,
           holding the node tree(s) stripped out of components.local.json's variantsFile/nodeFile pointer) ·
           pages/index.json · pages/<page>/index.json +
-          pages/<page>/<name>__<id>.json · assets/
+          pages/<page>/<name>__<id>.json (+ .vars.json / .assets.json for a single-screen pull) ·
+          variables.json (the UNION across screens) · assets/
+          — and NOTHING outside design/export/, so design/{target,codeconnect.local}.json,
+            design/plan/, design/audit/ and design/verify/ survive a delete-and-re-pull
     Claude Code  ── runs `figma-pull` (Bash), then Reads files selectively ──►
 
     figma-pull --serve (daemon)  ── holds the WS server open; later invocations become thin
@@ -332,7 +335,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   single-node / small (≤60-node) selections so Figma's `getCSSAsync` oracle is on by default where it's cheap
   (large trees & multi-select stay opt-in; an explicit `css:false` always wins).
   **Code Connect** (node→codebase-component + prop transforms) is Org/Ent-gated — **now replicated locally**
-  in `design-to-code/` (DTCG token emitter, schema'd + validated + drift-checked `codeconnect.local.json` map,
+  in `design-to-code/` (DTCG token emitter, schema'd + validated + drift-checked `design/codeconnect.local.json` map,
   bootstrapper). See `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced
   ADR); validate on real data via the Layer C checklist in `TESTING.md`. Built + 4-round adversarially
   reviewed (tooling suite 126/126); codegen resolver deferred to a target repo.

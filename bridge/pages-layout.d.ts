@@ -22,3 +22,25 @@ export interface PageLayout {
 }
 export function buildPageLayout(layersDoc: any, sep: string): PageLayout;
 export function safe(id: string): string;
+
+/** Where ONE single-screen export's files land. The node id is part of the base name because a frame
+ *  NAME does not identify a frame — two frames called `Popup` on one page are two screens. */
+export interface ScreenPaths {
+  /** The page's display name, or null on an export written before page identity was emitted. */
+  page: string | null;
+  pageId: string | null;
+  nodeId: string | null;
+  /** The sanitised page directory under pages/ (`_unfiled` when the page is unknown). */
+  dir: string;
+  /** `<safeName>__<safeNodeId>` — the stem every sibling file below shares. */
+  base: string;
+  screen: string;
+  variables: string;
+  assets: string;
+  index: string;
+  rootIndex: string;
+}
+export function screenPaths(screenDoc: any, sep: string): ScreenPaths;
+export function mergeScreenIndex(prev: any, entry: Record<string, any>): Record<string, any>;
+export function mergeRootIndex(prev: any, paths: ScreenPaths, layerCount: number): Record<string, any>;
+export const NO_PAGE_DIR: string;

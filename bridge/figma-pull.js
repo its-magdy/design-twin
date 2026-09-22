@@ -8,6 +8,22 @@
 // is legal here because a CommonJS module body is a function body — it stops the rest of the CLI
 // (arg parsing, bridge setup) from ever loading in MCP mode.
 if (require.main === module && process.argv[2] === "mcp") {
+  // `--help` must never be the thing that STARTS a server. Probing a CLI's help surface silently
+  // launched a second MCP process attached to the live bridge and held stdio until the caller killed
+  // it (live finding 4) — the one command in the table whose --help had a side effect.
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(
+      "dtwin mcp\n\n" +
+      "  Run the Design Twin MCP server on stdio. This is what a .mcp.json entry points at\n" +
+      "  (`dtwin init --mcp` writes one); you do not normally run it by hand.\n\n" +
+      "  It takes no flags. While it runs it owns the bridge, so ordinary `dtwin` commands\n" +
+      "  route through it rather than starting a second one — `dtwin doctor` says who holds the port.\n\n" +
+      "  Its tools mirror the CLI: figma_list_clients / figma_list / figma_export_* / figma_screenshot /\n" +
+      "  figma_status / figma_write. Pass writeToDisk:true to get files plus a compact index instead\n" +
+      "  of node payloads inline — asset bytes are never returned inline."
+    );
+    process.exit(0);
+  }
   // Hide the subcommand from the MCP entry: it should see the argv of a plain `figma-mcp.mjs` run.
   process.argv.splice(2, 1);
   import("./figma-mcp.mjs").catch((e) => {
@@ -36,7 +52,15 @@ if (require.main === module && process.argv[2] === "doctor") {
 // check and the --token-file pre-scan, so both see the translated argv. verbs.js is pure (no requires,
 // no I/O), so `dtwin help` keeps --help's zero-side-effects guarantee.
 if (require.main === module) {
-  const { translate, VerbError } = require("./verbs.js");
+  const { translate, VerbError, verbHelp } = require("./verbs.js");
+  // Help wins over the verb's own argument check. `dtwin screenshot --help` used to be answered with
+  // "needs a node id" (live finding 5) because translate ran first; a help probe must never be an
+  // error, and must never have a side effect (see `dtwin mcp --help` above).
+  const vh = verbHelp(process.argv.slice(2));
+  if (vh) {
+    console.log(vh);
+    process.exit(0);
+  }
   try {
     process.argv.splice(2, process.argv.length - 2, ...translate(process.argv.slice(2), (p) => require("fs").existsSync(p)));
   } catch (e) {
@@ -52,24 +76,31 @@ if (require.main === module) {
 //
 // Usage:
 // Quick start (Figma file open, the "Design Twin" plugin running):
-//   dtwin list                        # what is in the file: pages + top-level frames, with ids
-//   dtwin pull design --page Screens  # export ONE page into ./design (tokens, frames, assets)
-//   dtwin screenshot 12:34            # a reference PNG of one node (an id from `list`, or a Figma URL)
+//   dtwin list                        # what is in the file: pages + their top-level LAYERS, with ids
+//   dtwin screenshot 12:34            # a reference PNG of one node — look before you pull
+//   dtwin pull --node 12:34           # export ONE screen into design/export (tokens, tree, assets)
 //   dtwin doctor                      # something not working? checks token, port, daemon, plugin, project
 //
+// Where things land: everything a pull writes goes under design/export/ and nowhere else, so that
+// directory can be deleted and re-pulled without touching design/target.json, design/codeconnect.local.json,
+// design/plan/ or design/audit/ — the files you own. `design/README.md` (written by init) says so too.
+//
 // Commands (each is shorthand for a flag documented below — the flags keep working unchanged):
-//   dtwin pull [outDir] [flags]              = dtwin [outDir] [flags]
+//   dtwin pull [outDir] [flags]              = dtwin [outDir] [flags].          See pull --help
 //   dtwin list [pages|libraries|clients]     = --list | --list-pages | --list-libraries | --list-clients
-//   dtwin list children <id|url>             = --children <id|url>
-//   dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>
+//   dtwin list children <id|url>             = --children <id|url>.             See list --help
+//   dtwin screenshot <id|url> [--scale N]    = --screenshot <id|url>.           See screenshot --help
 //   dtwin whoami                             = --whoami
 //   dtwin serve | stop | status              = --serve | --stop | --daemon-status
-//   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | --rotate-token | --forget-token
+//   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | …  See token --help
 //   dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
 //   dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
-//   dtwin mcp                                # run the MCP server (what .mcp.json points at)
+//   dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help
 //   dtwin help                               = --help
 //   dtwin --version                          print the installed version
+//
+//   Every command above answers `--help` with its own page, and none of them does anything else
+//   while doing so.
 //   A command is only recognised as the FIRST argument: `dtwin design` still pulls into ./design.
 //   For an outDir spelled like a command, write `dtwin pull list` or `dtwin ./list`.
 //
@@ -159,7 +190,9 @@ if (require.main === module) {
 //                                        # stale plugin silently returns nothing.
 //   dtwin --whoami       # who is connected: plugin instance id, file name, whether
 //                                     # figma.fileKey is available, socket uptime, and how many times
-//                                     # a new connection displaced an earlier one. The probe for
+//                                     # a new connection displaced an earlier one — read from the
+//                                     # daemon when one holds the port, so the numbers are real
+//                                     # either way. The probe for
 //                                     # "can two Figma files use the bridge at once?" — run it from
 //                                     # each open file and compare instanceId. Costs nothing (no page
 //                                     # load, no node walk, no assets) and writes no files.
@@ -198,6 +231,7 @@ if (require.main === module) {
 
 const fs = require("fs");
 const path = require("path");
+const LAYOUT = require("./project-layout.js");
 
 // --help / -h: print the usage header above and exit 0. Handled HERE, before server-core is required,
 // so help has no side effects at all — no token minted, no port bound. The text is the header comment
@@ -424,7 +458,7 @@ const pageSel = takeValues(args, "--page", "--page needs an id or name (see --li
 // flags for it too. The name is required rather than defaulted from figma.root.name, because it is
 // what the output directory is named after and a silent default is a directory the user did not
 // choose. Run it with the LIBRARY file open in Figma, not the design file that consumes it.
-const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"NERA\"")[0] || null;
+const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-library \"Acme UI\"")[0] || null;
 
 // --client: WHICH connected Figma file this command talks to. Unlike every other flag here it is not
 // a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
@@ -495,7 +529,11 @@ if (unknown.length) {
 // The positional [outDir] — the first token that's neither a `--flag` nor a value a flag above already
 // claimed. Doing this AFTER parsing every value-taking flag is what keeps e.g. `--children 131:1879`
 // (no outDir given) from being misread as `outDir = "131:1879"`.
-const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) || "design";
+// Default: design/export — dtwin writes only there, so `rm -rf design/export && re-pull` cannot take
+// the component map, the plan or the audit with it. A project created under the older flat layout
+// keeps working: its export is still found (bridge/project-layout.js findExportDir).
+const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) ||
+  (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
 
 // Scope flags are MUTUALLY EXCLUSIVE, and the loser used to be discarded in silence: collectFull is
 // `if (allPages) … else if (page)`, so `--all-pages --page Foo` exported all 25 pages while the user
@@ -867,8 +905,15 @@ async function main() {
     const r = await send("whoami", {}, TIMEOUTS.command);
     // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
     // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
-    const conn = bridge ? bridge.connectionInfo() : null;
-    console.log(JSON.stringify({ plugin: r, connection: conn }, null, 2));
+    // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
+    // than emitting `connection: null` under a help text that promises socket uptime and takeovers.
+    let conn = bridge ? bridge.connectionInfo() : null;
+    let connFrom = bridge ? "this process" : null;
+    if (!conn) {
+      const st = await daemon.status().catch(() => null);
+      if (st && st.connection) { conn = st.connection; connFrom = `the daemon (pid ${st.pid})`; }
+    }
+    console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
     console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
       ", up " + Math.round((r.uptimeMs || 0) / 1000) + "s.");
     console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
@@ -877,9 +922,10 @@ async function main() {
     if (conn) {
       console.error("[dtwin] socket " + conn.connId + " up " + Math.round(conn.connectionUptimeMs / 1000) +
         "s; connections this run: " + conn.connectionsThisRun + ", takeovers: " + conn.takeovers +
-        (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : "."));
+        (conn.takeovers ? " — a second plugin instance DID connect and displace an earlier one." : ".") +
+        (connFrom && connFrom !== "this process" ? " (from " + connFrom + ")" : ""));
     } else {
-      console.error("[dtwin] (socket stats live in the daemon — run --daemon-status for its view.)");
+      console.error("[dtwin] socket stats unavailable — no daemon is running and this process holds no bridge of its own.");
     }
     console.error("[dtwin] reading it: run this from BOTH open files. Two different instanceIds => " +
       "two instances coexist. A CHANGED instanceId on a repeat call => Figma restarted the plugin runtime. " +
@@ -914,9 +960,16 @@ async function main() {
           note: "listing structure",
           cmd: "listPages",
           args: { depth: listDepth },
+          // "top-level frame(s)" was a lie on every real file: the array holds SECTION, GROUP,
+          // INSTANCE, TEXT and RECTANGLE too, and on a sectioned file the actual screens are one
+          // level deeper (live finding 18). Say "layer", which is Figma's own word for any object,
+          // and break the count down so "deep-pull next" points somewhere real.
           summary: (r) => {
             const fr = r.manifest && r.manifest.frames;
-            return `${r.manifest.pages} page(s)${fr === undefined ? "" : `, ${fr} top-level frame(s)`} in "${r.file}".`;
+            const byType = {};
+            for (const f of r.frames || []) byType[f.type || "?"] = (byType[f.type || "?"] || 0) + 1;
+            const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
+            return `${r.manifest.pages} page(s)${fr === undefined ? "" : `, ${fr} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
           },
         };
     console.error("[dtwin] plugin connected — " + q.note + "…");
@@ -924,8 +977,15 @@ async function main() {
     for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
     console.log(JSON.stringify(r, null, 2));
     console.error("[dtwin] " + q.summary(r));
-    console.error("[dtwin] next: dtwin design --page <id>   (repeatable; add --no-assets to skip the render pass)");
-    console.error("[dtwin]       or: dtwin design --node <id>   (just ONE node, fully exported with its own assets)");
+    // A SECTION is a container, not a screen — pulling one deep-serializes every screen inside it.
+    // On the file this was found on, the sections were 8898-35975px wide.
+    if ((r.frames || []).some((f) => f.type === "SECTION")) {
+      console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
+      console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
+    }
+    console.error("[dtwin] next: dtwin pull design --page <id>   (repeatable; add --no-assets to skip the render pass)");
+    console.error("[dtwin]       or: dtwin pull design --node <id>   (just ONE node, fully exported with its own assets)");
+    console.error("[dtwin]       unsure which of two same-named frames? dtwin screenshot <id> renders one cheaply.");
     // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
     // forever after printing (found live: still resident and holding port 8787 a minute later,
     // blocking every subsequent pull). close() rather than process.exit(0) — same effect on the hang,
@@ -941,9 +1001,13 @@ async function main() {
     console.error("[dtwin] plugin connected — rendering a reference screenshot…");
     const r = await send("screenshot", { nodeId: screenshotId, scale }, exportTimeoutMs);
     for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
-    writeScreenshot(outDir, r);
-    console.log(JSON.stringify({ id: r.id, name: r.name, type: r.type, reference: r.reference }, null, 2));
-    console.error(`[dtwin] wrote ${r.reference} — ${r.name} (${r.type}).`);
+    // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
+    // string: those disagreed for a whole release (live-test findings 20/31) and a printed path that
+    // finds nothing is worse than no path at all.
+    const shot = writeScreenshot(outDir, r);
+    const ref = shot.reference || r.reference;
+    console.log(JSON.stringify({ id: r.id, name: r.name, type: r.type, reference: ref }, null, 2));
+    console.error(`[dtwin] wrote ${path.join(outDir, ref)} — ${r.name} (${r.type}).`);
     return finish();
   }
 

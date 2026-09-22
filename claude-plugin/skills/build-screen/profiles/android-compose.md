@@ -61,7 +61,7 @@ space rather than a bitmap — there is no asset file for that node.
 **Tokens** — the right-hand value in `tokens.json` is a Compose reference (e.g.
 `MaterialTheme.colorScheme.primary`, or your `Tokens.space.md`). Emit these, not literals.
 
-**Components** — your `@Composable`s per `codeconnect.local.json`; pass Figma `props` through.
+**Components** — your `@Composable`s per `design/codeconnect.local.json`; pass Figma `props` through.
 
 **Text** — `Text(...)` with `style = MaterialTheme.typography...`; map `font.size` to `.sp`.
 

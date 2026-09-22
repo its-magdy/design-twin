@@ -57,11 +57,25 @@ async function rootTree(node: SceneNode): Promise<Obj | null> {
 // other (which is how `measurements` nearly shipped half-wired).
 // `title` is the human screen label; `fileBase` is what the output filename derives from — a
 // multi-frame selection is titled "selection" but still files under its first frame's name.
-async function screenResult(title: string, fileBase: string, nodes: Obj[]): Promise<Obj> {
+// `origin` is the node's ADDRESS in the file — the owning page and the root node id. Without it a
+// single-screen export could only ever be filed flat under its layer name, which is how two frames
+// both called "Popup" silently overwrote each other and why a --node pull could not join the pages/
+// layout a --page pull writes (live findings 47/63). pageId (not the page NAME) is the identity:
+// PageNode.name is user-editable and the Plugin API documents no uniqueness constraint on it.
+async function screenResult(title: string, fileBase: string, nodes: Obj[], origin?: { page: PageNode | null; nodeId?: string }): Promise<Obj> {
   const screen: Obj = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
+  const page = origin && origin.page;
+  if (page) { screen.page = page.name; screen.pageId = page.id; }
+  if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
   const measurements = collectMeasurements();
   if (measurements) screen.measurements = measurements;
-  return { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+  // Repeated at the TOP level as well as inside `screen`: write-out.js routes the file into
+  // pages/<page>/ before it has any reason to open the screen doc, and the MCP path hands the same
+  // envelope to a caller that may never write to disk at all.
+  const out: Obj = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+  if (page) { out.page = page.name; out.pageId = page.id; }
+  if (origin && origin.nodeId) out.nodeId = origin.nodeId;
+  return out;
 }
 
 // A node's STRUCTURAL summary — the only shape the cheap index tools emit (id/name/type/size), shared
@@ -270,7 +284,9 @@ export async function collectSelection(opts?: CollectOpts): Promise<Obj> {
     const tree = await rootTree(nd);
     if (tree) nodes.push(tree);
   }
-  return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes);
+  // A selection is always on the current page by construction, so no walk is needed — but the id of
+  // the FIRST selected node is what the file is named after, so that is the one recorded.
+  return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes, { page: figma.currentPage, nodeId: sel[0].id });
 }
 
 // Walk up to the owning PAGE node (needed to switch pages before selecting a linked node).
@@ -296,7 +312,7 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Ob
   } catch (e) {}
   const tree = await rootTree(node as SceneNode);
   if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");
-  return screenResult(node.name, node.name, [tree]);
+  return screenResult(node.name, node.name, [tree], { page: pageOf(node), nodeId });
 }
 
 // On-demand visual reference for ONE node — the cheap, single-node twin of the whole-frame reference

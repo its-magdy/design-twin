@@ -175,9 +175,67 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
   return { lastModified, aheadOfSnapshot };
 }
 
-module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+// ---------------------------------------------------------------- coverage of a SCREEN
+//
+// driftLint's own coverage number is the catalog measured against the map — which on the live run
+// printed "318/318 components mapped · 0 error(s)" for a map that covered 0% of the screen about to be
+// built (finding 65). Both numbers were true and neither answered the question a builder is asking.
+//
+// This one does: of the components actually placed on the screen, how many can you reuse? It keys on
+// the instance's mainComponent set key (a screen using six Button variants is ONE component to map),
+// and it deliberately reports zero as an error rather than as an empty success.
+function screenCoverage(map, catalog, screenDocs) {
+  const entries = (map && map.components) || {};
+  const mapKeys = new Set();
+  for (const k of Object.keys(entries)) {
+    const f = entries[k].figma || {};
+    if (f.key) mapKeys.add(f.key);
+    if (f.id) mapKeys.add(f.id);
+    mapKeys.add(k);
+  }
+  const catKeys = new Set(((catalog && catalog.components) || []).map((c) => c.key).filter(Boolean));
 
-// CLI: node design-to-code/drift-lint.js <codeconnect.local.json> <design-system/components.local.json> [--max-age <hours>]
+  const used = new Map(); // set key -> { setName, instances }
+  const walk = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent;
+      const id = mc.setKey || mc.key;
+      if (id) {
+        if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, key: id, variantKey: mc.key });
+        used.get(id).instances++;
+      }
+    }
+    for (const c of n.children || []) walk(c);
+  };
+  for (const doc of screenDocs || []) {
+    const roots = Array.isArray(doc && doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
+    for (const r of roots) walk(r);
+  }
+
+  const rows = [...used.values()].map((u) => ({
+    ...u,
+    inCatalog: catKeys.has(u.key) || catKeys.has(u.variantKey),
+    inMap: mapKeys.has(u.key) || mapKeys.has(u.variantKey),
+  }));
+  const instances = rows.reduce((n, r) => n + r.instances, 0);
+  const inCatalog = rows.filter((r) => r.inCatalog).length;
+  const inMap = rows.filter((r) => r.inMap).length;
+  return {
+    distinct: rows.length,
+    instances,
+    inCatalog,
+    inMap,
+    catalogPct: rows.length ? Math.round((inCatalog / rows.length) * 100) : null,
+    mapPct: rows.length ? Math.round((inMap / rows.length) * 100) : null,
+    unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances })),
+  };
+}
+
+module.exports = { driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+
+// CLI: node design-to-code/drift-lint.js <codeconnect.local.json> <design-system/components.local.json>
+//        [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
 if (require.main === module) {
@@ -195,8 +253,20 @@ if (require.main === module) {
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
 
+  // --screen is repeatable: a build usually spans a screen plus its modals, and the question
+  // "how much of this can I reuse" is about all of them together.
+  const screenFiles = [];
+  for (;;) {
+    const i = argv.indexOf("--screen");
+    if (i === -1) break;
+    const v = argv[i + 1];
+    if (!v) { console.error("--screen expects a path to a screen export"); process.exit(2); }
+    screenFiles.push(v);
+    argv.splice(i, 2);
+  }
+
   const [mapFile, catalogFile] = argv;
-  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]"); process.exit(2); }
+  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]"); process.exit(2); }
   const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const map = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
@@ -205,6 +275,39 @@ if (require.main === module) {
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;
   console.error(`\n${s.mapped}/${s.catalogComponents} components mapped · ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
+  console.error(`      (that number is the CATALOG measured against the map — it says nothing about any particular screen.)`);
+
+  // The number a builder is actually asking for. Printed last, because it is the headline.
+  let screenFail = false;
+  if (screenFiles.length) {
+    const docs = screenFiles.map((f) => readJsonFile(f, "screen export"));
+    const cov = screenCoverage(map, catalog, docs);
+    if (!cov.distinct) {
+      console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
+    } else {
+      console.error(
+        `\nSCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the components on this screen are in your map` +
+          ` · ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog` +
+          ` · ${cov.instances} instance(s) total`
+      );
+      if (cov.mapPct === 0) {
+        screenFail = true;
+        console.error(
+          `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.\n` +
+            `       The catalog you exported is not the library this screen is built from — a green "mapped" count above measures\n` +
+            `       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,\n` +
+            `       then export it with \`dtwin pull design --as-library "<name>"\`. Until then build every instance as new.`
+        );
+      } else if (cov.unmapped.length) {
+        console.error(
+          `warn   [screen-coverage] ${cov.unmapped.length} component(s) on this screen have no map entry: ` +
+            cov.unmapped.slice(0, 6).map((u) => `'${u.setName}' (${u.instances}x)`).join(", ") + (cov.unmapped.length > 6 ? ", …" : "")
+        );
+      }
+    }
+  } else {
+    console.error(`note   pass --screen <screen.json> to get the number that matters: how much of THAT screen your map covers.`);
+  }
 
   // Strictly opt-in: only attempted when both are present, and any failure is a warning, never a
   // crash — this check is a bonus on top of the offline exportedAt/maxAge guarantee above, not a
@@ -220,7 +323,7 @@ if (require.main === module) {
         console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
       }
     }
-    process.exit(res.errors.length ? 1 : 0);
+    process.exit(res.errors.length || screenFail ? 1 : 0);
   };
   run();
 }

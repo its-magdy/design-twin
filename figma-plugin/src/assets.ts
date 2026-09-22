@@ -1,16 +1,105 @@
 // Rendering nodes to assets: vector/icon -> SVG, image-fill -> PNG, whole-frame reference PNG,
 // and Dev-Mode resource links.
 import { Obj, safe, toBase64, errMsg, round } from "./util";
-import { assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
+import { Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
 import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node
 // tree, and stores the identical basename on the asset record — so figma-pull / the UI download write
-// exactly the name the tree points at instead of each re-deriving `safe(id) + "." + format`.
+// exactly the name the tree points at instead of each re-deriving the convention.
+//
+// It used to be `safe(node.id) + "." + format`, which produced two problems a real build could not
+// work around:
+//
+//   * Every file was named after a node-id PATH. A layer named `icons/linear/arrow-down` landed as
+//     `I10970_111374_1910_23337_1902_19173.svg`, and an app importing 41 icons imported 41 of those
+//     (live finding 96). The layer name was sitting right beside it in the tree, unused.
+//   * The id path includes the whole INSTANCE chain, so one shared sidebar icon was re-exported under
+//     a different name for every screen and every instance that used it — five identical avatar
+//     placeholders on one frame became five files (finding 97).
+//
+// So: name from the LAYER, dedupe on CONTENT. Two registrations whose bytes are identical return the
+// same path and produce one file; the second one records its node id on the first's `from` list, so
+// nothing about provenance is lost. Two different assets that sanitize to the same name are told
+// apart by a short content hash, never by silently overwriting one another.
+//
+// The node id remains the reference PNG's name (`<id>_ref.png`): a reference belongs to one frame by
+// definition, build-screen looks it up by id, and every doc names that shape.
 const ASSET_DIR = "assets/";
+
+// FNV-1a, 32-bit. Not a cryptographic hash and does not need to be — it decides whether two byte
+// strings in ONE export are the same, and a collision would at worst reuse one icon for another
+// (which the length check below makes vanishingly unlikely). The Figma plugin sandbox has no
+// crypto.subtle, so this is also the only option that does not cost a round trip.
+function contentHash(a: { base64?: string; text?: string }): string {
+  const src = a.text != null ? a.text : a.base64 != null ? a.base64 : "";
+  let h = 0x811c9dc5;
+  for (let i = 0; i < src.length; i++) {
+    h ^= src.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return (h >>> 0).toString(16).padStart(8, "0") + "-" + src.length.toString(36);
+}
+
+// Per-run, reset by resetRun() via releaseAssets(): content hash -> the file already written for it,
+// and taken basename -> the hash that owns it.
+const byContent = new Map<string, { file: string; asset: Asset }>();
+const byName = new Map<string, string>();
+export function resetAssetNames(): void {
+  byContent.clear();
+  byName.clear();
+}
+
+// A Figma layer name is often a path (`icons/linear/arrow-down`, `Linear / School / Award`) and may be
+// empty, emoji-laden or whitespace-padded. Take the LAST segment — that is the icon's actual name —
+// and fall back to the node id when nothing usable survives.
+// safe() is the FILESYSTEM-boundary sanitiser shared with the pages/ layout, and it folds every
+// non-alphanumeric to "_" — including the hyphen, which is the single most common character in an
+// icon name (`element-4`, `calendar-tick`, `arrow-down`). Turning those into `element_4` would swap
+// one unreadable convention for another, so asset names keep `-` and `.` is dropped (an extension is
+// appended by the caller and a second dot in the stem confuses every bundler).
+function assetSafe(x: string): string {
+  return String(x).replace(/[^a-zA-Z0-9-]+/g, "_").replace(/_+/g, "_");
+}
+
+function baseNameFor(a: { id: string; name: string; kind?: string }): string {
+  if (a.kind === "reference") return safe(a.id.replace(/:ref$/, "")) + "_ref";
+  if (a.kind === "source") return safe(a.id); // img:<hash> -> img_<hash>: the join back to a fill's `hash`
+  const last = String(a.name || "").split("/").pop() || "";
+  const cleaned = assetSafe(last.trim()).replace(/^[-_]+|[-_]+$/g, "");
+  return cleaned || safe(a.id);
+}
+
 function register(a: { id: string; name: string; format: string; base64?: string; text?: string; kind?: string }): string {
-  const file = safe(a.id) + "." + safe(a.format);
-  assets.push({ ...a, file });
+  const fmt = safe(a.format);
+  // A reference PNG is per-frame and keyed by id; deduping it against an identical-looking frame
+  // would point two screens' `reference` at one file, which is exactly the confusion it exists to
+  // resolve. Source images are already content-addressed by Figma's own hash.
+  const dedupable = a.kind !== "reference";
+  const hash = contentHash(a);
+
+  if (dedupable) {
+    const hit = byContent.get(hash + "." + fmt);
+    if (hit) {
+      // Same bytes, already on disk. Record who else points at it rather than writing a copy.
+      (hit.asset.from || (hit.asset.from = [hit.asset.id])).push(a.id);
+      return ASSET_DIR + hit.file;
+    }
+  }
+
+  const base = baseNameFor(a);
+  let file = base + "." + fmt;
+  const taken = byName.get(file);
+  if (taken !== undefined && taken !== hash) {
+    // Same human name, different bytes — two distinct icons that happen to share a leaf name. Keep
+    // both, tell them apart by content, and never let the second silently replace the first.
+    file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
+  }
+  byName.set(file, hash);
+
+  const asset: Asset = { ...a, file, hash };
+  assets.push(asset);
+  if (dedupable) byContent.set(hash + "." + fmt, { file, asset });
   return ASSET_DIR + file;
 }
 

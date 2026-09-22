@@ -1,6 +1,6 @@
 ---
 name: extract
-description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "get me the colors", "set up my theme from Figma", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen. When a screen that is ALREADY built must catch up with a changed design, use sync-design — it snapshots before re-pulling.
+description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "get me the colors", "set up my theme from Figma", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/export/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land, hand off to build-screen. When a screen that is ALREADY built must catch up with a changed design, use sync-design — it snapshots before re-pulling.
 argument-hint: "[what to pull: page, frame name, node id or Figma URL]"
 ---
 
@@ -19,10 +19,23 @@ is headless — the plugin *is* the reader. If the user hasn't started it: Figma
 
 Not imported yet? That's one-time setup — send them to `/designtwin:help`.
 
+## Where things land
+
+`dtwin` writes to **`design/export/` and nowhere else**. Everything beside it under `design/` —
+`target.json`, `codeconnect.local.json`, `plan/`, `audit/`, `verify/` — is decisions and evidence a
+human or a later step owns, and no pull touches them.
+
+That boundary is the point: `rm -rf design/export && re-pull` is the natural way to recover from a
+bad export, and it used to take a hand-mapped component map with it. `design/README.md` (written by
+`dtwin init`) says the same thing where someone deleting files will actually see it.
+
+A project created before this split keeps its export directly in `design/`; every tool still finds
+it, and `dtwin doctor` says which layout it found.
+
 ## Pick a path
 
 Four ways to get data out: click the plugin's export buttons (manual), run the `dtwin` CLI, hold it
-open as a daemon (`--serve`) for several pulls in a row, or go through a registered `figma-mcp` server.
+open as a daemon (`dtwin serve`) for several pulls in a row, or go through a registered MCP server.
 What each is, when to reach for it, and how a connection actually gets opened is the **help**
 skill's job, not this one — use it if the user hasn't got a connection working yet.
 
@@ -33,42 +46,55 @@ works; walking a user through CLI/token setup mid-task is worse than just clicki
 server is already running, use its own export tools with `writeToDisk: true` instead of also trying
 the CLI.
 
+**Where `dtwin` comes from.** Check `which dtwin` first — it is usually already on PATH, installed
+globally from the `designtwin` npm package (and it can be on PATH by other means; don't assume npm).
+Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
+`node bridge/figma-pull.js`. If neither works, the CLI isn't installed: fall back to the plugin's own
+export buttons, which need nothing.
+
 ## Discover, then scope — never open with a whole-file pull
 
 A full pull on a real design file is enormous and most of it is irrelevant to the task. Spend two
-cheap calls to find the one page you actually need:
+cheap calls to find the one frame you actually need:
 
 ```
-dtwin list libraries          # which design libraries this file draws on
-dtwin list                    # pages + their top-level frames, WITH IDS
+dtwin list                    # pages + their top-level LAYERS, with ids
 dtwin list children <id>      # peek inside one node before committing
-dtwin pull design --page <id> # then deep-pull only that page
-dtwin pull design --node <id> # or just ONE node (a link someone pasted, a single component)
+dtwin screenshot <id>         # look at a candidate before paying for a pull
+dtwin pull design --node <id> # then deep-pull ONE screen
+dtwin pull design --page <id> # or a whole page
+dtwin list libraries          # which design libraries this file draws on — SLOW, see below
 ```
 
-Each command is shorthand for a flag that still works (`dtwin --list-libraries`, `--list`,
-`--children <id>`, `dtwin design --page <id>`) — an older install without the commands takes those.
-If a command hangs or times out, run **`dtwin doctor`** before anything else: it says whether the
-cause is the token, the port, the daemon or the plugin.
+Every command answers `--help` with its own page (`dtwin screenshot --help`, `dtwin list --help`),
+and none of them does anything else while doing so. If a command hangs or times out, run
+**`dtwin doctor`** first: it says whether the cause is the token, the port, the daemon or the plugin.
+
+**`dtwin list` reports LAYERS, not screens.** Its top-level array carries SECTION, GROUP, INSTANCE,
+TEXT and RECTANGLE alongside FRAME, and on a sectioned file the real screens are one level *deeper*,
+inside SECTIONs 9,000-36,000px wide. The summary line breaks the count down by type and the JSON
+carries `type` per row; when you see SECTIONs, `list children <section id>` is the next call, not a
+pull.
+
+**`dtwin list libraries` is the slowest read there is** — 5-15s against half a second for `list`,
+because it asks Figma about every enabled library's variable collections one at a time. It prints
+progress while it works. Run it when you need to know which library owns a token, not as a warm-up.
 
 **More than one Figma file open? Every command above needs `--client`.** The bridge routes per
-connected plugin, so with two files connected it refuses rather than guessing which one you meant:
+connected plugin, so with two files connected it refuses rather than guessing:
 "2 Figma files are connected to the bridge — say which one to use". That is not a failure — add
-`--client <connId|fileKey|part of the file name>` to each command and re-run:
+`--client <connId|part of the file name>` and re-run:
 
 ```
 dtwin list clients                              # the address book: connId, file name, fileKey
-dtwin list --client TeamSmart                   # …then scope every command to one file
-dtwin pull design --node <id> --client TeamSmart
+dtwin list --client Marketing                   # …then scope every command to one file
+dtwin pull design --node <id> --client Marketing
 ```
 
-`dtwin doctor` names each connected file and says when disambiguation will be needed. MCP twin: a
-`client: "<id|name>"` argument on every plugin-reaching tool.
-
-**`dtwin` comes from the `designtwin` npm package.** If it isn't on PATH, you are probably working
-inside a clone of the Design Twin repo itself — there, every `dtwin` above is
-`node bridge/figma-pull.js`. If neither is available, the CLI isn't installed: fall back to Path A
-(the plugin's own export buttons), which needs nothing.
+A partial file name works and is what to reach for. The docs also offer `fileKey`, but on a
+self-imported plugin (the free-plan setup this tool targets) `figma.fileKey` is gated and reported as
+`null` — so that form addresses nothing here. `dtwin doctor` names each connected file and says when
+disambiguation will be needed. MCP twin: a `client: "<id|name>"` argument on every plugin-reaching tool.
 
 MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_children` →
 `figma_export_full({page:[id]})`.
@@ -77,21 +103,22 @@ Two narrower pulls worth knowing: `design --design-system` gets tokens/styles/co
 page walk and no assets; `design --as-library "<name>"` gets a library file's complete catalog (run it
 with the *library* open, not the file consuming it).
 
-**Several frames with the same name?** Real files have them — one page held two "Skills list" frames
-and four "Tags", all the same size, and `list children` returns only name/id/type/size, so there is
-nothing in that output to tell them apart. Don't just take the first id: `dtwin screenshot <id>`
-renders ONE node to `screenshots/<id>_ref.png` cheaply (no `serialize()`, no asset walk). Shoot each
-candidate, look, then pull the right one — guessing costs a full pull of the wrong frame and a build
-on top of it. Ask the user if the renders don't settle it.
+**Several frames with the same name?** Real files have them — one page held two frames with the same
+name and the same size, and `list children` returns only name/id/type/size, so nothing in that output
+tells them apart. Don't take the first id: `dtwin screenshot <id>` renders ONE node to
+`design/export/assets/<id>_ref.png` cheaply (no `serialize()`, no asset walk, well under a second
+warm). Shoot each candidate, look, then pull the right one. That PNG lands in exactly the place a
+later `--node` pull of the same frame writes its own reference, so shooting first costs nothing and
+leaves no duplicate. Ask the user if the renders don't settle it.
 
-**After `build-screen` generates code for one component**, the same command gets a fresh PNG of
-just that node to compare the output against — cheaper than re-exporting, and a tighter check than the
-one whole-frame reference PNG every export already carries (which is too zoomed-out to eyeball a small
-component inside a dense screen). MCP twin: `figma_screenshot`.
+**A state you need may be a sibling frame, not a missing design.** Before reporting "there is no
+populated/empty/error state", run `dtwin list children <the parent section>`. On the live file the
+populated table sat beside the empty one, named for what it holds rather than for the screen beside it — and a
+three-second sweep answered what would otherwise have been a blocking designer question.
 
-**The full command + flag surface is `dtwin help`** (and `bridge/README.md` in a clone of the Design Twin
-repo) — read it rather than guessing at flags; an unknown flag is refused with a suggestion. This
-skill owns the decision of *which* pull to run; that reference owns *how*.
+**The full command + flag surface is `dtwin help`** (and `bridge/README.md` in a clone) — read it
+rather than guessing; an unknown flag is refused with a suggestion. This skill owns the decision of
+*which* pull to run; that reference owns *how*.
 
 ## Through the MCP instead
 
@@ -101,71 +128,132 @@ The server is registered as `designtwin`, so a tool's full name is `mcp__designt
 **Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
 default). An export too large to return is written to disk on its own and the result's `note` says
 so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
-inline at all, so it's the only way to get `design/assets/`.
+inline at all, so it's the only way to get `assets/`.
 
 ## Check what landed before declaring success
 
-Every export doc carries a **`manifest`**: `nodes`, `skipped`, `truncated`, `assetsFailed`,
-`warnings`. Read it. A truncated tree or a failed asset produces a screen that *looks* buildable and
-silently isn't, so say so now rather than letting `build-screen` discover it halfway through.
+Every export doc carries a **`manifest`**. Read all of it, not just the three fields that are
+obviously about failure:
 
-Also confirm the shape on disk. **What lands depends on the pull**, so check for what your command
-actually produces rather than the full set:
-- `--node <id>` / a selection → `design/<Screen>.json` (keys: `exportedAt`, `screen`, `nodes[]`,
-  `manifest`) + `design/variables.json` + `design/assets/`. **No `design/design-system/`** — that
-  directory needs its own pull, and its absence here is normal, not a failed export.
-- `--page <id>` / `--all-pages` → `design/pages/index.json` + per-page dirs + `design/assets/`.
-- `--design-system` → `design/design-system.json` (a slim pointer manifest) + `design/design-system/`
-  (`tokens.json`, `components.local.json`, `styles.*.json`, `hygiene.json`). No page walk, no assets.
+| key | what a non-zero value means |
+|---|---|
+| `nodes` | how much tree you got |
+| `truncated`, `skipped` | the export did not finish the tree — treat as a failed pull |
+| `assetsFailed` | a render failed and nothing replaced it |
+| `warnings` | read every line |
+| `assetsGeometry` | that many nodes took the **fallback** path: the render failed and their vector paths were inlined instead. `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
+| `assetsSkippedInvisible` | vector nodes with nothing visible to render. Normal, and not a failure. |
 
-So a project that has only ever run a single-screen pull has no `design/design-system/` at all, and
-the token/component commands below need that pull first — they will say so if you forget.
+**What lands depends on the pull**, so check for what your command actually produces:
+
+- `--node <id>` / a selection → `design/export/pages/<Page>/<Screen>__<node-id>.json` (keys:
+  `exportedAt`, `screen`, `page`, `pageId`, `nodeId`, `nodes[]`, `manifest`), plus three siblings:
+  `…__<id>.vars.json` (the tokens THIS screen binds), `…__<id>.assets.json` (which assets it uses,
+  with content hashes), and a row in `design/export/pages/index.json`. Also
+  `design/export/variables.json` and `design/export/assets/`. **No `design/export/design-system/`** —
+  that directory needs its own pull, and its absence here is normal, not a failed export.
+- `--page <id>` / `--all-pages` → the same `pages/` tree, one file per top-level layer.
+- `--design-system` → `design/export/design-system.json` (a slim pointer manifest — every entry under
+  `files` resolves to something on disk) + `design/export/design-system/`: `tokens.json`,
+  `components.local.json`, `components.library.json` (components this file *consumes* from
+  elsewhere), `styles.{paint,text,effect,grid}.json`, `hygiene.json`. No page walk, no assets.
+
+The filename carries the node id because frame names do not identify a frame: two `Popup`s on one
+page are two different screens, and a name ending in a space sanitises to a trailing `_`. Read `pages/index.json` rather than reconstructing filenames — it carries each screen's
+real name, page, node id, size and the paths to all three files.
+
+`--design-system` counts and `dtwin list libraries` counts legitimately differ: the export includes
+variables this file merely *references* from a published library, flagged `remote: true`, and
+`hygiene.json`'s first line says how many. Both numbers are right; they are answering different
+questions.
+
+**`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
+merges its slice in, keyed on each variable's Figma key, so pulling screen B no longer deletes screen
+A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json`. If two screens
+resolve one variable differently, the newest wins and the disagreement is recorded under `_conflicts`
+and in `hygiene` — read those before generating a theme.
 
 **Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
-points at it from a `reference` field holding a path relative to `design/` (e.g.
-`assets/<id>_ref.png`). **Where that field sits depends on which export you ran**, and getting it
-wrong is the difference between finding the PNG and concluding there isn't one:
-`design/<screen>.json` (a single-screen pull) puts it on each node — `nodes[0].reference` — while a
-page-walk layer file (`design/pages/<page>/<name>__<id>.json`) puts it at the root, beside `tree`. `build-screen` validates against it, and without it fidelity checking is
-guesswork — so confirm that file exists. Only if `reference` is absent (the manifest `warnings` will
-say "reference screenshot failed/empty") ask the user to export a PNG of the frame by hand (Figma
-right-click → Export) to `design/<screen>.png`.
+points at it from a `reference` field holding a path relative to the export dir
+(`assets/<id>_ref.png`). Where that field sits depends on the export: a single-screen pull puts it on
+each node (`nodes[0].reference`), a page-walk layer file puts it at the root beside `tree`.
+`build-screen` validates against it, so confirm the file exists. Only if `reference` is absent (the
+manifest `warnings` will say so) ask the user to export a PNG by hand (Figma right-click → Export).
+
+**Assets are named after their Figma layer and deduped by content.** `icons/linear/arrow-down` lands
+as `arrow-down.svg`, not as a node-id path, and the same artwork reached through several instance
+paths becomes one file with every node id recorded on it. Two different icons sharing a leaf name are
+told apart by a short content hash, never by overwriting. Image *fills* are the one exception: they
+carry a `hash` rather than a path, and the byte lands at `assets/img_<hash>.<ext>` —
+`…__<id>.assets.json` indexes all of it, so read that instead of deriving the convention.
+
+**A pull warns about assets too heavy to inline.** A flattened illustration exports as one SVG with
+thousands of paths — the live run hit 2.47 MB, which inlined into a 2.71 MB JS bundle until it was
+moved to a URL import. Import those by URL, or ask the designer to re-export as a PNG. Do not redraw
+or simplify one yourself.
+
+## Is this screen even from that design system?
+
+Pulling the design system and then pulling a screen does **not** mean the two are related. Both may
+be copies of one original, in which case names and values line up while every key differs; or the
+screen may simply consume a library you never exported. That failure is invisible in either file
+alone and produces a build that looks plausible and is themed from the wrong source.
+
+One command answers it:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<Screen>__<id>.json \
+  --design-system design/export/design-system
+```
+
+Run it after any pull that produced both, and report its blockers before offering to build.
+`/designtwin:audit-design` runs the same pass as part of its report; this is the standalone form for
+when you have only just pulled.
 
 ## Tokens → a theme file the app can import
 
 "Get me the colors" is not finished when the raw variables land — nothing in the app can import
 those. Turn them into the stack's own theme file once, instead of re-mapping values on every screen.
 
-**The first argument is whichever variable file your pull produced**: `design/design-system/tokens.json`
-after a `--design-system` pull, or `design/variables.json` after a single-screen pull. There is no
-other input, and passing the one you don't have is the usual reason this command fails.
+**The first argument is whichever variable file your pull produced**:
+`design/export/design-system/tokens.json` after a `--design-system` pull, or
+`design/export/variables.json` after single-screen pulls. Passing the one you don't have is the usual
+reason this command fails.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json design/                                 # DTCG json + tokens.css (plain custom properties)
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json <css dir> --web tailwind                # Tailwind v4: theme.css with an @theme block
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json <theme dir> --native swiftui            # or compose | flutter | react-native  (+ --package com.acme.ui for Kotlin)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json <css dir> --web tailwind
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json <theme dir> --native swiftui   # or compose | flutter | react-native
 ```
 
-Pick the output by stack. `tokens.css` is plain `:root` custom properties — right for CSS Modules or
-vanilla CSS, but **Tailwind generates no utilities from it**, so on a Tailwind v4 project use
-`--web tailwind`: it writes `theme.css` (`@import "tailwindcss"` + an `@theme` block) with each
-variable under the namespace that earns it a utility — `--color-*` → `bg-`/`text-`, `--spacing-*` →
-`p-`/`gap-`, `--radius-*` → `rounded-`, `--text-*` → `text-<size>` — and every non-default mode
-reassigning those same properties in a `[data-theme="…"]` block. Import it as the app's entry CSS.
-Do not hand-write an `@theme` block from the bound token names: that is the per-screen re-mapping
-this step exists to stop.
+It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json` and a
+`tokens/` directory of per-collection/per-mode set files — around 20 files for a real system. Point
+it at a directory you are happy to have filled.
 
-Read the warnings it prints (a skipped alias, a renamed identifier). The file is generated — say
-where it landed and how to wire it in (its header comment shows the one line), don't hand-edit it,
-and re-run it after the next token pull. Variables only: text styles and shadows are not emitted yet.
-If the project already has a theme file, do not add a second one beside it — show the user the
-difference and ask which is the source of truth.
+Pick the output by stack. `tokens.css` is plain `:root` custom properties — right for CSS Modules or
+vanilla CSS, but **Tailwind generates no utilities from it**, so on Tailwind v4 use `--web tailwind`:
+it writes `theme.css` (`@import "tailwindcss"` + an `@theme` block) with each variable under the
+namespace that earns it a utility — `--color-*` → `bg-`/`text-`, `--spacing-*` → `p-`/`gap-`,
+`--radius-*` → `rounded-`, `--text-*` → `text-<size>` — and every non-default mode reassigning those
+properties in a `[data-theme="…"]` block. Import it as the app's entry CSS. Do not hand-write an
+`@theme` block from bound token names: that is the per-screen re-mapping this step exists to stop.
+
+**Read the warnings it prints — one of them is lossy.** `duplicate token name 'X' — later definition
+wins` means two variables really do share a name and one has been dropped. Stop and find out which
+(they are usually from two different libraries); do not generate a theme over it. The others —
+a name sanitised for CSS, a resolver file renamed to avoid a collision — are informational.
+
+The file is generated: say where it landed and how to wire it in (its header comment shows the one
+line), don't hand-edit it, and re-run it after the next token pull. Variables only — text styles and
+shadows are not emitted yet. If the project already has a theme file, do not add a second one beside
+it; show the user the difference and ask which is the source of truth.
 
 ## Then hand off
 
-Report briefly: what landed, anything the manifest flagged, and whether the PNG exists. Then
-**`/designtwin:audit-design <screen>`** to check the design is buildable (missing states, contrast,
-touch targets, designer questions), and **`/designtwin:build-screen <screen>`** to build it.
+Report briefly: what landed, anything the manifest flagged, whether the PNG exists, and any
+cross-check blocker. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
+(missing states, contrast, touch targets, designer questions), and
+**`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
 the **help** skill's `references/troubleshooting.md`. Load it; don't debug from memory.

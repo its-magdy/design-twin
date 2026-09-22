@@ -229,6 +229,19 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("background_blur no offset", rect.effects[1].type === "background_blur" && rect.effects[1].offset === undefined);
   ok("per-corner radius (mixed fallback)", rect.radius && rect.radius.tl === 8 && rect.radius.bl === undefined);
 
+  // Two things used to land in `radius` that a builder then copied verbatim into CSS.
+  const pill = await sandbox.serialize(
+    { type: "RECTANGLE", name: "Pill", visible: true, id: "r:full", width: 120, height: 32,
+      absoluteBoundingBox: { x: 0, y: 0, width: 120, height: 32 }, cornerRadius: 1000000000 }, 0, false);
+  ok("radius: Figma's 'fully rounded' sentinel is not emitted as 1000000000", pill.radius !== 1000000000);
+  ok("radius: it is clamped to what Figma actually renders — half the shorter side", pill.radius === 16);
+  ok("radius: and the INTENT survives as radiusFull, so a builder can emit 50% / .infinity", pill.radiusFull === true);
+  const dusty = await sandbox.serialize(
+    { type: "RECTANGLE", name: "Card", visible: true, id: "r:dust", width: 100, height: 100,
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 }, cornerRadius: 60.00000762939453 }, 0, false);
+  ok("radius: float dust from a resize is rounded like every other emitted number", dusty.radius === 60);
+  ok("radius: an ordinary radius carries no radiusFull flag", dusty.radiusFull === undefined);
+
   ok("instance main component name", btn.component === "Button");
   ok("mainComponent join keys captured (id/key)", btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn");
   ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent.setId === "set:btn" && btn.mainComponent.setKey === "setkey_btn");
@@ -294,6 +307,13 @@ Object.assign(sandbox, sandbox.__designExport || {});
     "tree reference path == assets/ + the record's file",
     sel.assets.some((a) => a.kind === "reference" && "assets/" + a.file === tree.reference)
   );
+  // Named from the LAYER, not from the node-id path. An app importing 41 icons used to import 41
+  // filenames like `I10970_111374_1910_23337_1902_19173.svg` (live finding 96) while the layer name
+  // sat unused right beside it in the tree.
+  ok("the reference PNG keeps its <id>_ref.png name — build-screen looks it up by id",
+    sel.assets.some((a) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
+  ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
+    sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
   ok("componentPropertyReferences -> propRefs (stripped)", txt.propRefs && txt.propRefs.characters === "Label");
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
   ok("text run bound variable -> token name", txt.runs[1].tokens && txt.runs[1].tokens.fills === "color/primary");
@@ -508,8 +528,52 @@ Object.assign(sandbox, sandbox.__designExport || {});
     iconSkipped.screen.manifest.assetsSkipped === 1);
   ok("[RD-noassets-shape] no assetSkipped flag leaks into a normal run", nNode.assetSkipped === undefined);
 
+  // ---- asset NAMING and DEDUPE (live findings 96/97)
+  // Names came from the node-id PATH, which included the whole instance chain: an app importing 41
+  // icons imported 41 filenames like `I10970_111374_1910_23337_1902_19173.svg`, and one shared
+  // sidebar icon was re-exported under a different name for every screen that used it.
+  const svgIcon = (id, name, body) => ({ type: "VECTOR", name, visible: true, id, width: 16, height: 16,
+    fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    exportAsync: async () => body });
+  const namedSheet = { type: "FRAME", name: "Names", visible: true, id: "an:0", width: 100, height: 100,
+    children: [
+      svgIcon("I1:2:3", "vuesax/linear/element-4", "<svg>A</svg>"),
+      svgIcon("I9:8:7", "Side menu tabs/vuesax/linear/element-4", "<svg>A</svg>"), // same artwork, another instance path
+      svgIcon("I4:5:6", "Linear / School / Diploma", "<svg>B</svg>"),
+      svgIcon("I7:7:7", "misc/Diploma", "<svg>C</svg>"), // same leaf name, DIFFERENT artwork
+    ],
+    exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
+  sandbox.figma.currentPage.selection = [namedSheet];
+  const named = await sandbox.collectSelection({});
+  const icons = named.assets.filter((a) => a.format === "svg");
+  const fileOf = (n) => { const a = icons.find((x) => x.name === n); return a && a.file; };
+
+  ok("[ASSET-NAME] an icon is named after its Figma layer, not its node-id path", fileOf("vuesax/linear/element-4") === "element-4.svg");
+  ok("[ASSET-NAME] the hyphen survives — it is the commonest character in an icon name",
+    icons.every((a) => a.file.indexOf("/") === -1) && fileOf("vuesax/linear/element-4").indexOf("-") !== -1);
+  ok("[ASSET-NAME] a slash-pathed layer name files under its LAST segment, trimmed", fileOf("Linear / School / Diploma") === "Diploma.svg");
+  ok("[ASSET-DEDUPE] the same artwork reached through two instance paths produces ONE file", icons.length === 3);
+  ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",
+    (() => { const a = icons.find((x) => x.file === "element-4.svg"); return a.from && a.from.indexOf("I1:2:3") !== -1 && a.from.indexOf("I9:8:7") !== -1; })());
+  ok("[ASSET-DEDUPE] the deduped node's tree path points at that same one file",
+    named.screen.nodes[0].children[1].asset === "assets/element-4.svg");
+  ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",
+    (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })());
+  ok("[ASSET-NAME] every filename is still separator-free and ends in its format",
+    named.assets.every((a) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
+  sandbox.figma.currentPage.selection = [iconSheet];
+
   ok("[RD-noassets] and exportAsync did run when not skipping", exportCalls > skipCalls);
   ok("[RD-noassets] a normal run reports assetsSkipped: 0", normalRun.screen.manifest.assetsSkipped === 0);
+  // Which OPT-IN reads ran. An absent `codeSyntax`/`annotations`/`measurements` used to be
+  // indistinguishable from "the read was never asked for", which silently killed two of
+  // build-screen's six hint tiers with nothing to say so (live finding 44).
+  ok("[RD-manifest] the manifest names the opt-in reads that actually ran",
+    Array.isArray(normalRun.screen.manifest.reads));
+  ok("[RD-manifest] an opt-in read that was requested appears in it",
+    (await sandbox.collectSelection({ measurements: true })).screen.manifest.reads.includes("measurements"));
+  ok("[RD-manifest] one that was not, does not",
+    !(await sandbox.collectSelection({})).screen.manifest.reads.includes("measurements"));
   sandbox.figma.currentPage.selection = prevSelection;
 
   // --- FIX: hasMissingFont -> flag + warning so codegen knows the recorded font may be substituted ---
@@ -1336,8 +1400,13 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // Enabled-but-empty: a fresh file with no library turned on. NORMAL, and must say so.
   sandbox.figma.teamLibrary = { getAvailableLibraryVariableCollectionsAsync: async () => [], getVariablesInLibraryCollectionAsync: async () => [] };
   const empty = await sandbox.listLibraries();
-  ok("[LIB] an empty team-library result reads as normal, not as a failure", empty.warnings.some((w) => /normal/.test(w) && /enable them in Figma/.test(w)));
+  ok("[LIB] an empty team-library result reads as normal, not as a failure", empty.warnings.some((w) => /normal, not a failure/.test(w) && /Assets > Libraries/.test(w)));
   ok("[LIB] and it is not reported as an error", empty.libraries.length > 0);
+  // The warning must SCOPE itself to variable collections. Worded as a flat "no libraries are
+  // enabled" it contradicted the "LIBRARIES (2)" printed immediately below, whose rows come from the
+  // component side and from this file itself — two true statements reading as one lie (finding 17).
+  ok("[LIB] and it says WHICH list is empty, so it cannot contradict the rows printed beneath it",
+    empty.warnings.some((w) => /VARIABLE collections/.test(w) && /rows below come from this file itself/.test(w)));
 
   sandbox.figma.teamLibrary = {
     getAvailableLibraryVariableCollectionsAsync: async () => ([

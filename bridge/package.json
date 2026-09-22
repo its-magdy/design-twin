@@ -34,6 +34,8 @@
     "library-layout.js",
     "node-id.js",
     "pages-layout.js",
+    "variables-merge.js",
+    "project-layout.js",
     "read-opts.js",
     "seed-components.js",
     "server-core.js",

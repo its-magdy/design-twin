@@ -81,7 +81,7 @@ copy them as literal `\n`s; let `<Text>` wrap.
 **Images** — use `intrinsicSize` to set `aspectRatio: w/h` in the image's style so layout doesn't jump
 before load; always set explicit `width`/`height` or `aspectRatio` (never omit both).
 
-**Interaction states** — check `design/design-system/components.local.json` component variant `options` for
+**Interaction states** — check `design/export/design-system/components.local.json` component variant `options` for
 pressed/disabled/error/selected states; implement pressed via `Pressable`'s `style={({pressed}) => ...}`.
 RN has no hover/focus-visible on touch, but for any web-adjacent RN target (RNW) still add a focus ring.
 
@@ -112,8 +112,8 @@ Anything tappable → `Pressable` (not `TouchableOpacity`) so pressed/disabled s
 your structure and let you sanity-check spacing; never render them as visible UI.
 
 **Component reuse** — `exposedInstances`/`propRefs`/`overrides` on an instance's sublayer mean: map to a
-**prop** on the already-imported component from `codeconnect.local.json`, don't hand-build the divergence.
-`detachedFrom` (`{key}`/`{componentId}`) → look that component up in `codeconnect.local.json` and reuse it
+**prop** on the already-imported component from `design/codeconnect.local.json`, don't hand-build the divergence.
+`detachedFrom` (`{key}`/`{componentId}`) → look that component up in `design/codeconnect.local.json` and reuse it
 unless clearly intentional.
 
 **Units** — unitless density-independent numbers (no `px`).
@@ -121,7 +121,7 @@ unless clearly intentional.
 **Tokens** — the right-hand value in `tokens.json` is a JS theme reference (e.g. `theme.colors.primary`,
 `theme.space.md`). No CSS variables. Emit via `StyleSheet.create` or inline style.
 
-**Components** — import per `codeconnect.local.json` (RN components / your kit); pass Figma `props` through.
+**Components** — import per `design/codeconnect.local.json` (RN components / your kit); pass Figma `props` through.
 
 **Text** — `<Text>` with style; map `font.size/weight` to your theme's type scale.
 

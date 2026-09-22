@@ -1,7 +1,7 @@
 ---
 name: audit-design
-description: Review a Figma export the way a senior frontend / iOS / Android engineer does BEFORE writing any code — token and typography binding, spacing grid, sizing and responsiveness, component variants and interaction states (hover/pressed/focus/disabled/error), loading/empty/error screens, content edge cases, touch targets, contrast, font scaling, dark mode, RTL, platform chrome and safe areas, assets and effects that won't translate — and turn every gap into a concrete question for the designer. Use this whenever the user asks whether a design is ready to build, what's missing from a Figma file/frame, to review or QA a design handoff, to check a design before implementation, or to list questions for the designer — and run it as the first step before building a non-trivial screen with build-screen. Produces design/audit/<screen>.md; never writes app code.
-argument-hint: "[screen name | design/<screen>.json]"
+description: Review a Figma export the way a senior frontend / iOS / Android engineer does BEFORE writing any code — token and typography binding, spacing grid, sizing and responsiveness, component variants and interaction states (hover/pressed/focus/disabled/error), loading/empty/error screens, content edge cases, touch targets, contrast, font scaling, dark mode, RTL, platform chrome and safe areas, assets and effects that won't translate — and turn every gap into a concrete question for the designer. Use this whenever the user asks whether a design is ready to build, what's missing from a Figma file/frame, to review or QA a design handoff, to check a design before implementation, or to list questions for the designer — and run it as the first step before building a non-trivial screen with build-screen. Produces design/audit/<screen>.md and .json; never writes app code.
+argument-hint: "[screen name | path to the screen's export]"
 context: fork
 agent: general-purpose
 background: false
@@ -52,8 +52,11 @@ Copy this checklist into your working notes and tick it off:
 1. **Scope.** The screen to audit is whatever was passed to this skill (the `ARGUMENTS` line at the
    end of this prompt). This skill runs in its own context and cannot see the conversation that
    invoked it, so if no screen was passed and `design/` holds more than one, don't guess — return
-   the list of candidates and ask which. Find the screen: `design/pages/index.json` → page `index` → layer `file`, or
-   `design/<screen>.json` for a single-screen export. If it isn't exported, hand off to
+   the list of candidates and ask which. Find the screen through the index, never by guessing a
+   filename: `design/export/pages/index.json` → the page's `index` → the layer's `file`. Screen files
+   are `pages/<Page>/<Screen>__<node-id>.json`, because a frame name does not identify a frame (two
+   `Popup`s on one page are two screens). A project created before the export/ split keeps the same
+   tree directly under `design/`. If it isn't exported, hand off to
    `/designtwin:extract` — don't audit a screenshot alone. Resolve the platform the same way
    build-screen does: `design/target.json` `profile`, else detect from the repo (`package.json` with
    react-native / tailwind, `*.xcodeproj`/`Package.swift`, Compose in `build.gradle(.kts)`,
@@ -66,8 +69,14 @@ Copy this checklist into your working notes and tick it off:
    `warn` on stderr when `--platform` is missing, and sets `platformAssumed: true` in the JSON; lead
    with the same fact and offer to write `design/target.json` so the next run and `build-screen` agree.
 
+   **If you are guessing, do not pass `--platform`.** Passing it is how you tell the script you know;
+   the script then records `platformAssumed: false`, and a live run ended up with a report whose prose
+   said "ASSUMED — not detected" while its own JSON said the opposite. `build-screen` reads the JSON
+   to decide whether to ask the user again, so the boolean is the field that acts. Let it be true when
+   it is true, and make your prose agree with it rather than the other way round.
+
 2. **Gates.** Read the export's `manifest`: `truncated` or `assetsFailed` means the tree is incomplete
-   — say so first. Check `exportedAt` (on the screen doc or `design/design-system.json`): older than a
+   — say so first. Check `exportedAt` (on the screen doc or `design/export/design-system.json`): older than a
    day, warn that the live file may have moved. A root `devStatus` other than `ready_for_dev` /
    `completed` means the design may not be final — ask before auditing in depth.
 
@@ -76,9 +85,25 @@ Copy this checklist into your working notes and tick it off:
    by eye across thousands of nodes:
 
    ```
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" design/<screen file>.json --platform <platform> \
-     --catalog design/design-system/components.local.json --out design/audit/<screen>
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" design/export/pages/<Page>/<Screen>__<id>.json \
+     --platform <platform> \
+     --design-system design/export/design-system \
+     --out design/audit/<screen>
    ```
+
+   **`--design-system` is what makes this a real audit rather than a self-consistent one.** Without
+   it every check reasons inside the screen's own JSON, and the token-binding table means "this node
+   binds SOME variable" — not "it binds a variable your design system defines". Those read identically
+   and are wildly different facts: on the live run the audit reported 96% of colours bound on a screen
+   whose every collection key belonged to a different library than the design system sitting beside
+   it. With the flag, the report leads with **"Does this screen come from that design system?"** and
+   the cross-file findings (`foreign-token-library`, `catalog-covers-nothing`, `token-name-collision`,
+   `text-style-near-miss`, `font-not-in-design-system`, `sentinel-token-value`, `single-mode-export`,
+   `derived-mode-contrast`) are merged into the findings list. Without it the report says, in the
+   report, which checks it could not run — which is the honest outcome, not a clean one.
+
+   `--variables` is found automatically (the merged `variables.json`, else the screen's own
+   `.vars.json`); pass it only if your project keeps it somewhere unusual.
 
    `--out` writes `<out>.md` (the report) and `<out>.json`. The JSON's top level is
    `{platform, platformAssumed, grid, screenStatesScope, screens, summary, tokenBinding, components,
@@ -88,11 +113,12 @@ Copy this checklist into your working notes and tick it off:
    to the export document you passed in, not to the audit. The header comment of `audit.js` is the
    full schema.
 
-   Pass several layer files at once to audit a flow; check `design/design-system/tokens.json` (or
-   `design/variables.json` after a single-screen pull) or `layoutGrids` for the design's real spacing
-   step and pass it as `--grid` (default 4px silently under-flags an 8px-grid system — don't skip
-   this). `--catalog` is optional: a single-screen pull writes no `design/design-system/`, so drop
-   the flag rather than passing a path that isn't there.
+   Pass several layer files at once to audit a flow; check `design/export/design-system/tokens.json`
+   (or `design/export/variables.json` after a single-screen pull) or `layoutGrids` for the design's
+   real spacing step and pass it as `--grid` (default 4px silently under-flags an 8px-grid system —
+   don't skip this). Both `--design-system` and the older `--catalog` are optional: a project that has
+   only ever run a single-screen pull has no design system to point at, so drop the flag rather than
+   passing a path that isn't there — and then say in the report that the cross-file half did not run.
 
    **Never let a question's default tell the build to approximate a value.** "Bind to the nearest 4px
    step" and "use the closest existing token" both contradict `build-screen`'s rule 5, which treats an
@@ -103,7 +129,13 @@ Copy this checklist into your working notes and tick it off:
    checks by hand from `references/heuristics.md` if it genuinely errors out, and say which checks you
    skipped. Read the resulting `.json`; treat it as evidence to verify, not a verdict.
 
-4. **Engineer review.** Read the reference `.png` and skim the tree top-down, then walk
+4. **Engineer review.** Before writing "this state was not designed", spend three seconds proving
+   it: `dtwin list children <the parent section>` lists the frames sitting beside this one. On the
+   live run the populated table was right there, named for what it holds rather than for the screen beside it —
+   and the audit's single blocking question was answerable without the designer. A sibling sweep
+   removes most blocking questions; skipping it manufactures them.
+
+   Then read the reference `.png` and skim the tree top-down, and walk
    `references/checklist.md`. This is the judgment the script can't make: what each region *is*
    (list, form, sheet, nav bar), what should be a reused component or a native control, how the layout
    behaves at other widths and font sizes, which content can be long/missing/zero, what the states
@@ -125,6 +157,10 @@ Copy this checklist into your working notes and tick it off:
    - **Questions for the designer** — per `references/questions.md`: specific, one decision each,
      citing the node, ordered by how much they block, **each with the default you'll assume** if
      there's no answer.
+   - **Next step** — a closing line naming `/designtwin:build-screen <screen>` and what it will
+     assume. The `.md` is the artifact this skill promises to produce, so a reader who only opens the
+     file must find the next step there; a hand-off that exists only in the chat reply is lost the
+     moment the conversation is.
 
 7. **Hand back.** Tell the user the verdict, the blockers, and the top 3–5 questions — not the whole
    report. Offer to build with the stated defaults (`/designtwin:build-screen`) or wait for answers.

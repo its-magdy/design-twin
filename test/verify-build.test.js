@@ -61,6 +61,74 @@ check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the
   return pr.length === 1 && /raw literal #ffffff1a\b/.test(pr[0]) && /bg-scrim/.test(pr[0]);
 })());
 check("arbitraryPx reads [Npx] and [Nrem] as px", (() => { const d = arbitraryPx("gap-[14px] p-[1.5rem]"); return d.has(14) && d.has(24); })());
+// Live finding 88: keyed on the number alone, every `rounded-[20px]` was reported as the 20px a
+// fontSize token resolves to — and applying the suggestion ("use text-body-1") would have put a
+// font-size utility on a border-radius, which the gate would then have passed.
+check("[kind] an arbitrary value remembers which utility it was on", (() => {
+  const d = arbitraryPx("rounded-[20px] text-[20px]");
+  const u = (d.get(20) || []).map((e) => e.utility).sort();
+  return u.length === 2 && u[0] === "rounded" && u[1] === "text";
+})());
+check("[kind] a radius literal is NOT reported against a fontSize token of the same number", (() => {
+  const fontTok = { value: "20", kind: "fontSize", codeToken: "text-body-1", verdict: "exact" };
+  return problems({ "a.tsx": '<div className="rounded-[20px]" />' }, { files: ["a.tsx"], tokens: [fontTok], verification: STATIC }).length === 0;
+})());
+check("[kind] …while the SAME number on a font utility still is", (() => {
+  const fontTok = { value: "20", kind: "fontSize", codeToken: "text-body-1", verdict: "exact" };
+  return has(problems({ "a.tsx": '<div className="text-[20px]" />' }, { files: ["a.tsx"], tokens: [fontTok], verification: STATIC }), /text-body-1/);
+})());
+check("[kind] a radius token IS matched by a radius utility", (() => {
+  const radiusTok = { value: "12", kind: "radius", codeToken: "rounded-card", verdict: "exact" };
+  return has(problems({ "a.tsx": '<div className="rounded-[12px]" />' }, { files: ["a.tsx"], tokens: [radiusTok], verification: STATIC }), /rounded-card/);
+})());
+check("[kind] padding and gap both count as spacing — the vocabulary really does overlap there", (() => {
+  const sp = { value: "16", kind: "spacing", codeToken: "spacing-4", verdict: "exact" };
+  return has(problems({ "a.tsx": '<div className="p-[16px]" />' }, { files: ["a.tsx"], tokens: [sp], verification: STATIC }), /spacing-4/)
+    && has(problems({ "a.tsx": '<div className="gap-[16px]" />' }, { files: ["a.tsx"], tokens: [sp], verification: STATIC }), /spacing-4/);
+})());
+check("[kind] an unrecognised utility keeps the check it had, rather than losing it silently", (() => {
+  const sp = { value: "16", kind: "spacing", codeToken: "spacing-4", verdict: "exact" };
+  return has(problems({ "a.tsx": "style={{ blob: '[16px]' }}" }, { files: ["a.tsx"], tokens: [sp], verification: STATIC }), /spacing-4/);
+})());
+
+console.log("token DEFINITIONS are not token usages:");
+// Live finding 87: all 19 flagged hexes occurred ONLY in the generated theme files — the files that
+// DEFINE the tokens, and which files[] already listed — and not one appeared in a component. The
+// build was blocked on 30 items and had to re-declare each generated hex by hand.
+check("[defs] a hex that only appears on the line DEFINING its token is not a violation", (() => {
+  return problems(
+    { "theme.css": ":root {\n  --brand-600: #5B5FC7;\n}", "Card.tsx": '<div className="bg-brand-600" />' },
+    { files: ["theme.css", "Card.tsx"], tokens: [brand], verification: STATIC }
+  ).length === 0;
+})());
+check("[defs] the Tailwind v4 @theme spelling counts too (--color-<token>)", (() => {
+  const tok = { value: "#03d5ab", kind: "color", codeToken: "success-success", verdict: "exact" };
+  return problems(
+    { "theme.css": "@theme {\n  --color-success-success: #03d5ab;\n}" },
+    { files: ["theme.css"], tokens: [tok], verification: STATIC }
+  ).length === 0;
+})());
+check("[defs] a JS/TS token object is a definition as well", (() => {
+  return problems({ "tokens.ts": 'export const theme = {\n  brand600: "#5B5FC7",\n};' },
+    { files: ["tokens.ts"], tokens: [brand], verification: STATIC }).length === 0;
+})());
+check("[defs] but the SAME hex used in a component still fails, even with the theme file present", (() => {
+  return has(problems(
+    { "theme.css": ":root { --brand-600: #5B5FC7; }", "Card.tsx": "<div style={{ color: '#5B5FC7' }} />" },
+    { files: ["theme.css", "Card.tsx"], tokens: [brand], verification: STATIC }
+  ), /raw literal #5B5FC7/i);
+})());
+check("[defs] a CSS PROPERTY declaration is not a token declaration", (() => {
+  return has(problems({ "Card.tsx": "color: #5b5fc7" }, { files: ["Card.tsx"], tokens: [brand], verification: STATIC }), /brand-600/);
+})());
+check("[defs] allowedLiterals may now name a FILE instead of a value", (() => {
+  return problems({ "gen.css": "/* generated */ .x{background:#5B5FC7}" },
+    { files: ["gen.css"], tokens: [brand], allowedLiterals: [{ file: "gen.css", reason: "generated token source" }], verification: STATIC }).length === 0;
+})());
+check("[defs] and the failure message says allowedLiterals matches an exact value string", (() => {
+  const pr = problems({ "a.tsx": "color: #5b5fc7" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC });
+  return pr.length === 1 && /matched on the exact value string/.test(pr[0]) && /"file"/.test(pr[0]);
+})());
 
 console.log("token checks — only plan-resolved values fail:");
 check("a resolved color used as a raw #hex fails", has(problems({ "a.tsx": "color: #5b5fc7" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC }), /raw literal #5b5fc7.*brand-600/));

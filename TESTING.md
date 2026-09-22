@@ -19,7 +19,7 @@ cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   
 node test/harness.js
 ```
 
-Expected: **`395/395 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
+Expected: **`414/414 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
 `npm run typecheck` (`tsc --noEmit`) is the first gate — it catches property-name / `figma.mixed` /
 null-handling bugs before the harness even runs.
 
@@ -42,17 +42,26 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 ```
 node test/design-to-code.test.js       # expect: 281/281 checks passed, exit 0
 node test/audit.test.js                # expect: 70/70 checks passed, exit 0
-node test/verify-build.test.js         # expect: 57/57 checks passed, exit 0 — the build-screen Stop-hook gate,
+node test/verify-build.test.js         # expect: 77/77 checks passed, exit 0 — the build-screen Stop-hook gate,
                                        # and that claude-plugin/scripts/ is in sync with design-to-code/
                                        # (stale? run: node claude-plugin/build-scripts.js)
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
+node test/cross-check.test.js          # expect: 47/47 checks passed, exit 0 — the JOIN between a screen and the
+                                       # design system: a duplicated file that re-keys every collection, a catalog
+                                       # covering 0% of the screen, token names that collide on different values,
+                                       # a text style one capital letter apart, a 1e9 radius, contrast in a mode
+                                       # that was derived rather than drawn
+node test/verify-screen.test.js        # expect: 44/44 checks passed, exit 0 — the per-node comparison behind a
+                                       # "pass": the expectation emitted as data, the tolerance table, component
+                                       # coverage, reactions-driven interaction checks, and the rule that an
+                                       # unmeasured expectation is not a passed one
 node test/design-diff.test.js          # expect: 27/27 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
                                        # token diffs, baseline choice, re-drawn assets, snapshot CLI)
 node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.js            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js
+node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js design-to-code/cross-check.js design-to-code/verify-screen.js
 ```
 
 `test/audit.test.js` drives `design-to-code/audit.js` (the pre-build design audit behind the
@@ -88,9 +97,9 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 492/492 checks passed, exit 0
+node test/bridge.test.js        # expect: 529/529 checks passed, exit 0
 # NOTE: run this with no dtwin daemon holding port 8787. A live daemon makes doctor's plugin
-# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (491/492).
+# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (528/529).
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```
 
@@ -166,15 +175,17 @@ measured **24MB**, unworkable for an agent that only wants to build one at a tim
 one-file-per-node fixed that; grouping those files by Figma PAGE is the next step of the same idea.
 Naming: Figma itself calls every object in a file a **layer** (its own Layers-panel vocabulary; there is
 no "screen" node type in Figma). This tool reserves **"screen"** for a single node a human deliberately
-selected (`collectSelection`/`collectNode`, `design/<screen>.json`) — everything swept up by walking a
+selected (`collectSelection`/`collectNode`) — everything swept up by walking a
 whole page indiscriminately (specimen sections, icon components, real UI frames alike) is a **"layer"**
 instead, which is both the accurate Figma term and avoids implying every one of them is a real app view.
 A page can hold many layers, never the reverse (Figma's own model is File → Page → Frame), so the
 directory structure mirrors that containment instead of dumping every layer from every page into one
-flat folder. Both export paths write `design/pages/index.json` (the run-wide `manifest` + a lean
+flat folder. A deliberately-selected SCREEN files into the same tree, under the same
+`<name>__<id>.json` convention — it used to land flat as `design/<Screen>.json`, which meant two
+frames called `Popup` overwrote each other and a single-screen project had no index at all. Both export paths write `design/export/pages/index.json` (the run-wide `manifest` + a lean
 `pageDirs[]` of `{page,dir,index,layers}` (`index` is the pointer to that page's own index file — open it verbatim, don't rebuild it from `dir`) — NOT the full layer list, so reading it never means loading every
-layer's metadata) plus, per page, `design/pages/<page>/index.json` (that page's own
-`{name,id,type,page,file}` entries) and one `design/pages/<page>/<name>__<id>.json` per layer (`{name,
+layer's metadata) plus, per page, `design/export/pages/<page>/index.json` (that page's own
+`{name,id,type,page,file}` entries) and one `design/export/pages/<page>/<name>__<id>.json` per layer (`{name,
 id, page, tree, reference, devResources}`). Read the root index to find the PAGE you want, its own
 index.json to find the LAYER, then read only that file — never a whole directory.
 
@@ -277,7 +288,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       and `components.local.json` `components[]`. Every split file repeats the `exportedAt` stamp, so
       the tooling below is pointed at the part it actually consumes.
 
-### Tokens (`node design-to-code/tokens.js design/design-system/tokens.json ./out`)
+### Tokens (`node design-to-code/tokens.js design/export/design-system/tokens.json ./out`)
 - [ ] Command prints `wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+M set files under tokens/) (N variables)` with N matching your variable count.
 - [ ] **References preserved** in `out/tokens.dtcg.json`: a semantic token's `$value` is a `"{group.token}"`
       string, NOT a flattened hex. (A flattened hex here = the themeability bug.)
@@ -290,15 +301,15 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 - [ ] **Never-silent**: any warning the CLI prints (`warn …`) is a REAL issue in your file (a dangling
       alias, a name collision, a token with no value) — investigate each; there should be none on a clean file.
 
-### Bootstrap → validate (`node design-to-code/map-bootstrap.js design/design-system/components.local.json --out codeconnect.local.json`)
+### Bootstrap → validate (`node design-to-code/map-bootstrap.js design/export/design-system/components.local.json --out design/codeconnect.local.json`)
 - [ ] Every **published** component appears, keyed by its publish key; unpublished ones are keyed by node
       id with `figma.unstable: true`.
 - [ ] Each entry has `status: "needs-review"`, a `code.export` that reads like a component name, and props
       translated by type (VARIANT→`enum` with option values, BOOLEAN→`boolean`, TEXT→`string`/`children`,
       INSTANCE_SWAP→`instance` slot).
-- [ ] `node design-to-code/map-validate.js codeconnect.local.json` prints **`map valid`** (exit 0).
+- [ ] `node design-to-code/map-validate.js design/codeconnect.local.json` prints **`map valid`** (exit 0).
 
-### Drift-lint — clean, then inject each drift class (`node design-to-code/drift-lint.js codeconnect.local.json design/design-system/components.local.json`)
+### Drift-lint — clean, then inject each drift class (`node design-to-code/drift-lint.js design/codeconnect.local.json design/export/design-system/components.local.json`)
 - [ ] On the fresh bootstrap it reports **0 errors and 0 warnings** (`N/N components mapped`) — bootstrap
       covers every component and every variant option, so a clean file is clean. (No tool flags the
       `TODO: import path` placeholders — they're markers for you to fill in, then confirm the entry.)
@@ -314,7 +325,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
       `unknown-freshness` warning. Override the threshold with `node design-to-code/drift-lint.js map.json components.local.json --max-age <hours>`
       (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/figma-pull.js` both surface the
-      same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/design-system.json`
+      same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/export/design-system.json`
       manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
 
 ### Reality check on a messy file (optional but recommended)
@@ -331,12 +342,14 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 
 | Command | What |
 |---|---|
-| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `395/395` |
+| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `414/414` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
 | `node test/design-to-code.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `281/281` |
+| `node test/cross-check.test.js` | Screen-vs-design-system join — expect `47/47` |
+| `node test/verify-screen.test.js` | Per-node verification and its verdict — expect `44/44` |
 | `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note) — expect `492/492` |
+and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |
 | `node bridge/figma-pull.js --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
@@ -347,11 +360,11 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
 | `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
 | `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
-| `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/libraries/<slug>-<fileKey8>/` |
+| `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check design-to-code/*.js` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
-| `node design-to-code/map-bootstrap.js design/design-system/components.local.json --out codeconnect.local.json` | Scaffold codeconnect.local.json from the Figma catalog (re-running merges into it) |
-| `node design-to-code/drift-lint.js codeconnect.local.json design/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
-| `node design-to-code/get-component.js design/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
+| `node design-to-code/map-bootstrap.js design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
+| `node design-to-code/drift-lint.js design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
+| `node design-to-code/get-component.js design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
 | `node design-to-code/tokens.js <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → theme.css; `--native <p>` → a native token file) |

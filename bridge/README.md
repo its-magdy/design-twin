@@ -87,10 +87,31 @@ environment, keep the token in your own secret manager and pass `--token-file`.
 Run in the root of the project you are **building** (not this repo):
 
 ```
-dtwin init             # design/, design/target.json (detected stack), bridge token, next steps
+dtwin init             # design/ + design/export/, README, target.json, bridge token, next steps
 dtwin init --mcp       # …and register this MCP server in ./.mcp.json (merged, never overwritten)
 dtwin init --dry-run   # print what it would do; write nothing, mint no token
 ```
+
+It lays out the project as two halves, and the split is the point:
+
+```
+design/
+  export/                  <- dtwin writes ONLY here. rm -rf and re-pull loses nothing.
+    pages/<Page>/<Screen>__<node-id>.json    one screen, any pull shape
+    pages/index.json                          every screen pulled
+    design-system/                            tokens, styles, component catalogs
+    variables.json                            the union of every screen's tokens (merged, never replaced)
+    assets/                                   named after the Figma layer, deduped by content
+  README.md                what dtwin owns vs what you own
+  target.json              the stack (profile: null when nothing was detected — build-screen fills it in)
+  codeconnect.local.json   Figma component -> your code component. HAND-OWNED.
+  plan/ audit/ verify/     decisions and evidence from the skills
+```
+
+`design/` used to hold both halves, so "delete design/ and re-pull" — the obvious way to recover from
+a bad export — silently destroyed a hand-mapped component map. Projects created before the split keep
+their export directly in `design/`; every command still finds it and `dtwin doctor` says which layout
+it found.
 
 It needs no bridge, plugin or free port. It never overwrites: an existing `target.json`, an existing
 `designtwin` entry in `.mcp.json` (or this server already registered under any other name), or an
@@ -147,9 +168,16 @@ dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
    bridge (almost always the MCP server), or held by something unrelated.
 5. **Figma plugin** — can it actually connect? If a plugin is running with a *different* token, doctor
    says so with both fingerprints, instead of the "nothing connected" that case otherwise looks like.
-6. **Project** (the current directory) — `design/`, `design/target.json`, the age of the last export,
-   `codeconnect.local.json`, and the `.mcp.json` registration (a legacy `figma` key still works; new
-   setups use `designtwin`).
+6. **Project** (the current directory) — `design/`, `design/target.json`, which export LAYOUT it
+   found, the age of the last export, **which Figma files that export mixes**, the component map
+   (`design/codeconnect.local.json`, or the older repo-root location), and the `.mcp.json`
+   registration (a legacy `figma` key still works; new setups use `designtwin`).
+
+   The "which Figma files" line exists because the freshness line describes exactly one file — the
+   snapshot doctor happened to pick — and on a project whose screens came from a different Figma file
+   than its design system it confidently named the wrong one. When an export mixes sources, doctor
+   now lists all of them and points at `/designtwin:audit-design`, whose cross-file check proves
+   whether the screens and the design system really are the same system.
 
 It changes nothing: no token is created, no file written. Check 5 opens a bridge for a few seconds,
 so it only runs when the port is free **and** a token already exists; when a daemon is up doctor asks
@@ -164,8 +192,8 @@ exits — no bridge is started, no token minted.
 An unknown or mistyped flag is an error with a suggestion (`--lst` → "did you mean --list?"), never
 silently ignored: a typo used to fall through to a full pull.
 
-A full pull writes `design/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
-`files` pointers, `counts`) over the catalog split under `design/design-system/`, one file per Figma
+A full pull writes `design/export/design-system.json` as a slim MANIFEST (`exportedAt`/`file`/`colorProfile`,
+`files` pointers, `counts`) over the catalog split under `design/export/design-system/`, one file per Figma
 concept: `tokens.json` (variable collections → modes → variables), one file per style type —
 `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` — (the separate
 Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
@@ -176,7 +204,7 @@ below), `components.library.json` (`remote: true` —
 consumed from a published library, recovered from instances, props possibly inferred) and
 `hygiene.json` (the lint report). Every part repeats the
 `exportedAt` stamp, so `design-to-code/` reads freshness off whichever part it is handed. The split files sit
-in a subdirectory because `design/tokens.json` and `design/components.json` at the export root are your
+in a subdirectory because `design/tokens.json` and `design/components.json` are your
 hand-authored, non-regenerable config maps.
 
 ```
@@ -186,7 +214,7 @@ dtwin design --all-pages      # like above, but frame trees from EVERY page
 dtwin design --selection      # just the current selection
 dtwin design --design-system  # ONLY design-system.json + design-system/ — no page
                                                    # walk, no assets/ (the cheap "tokens only" pull)
-dtwin design --as-library NERA # the COMPLETE catalog of a LIBRARY file — run this
+dtwin design --as-library "Acme UI"  # the COMPLETE catalog of a LIBRARY file — run this
                                                    # with the LIBRARY open, not the file that uses it
 dtwin design --node <id>      # ONE node, fully exported (properties + assets) —
                                                    # see "--node <id>" below
@@ -210,7 +238,7 @@ dtwin screenshot <id>          # 5. (optional) visually check ONE component afte
 ### `--node <id>` — one node, fully exported
 
 ```
-dtwin design --node 123:456                                          # writes 123_456.json + assets/
+dtwin design --node 123:456                          # -> design/export/pages/<Page>/<Name>__123_456.json
 dtwin design --node "https://figma.com/design/KEY/App?node-id=123-456" # a pasted link works too
 ```
 
@@ -230,17 +258,46 @@ Don't confuse it with its two neighbors:
 
 It is a SCOPE flag like `--page`/`--selection`/`--all-pages`, so it's mutually exclusive with them,
 and unlike `--screenshot` it composes with read options (`--css`, `--measurements`, etc.) since it
-does a real walk. Writes `<node-name>.json` + `variables.json` (if any) + `assets/` — the same shape
-`--selection` writes, since both are single-root exports. As with `--selection`, the output file is
-named after the node's own name, so two same-named nodes in one pull would overwrite each other —
-pull them into separate `outDir`s if that matters.
+does a real walk.
+
+It files into the **same `pages/` tree** a `--page` pull writes, so nothing downstream has to know
+which pull produced a file:
+
+```
+design/export/pages/<Page>/<Name>__<node-id>.json        the screen tree
+design/export/pages/<Page>/<Name>__<node-id>.vars.json   exactly the variables THIS screen binds
+design/export/pages/<Page>/<Name>__<node-id>.assets.json its assets, with content hashes,
+                                                         plus duplicates / monochrome / heavy
+design/export/pages/<Page>/index.json                    merged, one row per screen pulled
+design/export/pages/index.json                           merged, one row per page
+design/export/variables.json                             the UNION of every screen's slice
+design/export/assets/                                    shared, deduped by content
+```
+
+Three consequences worth knowing:
+
+- **The node id is in the filename**, because a frame NAME does not identify a frame. Two frames both
+  called `Popup` used to overwrite each other; a frame whose name ends in a space filed as `Name_.json`,
+  which looks like a typo. Read `pages/index.json` — it carries each screen's real
+  name, page, node id, size and the paths to all three files — rather than reconstructing a filename.
+- **`variables.json` MERGES.** Each pull's slice is unioned in, keyed on each variable's Figma key, so
+  pulling screen B no longer deletes screen A's tokens — which it used to do silently, leaving A's
+  theme unresolvable while the build still rendered from the raw hex beside every binding. The raw
+  per-pull slice is kept verbatim as the screen's `.vars.json`. When two screens resolve one variable
+  differently the newest wins and the disagreement is recorded under `_conflicts` and in `hygiene`.
+- **Assets are named after their Figma layer and deduped by content.** `icons/linear/arrow-down` lands
+  as `arrow-down.svg`; the same artwork reached through several instance paths is one file carrying
+  every node id that resolved to it; two different icons whose leaf names collide are separated by a
+  short content hash, never by overwriting.
 
 MCP twin: `figma_export_url` (also accepts a bare node id, not just a URL).
 
 ### `--screenshot <id>` — an on-demand PNG of one node
 
 ```
-dtwin --screenshot 123:456                # writes design/screenshots/123_456_ref.png
+dtwin --screenshot 123:456                # writes design/export/assets/123_456_ref.png — the same
+                                          # path a later --node pull of that frame writes its own
+                                          # reference to, so there is never a second copy
 dtwin --screenshot 123:456 --scale 3      # override the default (auto, capped at 2048px on the longest side)
 ```
 
@@ -277,7 +334,7 @@ listing shows what you can address:
 
   c1    "App — Base"
         page "Home" · fileKey KEYBASE · up 12m
-  c2    "NERA Library"
+  c2    "Acme UI Library"
         page "Tokens" · no fileKey (private-plugin API not in effect) · up 3m
 
 Address one with --client <connId | fileKey | part of the file name>, e.g. --client "App".
@@ -286,7 +343,7 @@ Address one with --client <connId | fileKey | part of the file name>, e.g. --cli
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
 dtwin design/base --client c1 --page 12:34
-dtwin design/lib  --client "NERA" --as-library "NERA"
+dtwin design/lib  --client "Acme UI" --as-library "Acme UI"
 ```
 Give each file its own output directory, as above, and their exports never collide.
 
@@ -296,7 +353,7 @@ omitting it is an error** that lists your choices:
 ```
 2 Figma files are connected to the bridge — say which one to use.
   c1  "App — Base"  fileKey KEYBASE
-  c2  "NERA Library"
+  c2  "Acme UI Library"
 Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").
 ```
 
@@ -364,13 +421,13 @@ Three honest limits, because they change what the numbers mean:
 
 ```
 # open the LIBRARY file in Figma (not the design file that consumes it), then:
-dtwin design --as-library "NERA"
+dtwin design --as-library "Acme UI"
 ```
 
 `--list-libraries` tells you a library exists and how many variables its collections hold.
 `--as-library` gets you the **values**: every variable with its full per-mode values, every paint /
 text / effect / grid style, and every component with its **real** property definitions. Output lands
-in `design/libraries/<slug>-<fileKey8>/` and **never touches `design-system/`** — the two catalogs
+in `design/export/libraries/<slug>-<fileKey8>/` and **never touches `design-system/`** — the two catalogs
 describe different Figma files and answer different questions.
 
 **Why it must run inside the library file.** From a consuming file the Plugin API simply does not have
@@ -399,7 +456,7 @@ no paid plan, no import step.
    `hiddenFromPublishing` is forward-looking publish config, not publish state, so filtering on it
    would be wrong in both directions.
 4. **One library per run.** A library is a file, so exporting several means running this once per
-   library file. Rows accumulate in `design/libraries/index.json` — a second library is added, never
+   library file. Rows accumulate in `design/export/libraries/index.json` — a second library is added, never
    substituted. A variable that aliases into a *different* library stays an unresolved reference until
    that library is exported too.
 
@@ -411,7 +468,7 @@ read command does not remove files it did not create.
 **How the two catalogs fit together.** They stay separate and join on `key` (durable cross-file
 identity, present on variables, collections, styles and components — names collide across libraries):
 
-| | `design/design-system/` | `design/libraries/<lib>/` |
+| | `design/export/design-system/` | `design/export/libraries/<lib>/` |
 |---|---|---|
 | Which file | the design file you build screens from | one library file |
 | Variables | the subset your screens reference | **all**, full per-mode values |
@@ -425,7 +482,7 @@ and "what props does this component *really* take?".
 
 Because the layout matches `design-system/`, existing tooling runs on it unchanged:
 ```
-node design-to-code/tokens.js design/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+node design-to-code/tokens.js design/export/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
 
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
@@ -461,7 +518,7 @@ reason to gate them the way `--design-system` gates a page walk. **Two honest li
    `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets) or
    `nodeFile` (standalone components) — absent when nothing was exported for that entry. `entry.variants[]`
    in the slim catalog keeps only `id`/`name`/`key`/`values`. Fetch one component's real node tree(s) with
-   `node design-to-code/get-component.js design/design-system/components.local.json <key|id|name>`.
+   `node design-to-code/get-component.js design/export/design-system/components.local.json <key|id|name>`.
 2. It only covers components DEFINED in this file. Components consumed from a published library
    (the `remote:true` entries, recovered via instance-walk — see the honest-limits note above) are
    not covered here; pull `--as-library` on the *source* library file for those. There is no

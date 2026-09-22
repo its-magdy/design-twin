@@ -160,7 +160,7 @@ how a value becomes code on your stack, see the profile.
 ## Components, props and overrides
 
 - **`component`** (name) + **`mainComponent`** `{id, key, remote, setId, setKey, setName, variant}` —
-  join to `codeconnect.local.json` and the catalogs by `key`/`setKey`, never by name.
+  join to `design/codeconnect.local.json` and the catalogs by `key`/`setKey`, never by name.
 - **`props`** `{name: value}` — the instance's variant values, booleans, text and swaps → the code
   component's props. **`propTokens`** — a prop value driven by a variable.
 - **`propRefs`** (which prop drives this sublayer's `visible`/`characters`/`mainComponent`),
@@ -174,7 +174,7 @@ how a value becomes code on your stack, see the profile.
 ## Interaction states (always check this)
 
 Before shipping any interactive element (button, input, link, row, card), check that component's
-variant `options` in `design/design-system/components.local.json` (or `components.library.json`, whose
+variant `options` in `design/export/design-system/components.local.json` (or `components.library.json`, whose
 props are only a sample). States are usually **variant option values, not separate nodes** — and
 often under a property literally named "Property 1" (`["Default","hover","Pressed"]`). Boolean props
 like `Disabled`/`Loading` also carry states.

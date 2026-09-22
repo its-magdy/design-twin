@@ -80,7 +80,7 @@ modal/dialog → `<dialog>` + `showModal()` (focus trap, Esc and backdrop come f
 popover → the `popover` attribute; accordion/disclosure → `<details><summary>`. No native element:
 spinner (CSS animation + `role="status"`), tabs and segmented controls (`role="tablist"` pattern with
 arrow-key handling), combobox/autocomplete. **The project's own component or an installed headless
-library (Radix, React Aria, Headless UI…) beats all of the above** — check `codeconnect.local.json` and
+library (Radix, React Aria, Headless UI…) beats all of the above** — check `design/codeconnect.local.json` and
 `package.json` before writing either.
 
 **Idiomatic web (patterns by structure)** — decide from the node's STRUCTURE; its name is only a hint.
@@ -112,9 +112,9 @@ your column structure and let you sanity-check spacing; never render them as vis
 
 **Component reuse** — before generating markup for an instance's sublayer, check `exposedInstances`,
 `propRefs`, `overrides` on the node: a prop-driven or overridden sublayer maps to a **prop/variant** on
-the already-mapped component (from `codeconnect.local.json`), not new markup. `detachedFrom` (`{key}` or
+the already-mapped component (from `design/codeconnect.local.json`), not new markup. `detachedFrom` (`{key}` or
 `{componentId}`) means the node used to be an instance of a component that may still exist in
-`codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate (genuinely bespoke).
+`design/codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate (genuinely bespoke).
 
 **Effects → CSS**
 - `background_blur` effect → `backdrop-blur-*` (or `backdrop-blur-[Npx]`) + ensure the element has a
@@ -164,7 +164,7 @@ Hex is 8-bit sRGB even when `colorProfile` is display-p3 → `[color:color(displ
 **Images** — use `intrinsicSize` (`{w,h}`) to set `aspect-[w/h]` so layout doesn't jump before the image
 loads; always set explicit width+height on the container (see the base skill's asset-sizing rule).
 
-**Interaction states** — look up the component in `design/design-system/components.local.json`'s `components` catalog and
+**Interaction states** — look up the component in `design/export/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `focus-visible:` style even if the Figma design only shows a hover state — it's the most commonly
 missed a11y requirement. `hover:` only matters on pointer devices (`@media (hover:hover)` — Tailwind v4's
@@ -201,10 +201,10 @@ appears on a vector node whose SVG export failed. Render it inline as
 **Tokens** — the right-hand value in `tokens.json` is a Tailwind class (e.g. `bg-primary`, `text-body`,
 `rounded-md`). Emit it in `className`. If no class exists, use arbitrary value `bg-[var(--color-primary)]`.
 
-**Components** — import per `codeconnect.local.json`; pass Figma `props` through to component props (see
+**Components** — import per `design/codeconnect.local.json`; pass Figma `props` through to component props (see
 **Component reuse** above before generating any markup for an instance's sublayer).
 
-**Assets** — use the exported files in `design/assets/`: `<img src>` (or `next/image`) for PNG, and for a
+**Assets** — use the exported files in `design/export/assets/`: `<img src>` (or `next/image`) for PNG, and for a
 vector either `<img src="….svg">` or an `<Icon/>` wrapper around that file / an SVGR import of it. **Never
 hand-write `<svg><path d="…">` markup** — the only exception is the `geometry` vector fallback above, where
 no asset file exists. Size every asset explicitly (see **Images**).

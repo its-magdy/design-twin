@@ -72,11 +72,50 @@ function alphaHex(a) {
   if (!Number.isFinite(n)) return "ff";
   return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
+var UTILITY_KIND = [
+  [/^rounded(-[a-z]+)?$/, "radius"],
+  [/^text$/, "fontSize"],
+  [/^leading$/, "lineHeight"],
+  [/^tracking$/, "letterSpacing"],
+  [/^(gap|gap-x|gap-y|space-x|space-y)$/, "spacing"],
+  [/^([pm][trblxy]?)$/, "spacing"],
+  [/^(top|right|bottom|left|inset(-[xy])?|start|end)$/, "spacing"],
+  [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
+  [/^border(-[trblxyse]+)?$/, "borderWidth"]
+];
+var KIND_MATCHES = {
+  radius: ["radius", "borderradius", "cornerradius"],
+  fontSize: ["fontsize", "font-size", "type", "typography"],
+  lineHeight: ["lineheight", "line-height"],
+  letterSpacing: ["letterspacing", "letter-spacing", "tracking"],
+  spacing: ["spacing", "space", "gap", "padding", "margin", "size", "dimension"],
+  size: ["size", "spacing", "space", "dimension", "width", "height"],
+  borderWidth: ["borderwidth", "border-width", "border", "stroke"]
+};
+function utilityKind(utility) {
+  const u = String(utility || "").replace(/^-/, "");
+  for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
+  return null;
+}
+function kindsCompatible(utility, rowKind) {
+  const uk = utilityKind(utility);
+  if (!uk) return true;
+  const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!rk) return true;
+  return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
+}
 function arbitraryPx(source) {
   const found = /* @__PURE__ */ new Map();
+  for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
+    const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
+    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const list = found.get(px) || [];
+    if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
+    found.set(px, list);
+  }
   for (const m of source.matchAll(/\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
-    if (!found.has(px)) found.set(px, m[0]);
+    if (!found.has(px)) found.set(px, [{ literal: m[0], utility: null }]);
   }
   return found;
 }
@@ -122,8 +161,39 @@ function checkPlan({ plan }, cwd) {
   const files = listed.map((f) => path.join(cwd, f)).filter((f) => fs.existsSync(f));
   const sources = files.map((f) => fs.readFileSync(f, "utf8"));
   const source = sources.join("\n");
-  const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason).map((a) => String(a.value).toLowerCase()));
+  const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
+  const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
+  const byFile = listed.map((rel) => ({ rel, abs: path.join(cwd, rel) })).filter((f) => fs.existsSync(f.abs)).map((f) => ({ rel: f.rel, text: fs.readFileSync(f.abs, "utf8") }));
+  const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
+  const slug = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  function declaresToken(line, literal, codeToken) {
+    const at = line.indexOf(literal);
+    if (at === -1) return false;
+    const m = DECLARATION.exec(line.slice(0, at));
+    if (!m) return false;
+    const declared = slug(m[2]);
+    const token = slug(codeToken);
+    if (!declared || !token) return false;
+    return declared === token || declared.includes(token) || token.includes(declared);
+  }
+  function definedOnlyInTokenSource(literal, codeToken) {
+    if (!literal) return false;
+    let seen = false;
+    for (const f of byFile) {
+      if (!f.text.includes(literal)) continue;
+      if (allowedFiles.includes(f.rel)) {
+        seen = true;
+        continue;
+      }
+      for (const line of f.text.split("\n")) {
+        if (!line.includes(literal)) continue;
+        if (!declaresToken(line, literal, codeToken)) return false;
+        seen = true;
+      }
+    }
+    return seen;
+  }
   for (const row of plan.tokens || []) {
     if ((verdictOf(row) === "missing" || !hasToken(row)) && !row.decision) {
       problems.push(`token ${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision \u2014 say what you did about it (a one-off literal is a legitimate answer; say so) before finishing`);
@@ -149,11 +219,14 @@ function checkPlan({ plan }, cwd) {
     if (row.kind === "color") {
       const h = colorKey(row.value);
       const lit = h && colors.get(h);
-      if (lit && !isAllowed(row, lit)) problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' \u2014 use the token, not the literal (or add it to allowedLiterals with a reason)`);
+      if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
+        problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' \u2014 use the token, not the literal (or add it to allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or {"file": "<the file that defines the tokens>", "reason": "\u2026"})`);
+      }
     } else {
       const n = parseFloat(row.value);
-      const lit = Number.isFinite(n) && dims.get(n);
-      if (lit && !isAllowed(row, lit)) problems.push(`arbitrary value ${lit} found in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
+      const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
+      const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
+      if (hit) problems.push(`arbitrary value ${hit.utility ? hit.utility + hit.literal : hit.literal} found in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
     }
   }
   const mapped = loadMapKeys(cwd);

@@ -94,7 +94,7 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
   width, fluid vs stepped).
 
 ## 6. Components, variants and props
-- **Reuse.** Every `INSTANCE` → `mainComponent` `{key,setKey,setName}` → `codeconnect.local.json`
+- **Reuse.** Every `INSTANCE` → `mainComponent` `{key,setKey,setName}` → `design/codeconnect.local.json`
   mapping? Unmapped components that clearly match an existing code component → note the mapping gap.
 - **Native controls.** Switches, pickers, sheets, nav bars, tab bars, text fields drawn as custom
   components: should the build use the platform control (recommended) or match the drawing exactly?

@@ -119,7 +119,7 @@ intent to real widgets; a node name is a hint, never the decision.
   with an `InputDecoration` (`labelText`/`hintText`/`errorText`) rather than a separate label `Text`,
   tabs→`TabBar`/`TabBarView`, sheet→`showModalBottomSheet`, dialog→`AlertDialog`.
 
-**Interaction states** — look up the component in `design/design-system/components.local.json`'s
+**Interaction states** — look up the component in `design/export/design-system/components.local.json`'s
 `components` catalog and check its variant `options` for hover/focus/pressed/disabled/error/selected
 before shipping. In M3 these are `WidgetStateProperty.resolveWith((states) => …)` on the widget's
 `ButtonStyle`/theme (`WidgetState.hovered/focused/pressed/disabled/selected/error`) — one styled widget,
@@ -132,11 +132,11 @@ your structure and let you sanity-check spacing; never render them as visible UI
 
 **Component reuse** — before generating widgets for an instance's sublayer, check `exposedInstances`,
 `propRefs`, `overrides` on the node: a prop-driven or overridden sublayer maps to a **constructor
-param/enum variant** on the already-mapped widget (from `codeconnect.local.json`), not new widget code.
+param/enum variant** on the already-mapped widget (from `design/codeconnect.local.json`), not new widget code.
 `detachedFrom` (`{key}` or `{componentId}`) means the node used to be an instance of a component that may
-still exist in `codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate.
+still exist in `design/codeconnect.local.json` — look it up and reuse it unless the detach looks deliberate.
 
-**Components** — your widgets per `codeconnect.local.json`; Figma `props` → constructor params.
+**Components** — your widgets per `design/codeconnect.local.json`; Figma `props` → constructor params.
 
 **Interactions & motion** — `reactions` navigate → a callback on the widget, wired by the route layer with the project's router (`go_router` `context.go/push`, `Navigator`… — see *Fit the existing app*); overlay →
 `showModalBottomSheet`/`showDialog`. `transition.duration` SECONDS → `Duration(milliseconds:)`;

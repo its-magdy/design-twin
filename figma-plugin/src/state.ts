@@ -3,6 +3,7 @@
 
 import { errMsg } from "./util";
 import { beginRun, endRun, RunInfo } from "./progress";
+import { resetAssetNames } from "./assets";
 import { readOptDefaults, ReadOptName } from "../../bridge/read-opts.js";
 
 export interface Asset {
@@ -16,6 +17,12 @@ export interface Asset {
   base64?: string;
   text?: string;
   kind?: string;
+  /** Content hash of the bytes (assets.ts contentHash). Written into the per-screen asset index so a
+   *  consumer can see which files are byte-identical without diffing them. */
+  hash?: string;
+  /** Every node id that resolved to THIS file. Present only when more than one did — i.e. when the
+   *  same artwork was reached through several instance paths and deduped to one file. */
+  from?: string[];
 }
 
 export interface RunStats {
@@ -112,7 +119,13 @@ export function manifest() {
   // Grouped warnings are appended to the RETURNED copy for the same reason the note above is: they are
   // derived from the counters, so repeat calls stay identical by construction.
   const all = warnings.concat(groupedWarnings());
-  return { ...stats, skipped: stats.truncated, warnings: note ? all.concat(note) : all };
+  // Which OPT-IN reads actually ran. Without this, a consumer cannot tell "the designer never wrote
+  // an annotation" from "annotations were not exported" — and on a real export `codeSyntax`,
+  // `annotations`, `devStatusNote` and `measurements` were all absent, which silently killed two of
+  // build-screen's six hint tiers with nothing to say so. `reads` names exactly what was asked for,
+  // so an absent field is now an answerable question rather than an ambiguous one.
+  const reads = Object.keys(runOpts).filter((k) => (runOpts as Record<string, boolean>)[k]);
+  return { ...stats, skipped: stats.truncated, reads, warnings: note ? all.concat(note) : all };
 }
 
 // Resolve a Figma id to its .name at most once per export run — a design system reuses
@@ -238,6 +251,7 @@ export async function loadAllPages(consequence: string): Promise<void> {
 
 export function resetRun(): void {
   releaseAssets();
+  resetAssetNames(); // the per-run dedupe/name tables live in assets.ts
   warnings = [];
   grouped = new Map();
   stats = newStats();

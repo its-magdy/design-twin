@@ -221,7 +221,14 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
   if (!collections || !collections.length) {
     // NOT an error. Libraries can only be enabled from the Figma UI (Assets > Libraries), never via
     // the API, so "none enabled" is the default state of a fresh file and must read as such.
-    sink("no team libraries are enabled for this file — enable them in Figma (Assets > Libraries); an empty list here is normal, not a failure");
+    // Scoped to what this call actually answers. Worded as a flat "no libraries are enabled" it
+    // contradicted the "LIBRARIES (2)" printed immediately below, whose rows come from the COMPONENT
+    // side and from this file itself (live finding 17) — two true statements that read as one lie.
+    sink(
+      "no team libraries are enabled for this file, so no library VARIABLE collections are listed — " +
+        "any rows below come from this file itself or from components it consumes. Enable libraries in " +
+        "Figma (Assets > Libraries) if you expected more; an empty list here is normal, not a failure"
+    );
     return byLibrary;
   }
   // Independent per-collection reads — fan out rather than paying one round trip per collection.

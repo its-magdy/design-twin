@@ -93,7 +93,40 @@ var require_pages_layout = __commonJS({
       const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
       return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
     }
-    module2.exports = { buildPageLayout, safe };
+    var NO_PAGE_DIR = "_unfiled";
+    function screenPaths(screenDoc, sep) {
+      const join = (...parts) => ["pages"].concat(parts).join(sep);
+      const page = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
+      const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
+      const dir = page ? safe(page) : NO_PAGE_DIR;
+      const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
+      const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
+      return {
+        page: page || null,
+        pageId: pageId || null,
+        nodeId: nodeId || null,
+        dir,
+        base,
+        screen: join(dir, base + ".json"),
+        variables: join(dir, base + ".vars.json"),
+        assets: join(dir, base + ".assets.json"),
+        index: join(dir, "index.json"),
+        rootIndex: join("index.json")
+      };
+    }
+    function mergeScreenIndex(prev, entry) {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+      layers.push(entry);
+      return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
+    }
+    function mergeRootIndex(prev, paths, layerCount) {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
+      pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
+      return Object.assign({}, base, { pageDirs });
+    }
+    module2.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, safe, NO_PAGE_DIR };
   }
 });
 
@@ -200,11 +233,14 @@ var require_design_system_layout = __commonJS({
           stylesGrid: join(STYLES_GRID),
           componentsLocal: join(COMPONENTS_LOCAL),
           componentsLibrary: join(COMPONENTS_LIBRARY),
-          componentsDir: DIR + (sep || "/") + COMPONENTS_DIR,
           hygiene: join(HYGIENE)
         },
         counts
       };
+      const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
+      if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
+        manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+      }
       files.push({ path: MANIFEST, data: manifest });
       return { files, manifest, counts, dir: DIR };
     }

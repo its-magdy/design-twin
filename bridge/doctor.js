@@ -29,6 +29,7 @@ const tokenStore = require("./token-store.js");
 const daemon = require("./daemon.js");
 const { readSnapshotInfo } = require("./snapshot-meta.js");
 const { errMsg } = require("./errmsg.js");
+const LAYOUT = require("./project-layout.js");
 const { isOurMcpEntry } = require("./init.js");
 
 // Mirrors server-core's ALLOWED_PORTS (the manifest's allowedDomains). Restated rather than imported
@@ -124,22 +125,57 @@ function checkPlugin(r, waitSec) {
   return fail("plugin", title, `no plugin connected within ${waitSec}s`, "in Figma DESKTOP open the file and run Plugins → Development → Design Twin (keep its window open); `--wait 30` waits longer");
 }
 
+// Which Figma FILE each part of the export came from. `exportedAt`/`file` are stamped by the plugin on
+// every export document, so this is a read, not a guess — and it is the one line that would have told
+// a two-file project that its screens and its design system are not the same system.
+function exportSources(exportDir) {
+  const seen = new Map();
+  const add = (rel, what) => {
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return; }
+    if (!doc || !doc.file) return;
+    if (!seen.has(doc.file)) seen.set(doc.file, { file: doc.file, what: [] });
+    seen.get(doc.file).what.push(what);
+  };
+  add("design-system.json", "design system");
+  add(path.join("design-system", "tokens.json"), "design system");
+  // Screens: one representative is enough to name the file, and reading every screen on a 20-screen
+  // project inside `doctor` would make a 0.08s command visibly slow.
+  try {
+    const idx = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8"));
+    for (const p of (idx.pageDirs || []).slice(0, 3)) {
+      let pi;
+      try { pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); } catch { continue; }
+      for (const l of (pi.layers || []).slice(0, 1)) add(l.file, "screens");
+    }
+  } catch { /* no page index — a design-system-only export */ }
+  return [...seen.values()].map((s) => ({ file: s.file, what: [...new Set(s.what)].join(" + ") }));
+}
+
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
 // project (to debug the connection), where all of this is legitimately absent.
 function checkProject(cwd, now = Date.now()) {
   const out = [];
-  const designDir = path.join(cwd, "design");
+  const designDir = path.join(cwd, LAYOUT.DESIGN_DIR);
   if (!fs.existsSync(designDir)) {
     out.push(warn("project", "Project", `no design/ in ${cwd}`, "run `dtwin init` in the root of the project you are building (skip this if you are only testing the connection)"));
   } else {
-    const hasTarget = fs.existsSync(path.join(designDir, "target.json"));
+    const hasTarget = fs.existsSync(path.join(cwd, LAYOUT.TARGET_FILE));
     out.push(hasTarget ? ok("project", "Project", "design/ and design/target.json present") : warn("project", "Project", "design/ present, but no design/target.json", "run `dtwin init` (it detects the stack), or build-screen will ask on first run"));
 
-    const snap = readSnapshotInfo(designDir);
+    // Which layout this project uses, said out loud. A project created before the export/ split keeps
+    // working, but "where do my files land" must never be a thing the user has to infer.
+    const ex = LAYOUT.findExportDir(cwd);
+    if (ex.layout === "legacy-flat") {
+      out.push(warn("layout", "Layout", "this project uses the older flat layout — exports live directly in design/, beside your hand-owned target.json / plan / audit",
+        "it keeps working as is. To adopt the current split, move the export into design/export/ (pages/, design-system/, assets/, variables.json, libraries/) so `rm -rf design/export` can never take your decisions with it"));
+    }
+
+    const snap = readSnapshotInfo(ex.dir);
     // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
-    // or a single-screen design/<Screen>.json (snapshot-meta.js checks all three; naming only the
-    // first sent someone who had just pulled a screen off to re-run a pull they had already run).
-    if (!snap) out.push(warn("export", "Export", "nothing exported yet (no design-system.json, pages/index.json or screen JSON in design/)", "dtwin list   →   dtwin pull design --node <id>   (or --page <name> / --design-system)"));
+    // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.js checks all three; naming only
+    // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
+    if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull design --node <id>   (or --page <name> / --design-system)"));
     else if (snap.error) out.push(warn("export", "Export", snap.error, "re-run the pull"));
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
@@ -148,10 +184,25 @@ function checkProject(cwd, now = Date.now()) {
       const age = h < 1 ? `${Math.max(0, Math.round(ageMs / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`;
       const from = snap.sourceFile ? ` from '${snap.sourceFile}'` : "";
       out.push(ageMs > STALE_MS ? warn("export", "Export", `exported ${age} ago${from} — the Figma file may have moved on`, "re-run the pull before building from it") : ok("export", "Export", `exported ${age} ago${from}`));
+
+      // The freshness line above describes ONE file — whichever snapshot-meta picked. On a project
+      // whose screens came from a different Figma file than its design system, that one line named
+      // the wrong file and nothing said so (live finding 48). List every source present instead.
+      const sources = exportSources(ex.dir);
+      if (sources.length > 1) {
+        out.push(warn("export", "Export sources", `this export mixes ${sources.length} Figma files: ${sources.map((s) => `'${s.file}' (${s.what})`).join(", ")}`,
+          "that is legitimate when a design system lives in its own file — but confirm the screens and the design system really are the same system: `/designtwin:audit-design <screen>` now runs the cross-file check that proves it"));
+      }
     }
 
-    const map = path.join(cwd, "codeconnect.local.json");
-    out.push(fs.existsSync(map) ? ok("map", "Component map", "codeconnect.local.json present") : warn("map", "Component map", "no codeconnect.local.json — builds cannot reuse your existing components yet", "scaffold one after a pull: /designtwin:build-screen walks you through it"));
+    const map = LAYOUT.findMapFile(cwd);
+    out.push(
+      map.missing
+        ? warn("map", "Component map", `no ${LAYOUT.MAP_FILE} — builds cannot reuse your existing components yet`, "scaffold one after a pull: /designtwin:build-screen walks you through it")
+        : map.legacy
+          ? warn("map", "Component map", "codeconnect.local.json is at the repo root (the older location)", `it still works. Moving it to ${LAYOUT.MAP_FILE} keeps every hand-owned file in one place`)
+          : ok("map", "Component map", `${LAYOUT.MAP_FILE} present`)
+    );
   }
 
   const mcpFile = path.join(cwd, ".mcp.json");

@@ -71,7 +71,9 @@ function snapshotCandidates(dir) {
 }
 
 function readSnapshotInfo(outDir) {
-  const dir = outDir || process.env.FIGMA_EXPORT_DIR || "design";
+  // Same resolution order as write-out.js's resolveOutDir, plus the legacy flat layout: a project
+  // that exported before design/export/ existed must still report its snapshot, not "nothing yet".
+  const dir = outDir || process.env.FIGMA_EXPORT_DIR || require("./project-layout.js").findExportDir(process.cwd()).dir;
   const cands = snapshotCandidates(dir);
   let file = null, doc = null, parseError = null, fallback = null;
   for (const { f: cand, named } of cands) {

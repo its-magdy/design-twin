@@ -50,7 +50,7 @@ coordinate space rather than a bitmap `Image` — there is no asset file for tha
 **Tokens** — the right-hand value in `tokens.json` is a Swift reference (e.g. `Color("Primary")` from an
 asset catalog, or `Theme.spacing.md`). Emit these, not literals.
 
-**Components** — your SwiftUI `View`s per `codeconnect.local.json`; pass Figma `props` via init params/modifiers.
+**Components** — your SwiftUI `View`s per `design/codeconnect.local.json`; pass Figma `props` via init params/modifiers.
 
 **Text** — `Text(...)` with `.font(...)`; map `font.size/weight` to your type scale.
 

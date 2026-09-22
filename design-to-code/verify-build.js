@@ -180,11 +180,68 @@ function alphaHex(a) {
 }
 
 // Tailwind arbitrary dimensions: `gap-[14px]`, `p-[0.875rem]` -> px number -> the spelling found.
+//
+// Keyed on the number ALONE, this collided across token kinds: every `rounded-[20px]` in the build
+// was reported as "the plan resolved 20px (fontSize) to token 'text-body-1' — use the token", which
+// would have been a genuine bug to apply (a font-size utility on a border-radius) and which the gate
+// would then have passed (live finding 88). The utility PREFIX says which kind the number is, and it
+// is sitting in the very string being matched.
+const UTILITY_KIND = [
+  [/^rounded(-[a-z]+)?$/, "radius"],
+  [/^text$/, "fontSize"],
+  [/^leading$/, "lineHeight"],
+  [/^tracking$/, "letterSpacing"],
+  [/^(gap|gap-x|gap-y|space-x|space-y)$/, "spacing"],
+  [/^([pm][trblxy]?)$/, "spacing"],
+  [/^(top|right|bottom|left|inset(-[xy])?|start|end)$/, "spacing"],
+  [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
+  [/^border(-[trblxyse]+)?$/, "borderWidth"],
+];
+
+// Which token kinds a given utility kind may legitimately be compared against. Deliberately loose
+// where the vocabulary genuinely overlaps (a spacing token IS what padding and gap both use) and
+// strict where it does not (a radius is never a font size).
+const KIND_MATCHES = {
+  radius: ["radius", "borderradius", "cornerradius"],
+  fontSize: ["fontsize", "font-size", "type", "typography"],
+  lineHeight: ["lineheight", "line-height"],
+  letterSpacing: ["letterspacing", "letter-spacing", "tracking"],
+  spacing: ["spacing", "space", "gap", "padding", "margin", "size", "dimension"],
+  size: ["size", "spacing", "space", "dimension", "width", "height"],
+  borderWidth: ["borderwidth", "border-width", "border", "stroke"],
+};
+
+function utilityKind(utility) {
+  const u = String(utility || "").replace(/^-/, "");
+  for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
+  return null; // an arbitrary value on a utility we do not recognise — compared against any kind, as before
+}
+
+// A plan row's `kind` is agent-written prose ("radius", "border-radius", "fontSize"). Normalise both
+// sides and ask whether they could be the same thing; an UNRECOGNISED utility stays comparable, so a
+// stack this list does not cover keeps the check it had rather than losing it silently.
+function kindsCompatible(utility, rowKind) {
+  const uk = utilityKind(utility);
+  if (!uk) return true;
+  const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!rk) return true;
+  return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
+}
+
 function arbitraryPx(source) {
-  const found = new Map();
+  const found = new Map(); // px -> [{ literal, utility }]
+  for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
+    const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
+    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const list = found.get(px) || [];
+    if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
+    found.set(px, list);
+  }
+  // A bare `[14px]` with no utility in front (a raw style object, a template string) keeps the old
+  // kind-blind behaviour rather than dropping out of the check entirely.
   for (const m of source.matchAll(/\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[1]) * (m[2] === "rem" ? 16 : 1);
-    if (!found.has(px)) found.set(px, m[0]);
+    if (!found.has(px)) found.set(px, [{ literal: m[0], utility: null }]);
   }
   return found;
 }
@@ -244,8 +301,61 @@ function checkPlan({ plan }, cwd) {
   const files = listed.map((f) => path.join(cwd, f)).filter((f) => fs.existsSync(f));
   const sources = files.map((f) => fs.readFileSync(f, "utf8"));
   const source = sources.join("\n");
-  const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason).map((a) => String(a.value).toLowerCase()));
+  // allowedLiterals matches on the exact VALUE string, and nothing said so. A build that wrote the
+  // perfectly readable prose form — {value: "every hex in app/src/styles/theme.css", reason: "it is
+  // the file that DEFINES the tokens"} — was blocked on 30 items with no hint why (live finding 87).
+  // Two changes: an entry may now name a FILE instead of a value, and the common case is detected
+  // without any entry at all (definedOnlyInTokenSource below).
+  const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== undefined).map((a) => String(a.value).toLowerCase()));
+  const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
+
+  // Per-file sources, so "where does this literal appear" is answerable. The old scan concatenated
+  // everything into one string, which is why it could not tell a token DEFINITION from a usage.
+  const byFile = listed
+    .map((rel) => ({ rel, abs: path.join(cwd, rel) }))
+    .filter((f) => fs.existsSync(f.abs))
+    .map((f) => ({ rel: f.rel, text: fs.readFileSync(f.abs, "utf8") }));
+
+  // The whole point of a generated theme file is that it contains every token's literal value ONCE,
+  // as the definition. Flagging those is flagging the design system itself: all 19 hexes the live run
+  // blocked on occurred ONLY in theme.css / screen-tokens.css, and not one appeared in a component.
+  //
+  // A file counts as a token source when the plan says so (allowedLiterals[].file), or when the
+  // literal's every occurrence in it sits on a DECLARATION line — `--color-x: #123456;`,
+  // `brand600: "#123456"`, `val brand600 = Color(0xFF123456)`. That is what a definition looks like
+  // in every stack, and a component that merely uses the colour never looks like it.
+  // A DEFINITION line declares the code token itself: `--color-page-bg: #1d1d1f`, `pageBg: "#1d1d1f"`,
+  // `val pageBg = Color(0xFF1D1D1F)`. The declared name has to be the TOKEN's name — `color: #5b5fc7`
+  // inside a component declares a CSS property, not a token, and must keep failing.
+  const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
+  const slug = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  function declaresToken(line, literal, codeToken) {
+    const at = line.indexOf(literal);
+    if (at === -1) return false;
+    const m = DECLARATION.exec(line.slice(0, at));
+    if (!m) return false;
+    const declared = slug(m[2]);
+    const token = slug(codeToken);
+    if (!declared || !token) return false;
+    // Either direction: a Tailwind theme writes `--color-success-success` for the token
+    // `success-success`, and a plain CSS theme writes `--brand-600` for `brand-600`.
+    return declared === token || declared.includes(token) || token.includes(declared);
+  }
+  function definedOnlyInTokenSource(literal, codeToken) {
+    if (!literal) return false;
+    let seen = false;
+    for (const f of byFile) {
+      if (!f.text.includes(literal)) continue;
+      if (allowedFiles.includes(f.rel)) { seen = true; continue; }
+      for (const line of f.text.split("\n")) {
+        if (!line.includes(literal)) continue;
+        if (!declaresToken(line, literal, codeToken)) return false; // a real usage — the check stands
+        seen = true;
+      }
+    }
+    return seen;
+  }
 
   // A row with no token is fine — provided the build SAID what it did about it. That decision is
   // the whole substance of the MISSING rule, so it is what gets enforced, in either spelling.
@@ -281,11 +391,16 @@ function checkPlan({ plan }, cwd) {
     if (row.kind === "color") {
       const h = colorKey(row.value);
       const lit = h && colors.get(h);
-      if (lit && !isAllowed(row, lit)) problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' — use the token, not the literal (or add it to allowedLiterals with a reason)`);
+      if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
+        problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' — use the token, not the literal (or add it to allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or {"file": "<the file that defines the tokens>", "reason": "…"})`);
+      }
     } else {
       const n = parseFloat(row.value);
-      const lit = Number.isFinite(n) && dims.get(n);
-      if (lit && !isAllowed(row, lit)) problems.push(`arbitrary value ${lit} found in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' — use the token (or add it to allowedLiterals with a reason)`);
+      const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
+      // Only the occurrences whose utility could actually BE this kind. `rounded-[20px]` is not the
+      // 20px a fontSize token resolves to, however equal the numbers are.
+      const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
+      if (hit) problems.push(`arbitrary value ${hit.utility ? hit.utility + hit.literal : hit.literal} found in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' — use the token (or add it to allowedLiterals with a reason)`);
     }
   }
 

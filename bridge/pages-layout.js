@@ -99,4 +99,67 @@ function buildPageLayout(layersDoc, sep) {
   return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
 }
 
-module.exports = { buildPageLayout, safe };
+
+// ---------------------------------------------------------------- the single-screen twin
+//
+// A --node/--selection pull used to land FLAT: design/<Screen>.json, named from the layer alone. That
+// gave a frame whose name ends in a space a file ending in `_`, let a second frame called `Popup`
+// silently overwrite the first, and left the pull's variable slice and its assets with nowhere
+// per-screen to live — while a --page pull of the very same frame wrote the nested layout above
+// (live findings 47/50/63). Two layouts for one kind of content, and every downstream skill had to
+// know which one it was looking at.
+//
+// So a screen files into the SAME tree: pages/<PageDir>/<Name>__<id>.json, with its token slice and
+// its asset index as siblings. The difference from buildPageLayout is arrival, not shape — a page
+// pull writes every layer at once and can compute its index in one pass, whereas screens accumulate
+// one pull at a time, so the indexes here MERGE with whatever is already on disk (mergeScreenIndex
+// below). The caller supplies the previous index; this module stays pure.
+//
+// `id` in the filename is the frame's own node id, which is what makes two same-named frames
+// distinguishable — the same reason buildPageLayout suffixes its layer files.
+const NO_PAGE_DIR = "_unfiled";
+
+function screenPaths(screenDoc, sep) {
+  const join = (...parts) => ["pages"].concat(parts).join(sep);
+  const page = screenDoc.page || (screenDoc.screen && screenDoc.screen.page);
+  const pageId = screenDoc.pageId || (screenDoc.screen && screenDoc.screen.pageId);
+  // An export written before the plugin emitted page identity still has to land somewhere, and
+  // somewhere PREDICTABLE — a bucket named for what it is beats inventing a page that was never read.
+  const dir = page ? safe(page) : NO_PAGE_DIR;
+  const nodeId = screenDoc.nodeId || (screenDoc.screen && screenDoc.screen.nodeId);
+  const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
+  return {
+    page: page || null,
+    pageId: pageId || null,
+    nodeId: nodeId || null,
+    dir,
+    base,
+    screen: join(dir, base + ".json"),
+    variables: join(dir, base + ".vars.json"),
+    assets: join(dir, base + ".assets.json"),
+    index: join(dir, "index.json"),
+    rootIndex: join("index.json"),
+  };
+}
+
+// Merge one screen's entry into a page index (or the root index's pageDirs), keyed on the FILE path —
+// which is unique per (page, name, node id) by construction, so re-pulling the same frame replaces its
+// row instead of appending a duplicate, and pulling a different frame with the same name adds one.
+function mergeScreenIndex(prev, entry) {
+  const base = prev && typeof prev === "object" ? prev : {};
+  const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+  layers.push(entry);
+  return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
+}
+
+// The root pages/index.json is the ONE entry point a consumer opens without knowing which pull shape
+// produced the tree: it lists every page directory, whether that page arrived as a whole-page sweep
+// or as single screens pulled one at a time.
+function mergeRootIndex(prev, paths, layerCount) {
+  const base = prev && typeof prev === "object" ? prev : {};
+  const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
+  pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
+  return Object.assign({}, base, { pageDirs });
+}
+
+module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, safe, NO_PAGE_DIR };
