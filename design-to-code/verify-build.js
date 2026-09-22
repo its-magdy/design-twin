@@ -41,6 +41,7 @@
 //     "files": ["src/screens/Login.tsx", ...],
 //     "tokens": [{ "value": "#5B5FC7", "kind": "color", "codeToken": "brand-600"|null, "verdict": "exact"|"missing"|"decided", "decision": "..."?}],
 //     "components": [{ "name": "Button", "key": "...", "mapModule": "@/ui/Button"|null, "verdict": "reused"|"new"|"missing" }],
+//     "anchors": { "12:40": { "file": "src/screens/Login.tsx", "symbol": "LoginHeader" } },  (node id → code; read by sync-design, not checked here)
 //     "allowedLiterals": [{ "value": "#5B5FC7", "reason": "theme.ts defines brand-600" }],
 //     "verification": { "mode": "rendered", "renderer": "playwright", "artifacts": ["design/verify/login.png"], "deltas": ["title 1px low"] }
 //                       (+ optional "coverage": { "rendered": ["default","dark"], "notChecked": [{ "what": "rtl", "why": "app ships no RTL locale" }] },

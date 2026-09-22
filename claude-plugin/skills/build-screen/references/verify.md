@@ -89,8 +89,12 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
 ## The fix loop
 - Fix the largest structural or numeric delta first, re-render, re-compare. Keep a one-line log per
   round (what changed, what the delta became).
-- Cap at **8 rounds per component**. If a fix to one value breaks another (margin vs padding
-  ping-pong), the constraints conflict — step back to the plan, split the component, or report it.
+- Cap at **5 rounds per component**, and stop sooner when a round fixes nothing. If a fix to one value
+  breaks another (margin vs padding ping-pong), the constraints conflict — step back to the plan,
+  split the component, or report it.
+- Never trade maintainability for pixels: a round that adds absolute positioning, a fixed size or a
+  magic offset to a node the export lays out with auto layout, or replaces a token with a literal,
+  is a regression even when the screenshot got closer. Report the residual in `deltas` instead.
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
 

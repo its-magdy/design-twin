@@ -1,6 +1,6 @@
 ---
 name: build-screen
-description: Build a front-end screen as real, production-quality code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, Flutter, or a custom target). Use this whenever the user wants a design turned into code — "implement the login screen", "build this frame", "code up the settings page", "make this design real", "match the Figma" — or points at a design/ export or a Figma frame, even if they don't say which stack. Resolves the target stack, audits the design for missing states and untranslatable values, maps every node to existing components and tokens before coding, builds leaf-first with exact unit conversions per platform, then verifies by rendering and comparing against the reference screenshot. If design/ is empty or stale, use extract first. If the screen is ALREADY built and the design changed, use sync-design (a rebuild discards hand edits). To only CHECK a built screen against its design, use the visual-verifier agent instead.
+description: Build a front-end screen as real, production-quality code from a Figma export, for ANY stack (React/Tailwind, CSS Modules, React Native, SwiftUI, Jetpack Compose, Flutter, or a custom target). Use this whenever the user wants a design turned into code — "implement the login screen", "build this frame", "code up the settings page", "make this design real", "match the Figma" — or points at a design/ export or a Figma frame, even if they don't say which stack. Resolves the stack, audits the design, maps every node to existing components and tokens before coding, builds leaf-first with exact unit conversions, then verifies by rendering against the reference screenshot. If design/ is empty or stale, use extract first. If the screen is ALREADY built and the design changed, use sync-design (a rebuild discards hand edits). To only CHECK a built screen against its design, use verify.
 argument-hint: "[screen name | design/<screen>.json | Figma frame URL]"
 hooks:
   Stop:
@@ -91,7 +91,7 @@ Copy this checklist into your notes and keep it updated:
 - [ ] 2. Mapping plan written and self-reviewed
 - [ ] 3. Built leaf → composite → screen
 - [ ] 4. States, font scaling, theme, RTL handled
-- [ ] 5. Verified: static checks, render + compare, fix loop ≤ 8 rounds
+- [ ] 5. Verified: static checks, render + compare, fix loop ≤ 5 rounds
 - [ ] 6. Report delivered
 ```
 
@@ -132,8 +132,8 @@ Copy this checklist into your notes and keep it updated:
 
 2. **Map before coding.** Write the plan to **`design/plan/<screen>.json`** — not "in your notes":
    `{screen, status:"pending", files:[], tokens:[{value,kind,codeToken,verdict,decision?}],
-   components:[{name,key,mapModule,verdict}], allowedLiterals:[{value,reason}]?}` (step 5 adds
-   `verification`). This file is what step 5's `Stop` hook (wired in this
+   components:[{name,key,mapModule,verdict}], anchors:{}, allowedLiterals:[{value,reason}]?}` (step 3
+   fills `anchors`, step 5 adds `verification`). This file is what step 5's `Stop` hook (wired in this
    skill's frontmatter) checks the built code against, so it must exist and be accurate before step 3 —
    a plan that only lives in your notes is invisible to that check and the mistake reappears at the end
    as a rubber-stamped "done" that the user has to catch by hand. Sections to fill in (show large-screen
@@ -188,7 +188,16 @@ Copy this checklist into your notes and keep it updated:
    structure, then one section at a time. As each file lands, add its path to the plan's `files[]`
    array (paths relative to the project root) — the `Stop` hook only inspects files listed there, so
    a file missing from `files[]` is a file this skill's own gate never checks; an empty list, or a
-   listed path that isn't on disk, fails the gate outright. Rules while building:
+   listed path that isn't on disk, fails the gate outright. In the same edit, record where each
+   section and component instance landed: `anchors: {"<node id>": {file, symbol}}` — the top-level
+   frames and every `INSTANCE`, not every leaf (`"12:40": {"file":"src/screens/Login.tsx",
+   "symbol":"LoginHeader"}`). It costs a line now; when the design changes, `sync-design` gets a change
+   list keyed by node id, and without anchors it has to guess which code a renamed layer became.
+   Rules while building:
+   - **Fit the app, not just the design** — before the first file, do the detection in the profile's
+     *Fit the existing app* section (strings/l10n, router, state, theme, styling library) and follow
+     what you find; a neighbouring screen is the reference. A pixel-exact screen with hard-coded
+     strings and its own navigation stack is not done.
    - **Layout** — the profile's stack constructs from `layout`; `fill` → stretch, `hug` → intrinsic,
      fixed only when truly fixed; `sizeLimits` → min/max. `layout.mode:"absolute"` means no auto layout
      — infer a flow, never transcribe coordinates. Real grids stay grids. `clip`/`scroll`/
@@ -237,9 +246,14 @@ Copy this checklist into your notes and keep it updated:
      **numbers** (sizes, spacing, font metrics against the IR), and **pixels** against the `.png` —
      look first for clipped/overlapping text, then spacing, alignment, color.
    - Re-render key states, a large font scale, the other theme, and RTL when supported.
-   - Fix the largest discrepancy first; log each round. Stop after **8 rounds** per component — if it
-     oscillates, the constraints conflict: split the component or report the gap. Don't chase marked
-     approximations.
+   - Fix the largest discrepancy first; log each round. Stop after **5 rounds** per component, or
+     sooner when a round fixes nothing — measured gains flatten by then, and if it oscillates the
+     constraints conflict: split the component or report the gap. Don't chase marked approximations.
+   - **A fix must not buy pixels with worse code.** After each round re-read the diff you just made:
+     no new absolute positioning, fixed width/height or magic offset where the export has auto
+     layout (`layout.mode` flex/grid → the stack's flow layout), and no token swapped for a literal.
+     Refinement loops drift exactly this way — closer screenshot, less maintainable screen — and the
+     residual difference belongs in `deltas`, not in a `top: 3px`.
    - Only if the project genuinely has no dev server/rendering tooling available (checked, not
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
@@ -253,7 +267,8 @@ Copy this checklist into your notes and keep it updated:
      never write `status` by hand, with two exceptions: `"abandoned"` for a plan the user decided not
      to finish, and `"awaiting-user"` whenever you end the turn to **ask the user something the build
      is blocked on** (a MISSING token row, an audit blocker, the component-map stub review). Set it
-     before you ask, and set it back to `"pending"` the moment you resume — the hook skips a paused
+     before you ask — a step-1 pause comes before the plan exists, so create it then with just
+     `{screen, status:"awaiting-user", files:[]}` — and set it back to `"pending"` the moment you resume — the hook skips a paused
      plan but never approves one, so a build left at `"awaiting-user"` is not done.
      The hook fails a literal only where the plan resolved that value to a token (in any spelling:
      `#hex`, `0xFF…`, `rgb()`, `[16px]`); a value with no token (a one-off shadow `rgba()`, `text-[15px]`)

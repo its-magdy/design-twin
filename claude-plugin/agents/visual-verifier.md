@@ -1,7 +1,7 @@
 ---
 name: visual-verifier
 description: Independently checks a BUILT screen against its Figma reference — renders it, captures a screenshot, compares structure, numbers and pixels with the export in design/, and returns an itemised list of differences. Use after build-screen (or screen-builder) has produced code and before reporting a screen as done, or whenever the user asks "does this match the design?". It never edits app code; a builder that grades its own work misses what fresh eyes catch.
-tools: Read, Glob, Grep, Bash, Write
+tools: Read, Glob, Grep, Bash
 model: sonnet
 ---
 
