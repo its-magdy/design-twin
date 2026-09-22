@@ -167,7 +167,8 @@ if (require.main === module) {
 //                        # The others above already print JSON; there it is accepted as a no-op.
 //   These take NO read options (--css/--measurements/--plugin-data/--motion/--shared-data/
 //   --no-assets): they emit structural fields only, so those flags are refused rather than ignored.
-//   --timeout DOES apply to them.
+//   --timeout DOES apply to them — to the command AND to the wait for the plugin to connect
+//   (default: 10 min at a terminal, 90 s when stderr is not a TTY, e.g. run by an agent).
 //
 // Speed:
 //   --no-assets      # skip the per-node SVG/PNG export pass (the dominant cost on a big file).
@@ -292,18 +293,13 @@ const designSystemOnly = args.includes("--design-system");
 // Daemon lifecycle. These are COMMANDS, not modifiers: each one owns the whole invocation, so they
 // are refused in combination with each other and with any pull below. --serve holds the bridge open
 // until stopped; every ordinary command then routes through it automatically (see daemon.js).
-const daemonCmd = args.includes("--serve") ? "--serve"
-  : args.includes("--stop") ? "--stop"
-  : args.includes("--daemon-status") ? "--daemon-status"
-  : null;
+const DAEMON_CMDS = ["--serve", "--stop", "--daemon-status"];
+const daemonCmd = DAEMON_CMDS.find((f) => args.includes(f)) || null;
 // Token lifecycle. COMMANDS, like the daemon ones above: each owns the whole invocation, needs no
 // bridge and no plugin (they only touch the local token file), and so is refused in combination with
 // anything else. --token-file is the exception — it is a MODIFIER, read below.
-const tokenCmd = args.includes("--token-status") ? "--token-status"
-  : args.includes("--show-token") ? "--show-token"
-  : args.includes("--rotate-token") ? "--rotate-token"
-  : args.includes("--forget-token") ? "--forget-token"
-  : null;
+const TOKEN_CMDS = ["--token-status", "--show-token", "--rotate-token", "--forget-token"];
+const tokenCmd = TOKEN_CMDS.find((f) => args.includes(f)) || null;
 // --no-assets REMOVES work (every other flag adds it): skips the per-node exportAsync render pass,
 // which dominates the export on a real design-system file. Structure, layout and tokens are
 // unaffected — a skipped node stays the same LEAF the full export produces, marked
@@ -465,14 +461,19 @@ const exportTimeoutMs = overrideMs ?? exportTimeout({ selection, allPages });
 // the first to fail on the big files where looking before you pull is the whole point, with no flag to
 // rescue it, since --timeout only ever reached the export branch.
 const listTimeoutMs = overrideMs ?? TIMEOUTS.list;
+// How long to wait for the Figma plugin to CONNECT, before any command is sent. --timeout bounds this
+// too — the help has always said it applies to the discovery commands, and a wait it cannot shorten
+// made `dtwin list --timeout 5` sit for ten minutes. Without the flag: ten minutes at a terminal (a
+// person is walking over to Figma), but 90 s when nobody is watching stderr — an agent's shell gives
+// up at two minutes, and a command that outlives it reads as a hang with no message at all.
+const connectWaitMs = overrideMs ?? (process.stderr.isTTY ? 600000 : 90000);
 
 // Unknown flags are REFUSED, not absorbed. Every flag above is matched by exact `includes`, so a typo
 // (`--lsit`, `--al-pages`) used to match nothing and fall through to the default — a full pull that
 // then waits on the plugin: the wrong command, run silently. Same silent-loss class as the guards
 // below, one step earlier. Runs after every takeValues() call so a flag's VALUE is never judged.
 const BOOL_FLAGS = [
-  "--selection", "--all-pages", "--design-system", "--serve", "--stop", "--daemon-status",
-  "--token-status", "--show-token", "--rotate-token", "--forget-token",
+  "--selection", "--all-pages", "--design-system", ...DAEMON_CMDS, ...TOKEN_CMDS,
   "--list", "--list-pages", "--list-libraries", "--whoami", "--list-clients", "--help", "--json",
   ...Object.keys(READ_OPT_FLAGS),
 ];
@@ -482,18 +483,10 @@ const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consum
   && !BOOL_FLAGS.includes(a) && !VALUE_FLAGS.some((f) => a === f || a.startsWith(f + "=")));
 if (unknown.length) {
   // "Did you mean": the nearest known flag by edit distance, offered only when it is a plausible typo.
-  const dist = (a, b) => {
-    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= a.length; i++) {
-      const next = [i];
-      for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-      row = next;
-    }
-    return row[b.length];
-  };
+  const { distance } = require("./verbs.js");
   const hints = unknown.map((u) => {
     const name = u.split("=")[0];
-    const best = KNOWN_FLAGS.map((f) => [dist(name, f), f]).sort((x, y) => x[0] - y[0])[0];
+    const best = KNOWN_FLAGS.map((f) => [distance(name, f), f]).sort((x, y) => x[0] - y[0])[0];
     return best[0] <= 2 ? `${u} (did you mean ${best[1]}?)` : u;
   });
   throw new UsageError(`unknown flag${unknown.length > 1 ? "s" : ""}: ${hints.join(", ")}. Run dtwin --help for the full list.`);
@@ -597,14 +590,11 @@ if ((designSystemOnly || asLibrary) && dsGuardFlags.length) {
 // class the scope guards above exist for: --serve --all-pages would start a daemon and never run the
 // export the user typed, with nothing said about it.
 if (daemonCmd) {
-  const others = [
-    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page", designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node",
-    screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven,
-  ].filter(Boolean);
+  const others = [...scopes, screenshotId && "--screenshot", ...indexCmds, ...readOptFlagsGiven].filter(Boolean);
   if (others.length) {
     throw new UsageError(`${daemonCmd} manages the background bridge — it cannot be combined with ${others.join(" / ")}. Start the daemon, then run your pull as a separate command (it will route through it automatically).`);
   }
-  if ([args.includes("--serve"), args.includes("--stop"), args.includes("--daemon-status")].filter(Boolean).length > 1) {
+  if (DAEMON_CMDS.filter((f) => args.includes(f)).length > 1) {
     throw new UsageError("--serve / --stop / --daemon-status are different commands — pass only one.");
   }
 }
@@ -613,15 +603,11 @@ if (daemonCmd) {
 // credential and never opens a bridge, so pairing it with a pull would start an export the user did
 // not ask for — or, worse, silently do only the token half of what they typed.
 if (tokenCmd) {
-  const others = [
-    selection && "--selection", allPages && "--all-pages", pageSel.length && "--page",
-    designSystemOnly && "--design-system", asLibrary && "--as-library", nodeId && "--node", screenshotId && "--screenshot",
-    daemonCmd, ...indexCmds, ...readOptFlagsGiven,
-  ].filter(Boolean);
+  const others = [...scopes, screenshotId && "--screenshot", daemonCmd, ...indexCmds, ...readOptFlagsGiven].filter(Boolean);
   if (others.length) {
     throw new UsageError(`${tokenCmd} manages the stored bridge token — it cannot be combined with ${others.join(" / ")}. Run it on its own, then run your command.`);
   }
-  const tokenCmds = ["--token-status", "--show-token", "--rotate-token", "--forget-token"].filter((f) => args.includes(f));
+  const tokenCmds = TOKEN_CMDS.filter((f) => args.includes(f));
   if (tokenCmds.length > 1) {
     throw new UsageError(`${tokenCmds.join(" and ")} are different commands — pass only one.`);
   }
@@ -634,7 +620,7 @@ if (tokenCmd) {
   }
 }
 
-return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
+return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json };
 }
 
 // --list-libraries prints for a HUMAN (and for an agent skimming a terminal), not raw JSON: the
@@ -737,7 +723,7 @@ try {
   console.error("[dtwin] error: " + errMsg(e));
   process.exit(1);
 }
-const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
+const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
 
 async function main() {
   // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,
@@ -834,7 +820,7 @@ async function main() {
   if (d) {
     // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
     // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    send = (cmd, args, timeoutMs) => d.request({ cmd, args, timeoutMs, client, waitForConnection: 600000 }, timeoutMs + 30000);
+    send = (cmd, args, timeoutMs) => d.request({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000);
   } else {
     bridge = createBridge();
     console.error("[dtwin] listening on ws://localhost:" + bridge.port);
@@ -843,7 +829,13 @@ async function main() {
     // --list-clients is the one command that is MEANINGFUL with nothing connected ("which files can I
     // talk to?" → "none, open one"), so it must not sit in the 10-minute connect wait that exists for
     // commands which genuinely need a plugin on the other end.
-    if (!listClients) await bridge.waitForConnection(600000); // 10 min — generous window for an interactive connect
+    if (!listClients) {
+      try { await bridge.waitForConnection(connectWaitMs); }
+      catch (e) {
+        bridge.close();
+        throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
+      }
+    }
     send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs, client);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to

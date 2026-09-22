@@ -59,22 +59,30 @@ function stripAssets(r) {
   if (r.assets.length) light.assetsNote = "Asset bytes omitted from context \u2014 re-run with writeToDisk:true to write them to <outDir>/assets/.";
   return light;
 }
-const { writeAny, assertInsideCwd } = require2("./write-out.js");
+const { writeAny, assertInsideCwd, inlineLimitChars } = require2("./write-out.js");
 const wlog = (m) => console.error("[figma-mcp] " + m);
 function exportResult(a, r) {
-  if (!a || !a.writeToDisk) return textResult(stripAssets(r));
+  let spilled = "";
+  if (!a || !a.writeToDisk) {
+    const inline = textResult(stripAssets(r));
+    const size = inline.content[0].text.length, limit = inlineLimitChars();
+    if (size <= limit) return inline;
+    const why = `this export is ${size.toLocaleString("en-US")} characters (~${Math.round(size / 4e3)}k tokens), past what the client accepts inline (~${Math.round(limit / 4e3)}k tokens; MAX_MCP_OUTPUT_TOKENS raises it)`;
+    if (a && a.writeToDisk === false) throw new Error(`${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).`);
+    spilled = `Written to disk WITHOUT being asked: ${why}, so returning it inline would have been cut off mid-JSON. `;
+  }
   assertInsideCwd(a.outDir);
   const written = writeAny(a.outDir, r, wlog);
   return textResult({
     ...written,
-    note: "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity."
+    note: spilled + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity."
   });
 }
 const clientShape = {
   client: z.string().optional().describe("WHICH connected Figma file to talk to \u2014 a connId (from figma_list_clients), a fileKey, or part of the file's name. The bridge accepts one connection per open Figma file, so a design file and the library it draws on can both be connected at once. Omit when only one file is connected. With several connected, omitting this is an ERROR listing the choices rather than a guess \u2014 an export from the wrong file is indistinguishable from a correct one.")
 };
 const writeShape = {
-  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes \u2014 they are never returned inline \u2014 and the right choice for anything large, since inline results are capped and truncated."),
+  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes \u2014 they are never returned inline \u2014 and the right choice for anything beyond one small frame. Omitted: a result that fits the client's output cap comes back inline, a larger one is written to disk automatically (the note says so). false: never write \u2014 a result too large to return is an error."),
   outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'.")
 };
 const readOptsShape = Object.fromEntries(
@@ -376,7 +384,7 @@ const driftLint = (map, catalog, opts) => loadLayer("drift-lint.js", "design_dri
 const nodeFs = require2("node:fs");
 const nodePath = require2("node:path");
 function componentsLocalPath(exportDir) {
-  const dir = assertInsideCwd(exportDir);
+  const dir = assertInsideCwd(exportDir, "exportDir");
   const manifestPath = nodePath.join(dir, "design-system.json");
   let manifest;
   try {
@@ -430,7 +438,7 @@ server.registerTool(
     annotations: READ_ONLY
   },
   guarded(async (a) => {
-    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json");
+    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json", "map");
     let map;
     try {
       map = JSON.parse(nodeFs.readFileSync(mapPath, "utf8"));

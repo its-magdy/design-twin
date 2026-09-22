@@ -1735,6 +1735,17 @@ async function disconnectErr(code, reason) {
   ok("[verbs-cli] a VerbError is a one-line `[dtwin] error:` + exit 1, before any bridge starts",
     badVerb.status === 1 && /^\[dtwin\] error: unknown `dtwin list bogus`/.test(badVerb.stderr.trim()) && !badVerb.stderr.includes("[bridge]"));
 
+
+  ok("[verbs] a word people reach for that is NOT a verb (`export`, `ls`, `check`) is refused with the real verb — it used to become an outDir and wait for a plugin",
+    ["export", "ls", "check"].every((w) => { try { translate([w]); return false; } catch (e) { return e instanceof VerbError && /did you mean `dtwin (pull|list|doctor)`/.test(e.message); } })
+    && tr("pull", "export") === "export" && translate(["export"], () => true).join(" ") === "export" && tr("./export") === "./export");
+  {
+    const t0 = Date.now();
+    const noPlugin = runCli(["list", "--timeout", "2"], { FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "t".repeat(32) });
+    ok("[verbs-cli] --timeout bounds the WAIT FOR THE PLUGIN too: no plugin → exit 1 in seconds with the next step, not a 10-minute hang",
+      noPlugin.status === 1 && Date.now() - t0 < 15000 && /no Figma plugin connected within 2s/.test(noPlugin.stderr) && /dtwin doctor/.test(noPlugin.stderr));
+  }
+
   // ---------------------------------------------------------------- doctor
   console.log("\ndoctor — pure checks:");
   const doctor = require("../bridge/doctor.js");

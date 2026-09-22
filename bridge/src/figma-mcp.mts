@@ -128,14 +128,18 @@ function stripAssets(r: any) {
 // page export is truncated). Writing the export and returning the compact index instead is also the
 // cheaper path in context by a wide margin — the agent then Reads/Greps the files at whatever
 // granularity it actually needs. It is opt-in, not the default, because a small selection export is
-// genuinely more useful inline than as a file path.
+// genuinely more useful inline than as a file path — but only while it FITS. An inline result past the
+// client's cap is not "more useful", it is cut off mid-JSON (a real design-system export measured
+// 589 KB ≈ 147k tokens against a 25k cap). So an oversized inline result goes to disk on its own and
+// says so; an explicit writeToDisk:false is refused with the size instead, never silently truncated.
 //
 // This matters more than it looks: the CLI cannot be used as the disk path WHILE the MCP server is
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.js). Before this, an MCP-only session had no way to get assets at all.
-const { writeAny, assertInsideCwd } = require("./write-out.js") as {
+const { writeAny, assertInsideCwd, inlineLimitChars } = require("./write-out.js") as {
   writeAny: (outDir: string | undefined, r: any, log?: (m: string) => void) => any;
-  assertInsideCwd: (outDir?: string) => string;
+  assertInsideCwd: (outDir?: string, what?: string) => string;
+  inlineLimitChars: () => number;
 };
 
 // stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
@@ -143,14 +147,22 @@ const { writeAny, assertInsideCwd } = require("./write-out.js") as {
 const wlog = (m: string) => console.error("[figma-mcp] " + m);
 
 function exportResult(a: any, r: any) {
-  if (!a || !a.writeToDisk) return textResult(stripAssets(r));
+  let spilled = "";
+  if (!a || !a.writeToDisk) {
+    const inline = textResult(stripAssets(r));
+    const size = inline.content[0].text.length, limit = inlineLimitChars();
+    if (size <= limit) return inline;
+    const why = `this export is ${size.toLocaleString("en-US")} characters (~${Math.round(size / 4000)}k tokens), past what the client accepts inline (~${Math.round(limit / 4000)}k tokens; MAX_MCP_OUTPUT_TOKENS raises it)`;
+    if (a && a.writeToDisk === false) throw new Error(`${why}, and writeToDisk:false was passed. Omit it (or pass true) to get the files plus a compact index, or narrow the scope (a node id instead of a page, a lower depth).`);
+    spilled = `Written to disk WITHOUT being asked: ${why}, so returning it inline would have been cut off mid-JSON. `;
+  }
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
   // guarded() turns the throw into an isError result naming the offending path.
   assertInsideCwd(a.outDir);
   const written = writeAny(a.outDir, r, wlog);
   return textResult({
     ...written,
-    note: "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
+    note: spilled + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
   });
 }
 
@@ -166,7 +178,7 @@ const clientShape = {
 };
 
 const writeShape = {
-  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes — they are never returned inline — and the right choice for anything large, since inline results are capped and truncated."),
+  writeToDisk: z.boolean().optional().describe("Write the export to disk and return a compact index (counts + file paths) instead of the node payloads. REQUIRED to get asset bytes — they are never returned inline — and the right choice for anything beyond one small frame. Omitted: a result that fits the client's output cap comes back inline, a larger one is written to disk automatically (the note says so). false: never write — a result too large to return is an error."),
   outDir: z.string().optional().describe("Directory for writeToDisk, relative to the directory this MCP server was started in (i.e. your project). Default: FIGMA_EXPORT_DIR or 'design'."),
 };
 
@@ -633,7 +645,7 @@ const nodePath = require("node:path") as typeof import("node:path");
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
 // filenames — the manifest is the ONE place that records where the export actually landed.
 function componentsLocalPath(exportDir?: string): string {
-  const dir = assertInsideCwd(exportDir);
+  const dir = assertInsideCwd(exportDir, "exportDir");
   const manifestPath = nodePath.join(dir, "design-system.json");
   let manifest: any;
   try {
@@ -698,7 +710,7 @@ server.registerTool(
     annotations: READ_ONLY,
   },
   guarded(async (a: any) => {
-    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json");
+    const mapPath = assertInsideCwd(a.map || "codeconnect.local.json", "map");
     let map: any;
     try {
       map = JSON.parse(nodeFs.readFileSync(mapPath, "utf8"));

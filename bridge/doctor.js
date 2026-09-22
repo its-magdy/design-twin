@@ -29,6 +29,7 @@ const tokenStore = require("./token-store.js");
 const daemon = require("./daemon.js");
 const { readSnapshotInfo } = require("./snapshot-meta.js");
 const { errMsg } = require("./errmsg.js");
+const { isOurMcpEntry } = require("./init.js");
 
 // Mirrors server-core's ALLOWED_PORTS (the manifest's allowedDomains). Restated rather than imported
 // because requiring server-core with a bad FIGMA_BRIDGE_PORT exits the process — the very case this
@@ -138,9 +139,7 @@ function checkProject(cwd, now = Date.now()) {
     let servers = null;
     try { servers = JSON.parse(fs.readFileSync(mcpFile, "utf8")).mcpServers || {}; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
     if (servers) {
-      // Same "is it ours" rule init.js uses: the entry points at figma-mcp.mjs, or runs `designtwin mcp`.
-      const isOurs = (e) => e && Array.isArray(e.args) && (e.args.some((a) => /(^|[\\/])figma-mcp\.mjs$/.test(String(a))) || (e.args.includes("designtwin") && e.args.includes("mcp")));
-      const mine = Object.keys(servers).find((k) => isOurs(servers[k]));
+      const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
       if (!mine) out.push(ok("mcp", "MCP registration", "not registered in .mcp.json (optional — `dtwin init --mcp` adds it)"));
       else if (mine === "designtwin") out.push(ok("mcp", "MCP registration", 'registered as "designtwin" in .mcp.json'));
       else out.push(warn("mcp", "MCP registration", `registered under the legacy key "${mine}" — it still works, but new setups use "designtwin" ("figma" collides with Figma's own MCP server)`, `rename the "${mine}" key in .mcp.json to "designtwin", then restart Claude Code`));
@@ -205,39 +204,38 @@ async function probePlugin(port, waitMs) {
 // got NOTHING, not even the instant Node/token answers, if the plugin wait outlived it.
 async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) {
   const checks = [];
-  const push = checks.push.bind(checks);
-  checks.push = (...cs) => { for (const c of cs) { push(c); if (onCheck) onCheck(c); } return checks.length; };
+  const add = (...cs) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
   const engines = (() => { try { return require("./package.json").engines.node; } catch (e) { return null; } })();
-  checks.push(checkNode(process.version, engines));
+  add(checkNode(process.version, engines));
 
   const tok = tokenStore.status();
-  checks.push(checkToken(tok));
+  add(checkToken(tok));
 
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
   if (problem) {
-    checks.push(problem, checkPlugin({ skipped: "the port setting has to be fixed first" }));
+    add(problem, checkPlugin({ skipped: "the port setting has to be fixed first" }));
   } else {
     const st = await daemon.status(port).catch(() => null);
-    checks.push(checkDaemon(st, port));
+    add(checkDaemon(st, port));
     const probe = await probePort(port);
-    checks.push(checkPort(port, probe, st));
+    add(checkPort(port, probe, st));
 
     if (st) {
       // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
-      checks.push(st.pluginConnected
+      add(st.pluginConnected
         ? ok("plugin", "Figma plugin", `connected (through the daemon): ${fileNames(st.clients)}`)
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`"));
     } else if (!probe.free) {
-      checks.push(checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined }));
+      add(checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined }));
     } else if (tok.activeSource === "ephemeral") {
-      checks.push(checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" }));
+      add(checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" }));
     } else {
       if (onWait) onWait(waitSec);
-      checks.push(checkPlugin(await probePlugin(port, waitSec * 1000), waitSec));
+      add(checkPlugin(await probePlugin(port, waitSec * 1000), waitSec));
     }
   }
 
-  checks.push(...checkProject(cwd));
+  add(...checkProject(cwd));
   return { ok: !checks.some((c) => c.status === "fail"), checks };
 }
 
@@ -248,7 +246,6 @@ function verdict(report) {
   const n = (s) => report.checks.filter((c) => c.status === s).length;
   return n("fail") ? `${n("fail")} problem(s) to fix${n("warn") ? `, ${n("warn")} note(s)` : ""}.` : n("warn") ? `No blocking problems; ${n("warn")} note(s) above.` : "All good.";
 }
-const format = (report) => [...report.checks.map(formatCheck), "", verdict(report)].join("\n");
 
 async function main(argv) {
   let waitSec = 10;
@@ -277,4 +274,4 @@ async function main(argv) {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-module.exports = { ALLOWED_PORTS, checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, format, main };
+module.exports = { ALLOWED_PORTS, checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };

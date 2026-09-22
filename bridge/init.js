@@ -27,6 +27,10 @@ const tokenStore = require("./token-store.js");
 // (bridge/src/figma-mcp.mts), so its tools surface as mcp__designtwin__figma_status etc.
 const MCP_KEY = "designtwin";
 
+// Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.mjs, or runs
+// `designtwin mcp` (the npx form). One rule for init (don't double-register) and doctor (report it).
+const isOurMcpEntry = (e) => !!e && Array.isArray(e.args) && (e.args.some((a) => /(^|[\\/])figma-mcp\.mjs$/.test(String(a))) || (e.args.includes("designtwin") && e.args.includes("mcp")));
+
 // Same detection order build-screen's step 0 documents — first match wins, most specific first.
 function detectProfile(cwd) {
   const has = (f) => fs.existsSync(path.join(cwd, f));
@@ -83,8 +87,7 @@ function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
       const servers = doc.mcpServers || {};
       // Ours under ANY key (older inits wrote "figma"): a second entry would start a second server
       // and the two would fight over port 8787.
-      const isOurs = (e) => e && Array.isArray(e.args) && e.args.some((a) => /(^|[\\/])figma-mcp\.mjs$/.test(String(a)));
-      const mine = Object.keys(servers).find((k) => isOurs(servers[k]));
+      const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
       if (mine) actions.push({ kind: "skip", path: rel(file), note: `Design Twin's MCP server is already registered as "${mine}" — left as is` });
       else if (servers[MCP_KEY]) actions.push({ kind: "skip", path: rel(file), note: `already has a "${MCP_KEY}" server that is not Design Twin's — left as is` });
       else {
@@ -139,4 +142,4 @@ function main(argv) {
   console.log("\nNext — the steps only you can do:\n" + steps.map((s, i) => `  ${i + 1}. ${s}`).join("\n") + "\n");
 }
 
-module.exports = { detectProfile, plan, apply, main };
+module.exports = { detectProfile, plan, apply, main, isOurMcpEntry };

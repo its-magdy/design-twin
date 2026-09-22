@@ -23,6 +23,12 @@ const TOKEN = { "": "--token-status", status: "--token-status", show: "--show-to
 const SIMPLE = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help" };
 const VERBS = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help"];
 
+// Words people (and agents) reach for first that are NOT verbs. Left alone they were a positional
+// outDir: `dtwin export` created ./export and then waited for a plugin, looking exactly like a pull
+// that was working. Same opt-outs as a near-miss: a path, an existing folder, or `dtwin pull export`.
+const ALIASES = { export: "pull", get: "pull", fetch: "pull", download: "pull", sync: "pull", ls: "list", frames: "list", pages: "list pages", libraries: "list libraries", clients: "list clients",
+  check: "doctor", diagnose: "doctor", setup: "init", install: "init", connect: "doctor", start: "serve", daemon: "serve", kill: "stop", version: "--version", tokens: "token" };
+
 const isFlag = (a) => typeof a === "string" && a.startsWith("-");
 
 function translate(argv, exists = () => false) {
@@ -53,6 +59,9 @@ function translate(argv, exists = () => false) {
   // used to start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
   // a typo than a folder. A path (`./serv`), an existing folder (`exists`), or `dtwin pull serv` opts out.
   if (VERBS.includes(verb)) return argv; // doctor | init | mcp: routed by figma-pull.js, not translated here
+  const alias = ALIASES[verb.toLowerCase()];
+  if (alias && !/[\\/.]/.test(verb) && !exists(verb))
+    throw new VerbError(`unknown command \`${verb}\` — did you mean \`dtwin ${alias}\`? (to export into a folder named "${verb}": dtwin pull ${verb})`);
   const near = nearestVerb(verb);
   if (near && !/[\\/.]/.test(verb) && !exists(verb))
     throw new VerbError(`unknown command \`${verb}\` — did you mean \`dtwin ${near}\`? (to export into a folder named "${verb}": dtwin pull ${verb})`);
@@ -86,4 +95,4 @@ function nearestVerb(word) {
   return best && best.v;
 }
 
-module.exports = { translate, VerbError, VERBS };
+module.exports = { translate, VerbError, VERBS, distance };

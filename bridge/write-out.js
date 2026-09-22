@@ -30,12 +30,14 @@ function resolveOutDir(outDir) {
 // write. Confine that side to the directory the server was started in — which is also exactly what
 // the option promises ("relative to your project"). Trust boundary, not a filesystem subtlety:
 // applied where the value is untrusted, not inside resolveOutDir, so the CLI keeps its freedom.
-function assertInsideCwd(outDir) {
+// `what` names the ARGUMENT in the message: this guards exportDir and map too, and telling a model its
+// `outDir` is wrong when it never passed one sends it looking for the wrong thing.
+function assertInsideCwd(outDir, what = "outDir") {
   const dir = resolveOutDir(outDir);
   const root = path.resolve(process.cwd());
   if (dir !== root && !dir.startsWith(root + path.sep)) {
     throw new Error(
-      `outDir must stay inside the directory this server was started in (${root}) — got '${outDir}' -> ${dir}. ` +
+      `${what} must stay inside the directory this server was started in (${root}) — got '${outDir}' -> ${dir}. ` +
         "Pass a relative path like 'design' or 'src/design'."
     );
   }
@@ -208,4 +210,12 @@ function writeAny(outDir, r, log) {
   return writeExport(outDir, r, log);
 }
 
-module.exports = { resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenshot, writeExport, writeScreen, writeAny };
+// How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
+// tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); ~4 characters per token, and 20% headroom
+// because that ratio is an estimate and indented JSON tokenizes worse than prose.
+function inlineLimitChars(env = process.env) {
+  const tokens = Number(env.MAX_MCP_OUTPUT_TOKENS);
+  return Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8);
+}
+
+module.exports = { inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenshot, writeExport, writeScreen, writeAny };
