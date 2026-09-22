@@ -79,15 +79,12 @@ when a build looks visibly worse than it at 1:1, that is a real delta — severi
 with what you saw. Downscaling can hide a difference; it cannot invent one. Only call a difference
 cosmetic when you can name the mechanism that makes it invisible to a user.
 
-**Grainy/speckled illustrations are the common case of this** (live run #31). Figma flattens a
-noise/grain/texture effect into *thousands of tiny vector paths* on SVG export — one real asset was
-2.4 MB and 1523 `<path>` elements for a 239×215 illustration. The browser antialiases each path
-independently, so at 1:1 the result is visibly speckled where Figma's own canvas (and the reference
-PNG) is smooth. The export is faithful — it asked Figma for the format the node's own
-`exportSettings` named — so **don't redraw the asset and don't "fix" it in CSS**. Report it as a real
-delta and say what it is: the fix is on the design side (rasterise that layer, or set its
-`exportSettings` to PNG in Figma and re-pull). A quick tell before you even render:
-`grep -c '<path' design/assets/<id>.svg` in the hundreds-plus, or an SVG over ~200 KB.
+**A grainy or speckled illustration is the common case of this**, and it is an asset
+problem rather than a build problem — the cause and the fix are in `export-layout.md`'s
+[heavy vector assets](export-layout.md#heavy-vector-assets). The short version: Figma emits a noise
+texture as thousands of separate paths, every renderer antialiases each one, and the speckle is the
+result. Report it as a real delta naming that cause; the fix is a re-export on the design side, never
+a redraw or a blur in your stack.
 
 ## Beyond the ideal frame
 Render at least once each, when the stack supports it:
@@ -116,22 +113,28 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
   probably misreading a unit or a sizing mode.
 
 ## Saying you're alive
-A full verify pass is minutes, not seconds, and it prints nothing while it runs — one live run sat
-for ~25 minutes with the caller unable to tell progress from a hang (#20). So **write a status file
-as you go**: `design/verify/<screen>.status.json`, rewritten at each step with
-`{"screen", "phase", "detail", "at": "<ISO>"}`, where `phase` is one of `starting` → `renderer-found`
-→ `server-up` → `rendered` → `comparing` → `done` (or `failed`). It costs one Write per phase.
+A full verify pass is minutes, not seconds, and every stack's render step is silent while it works —
+a dev server booting, a simulator coming up, a Gradle task compiling, a golden test warming. Observed
+in practice: a pass that ran ~25 minutes with the caller unable to distinguish progress from a hang.
+So **write a status file as you go**: `design/verify/<screen>.status.json`, rewritten at each step
+with `{"screen", "phase", "detail", "at": "<ISO>"}`, where `phase` is
+
+`starting` → `renderer-found` → `renderer-ready` → `rendered` → `comparing` → `done` (or `failed`)
+
+`renderer-ready` is whatever "ready to capture" means on your stack — dev server answering, simulator
+booted, emulator up, test harness compiled. One Write per phase is the whole cost.
 
 The caller polls that file instead of guessing: a changed `at` means working, an `at` that has not
 moved in several minutes means genuinely stuck, and `phase` says which step to blame. Delete nothing
 — the final `done`/`failed` record is useful afterwards.
 
 **On timings, so nobody chases a phantom:** the same verifier legitimately takes far longer inside a
-build than standalone, and that is not a bug (#30). A standalone run is one render against finished
-code with the dev server often already up. Inside a build it runs *once per fix round* — render →
-report deltas → the builder edits → re-render — each with its own cold start. The live run's ~25 min
-inner pass against ~3.5 min standalone was two full passes plus fix time plus cold starts. Budget
-per-round, and if one *phase* stops advancing for minutes, that is the real hang.
+build than standalone, and that is not a bug. Standalone is one capture against finished code with
+the renderer often already warm. Inside a build it runs *once per fix round* — render → report
+deltas → the builder edits → re-render — each paying its own cold start, and cold start is the
+expensive part on every stack (a simulator boot or a Gradle build more so than a dev server). One
+observed run: ~25 min inside a build with two fix rounds, ~3.5 min standalone afterwards. Budget
+per-round, and treat a *phase* that stops advancing for minutes as the real hang.
 
 ## When you can't render
 Rendering is the default, not an optional extra — check `package.json`/`node_modules` (or the

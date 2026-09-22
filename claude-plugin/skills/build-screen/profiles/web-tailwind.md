@@ -208,6 +208,10 @@ appears on a vector node whose SVG export failed. Render it inline as
 vector either `<img src="….svg">` or an `<Icon/>` wrapper around that file / an SVGR import of it. **Never
 hand-write `<svg><path d="…">` markup** — the only exception is the `geometry` vector fallback above, where
 no asset file exists. Size every asset explicitly (see **Images**).
+A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case
+to watch: the browser antialiases each path independently, so a flattened noise texture renders
+visibly speckled where Figma's canvas is smooth. Ask for a raster re-export — don't try to blur or
+fade the grain away in CSS.
 
 **Fit the existing app (detect before you emit)** — read `package.json` and a neighbouring page first.
 - *Strings.* `next-intl`, `react-intl`, `react-i18next`, `lingui` present → the project's `t()`/`<FormattedMessage>`

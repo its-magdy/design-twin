@@ -150,6 +150,10 @@ still exist in `codeconnect.local.json` — look it up and reuse it unless the d
 
 **Assets** — SVG → `flutter_svg` `SvgPicture.asset`; PNG → `assets/images/` with `2.0x/`/`3.0x/` variant
 folders, declared in `pubspec.yaml`. Flag anything the user must add.
+A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case to
+watch: `flutter_svg` parses and rasterises on the Dart side with no persistent cache by default, so a
+few thousand paths cost visibly on first frame. Ask for a raster re-export rather than reaching for
+`cacheColorFilter` or a manual `precachePicture` to hide it.
 
 **State** — match what the project already uses (check `pubspec.yaml`: `flutter_riverpod`, `provider`,
 `flutter_bloc`, `get_it`…); don't introduce a second state library. Screen data states (loading/empty/

@@ -22,11 +22,12 @@ is the fallback only when it is genuinely in neither place), the plan at `design
    (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`) has the per-stack table — read it.
    Nothing available → return `mode: "static-only"` with exactly what you looked for. Do not install
    tooling or add dependencies without the caller saying so.
-2. **Say you're alive as you go.** A pass takes minutes and prints nothing, so the caller cannot
-   tell progress from a hang. Before each step, write `design/verify/<screen>.status.json`:
-   `{"screen": "<name>", "phase": "starting|renderer-found|server-up|rendered|comparing|done|failed",
-   "detail": "<one line>", "at": "<ISO timestamp>"}`. One Write per phase; overwrite the same file.
-   Write `failed` with the reason if you give up, rather than leaving the last phase hanging.
+2. **Say you're alive as you go.** A pass takes minutes and prints nothing, so your caller cannot
+   tell progress from a hang. Before each step, overwrite `design/verify/<screen>.status.json` with
+   `{"screen": "<name>", "phase": "starting|renderer-found|renderer-ready|rendered|comparing|done|failed",
+   "detail": "<one line>", "at": "<ISO timestamp>"}` — one Write per phase, and `failed` with the
+   reason if you give up, so the last phase is never left hanging. This costs you almost nothing and
+   is the only signal anyone has that you are working.
 3. **Render at the frame's exact size** (`box.w`×`box.h` from the export; device scale 1 or note it),
    fonts loaded, animations off. Save the screenshot to `design/verify/<screen>.png` (and
    `<screen>-dark.png`, `<screen>-rtl.png`, `<screen>-large-text.png` when the app supports them).
@@ -42,11 +43,11 @@ is the fallback only when it is genuinely in neither place), the plan at `design
    - **Do not downgrade a visible difference because "the reference is downscaled".** The reference
      is exported above 1x and is what the designer sees; downscaling can hide a difference, never
      invent one. If the build looks worse than it at 1:1, that is a delta of at least `medium`.
-     The usual instance is a speckled/grainy illustration: Figma flattens noise textures into
-     thousands of vector paths on SVG export (one real asset: 1523 `<path>`s, 2.4 MB, for a 239×215
-     graphic), which a browser antialiases into visible grain. Report it as a real delta naming that
-     cause — the fix is on the design side (rasterise the layer, or set the node's `exportSettings`
-     to PNG and re-pull), never redrawing the asset or patching it in CSS.
+     The usual instance is a speckled/grainy illustration, which is an ASSET problem, not a build
+     one: Figma emits a noise texture as thousands of separate `<path>`s and every renderer
+     antialiases each independently. `grep -c '<path' design/assets/<id>.svg` in the hundreds
+     confirms it. Report it as a real delta naming that cause — the fix is a re-export on the design
+     side. (`references/export-layout.md`, "heavy vector assets", has the detail.)
    - If the plan already has a `verification` block from an earlier pass, say whether you **confirm
      or contradict** each of its deltas rather than reporting as if this were the first look.
 5. **Return** exactly this, and nothing else:

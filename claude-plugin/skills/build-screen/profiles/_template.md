@@ -35,6 +35,10 @@ Swift/Kotlin constant, theme reference) and how to emit it.
 **Text** — element/widget + how `font.size/weight/lineHeight` map to the type scale.
 
 **Assets** — how to consume `design/assets/*` (SVG/PNG), including any conversion the user must do.
+Also say what a path-heavy vector costs on this stack (`references/export-layout.md`, heavy vector
+assets): Figma exports a noise texture as thousands of separate paths, and every vector pipeline pays
+for that differently — say whether yours degrades in fidelity, in frame time, or at build time, so
+the builder knows what to watch for and asks for a raster re-export instead of coping in code.
 
 **Accessibility naming + touch targets** (REQUIRED — 5–10 lines) — how to give assistive tech a name and a
 role on this platform: which construct labels a control, what to do for an **icon-only** control, how to

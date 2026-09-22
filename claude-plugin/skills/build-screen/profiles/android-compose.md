@@ -67,6 +67,10 @@ space rather than a bitmap — there is no asset file for that node.
 
 **Assets** — SVG → import as a vector drawable (`ImageVector` / `painterResource(R.drawable.x)`);
 PNG → `painterResource`. Flag any drawable the user must add to `res/`.
+A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case to
+watch: `VectorDrawable` inflates its paths on the main thread, so a few thousand of them is a jank
+source, not just a size one, and AAPT can reject a pathological one outright. Ask for a raster
+re-export rather than shipping it as a drawable.
 
 **Idiomatic Android — recognize M3 patterns by STRUCTURE, not node name.** Upgrade generic flex intent
 to Material 3 components; a node name is a hint, never the decision.

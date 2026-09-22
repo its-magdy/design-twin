@@ -126,6 +126,9 @@ unless clearly intentional.
 **Text** — `<Text>` with style; map `font.size/weight` to your theme's type scale.
 
 **Assets** — `<Image source={require(...)}>` for PNG; an SVG component (react-native-svg) for vectors.
+A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case
+to watch: `react-native-svg` turns each path into a real native view, so a few thousand of them is a
+view-count problem that will drop frames. Ask for a raster re-export rather than shipping it.
 
 **Fit the existing app (detect before you emit)** — read `package.json` first; a generated screen that
 ignores the app's conventions is rejected in review however well it matches the design.

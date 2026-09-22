@@ -56,6 +56,9 @@ asset catalog, or `Theme.spacing.md`). Emit these, not literals.
 
 **Assets** — SVG usually needs importing into the Xcode asset catalog (as a PDF/vector) → `Image("name")`;
 PNG → `Image("name")`. Flag any asset the user must add to the catalog.
+A path-heavy SVG (see `references/export-layout.md`, heavy vector assets) is the case to
+watch: the catalog keeps it as a vector and Core Graphics redraws every path on each resize, so a few
+thousand paths stutter on scroll. Ask for a raster re-export rather than importing it as a vector.
 
 **Idiomatic iOS — recognize system patterns by STRUCTURE, not node name.** Upgrade generic flex
 intent to native containers; a name like "Grouped Table View" is a hint, never the decision.

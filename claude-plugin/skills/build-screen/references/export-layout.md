@@ -124,8 +124,8 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   `design/assets/`, and does **not** write `design/design-system/`.
 - The reference PNG is rendered **above 1x** (a 1440x1100 frame came back 2048x1565, ~1.42x) — the
   scale is chosen to fit a pixel budget, so it is not a round number and not worth assuming. Read the
-  image's real dimensions and compare against `box.w`/`box.h` rather than treating the PNG's pixels
-  as CSS px.
+  image's real dimensions and compare against `box.w`/`box.h` rather than treating the PNG's pixels as
+  layout units (px / pt / dp — Figma px at 1x, whatever your stack calls them).
 - The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
   `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
   **root `reference`** of a page-walk layer file (`design/pages/<page>/<name>__<id>.json`, where it
@@ -134,6 +134,23 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   the field is genuinely absent — not when you looked in the other file's place for it. **Always read it** — JSON gives exact values, the image
   tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
+- <a id="heavy-vector-assets"></a>**Some exported SVGs are flattened textures, and every stack suffers
+  for it.** Figma has no vector primitive for a noise/grain/scatter effect, so on SVG export it
+  approximates one by emitting *thousands of individual `<path>` elements* — one real illustration
+  came back as 1523 paths and 2.4 MB for a 239x215 graphic. Nothing is wrong with the export: it
+  asked Figma for the format that node's own `exportSettings` named, and got a faithful answer. The
+  cost lands at render time, wherever that is. Every renderer shades and antialiases each path
+  independently, so the result looks visibly speckled next to Figma's own canvas (and next to the
+  reference PNG, which is a raster of that canvas), and a few thousand paths is slow to parse and
+  draw on *any* platform's vector pipeline — see your profile's **Assets** section for what it costs
+  there specifically.
+
+  Spot it before you build, not after you render: `grep -c '<path' design/assets/<id>.svg` in the
+  hundreds-plus, or an SVG over ~200 KB, is the whole tell. The fix is on the **design side** — the
+  designer rasterises that layer, or sets the node's `exportSettings` to PNG, and you re-pull.
+  Do not redraw the illustration, do not hand-simplify the paths, and do not chase the speckle with
+  a blur or an opacity tweak in your own stack: all three replace a faithful asset with a guess, and
+  the next re-pull silently undoes them. Report it as a real visual difference and say what it is.
 - `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <design/design-system/tokens.json or design/variables.json> design/`;
   add `--web tailwind` for a Tailwind v4 `theme.css`, `--native <profile>` for a native token file),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
