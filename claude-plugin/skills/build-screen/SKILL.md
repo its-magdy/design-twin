@@ -343,6 +343,14 @@ own work: it sees only the render, the reference `.png`, the export and the plan
 screenshots to `design/verify/`, and returns `{mode, renderer, artifacts, deltas}` — copy that into
 the plan's `verification` block, fix the high-severity deltas, and re-verify.
 
+It runs for minutes with no output, so it also rewrites `design/verify/<screen>.status.json`
+(`{screen, phase, detail, at}`, phase `starting` → `renderer-found` → `server-up` → `rendered` →
+`comparing` → `done`/`failed`) at each step. **Poll that file rather than assuming it hung**: a
+moving `at` means it is working; an `at` that hasn't changed in several minutes is a real stall, and
+`phase` says which step to blame. Expect the whole thing to take *longer inside a build than run on
+its own* — it runs once per fix round, each with its own cold start, so two rounds is comfortably
+several times a single standalone pass. That is normal, not a hang.
+
 ## Rules (the failure modes, in one place)
 
 - **Stack-native layout, never absolute positioning** unless the design is genuinely absolute.

@@ -9,6 +9,7 @@ export in layers (structure → numbers → pixels), fix the largest gap first, 
 - [Compare in layers](#compare-in-layers)
 - [Beyond the ideal frame](#beyond-the-ideal-frame)
 - [The fix loop](#the-fix-loop)
+- [Saying you're alive](#saying-youre-alive)
 - [When you can't render](#when-you-cant-render)
 
 ## Readiness: make renders comparable
@@ -72,6 +73,22 @@ Work top-down; a structural miss makes pixel diffs meaningless.
 gradients, progressive blur, noise/glass, P3 colors, Figma-vs-platform text rasterizing) are excluded
 from "must match" — note their residual difference instead of iterating on them.
 
+**"The reference is downscaled" is not a reason to downgrade a difference.** The reference PNG is
+rendered above 1x (a 1440×1100 frame exports at ~2048px wide) and *is* what the designer sees, so
+when a build looks visibly worse than it at 1:1, that is a real delta — severity `medium` at least,
+with what you saw. Downscaling can hide a difference; it cannot invent one. Only call a difference
+cosmetic when you can name the mechanism that makes it invisible to a user.
+
+**Grainy/speckled illustrations are the common case of this** (live run #31). Figma flattens a
+noise/grain/texture effect into *thousands of tiny vector paths* on SVG export — one real asset was
+2.4 MB and 1523 `<path>` elements for a 239×215 illustration. The browser antialiases each path
+independently, so at 1:1 the result is visibly speckled where Figma's own canvas (and the reference
+PNG) is smooth. The export is faithful — it asked Figma for the format the node's own
+`exportSettings` named — so **don't redraw the asset and don't "fix" it in CSS**. Report it as a real
+delta and say what it is: the fix is on the design side (rasterise that layer, or set its
+`exportSettings` to PNG in Figma and re-pull). A quick tell before you even render:
+`grep -c '<path' design/assets/<id>.svg` in the hundreds-plus, or an SVG over ~200 KB.
+
 ## Beyond the ideal frame
 Render at least once each, when the stack supports it:
 - Each interaction state with a design (or a derived default) — pressed/disabled/focus/error/selected.
@@ -97,6 +114,24 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
   is a regression even when the screenshot got closer. Report the residual in `deltas` instead.
 - After two approaches fail on the same issue, stop and re-read the IR and profile for that node; you're
   probably misreading a unit or a sizing mode.
+
+## Saying you're alive
+A full verify pass is minutes, not seconds, and it prints nothing while it runs — one live run sat
+for ~25 minutes with the caller unable to tell progress from a hang (#20). So **write a status file
+as you go**: `design/verify/<screen>.status.json`, rewritten at each step with
+`{"screen", "phase", "detail", "at": "<ISO>"}`, where `phase` is one of `starting` → `renderer-found`
+→ `server-up` → `rendered` → `comparing` → `done` (or `failed`). It costs one Write per phase.
+
+The caller polls that file instead of guessing: a changed `at` means working, an `at` that has not
+moved in several minutes means genuinely stuck, and `phase` says which step to blame. Delete nothing
+— the final `done`/`failed` record is useful afterwards.
+
+**On timings, so nobody chases a phantom:** the same verifier legitimately takes far longer inside a
+build than standalone, and that is not a bug (#30). A standalone run is one render against finished
+code with the dev server often already up. Inside a build it runs *once per fix round* — render →
+report deltas → the builder edits → re-render — each with its own cold start. The live run's ~25 min
+inner pass against ~3.5 min standalone was two full passes plus fix time plus cold starts. Budget
+per-round, and if one *phase* stops advancing for minutes, that is the real hang.
 
 ## When you can't render
 Rendering is the default, not an optional extra — check `package.json`/`node_modules` (or the

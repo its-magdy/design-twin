@@ -22,10 +22,15 @@ is the fallback only when it is genuinely in neither place), the plan at `design
    (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`) has the per-stack table — read it.
    Nothing available → return `mode: "static-only"` with exactly what you looked for. Do not install
    tooling or add dependencies without the caller saying so.
-2. **Render at the frame's exact size** (`box.w`×`box.h` from the export; device scale 1 or note it),
+2. **Say you're alive as you go.** A pass takes minutes and prints nothing, so the caller cannot
+   tell progress from a hang. Before each step, write `design/verify/<screen>.status.json`:
+   `{"screen": "<name>", "phase": "starting|renderer-found|server-up|rendered|comparing|done|failed",
+   "detail": "<one line>", "at": "<ISO timestamp>"}`. One Write per phase; overwrite the same file.
+   Write `failed` with the reason if you give up, rather than leaving the last phase hanging.
+3. **Render at the frame's exact size** (`box.w`×`box.h` from the export; device scale 1 or note it),
    fonts loaded, animations off. Save the screenshot to `design/verify/<screen>.png` (and
    `<screen>-dark.png`, `<screen>-rtl.png`, `<screen>-large-text.png` when the app supports them).
-3. **Compare, in this order** — Read both images, and read numbers from the export rather than
+4. **Compare, in this order** — Read both images, and read numbers from the export rather than
    eyeballing them:
    - *Structure*: every visible node in the export present once; nothing extra; drawn system chrome
      (status bar, home indicator) is correctly ABSENT from the build.
@@ -34,7 +39,17 @@ is the fallback only when it is genuinely in neither place), the plan at `design
      comparing to hex).
    - *Pixels*: clipped or overlapping text first, then spacing, alignment, color, shadows, images.
    - Ignore differences the plan marks as deliberate approximations or decided defaults.
-4. **Return** exactly this, and nothing else:
+   - **Do not downgrade a visible difference because "the reference is downscaled".** The reference
+     is exported above 1x and is what the designer sees; downscaling can hide a difference, never
+     invent one. If the build looks worse than it at 1:1, that is a delta of at least `medium`.
+     The usual instance is a speckled/grainy illustration: Figma flattens noise textures into
+     thousands of vector paths on SVG export (one real asset: 1523 `<path>`s, 2.4 MB, for a 239×215
+     graphic), which a browser antialiases into visible grain. Report it as a real delta naming that
+     cause — the fix is on the design side (rasterise the layer, or set the node's `exportSettings`
+     to PNG and re-pull), never redrawing the asset or patching it in CSS.
+   - If the plan already has a `verification` block from an earlier pass, say whether you **confirm
+     or contradict** each of its deltas rather than reporting as if this were the first look.
+5. **Return** exactly this, and nothing else:
    ```json
    {"mode": "rendered", "renderer": "<tool>", "artifacts": ["design/verify/<screen>.png"],
     "deltas": [{"where": "<node name/id>", "expected": "…", "actual": "…", "severity": "high|medium|low"}],
