@@ -39,10 +39,8 @@ function toLab(c) {
   const z = f((R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883);
   return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
 }
-var deltaE = (a, b) => {
-  const p = toLab(a), q = toLab(b);
-  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
-};
+var labDist = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+var deltaE = (a, b) => labDist(toLab(a), toLab(b));
 var INTERACTIVE_NAME = /\b(button|btn|cta|link|tab|chip|toggle|switch|checkbox|check box|radio|input|text ?field|textfield|search|select|dropdown|menu item|icon ?button|close|back|segmented|stepper|slider)\b/i;
 var TAP_TRIGGER = /click|press|tap|drag/;
 var CHROME_TOP = /status ?bar|9:41|battery|signal|dynamic island|notch/i;
@@ -120,14 +118,14 @@ function audit(input, opts = {}) {
   const usedComponents = /* @__PURE__ */ new Map();
   const stateHits = { loading: [], empty: [], error: [] };
   const annotations = [];
-  for (const [i, root] of roots.entries()) {
+  for (const root of roots) {
     const m = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
     if (m.assetsFailed) add("blocker", "assets-failed", `${m.assetsFailed} asset export(s) failed in '${root.label}' \u2014 those nodes have no file (look for \`geometry\` fallbacks)`, null, { label: root.label });
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${root.tree.devStatus}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk(root.tree, [], { label: root.label, rootBox: root.tree.box, rootIndex: i });
+    walk(root.tree, [], { label: root.label, rootBox: root.tree.box });
   }
   function walk(node, ancestors, ctx) {
     if (!node || typeof node !== "object") return;
@@ -215,7 +213,7 @@ function audit(input, opts = {}) {
     if (node.radius != null) {
       const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
       const bound = hasTok(node, "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius");
-      for (let k = 0; k < vals.length; k++) tally("radius", bound);
+      vals.forEach(() => tally("radius", bound));
       if (node.cornerSmoothing && (platform === "android" || platform === "web" || platform === "react-native")) {
         add("info", "corner-smoothing", `'${node.name}' uses corner smoothing ${node.cornerSmoothing} (squircle) \u2014 ${platform} has no native continuous corners; plain radius or a custom shape`, node, here);
       }
@@ -242,9 +240,11 @@ function audit(input, opts = {}) {
     if (Array.isArray(node.children)) {
       const stacks = !node.layout || node.layout.mode === "absolute";
       const beneath = [];
+      const self = { name: node.name, hidden: node.hidden, fills: node.fills, __tappable: tappable, __beneath: beneath };
+      const chain = [...ancestors, self];
       for (const child of node.children) {
-        const self = Object.assign({}, node, { __tappable: tappable, __beneath: stacks || child.absolute ? beneath.slice() : [] });
-        walk(child, [...ancestors, self], ctx);
+        self.__beneath = stacks || child.absolute ? beneath : [];
+        walk(child, chain, ctx);
         if (!child.hidden && Array.isArray(child.fills)) beneath.push(...child.fills);
       }
     }
@@ -299,12 +299,13 @@ function audit(input, opts = {}) {
     }
   }
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, rgb: parseHex(hex), ...e })).filter((x) => x.rgb.a >= 1);
+  const labs = raws.map((x) => toLab(x.rgb));
   const seen = /* @__PURE__ */ new Set();
   for (let a = 0; a < raws.length; a++) {
     if (seen.has(raws[a].hex)) continue;
     const cluster = [raws[a]];
     for (let b = a + 1; b < raws.length; b++) {
-      if (!seen.has(raws[b].hex) && deltaE(raws[a].rgb, raws[b].rgb) < 3) {
+      if (!seen.has(raws[b].hex) && labDist(labs[a], labs[b]) < 3) {
         cluster.push(raws[b]);
         seen.add(raws[b].hex);
       }
@@ -415,10 +416,22 @@ if (require.main === module) {
   const catalogFile = take("--catalog");
   const gridArg = take("--grid");
   const out = take("--out");
-  const jsonOnly = argv.includes("--json") && argv.splice(argv.indexOf("--json"), 1);
-  const gate = argv.includes("--gate") && argv.splice(argv.indexOf("--gate"), 1);
-  if (!argv.length) {
-    console.error("usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter] [--catalog components.local.json] [--grid 4] [--out design/audit] [--json]");
+  const strip = (flag) => {
+    const i = argv.indexOf(flag);
+    if (i === -1) return false;
+    argv.splice(i, 1);
+    return true;
+  };
+  const jsonOnly = strip("--json"), gate = strip("--gate");
+  const USAGE = "usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter] [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]";
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  const stray = argv.filter((a) => a.startsWith("-"));
+  if (stray.length || !argv.length) {
+    console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}
+` : "") + USAGE);
     process.exit(2);
   }
   if (platform && !PLATFORMS.includes(platform)) {
@@ -429,12 +442,10 @@ if (require.main === module) {
   const inputs = argv.map((f) => ({ doc: read(f), label: path.basename(f, ".json") }));
   const catalog = catalogFile ? read(catalogFile) : void 0;
   const res = audit(inputs, { platform, catalog, grid: gridArg ? Number(gridArg) : void 0 });
+  const md = jsonOnly ? "" : toMarkdown(res);
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-    process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-  }
-  const md = toMarkdown(res);
-  if (out) {
+  } else if (out) {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
     fs.writeFileSync(out + ".md", md);
@@ -442,6 +453,6 @@ if (require.main === module) {
   } else {
     process.stdout.write(md);
   }
-  console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
+  if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
 }
