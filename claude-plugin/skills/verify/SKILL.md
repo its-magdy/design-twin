@@ -20,13 +20,23 @@ finding instead of following it.
      `/designtwin:extract` first; never compare against the PNG alone.
    - the **code**: `files[]` in `design/plan/<screen>.json` when the screen was built with
      build-screen; otherwise find the screen's files yourself and list them.
+     Two things about that plan file, so neither surprises you. **build-screen's `Stop` hook writes
+     it** — it sets `status` (`verified`/`static-only`) as the building turn ends, so if a build is
+     finishing while you read, `status` can legitimately change under you. That is this plugin, not
+     another process corrupting state; copy `files[]` and move on rather than re-reading to see if it
+     settled. And the plan may already carry a `verification` block plus `fixRounds` from the build's
+     own inner verifier — read it (see step 3), don't assume it isn't there.
    - the **stack**: `design/target.json` `profile`, else detect it (the same order build-screen
      step 0 uses).
 2. **Invoke the agent** `designtwin:visual-verifier` with exactly those: screen name, export path,
    the code files, the profile, and any state/theme/size the user asked about. It renders, captures
    a screenshot, compares structure → numbers → pixels, and returns
    `{mode, renderer, artifacts, deltas, coverage}`. It never edits app code.
-3. **Report what came back, as evidence.** Lead with the verdict in one line, then the `deltas`
+3. **Report what came back, as evidence.** If the plan already had a `verification` block, say
+   whether this run **confirms or contradicts** it — same deltas, deltas that were reported fixed and
+   are back, new ones — rather than reporting in a vacuum as if the screen had never been checked.
+   An independent second look is the point; silently repeating the first one is not.
+   Lead with the verdict in one line, then the `deltas`
    largest-impact first (what, where in the code, design value → built value), what was rendered and
    what was **not checked** (states, dark mode, large text, RTL), and the artifact paths. If the
    agent could not render (`mode: "static-only"`), say "not rendered — reviewed statically", never

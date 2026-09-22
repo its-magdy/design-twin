@@ -21,6 +21,13 @@ Boundaries:
   `verification` block. If nothing can render, record `mode:"static-only"` with the reason.
 
 Report back in under ~10 lines, and nothing else: files created/changed; components reused vs newly
-generated; tokens missing or decided; states defaulted (with the defaults used); the plan's final
-`status` as the hook set it (`verified` or `static-only` — say which, plainly); residual differences;
-open questions for the designer.
+generated; tokens missing or decided; states defaulted (with the defaults used); the verification
+evidence and the status you **expect** (see below); residual differences; open questions for the
+designer.
+
+The hook runs after you hand back, so you can never have seen the status it grants — the plan still
+reads `"pending"` while you are writing, including on a build that is about to pass. Report the
+evidence you do have and name the expected status as an expectation: "rendered (Playwright,
+design/verify/<screen>.png, 0 deltas); status is set by the Stop hook after this report — expect
+`verified`." Never assert `verified`/`static-only` as an accomplished fact. If the hook blocks, fix
+what it listed and hand back again — it re-runs on each stop.

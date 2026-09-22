@@ -50,6 +50,14 @@
 //   }
 // The hook sets status itself: "verified" only for mode "rendered" with an artifact on disk,
 // "static-only" otherwise — so a report can never claim a rendered match the plan does not evidence.
+//
+// This write happens AFTER the agent has handed back (that is what a Stop hook is), so the agent
+// cannot have read the status it was granted, and the skill tells it to report its verification
+// EVIDENCE plus the status it expects rather than a status it claims to have seen. It also means
+// design/plan/<screen>.json legitimately changes on disk once the building turn ends: a concurrent
+// reader (an independent `verify` run, say) can see that mutation and must not read it as state
+// leaking from some other process. Both are documented in build-screen SKILL.md step 5/6 and in
+// verify/SKILL.md step 1.
 // Set status "abandoned" by hand to retire a plan that will not be finished (otherwise it nags on
 // every stop for the rest of the session).
 //

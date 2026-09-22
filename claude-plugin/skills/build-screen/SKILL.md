@@ -276,8 +276,9 @@ Copy this checklist into your notes and keep it updated:
      you rendered>], notChecked:[{what, why}]}, a11y:{tool, violations}?}`. With genuinely nothing to
      render with:
      `verification: {mode:"static-only", reason:<what you checked for and didn't find>}`. The hook
-     sets `status` itself — `"verified"` only for a rendered check, `"static-only"` otherwise — so
-     never write `status` by hand, with two exceptions: `"abandoned"` for a plan the user decided not
+     sets `status` itself — `"verified"` only for a rendered check, `"static-only"` otherwise — **by
+     rewriting `design/plan/<screen>.json` as your turn ends**, so that file legitimately changes on
+     disk after you last wrote it. Never write `status` by hand, with two exceptions: `"abandoned"` for a plan the user decided not
      to finish, and `"awaiting-user"` whenever you end the turn to **ask the user something the build
      is blocked on** (a MISSING token row, an audit blocker, the component-map stub review). Set it
      before you ask — a step-1 pause comes before the plan exists, so create it then with just
@@ -296,11 +297,24 @@ Copy this checklist into your notes and keep it updated:
 6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
    <screen>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
    states designed vs defaulted (with the defaults used); approximations; verification evidence (what
-   was rendered and compared, residual differences); open designer questions. If the `Stop` hook
-   (`${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js`) reported problems earlier in this turn, they must
-   be resolved before this report is written — a report claiming "done" while the plan's `status` is
-   still `"pending"` is the exact failure this hook exists to catch. Report the status the hook
-   granted as it is: `"static-only"` is "built, not visually verified", not "matches the design".
+   was rendered and compared, residual differences); open designer questions. If no component catalog
+   was exported (step 1), say so in one line — "new" there means unverified against Figma's catalog.
+   If the `Stop` hook (`${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js`) reported problems earlier in
+   this turn, they must be resolved before this report is written — a report claiming "done" while
+   problems are outstanding is the exact failure this hook exists to catch.
+
+   **Do not state a granted status — you cannot have seen one.** The hook runs *after* you hand
+   back, so at the moment you write this report the plan still says `"pending"`, and it says
+   `"pending"` even on a build that is about to pass. Claiming `"verified"` there is a guess that
+   happened to be right; claiming `"pending"` reads like a failure. Write instead:
+
+   > Verification: rendered (Playwright, `design/verify/<screen>.png`, 0 residual deltas).
+   > Plan status is set by the build-screen Stop hook after this report — expect `verified`.
+
+   …i.e. report the **evidence** you actually have (the `verification.mode` you recorded, what you
+   rendered, what came back), and name the status you expect *as* an expectation. `static-only` means
+   "built, not visually verified" — never "matches the design". If the hook then blocks, fix what it
+   listed and hand back again: it re-runs on every stop and grants the status on the one that passes.
 
 ## Building several screens in one session
 
