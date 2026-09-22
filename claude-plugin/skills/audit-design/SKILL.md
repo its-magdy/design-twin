@@ -80,6 +80,14 @@ Copy this checklist into your working notes and tick it off:
      --catalog design/design-system/components.local.json --out design/audit/<screen>
    ```
 
+   `--out` writes `<out>.md` (the report) and `<out>.json`. The JSON's top level is
+   `{platform, platformAssumed, grid, screenStatesScope, screens, summary, tokenBinding, components,
+   screenStates, annotations, questions, findings}` — `questions` is an array of plain strings and
+   `findings` entries are `{severity, code, message, nodeId?, nodeName?, screen?, path?}` plus
+   per-code extras. Note there is **no** `exportedAt`/`manifest`/`screen` at that level: those belong
+   to the export document you passed in, not to the audit. The header comment of `audit.js` is the
+   full schema.
+
    Pass several layer files at once to audit a flow; check `design/design-system/tokens.json` (or
    `design/variables.json` after a single-screen pull) or `layoutGrids` for the design's real spacing
    step and pass it as `--grid` (default 4px silently under-flags an 8px-grid system — don't skip

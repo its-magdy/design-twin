@@ -391,10 +391,11 @@ function audit(input, opts = {}) {
   }
   const screenStates = {};
   for (const s of Object.keys(stateHits)) screenStates[s] = stateHits[s].length ? "designed" : "not-found";
+  const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
   const tokenBinding = {};
   for (const [k, [b, t]] of Object.entries(binding)) tokenBinding[k] = { bound: b, total: t, pct: t ? Math.round(b / t * 100) : null };
   for (const [k, v] of Object.entries(tokenBinding)) {
-    if (v.total >= 5 && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) \u2014 expect to map raw values to the nearest token and report each`, null, null, { category: k });
+    if (v.total >= 5 && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) \u2014 expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
   }
   const questions = [];
   const STATE_QUESTION = {
@@ -411,6 +412,7 @@ function audit(input, opts = {}) {
     platform,
     platformAssumed,
     grid,
+    screenStatesScope,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     tokenBinding,
@@ -437,7 +439,19 @@ function toMarkdown(res) {
   L.push("## Token binding", "", "| Category | Bound | Total | % |", "|---|---|---|---|");
   for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "\u2013" : v.pct + "%"} |`);
   L.push("", "## Screen states", "");
-  for (const [k, v] of Object.entries(res.screenStates)) L.push(`- ${k}: ${v === "designed" ? "designed" : "**not found \u2014 ask**"}`);
+  const scope = res.screenStatesScope || {};
+  if (scope.singleFrame) {
+    L.push(
+      `*Scope: **one frame** was audited. "not found" below means "not in this frame" \u2014 it does not`,
+      `mean the state is missing from the Figma file. Export the other frames to tell the two apart.*`,
+      ""
+    );
+  } else if (scope.rootsAudited > 1) {
+    L.push(`*Scope: ${scope.rootsAudited} frames audited \u2014 "not found" means none of them drew it.*`, "");
+  }
+  for (const [k, v] of Object.entries(res.screenStates)) {
+    L.push(`- ${k}: ${v === "designed" ? "designed" : scope.singleFrame ? "**not in this frame \u2014 ask**" : "**not found \u2014 ask**"}`);
+  }
   if (res.components.length) {
     L.push("", "## Component states", "", "| Component | Kind | Present | Missing |", "|---|---|---|---|");
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} |`);

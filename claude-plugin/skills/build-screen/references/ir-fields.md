@@ -103,8 +103,13 @@ how a value becomes code on your stack, see the profile.
   locked ratio.
 - **`pin`** `{h,v}` (`min`/`max`/`center`/`stretch`/`scale`) — how a non-auto-layout child resizes with
   its parent. **`strokesInLayout`** → stroke counts toward size (border-box).
-- **`box`** `{w,h[,x,y]}` — resolved page-space size, the ground-truth dimension for children with no
-  `x`/`y`. `x`/`y` appear only when the parent doesn't lay the node out. **`renderBox`** — includes
+- **`box`** `{w,h[,x,y]}` — resolved page-space size, and **the only place a node's size lives**:
+  there are no top-level `width`/`height` fields, so read `box.w`/`box.h` (a root frame's `box` is the
+  screen size). It is the ground-truth dimension for children with no `x`/`y`. Its `x`/`y` are
+  **page-space** coordinates and are routinely large negatives (a real root: `box.x -5535`) — they
+  locate the frame on the Figma canvas and mean nothing to your layout. A node's own top-level
+  `x`/`y`, which appear only when the parent doesn't lay it out, are **parent-relative** and are the
+  ones to build from; the two disagreeing is normal, not a bug. **`renderBox`** — includes
   shadow/stroke/blur overflow; if it's larger than `box` inside a `clip:true` parent, the effect is
   clipped in the design too.
 

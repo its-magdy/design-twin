@@ -11,7 +11,26 @@
 //   screen doc   design/<screen>.json            { exportedAt, screen, nodes:[tree], manifest }
 //   layer file   design/pages/<dir>/<layer>.json  a bare node tree (or { tree })
 //   catalog      design/design-system/components.local.json  { components:[{type,name,props}] }
-// Returns { summary, findings, tokenBinding, components, screenStates, annotations, questions }.
+// Returns ONE object, whose full shape is (this is also what --out writes to <out>.json, and the
+// only schema for it — live run #11 hit an agent guessing at the top level because the prose cited
+// fields like `exportedAt`/`manifest`/`screen`, which belong to the INPUT export and are not
+// re-exposed here):
+//   platform          "web"|"ios"|"android"|"react-native"|"flutter" — what the findings assume
+//   platformAssumed   true when no platform was given and "web" was guessed
+//   grid              the spacing step the off-grid check used (px)
+//   screenStatesScope { rootsAudited, singleFrame } — how much was looked at, so "not-found" below
+//                     can be read correctly ("not in this frame" vs "nowhere")
+//   screens           [label] — one per audited root, from the input's label/filename
+//   summary           { blockers, warnings, info } — counts by severity
+//   tokenBinding      { color|typography|spacing|radius|effects: { bound, total, pct|null } }
+//   components        [{ name, kind, known, present[], missing[], note?, sampled? }]
+//   screenStates      { list|loading|empty|error|...: "designed"|"not-found" }
+//   annotations       [{ nodeId, nodeName, label }] — what the designer wrote in the file
+//   questions         [string] — plain prose, one decision the export cannot answer per entry
+//   findings          [{ severity, code, message, nodeId?, nodeName?, screen?, path?, ...extra }]
+//                     where `extra` is per-code (e.g. { component, missing } on
+//                     missing-component-states, { category } on low-token-binding)
+// There is no `exportedAt`/`manifest`/`screen` at this level; those stay on the export document.
 
 const SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 
@@ -395,13 +414,18 @@ function audit(input, opts = {}) {
   }
 
   // ---- screen-level states: what was drawn vs what must be asked
+  // "not-found" is a statement about the FRAMES THAT WERE AUDITED, not about the Figma file. Audit
+  // one frame and every state but the drawn one is "not-found" by construction — which read as "the
+  // designer forgot these" and needed a human to reinterpret (live run #9). The count of roots is
+  // the missing context, so it ships with the verdict instead of being inferred from it.
   const screenStates = {};
   for (const s of Object.keys(stateHits)) screenStates[s] = stateHits[s].length ? "designed" : "not-found";
+  const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
 
   const tokenBinding = {};
   for (const [k, [b, t]] of Object.entries(binding)) tokenBinding[k] = { bound: b, total: t, pct: t ? Math.round((b / t) * 100) : null };
   for (const [k, v] of Object.entries(tokenBinding)) {
-    if (v.total >= 5 && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) — expect to map raw values to the nearest token and report each`, null, null, { category: k });
+    if (v.total >= 5 && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
   }
 
   // ---- questions the export cannot answer (always asked; the skill trims ones already answered)
@@ -421,6 +445,7 @@ function audit(input, opts = {}) {
     platform,
     platformAssumed,
     grid,
+    screenStatesScope,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     tokenBinding,
@@ -446,7 +471,16 @@ function toMarkdown(res) {
   L.push("## Token binding", "", "| Category | Bound | Total | % |", "|---|---|---|---|");
   for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "–" : v.pct + "%"} |`);
   L.push("", "## Screen states", "");
-  for (const [k, v] of Object.entries(res.screenStates)) L.push(`- ${k}: ${v === "designed" ? "designed" : "**not found — ask**"}`);
+  const scope = res.screenStatesScope || {};
+  if (scope.singleFrame) {
+    L.push(`*Scope: **one frame** was audited. "not found" below means "not in this frame" — it does not`,
+      `mean the state is missing from the Figma file. Export the other frames to tell the two apart.*`, "");
+  } else if (scope.rootsAudited > 1) {
+    L.push(`*Scope: ${scope.rootsAudited} frames audited — "not found" means none of them drew it.*`, "");
+  }
+  for (const [k, v] of Object.entries(res.screenStates)) {
+    L.push(`- ${k}: ${v === "designed" ? "designed" : scope.singleFrame ? "**not in this frame — ask**" : "**not found — ask**"}`);
+  }
   if (res.components.length) {
     L.push("", "## Component states", "", "| Component | Kind | Present | Missing |", "|---|---|---|---|");
     for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "–"} | ${c.known ? (c.missing.join(", ") || "none") : c.note}${c.sampled ? " (sampled)" : ""} |`);

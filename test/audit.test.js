@@ -135,4 +135,25 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   check("[platform-assumed] a given platform gets no banner", !/ASSUMED/.test(toMarkdown(given)));
 })();
 
+// ---------- "not found" is scoped to what was audited (live run #9) ---------------------------
+(() => {
+  const one = audit([{ doc: screen, label: "login" }]);
+  check("[states-scope] a single-frame audit says so in the result, not only in prose",
+    one.screenStatesScope.rootsAudited === 1 && one.screenStatesScope.singleFrame === true);
+  const md = toMarkdown(one);
+  const block = md.split("## Screen states")[1].split("##")[0];
+  check("[states-scope] the markdown reads 'not in this frame', with the caveat above it",
+    /not in this frame — ask/.test(block) && /does not/.test(block) && !/\*\*not found — ask\*\*/.test(block));
+  const two = audit([{ doc: screen, label: "a" }, { doc: screen, label: "b" }]);
+  check("[states-scope] several frames report the plain verdict and the count",
+    two.screenStatesScope.singleFrame === false && two.screenStatesScope.rootsAudited === 2
+    && /2 frames audited/.test(toMarkdown(two)));
+})();
+
+// The audit must never tell the build to approximate a value (see also [platform-assumed]).
+check("[no-snap] the off-grid finding says to keep exact values, not to snap to the grid", (() => {
+  const msgs = audit([{ doc: screen, label: "login" }]).findings.map((f) => f.message).join("\n");
+  return !/snap to the nearest/.test(msgs) && !/map raw values to the nearest/.test(msgs);
+})());
+
 report();

@@ -77,7 +77,14 @@ Two narrower pulls worth knowing: `design --design-system` gets tokens/styles/co
 page walk and no assets; `design --as-library "<name>"` gets a library file's complete catalog (run it
 with the *library* open, not the file consuming it).
 
-**After `build-screen` generates code for one component**, `dtwin screenshot <id>` gets a fresh PNG of
+**Several frames with the same name?** Real files have them — one page held two "Skills list" frames
+and four "Tags", all the same size, and `list children` returns only name/id/type/size, so there is
+nothing in that output to tell them apart. Don't just take the first id: `dtwin screenshot <id>`
+renders ONE node to `screenshots/<id>_ref.png` cheaply (no `serialize()`, no asset walk). Shoot each
+candidate, look, then pull the right one — guessing costs a full pull of the wrong frame and a build
+on top of it. Ask the user if the renders don't settle it.
+
+**After `build-screen` generates code for one component**, the same command gets a fresh PNG of
 just that node to compare the output against — cheaper than re-exporting, and a tighter check than the
 one whole-frame reference PNG every export already carries (which is too zoomed-out to eyeball a small
 component inside a dense screen). MCP twin: `figma_screenshot`.

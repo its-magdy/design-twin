@@ -122,6 +122,10 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   Root keys are `exportedAt`, `screen` (the human label), `nodes[]` (the trees, same shape as a layer
   file's `tree`) and `manifest`. A single-screen pull also writes `design/variables.json` and
   `design/assets/`, and does **not** write `design/design-system/`.
+- The reference PNG is rendered **above 1x** (a 1440x1100 frame came back 2048x1565, ~1.42x) — the
+  scale is chosen to fit a pixel budget, so it is not a round number and not worth assuming. Read the
+  image's real dimensions and compare against `box.w`/`box.h` rather than treating the PNG's pixels
+  as CSS px.
 - The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
   `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
   **root `reference`** of a page-walk layer file (`design/pages/<page>/<name>__<id>.json`, where it
