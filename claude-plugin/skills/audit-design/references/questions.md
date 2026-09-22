@@ -9,6 +9,13 @@ meeting.
 - **Point at the node**: name + id (`'Email input' 1:6`) so they can click to it.
 - **Offer options, recommend one, state the default** you'll build if there's no answer. The default
   should come from the design system or platform convention, never taste.
+- **A default must never be an approximation of a value that is already in the design.** "Bind to the
+  nearest 4px step", "use the closest existing token", "round 14 up to 16" all ask the build to
+  silently change what the designer drew — and build-screen forbids exactly that (its rule 5: an
+  approximate match is hardcoding by proxy). For an off-grid or unbound value the default is always
+  *use the exact value and flag it*; the question is whether the DESIGN should change, which only the
+  designer can answer. Same for a colour with no token: the default is the literal plus a recorded
+  decision, never the nearest palette entry.
 - **Say why it matters** in a few words when it isn't obvious (clips at 200% text, fails AA, can't be
   built on Android < 12).
 - **Order by what blocks the build**: core-flow states and blockers first, polish last.

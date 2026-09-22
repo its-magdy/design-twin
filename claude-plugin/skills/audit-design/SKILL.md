@@ -59,6 +59,12 @@ Copy this checklist into your working notes and tick it off:
    react-native / tailwind, `*.xcodeproj`/`Package.swift`, Compose in `build.gradle(.kts)`,
    `pubspec.yaml`), else ask. Map the profile to an audit platform: web-* → `web`, swiftui → `ios`,
    android-compose → `android`, react-native → `react-native`, flutter → `flutter`.
+   **If you had to guess, say so in the first line of your report**, not only as a designer question.
+   Touch-target minimums (24/44/48), shadow spread, background blur and blend-mode support all differ
+   per platform, so a wrong guess doesn't produce a slightly-off audit — it produces a confidently
+   wrong one. `audit.js` prints its own `(ASSUMED — not given)` banner at the top of the report and a
+   `warn` on stderr when `--platform` is missing, and sets `platformAssumed: true` in the JSON; lead
+   with the same fact and offer to write `design/target.json` so the next run and `build-screen` agree.
 
 2. **Gates.** Read the export's `manifest`: `truncated` or `assetsFailed` means the tree is incomplete
    — say so first. Check `exportedAt` (on the screen doc or `design/design-system.json`): older than a
@@ -74,9 +80,17 @@ Copy this checklist into your working notes and tick it off:
      --catalog design/design-system/components.local.json --out design/audit/<screen>
    ```
 
-   Pass several layer files at once to audit a flow; check `design/design-system/tokens.json` or
-   `layoutGrids` for the design's real spacing step and pass it as `--grid` (default 4px silently
-   under-flags an 8px-grid system — don't skip this). The script ships at `${CLAUDE_PLUGIN_ROOT}/
+   Pass several layer files at once to audit a flow; check `design/design-system/tokens.json` (or
+   `design/variables.json` after a single-screen pull) or `layoutGrids` for the design's real spacing
+   step and pass it as `--grid` (default 4px silently under-flags an 8px-grid system — don't skip
+   this). `--catalog` is optional: a single-screen pull writes no `design/design-system/`, so drop
+   the flag rather than passing a path that isn't there.
+
+   **Never let a question's default tell the build to approximate a value.** "Bind to the nearest 4px
+   step" and "use the closest existing token" both contradict `build-screen`'s rule 5, which treats an
+   approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
+   or an unbound colour is a question about whether the *design* should change; the default is always
+   "use the exact value and flag it". See `references/questions.md`. The script ships at `${CLAUDE_PLUGIN_ROOT}/
    scripts/audit.js` with the plugin, so it should always be present; only fall back to doing the same
    checks by hand from `references/heuristics.md` if it genuinely errors out, and say which checks you
    skipped. Read the resulting `.json`; treat it as evidence to verify, not a verdict.

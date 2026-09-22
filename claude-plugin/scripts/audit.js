@@ -144,7 +144,8 @@ function rootsOf(doc, label) {
 var r1 = (v) => Math.round(v * 100) / 100;
 var hasTok = (node, ...keys) => !!(node.tokens && keys.some((k) => node.tokens[k] != null));
 function audit(input, opts = {}) {
-  const platform = PLATFORMS.includes(opts.platform) ? opts.platform : "web";
+  const platformAssumed = !PLATFORMS.includes(opts.platform);
+  const platform = platformAssumed ? "web" : opts.platform;
   const grid = opts.grid > 0 ? opts.grid : 4;
   const docs = Array.isArray(input) ? input : [input];
   const roots = docs.flatMap((d, i) => rootsOf(d && d.doc !== void 0 ? d.doc : d, d && d.label || `input${i}`));
@@ -255,7 +256,7 @@ function audit(input, opts = {}) {
         if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) \u2014 Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
         else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
       }
-      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) \u2014 likely drift; snap to the nearest token or confirm`, node, here);
+      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) \u2014 likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY \u2014 it must not round them to the grid`, node, here);
     }
     if (node.radius != null) {
       const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
@@ -408,6 +409,7 @@ function audit(input, opts = {}) {
   const count = (s) => findings.filter((f) => f.severity === s).length;
   return {
     platform,
+    platformAssumed,
     grid,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
@@ -422,7 +424,16 @@ function audit(input, opts = {}) {
 function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
-  L.push(`Platform: **${res.platform}** \xB7 grid ${res.grid}px \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  if (res.platformAssumed) {
+    L.push(
+      `> \u26A0\uFE0F **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,
+      `> spread, blur and blend-mode support all differ per platform \u2014 on the wrong one, every one of`,
+      `> those findings is wrong. Confirm it, then re-run with \`--platform ios|android|react-native|flutter\``,
+      `> (or write \`design/target.json\`, which both this audit and build-screen read).`,
+      ""
+    );
+  }
   L.push("## Token binding", "", "| Category | Bound | Total | % |", "|---|---|---|---|");
   for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "\u2013" : v.pct + "%"} |`);
   L.push("", "## Screen states", "");
@@ -501,6 +512,7 @@ if (require.main === module) {
   } else {
     process.stdout.write(md);
   }
+  if (res.platformAssumed) console.error("warn  no --platform given \u2014 assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
 }

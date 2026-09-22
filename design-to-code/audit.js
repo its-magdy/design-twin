@@ -114,7 +114,13 @@ const hasTok = (node, ...keys) => !!(node.tokens && keys.some((k) => node.tokens
 
 // ---------------------------------------------------------------- the audit
 function audit(input, opts = {}) {
-  const platform = PLATFORMS.includes(opts.platform) ? opts.platform : "web";
+  // Live run #10: with no --platform the audit quietly picked "web" and the assumption surfaced only
+  // as one designer question buried in a list of thirteen. Every touch-target size, shadow-spread
+  // note and blur warning below depends on this value, so a wrong guess silently mis-audits the
+  // whole screen. The guess still happens (refusing to run is worse), but it is now recorded as a
+  // guess and printed at the TOP of the report rather than left for the reader to notice.
+  const platformAssumed = !PLATFORMS.includes(opts.platform);
+  const platform = platformAssumed ? "web" : opts.platform;
   const grid = opts.grid > 0 ? opts.grid : 4;
   const docs = Array.isArray(input) ? input : [input];
   const roots = docs.flatMap((d, i) => rootsOf(d && d.doc !== undefined ? d.doc : d, (d && d.label) || `input${i}`));
@@ -237,7 +243,11 @@ function audit(input, opts = {}) {
         if (v < 0) add("info", "negative-spacing", `'${node.name}' ${k} is ${v} (overlap) — Compose Arrangement.spacedBy rejects negatives; use offset/overlay`, node, here);
         else if (!bound && (v % grid !== 0 || !Number.isInteger(v))) offGrid.push(`${k}=${v}`);
       }
-      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) — likely drift; snap to the nearest token or confirm`, node, here);
+      // "snap to the nearest token" was the old wording and it contradicted build-screen's rule 5,
+      // which forbids resolving a value to an approximately-matching token (silent hardcoding by
+      // proxy). The audit reports the DESIGN problem; fixing it is a change to the Figma file or a
+      // new token, never a rounding the build performs on its own.
+      if (offGrid.length) add("info", "off-grid-spacing", `'${node.name}' has unbound spacing off the ${grid}px grid (${offGrid.join(", ")}) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid`, node, here);
     }
     if (node.radius != null) {
       const vals = typeof node.radius === "number" ? [node.radius] : Object.values(node.radius);
@@ -409,6 +419,7 @@ function audit(input, opts = {}) {
   const count = (s) => findings.filter((f) => f.severity === s).length;
   return {
     platform,
+    platformAssumed,
     grid,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
@@ -425,7 +436,13 @@ function audit(input, opts = {}) {
 function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit — ${res.screens.join(", ") || "(no screens)"}`, "");
-  L.push(`Platform: **${res.platform}** · grid ${res.grid}px · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED — not given)*" : ""} · grid ${res.grid}px · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  if (res.platformAssumed) {
+    L.push(`> ⚠️ **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,
+      `> spread, blur and blend-mode support all differ per platform — on the wrong one, every one of`,
+      `> those findings is wrong. Confirm it, then re-run with \`--platform ios|android|react-native|flutter\``,
+      `> (or write \`design/target.json\`, which both this audit and build-screen read).`, "");
+  }
   L.push("## Token binding", "", "| Category | Bound | Total | % |", "|---|---|---|---|");
   for (const [k, v] of Object.entries(res.tokenBinding)) L.push(`| ${k} | ${v.bound} | ${v.total} | ${v.pct == null ? "–" : v.pct + "%"} |`);
   L.push("", "## Screen states", "");
@@ -488,6 +505,8 @@ if (require.main === module) {
   } else {
     process.stdout.write(md);
   }
+  // On stderr too: --json callers never render the markdown, and a piped run shows only this line.
+  if (res.platformAssumed) console.error("warn  no --platform given — assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
 }

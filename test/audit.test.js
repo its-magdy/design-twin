@@ -115,4 +115,24 @@ let badExit = 0;
 try { execFileSync(process.execPath, [cli, "x.json", "--platform", "tvos"], { stdio: "ignore" }); } catch (e) { badExit = e.status; }
 check("CLI rejects an unknown --platform with exit 2", badExit === 2);
 
+// ---------- the platform is a GUESS unless it was given (live run #10) -------------------------
+// Touch-target minimums, shadow spread, blur and blend-mode support are all platform-dependent, so
+// a wrong guess silently mis-audits the whole screen. The guess still happens — refusing to run is
+// worse — but it must be visible, and it used to surface only as one designer question among 13.
+(() => {
+  const doc = screen;
+  const guessed = audit([{ doc, label: "login" }]);
+  const given = audit([{ doc, label: "login" }], { platform: "ios" });
+  check("[platform-assumed] no platform -> still audits, still 'web', but flagged as assumed",
+    guessed.platform === "web" && guessed.platformAssumed === true);
+  check("[platform-assumed] an explicit platform is not flagged", given.platform === "ios" && given.platformAssumed === false);
+  check("[platform-assumed] an UNKNOWN platform string is a guess too, not silently honoured",
+    audit([{ doc, label: "login" }], { platform: "windows" }).platformAssumed === true);
+  const md = toMarkdown(guessed);
+  const head = md.split("## Token binding")[0];
+  check("[platform-assumed] the markdown says so at the TOP, above the findings, not in a question list",
+    /\(ASSUMED — not given\)/.test(head) && /assumed `web`/.test(head) && /--platform ios\|android/.test(head));
+  check("[platform-assumed] a given platform gets no banner", !/ASSUMED/.test(toMarkdown(given)));
+})();
+
 report();
