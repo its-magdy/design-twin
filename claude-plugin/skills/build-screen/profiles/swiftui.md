@@ -5,7 +5,8 @@ Layout · Grid · Scroll/clip/sticky · Theming · Vector fallback · Units · T
 Assets · Idiomatic iOS (system patterns by structure) · HIG semantic colors · Dynamic Type · Shapes,
 corners & aspect · Multi-screen navigation · SF Symbols · Native controls · Don't double-inset ·
 Interactions · Text metrics · Effects · Strokes · Fills & images · Safe area & insets ·
-Accessibility & RTL · Accessibility naming · Motion · Assets (detail) · Output
+Accessibility & RTL · Accessibility naming · Motion · Assets (detail) · Fit the existing app ·
+Output
 
 **Layout (IR → stacks)**
 - `flexDirection:"row"` → `HStack`; `"column"` → `VStack`.
@@ -156,5 +157,25 @@ Use leading/trailing (padding is PHYSICAL `[t,r,b,l]`); directional images
 duration:)`; `spring` → `.spring(...)` / `Spring(mass:stiffness:damping:)`.
 
 **Assets (detail)** — PDF/SVG with "Preserve Vector Data", @2x/@3x rasters, SF Symbols where they match.
+
+**Fit the existing app (detect before you emit)** — the screen lands in a codebase with conventions; a
+generated screen that ignores them is rejected in review however well it matches the design.
+- *Strings.* Never ship `Text("Delete")` as a bare literal in a localised app. Check for a String Catalog
+  (`Localizable.xcstrings`) or `.strings`: with one, `Text("delete_action")` / `String(localized:)` using
+  the project's key style, and add the entry; the same for `.accessibilityLabel(...)`, alerts and
+  placeholders. User data and numbers are `Text(verbatim:)`. No catalog at all → literals are fine; say so.
+- *Navigation.* Find how screens are presented (an existing `NavigationStack` + `navigationDestination`
+  or path/enum router, a coordinator, TCA, a UIKit host) and plug into it. A screen that is pushed must
+  NOT create its own `NavigationStack` (double nav bar). Expose taps as closures (`onClose: () -> Void`)
+  or the project's route type; the rules above describe the chrome, not who owns the stack.
+- *State & data.* Match what neighbouring screens use — `@Observable` (iOS 17+) or `ObservableObject`,
+  where view models live, how dependencies arrive (init injection, `@Environment`). No business logic,
+  networking or singleton access in the `View`; `#Preview` runs on injected sample data.
+- *Colors: one source of truth.* A value bound to a Figma variable → the project's token for it (its
+  asset-catalog color, its theme type, or the generated `DesignTokens.swift`). The HIG semantic colors
+  above are for values with NO token that are plainly system chrome — never replace a brand token with
+  `Color(.systemBackground)` because the hex is close.
+- *Deployment target.* Read it (`IPHONEOS_DEPLOYMENT_TARGET` / `Package.swift` `platforms`) before using
+  an API this file marks with an iOS version.
 
 **Output** — a `View` struct per screen (`.swift`) under `outputDir`, with a `#Preview`.

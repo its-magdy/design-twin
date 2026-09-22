@@ -4,7 +4,7 @@
 Layout · Grid · Scroll/clip/sticky · Prototype reactions · Theming · Native controls ·
 Idiomatic web (patterns by structure) · Hints, not output · Component reuse ·
 Effects · Text metrics · Strokes · Fills · Text overflow · Images · Interaction states ·
-Accessibility & RTL · Accessibility naming · Motion · Vector fallback · Tokens · Components · Assets ·
+Accessibility & RTL · Accessibility naming · Motion · Vector fallback · Tokens · Components · Assets · Fit the existing app ·
 Output
 
 **Layout (IR → CSS in `<screen>.module.css`)**
@@ -193,5 +193,14 @@ Use it inside the module CSS (`color: var(--color-text)`), not inline literals.
 `<img src="….svg">` or an icon component wrapping that file (SVGR import). **Never hand-write
 `<svg><path d="…">` markup** — the only exception is the `geometry` vector fallback above, where no asset
 file exists. Size every asset explicitly (see **Images**).
+
+**Fit the existing app (detect before you emit)** — read `package.json` and a neighbouring page first.
+- *Strings.* `next-intl`, `react-intl`, `react-i18next`, `lingui` present → the project's `t()`/`<FormattedMessage>`
+  with a new key; `aria-label`, `alt`, placeholders and errors too. None → literals are fine; say so.
+- *Routing & data.* Next App Router vs Pages vs React Router vs TanStack Router decide the file location,
+  `<Link>` import and whether the component may be a Server Component (`"use client"` only where it
+  has state/handlers). Data states come from the fetching layer in use.
+- *Components & theme.* An installed UI kit (shadcn/ui, Radix, MUI, Headless UI) and the existing
+  CSS variables win over new markup and new literal values.
 
 **Output** — React function component `.tsx` + colocated `.module.css`, one screen per folder under `outputDir`.

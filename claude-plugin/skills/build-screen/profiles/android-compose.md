@@ -4,7 +4,8 @@
 Layout · Modifier ORDER · Grid · Scroll/clip/sticky · Theming · Vector fallback · Units · Tokens ·
 Components · Text · Assets · Idiomatic Android (M3 by structure) · Material theme colors · Type scale ·
 Native controls · Icons · Interactions · Text metrics · Effects · Shapes & strokes · Fills & images ·
-Safe area & insets · Accessibility & RTL · Accessibility naming · Motion · Assets (detail) · Output
+Safe area & insets · Accessibility & RTL · Accessibility naming · Motion · Assets (detail) · Fit the existing app ·
+Output
 
 **Layout (IR → Row/Column)**
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`.
@@ -102,8 +103,8 @@ TextField→`TextField`/`OutlinedTextField`.
 **Icons** — `Icon(Icons.Default.X)` (or `Icons.Outlined/Rounded`) / `painterResource(R.drawable.x)` from the
 exported vector drawable. Never redraw a vector; reuse a Material icon only if the glyph clearly matches.
 
-**Interactions (from IR `reactions`) → Navigation Compose.** `navigate`+destination →
-`navController.navigate(route)` inside `NavHost { composable("route"){…} }`; `overlay` → `ModalBottomSheet`/
+**Interactions (from IR `reactions`).** `navigate`+destination → an `onX: () -> Unit` lambda on the screen,
+wired by the caller (with Navigation Compose: `navController.navigate(route)` inside `NavHost { composable("route"){…} }` — see *Fit the existing app*); `overlay` → `ModalBottomSheet`/
 `Dialog`; `after_timeout` → `LaunchedEffect { delay(...) }`. Transitions → `AnimatedContent`/`animate*AsState`;
 honor the animator-duration-scale / reduce-motion setting.
 
@@ -160,6 +161,27 @@ damping / (2·√(stiffness·mass))).
 
 **Assets (detail)** — SVG → VectorDrawable (no filters/masks/text; gradients API 24+); PNG densities
 mdpi 1x / hdpi 1.5x / xhdpi 2x / xxhdpi 3x / xxxhdpi 4x; prefer WebP.
+
+**Fit the existing app (detect before you emit)** — the screen lands in a codebase with conventions; a
+generated screen that ignores them is rejected in review however well it matches the design.
+- *Strings.* No literal UI text: `stringResource(R.string.login_title)` with a new entry in
+  `res/values/strings.xml` (plurals → `pluralStringResource`), following the file's existing key style.
+  `contentDescription`, `onClickLabel`, placeholders and error text too. Sample/preview data may be literal.
+- *Navigation.* A screen composable never receives or captures a `NavController`. Hoist events:
+  `LoginScreen(state, onBack: () -> Unit, onSubmit: (…) -> Unit)`, and wire them where the project wires
+  routes. Check which library that is first (`navigation-compose`, Navigation 3, Voyager, Decompose,
+  Fragments) — the `NavHost` mapping under Interactions applies only when the project uses it.
+- *State.* State hoisting: a stateless `XScreen(state, callbacks)` plus a thin stateful wrapper that
+  reads the project's `ViewModel` (`collectAsStateWithLifecycle`). Match the DI in use (Hilt, Koin,
+  manual). `@Preview` calls the stateless one with sample state.
+- *Theme: one source of truth.* An existing `AppTheme`/`MaterialTheme` wins. When the Figma tokens ARE
+  Material 3 roles (`primary`, `onSurfaceVariant`, `surfaceTint`…), feed them into
+  `lightColorScheme(...)`/`darkColorScheme(...)` so `Button`/`Card` pick them up — a parallel
+  `LocalXTokens` that the Material widgets never read leaves the file and the UI disagreeing. Keep a
+  custom `CompositionLocal` only for roles Material has no slot for.
+- *Versions & ownership.* Check the Compose BOM before an API this file marks with a version
+  (`Modifier.dropShadow` needs 1.9+; fall back to `shadow`). `enableEdgeToEdge()` belongs in the
+  `Activity`, not in a screen — check it is there, don't add it here.
 
 **Output** — a `@Composable` function per screen (`.kt`) under `outputDir`, hoisting state, taking a
 `Modifier` param, passing `innerPadding` down, with a `@Preview`.

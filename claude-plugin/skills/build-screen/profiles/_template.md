@@ -67,4 +67,12 @@ of font size), `font.letterSpacing` (px|percent, absent when 0), `leadingTrim`, 
 
 **Motion** (optional) — `transition.duration` (SECONDS), `easing.cubicBezier{x1,y1,x2,y2}`, `spring`.
 
+**Fit the existing app** (REQUIRED — 8–15 lines) — what to DETECT in the project before emitting, and
+what to do for each answer: user-facing strings (the l10n mechanism and key style — including
+accessibility labels; literals only when the app has none), navigation (which router; the screen
+exposes callbacks and never owns the stack/shell it is pushed into), state & DI (match the
+neighbours), theme (one source of truth — the project's existing theme beats a generated token file),
+dependencies (use what is installed; ask before adding), and version checks for any API you mark with
+one. A profile without this produces screens that match the design and fail code review.
+
 **Output** — file type, one-screen-per-what, where under `outputDir`, any preview/boilerplate.

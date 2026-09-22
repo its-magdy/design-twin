@@ -4,7 +4,8 @@
 Detect · Layout · Grid · Scroll/clip/sticky · Text metrics · Effects · Shapes & strokes · Fills & images ·
 Safe area & insets · Accessibility & RTL · Accessibility naming · Theming & tokens · Idiomatic Flutter
 (M3 by structure) · Interaction states · Hints, not output · Component reuse · Components ·
-Interactions & motion · Vector fallback · Units · Assets · State · Output
+Interactions & motion · Vector fallback · Units · Assets · State · Fit the existing app ·
+Output
 
 **Detect** — `pubspec.yaml` with a `flutter:` sdk dependency.
 
@@ -33,7 +34,7 @@ Interactions & motion · Vector fallback · Units · Assets · State · Output
   column widths → `Table(columnWidths: {0: FixedColumnWidth(72), 1: FlexColumnWidth(), 2:
   IntrinsicColumnWidth()})`.
 - **Spans** (a child's `gridColumnSpan`/`gridRowSpan` > 1, placed by `gridColumnStart`/`gridRowStart`) → `flutter_staggered_grid_view` `StaggeredGrid.count` +
-  `StaggeredGridTile.count(crossAxisCellCount:, mainAxisCellCount:)`; flag the dependency.
+  `StaggeredGridTile.count(crossAxisCellCount:, mainAxisCellCount:)` — a new dependency: ask first (see *Fit the existing app*).
 - A grid inside a scrolling screen is a **sliver** (`SliverGrid` in the screen's `CustomScrollView`), not
   a `GridView` nested in a scroll view — see the next section.
 
@@ -137,7 +138,7 @@ still exist in `codeconnect.local.json` — look it up and reuse it unless the d
 
 **Components** — your widgets per `codeconnect.local.json`; Figma `props` → constructor params.
 
-**Interactions & motion** — `reactions` navigate → `go_router` `context.go/push` (or `Navigator`); overlay →
+**Interactions & motion** — `reactions` navigate → a callback on the widget, wired by the route layer with the project's router (`go_router` `context.go/push`, `Navigator`… — see *Fit the existing app*); overlay →
 `showModalBottomSheet`/`showDialog`. `transition.duration` SECONDS → `Duration(milliseconds:)`;
 `cubicBezier` → `Cubic(x1,y1,x2,y2)`; `spring` → `SpringDescription(mass:, stiffness:, damping:)`. Honor
 `MediaQuery.disableAnimationsOf`.
@@ -153,6 +154,23 @@ folders, declared in `pubspec.yaml`. Flag anything the user must add.
 **State** — match what the project already uses (check `pubspec.yaml`: `flutter_riverpod`, `provider`,
 `flutter_bloc`, `get_it`…); don't introduce a second state library. Screen data states (loading/empty/
 error) come from that layer; keep `setState` for purely local UI state (a toggle, the selected tab).
+
+**Fit the existing app (detect before you emit)** — the screen lands in a codebase with conventions; a
+generated screen that ignores them is rejected in review however well it matches the design.
+- *Strings.* Check `pubspec.yaml`/`l10n.yaml`: with `flutter_localizations` + gen-l10n →
+  `AppLocalizations.of(context)!.loginTitle` and a new key in the `.arb` file; with `easy_localization`
+  or `slang` → that package's form. `tooltip:`, `semanticLabel:`, hints and errors too. No l10n set up
+  → literals are fine; say so.
+- *Navigation.* Check `pubspec.yaml` before naming a router (`go_router`, `auto_route`, `beamer`, plain
+  `Navigator`). The widget takes callbacks (`onBack`, `onSubmit`) and the route layer calls the
+  router — a screen widget that calls `context.go` itself can't be reused or tested in isolation.
+- *Shell.* If the app has a shell route or a persistent `Scaffold`/`NavigationBar`, the screen is the
+  BODY: no second `Scaffold`/`AppBar` (double chrome, double insets). Look at a neighbouring screen.
+- *Theme.* An existing `ThemeData`/`ThemeExtension` wins; add the generated `design_tokens.dart`
+  through `ThemeData.extensions`, not as a parallel set of constants.
+- *Dependencies.* `flutter_staggered_grid_view`, `path_drawing`, `flutter_svg` and the like are
+  additions to someone else's `pubspec.yaml` — use one already there, otherwise ask first or degrade
+  (plain `GridView`, a PNG) and report it.
 
 **Output** — one `StatelessWidget`/`StatefulWidget` per screen (`.dart`) under `outputDir`. To see it while
 building: a `@Preview`-annotated top-level function (`package:flutter/widget_previews.dart`, run

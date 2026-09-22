@@ -4,7 +4,8 @@
 Layout · Grid · Scroll/clip/sticky · Prototype reactions · Theming · Effects · Text metrics ·
 Safe area, a11y & RTL · Accessibility naming · Motion · Text overflow · Images · Interaction states ·
 Idiomatic RN (patterns by structure) · Native controls · Hints, not output · Component reuse · Units ·
-Tokens · Components · Text · Assets · Output
+Tokens · Components · Text · Assets · Fit the existing app ·
+Output
 
 **Layout (IR → `View` + `StyleSheet`)** — flexbox is native; **default `flexDirection` is `column`**.
 - `display:flex` → a `<View>`; `flexDirection:"row"` → `flexDirection:'row'` (omit for column).
@@ -125,5 +126,23 @@ unless clearly intentional.
 **Text** — `<Text>` with style; map `font.size/weight` to your theme's type scale.
 
 **Assets** — `<Image source={require(...)}>` for PNG; an SVG component (react-native-svg) for vectors.
+
+**Fit the existing app (detect before you emit)** — read `package.json` first; a generated screen that
+ignores the app's conventions is rejected in review however well it matches the design.
+- *Styling.* `StyleSheet.create` is the fallback, not the rule. NativeWind/Tailwind (`className`),
+  `styled-components`, Tamagui, Restyle, Unistyles → use what is installed and its theme object; look
+  at a neighbouring screen and match it.
+- *Strings.* `react-i18next`/`i18next`, `i18n-js`, `lingui`, `expo-localization` present → `t("login.title")`
+  with a new key in the project's locale file; `accessibilityLabel`, placeholders and errors too. None
+  → literals are fine; say so.
+- *Navigation.* `expo-router` (an `app/` directory) is file-based: the screen is a route file,
+  `<Stack.Screen options>` and `router.push`. React Navigation uses `navigation.navigate` +
+  `options`. Don't assume either; the screen body takes callbacks where the project does.
+- *State & data.* Match the store/fetching already in use (Redux Toolkit, Zustand, TanStack Query…);
+  loading/empty/error come from that layer, local `useState` only for UI state.
+- *Lists.* `FlatList`/`FlashList` rows are a memoised component with a stable `keyExtractor` and a
+  `renderItem` that is not re-created each render (`useCallback`) — the standard review comment on a
+  generated list screen.
+- *Versions.* Check the RN / Expo SDK version before an API this file marks with one.
 
 **Output** — function component `.tsx` with a `StyleSheet.create` block, one screen per file under `outputDir`.
