@@ -98,6 +98,50 @@ check("[no-token] but a row with no token AND no decision still fails — the ru
 })());
 check("[no-token] a REAL token is still enforced — the sentinel list is not a blanket escape",
   has(problems({ "a.tsx": "bg-[#5b5fc7]" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC }), /raw literal .*brand-600/));
+// A token's VALUE is what it resolves to in the one exported mode; its NAME is what it is. Merging
+// two names onto one code token renders perfectly in that mode and breaks in every other — invisible
+// to the literal check, to a render, and to the eye. Seen live: three Figma tokens collapsed onto one
+// because they shared a hex in the exported mode, and the survivors were then named after each
+// other's roles (Schemes/On Surface ended up called `on-primary`, while the real Schemes/On Primary
+// was called `on-surface`).
+(() => {
+  const row = (figmaName, value, codeToken) => ({ figmaName, value, kind: "color", codeToken, verdict: "exact" });
+  const merged = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+    row("Schemes/On Primary", "#ffffff", "text-on-surface"),
+    row("Schemes/On Surface", "#ffffff", "text-on-surface"),
+  ] });
+  check("[identity] two Figma tokens on one code token is reported, naming both",
+    merged.length === 1 && /2 DIFFERENT Figma tokens/.test(merged[0])
+    && /Schemes\/On Primary/.test(merged[0]) && /Schemes\/On Surface/.test(merged[0]));
+  check("[identity] the message says WHY sharing a value now is not sharing an identity",
+    /diverge in another mode/.test(merged[0]));
+  check("[identity] three merged tokens are counted as three", (() => {
+    const p3 = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+      row("a/one", "#fff", "t"), row("b/two", "#fff", "t"), row("c/three", "#fff", "t")] });
+    return p3.length === 1 && /3 DIFFERENT/.test(p3[0]);
+  })());
+  // The same Figma token legitimately appears on several rows (one per node/usage) — that is one
+  // identity, not a collision, and flagging it would make honest plans unfinishable.
+  check("[identity] the SAME Figma token repeated across rows is not a collision",
+    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+      row("Schemes/On Primary", "#ffffff", "text-on-primary"),
+      row("Schemes/On Primary", "#ffffff", "text-on-primary")] }).length === 0);
+  check("[identity] distinct Figma tokens on DISTINCT code tokens is the correct case and passes",
+    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+      row("Schemes/On Primary", "#ffffff", "text-on-primary"),
+      row("Schemes/On Surface", "#1b1b21", "text-on-surface")] }).length === 0);
+  // Backward compatibility: plans predating figmaName, and genuinely unbound values, have no
+  // identity to compare. Silence there is correct — an unbound value is not a Figma token.
+  check("[identity] rows with no figmaName are not compared (older plans, and raw unbound values)",
+    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+      { value: "#ffffff", kind: "color", codeToken: "t", verdict: "exact" },
+      { value: "#eeeeee", kind: "color", codeToken: "t", verdict: "exact" }] }).length === 0);
+  check("[identity] a no-token row is not compared either — MISSING is not a code token to collide on",
+    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+      { ...row("a/one", "#fff", "MISSING"), decision: "one-off" },
+      { ...row("b/two", "#eee", "MISSING"), decision: "one-off" }] }).length === 0);
+})();
+
 check("[case] an uppercase component verdict is read the same as the documented lowercase one", (() => {
   const row = { name: "Button", mapModule: "@/ui/Button", verdict: "REUSED" };
   return has(problems({ "a.tsx": "nothing imported here" }, { files: ["a.tsx"], components: [row], verification: STATIC }),

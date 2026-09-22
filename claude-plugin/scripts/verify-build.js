@@ -129,6 +129,19 @@ function checkPlan({ plan }, cwd) {
       problems.push(`token ${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision \u2014 say what you did about it (a one-off literal is a legitimate answer; say so) before finishing`);
     }
   }
+  const byCodeToken = /* @__PURE__ */ new Map();
+  for (const row of plan.tokens || []) {
+    if (!hasToken(row) || !row.figmaName) continue;
+    const code = String(row.codeToken).trim();
+    const names = byCodeToken.get(code) || /* @__PURE__ */ new Map();
+    if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
+    byCodeToken.set(code, names);
+  }
+  for (const [code, names] of byCodeToken) {
+    if (names.size < 2) continue;
+    const listed2 = [...names].map(([n, v]) => `'${n}' (${v})`).join(" and ");
+    problems.push(`code token '${code}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${listed2}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
+  }
   const colors = colorLiterals(source);
   const dims = arbitraryPx(source);
   for (const row of plan.tokens || []) {

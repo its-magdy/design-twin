@@ -37,6 +37,10 @@ how a value becomes code on your stack, see the profile.
   topLeftRadius:"radius/card", fills:["color/surface"]}`). Paint-level bindings live on the paint
   (`fills[].tokens.color`, `stops[].tokens`, `effects[].tokens`); text bindings on `textTokens` or
   `runs[].tokens`.
+  **These names are the token's identity — the resolved value beside them is only what it happens to
+  be in this export's mode.** Two nodes showing the same hex may be bound to two different variables
+  that diverge in another theme, so map and name from this field, never from the colour you see. It
+  is what the plan's `figmaName` records (build-screen step 2, *Names come from Figma*).
 - **`styles`** — `{fill, stroke, effect, text, grid}` → the Figma style NAME (the pre-Variables token
   system). A text style name is the best key into the type scale.
 - **`variableModes`** — this subtree is pinned to a theme mode (e.g. Dark) → emit under that theme.

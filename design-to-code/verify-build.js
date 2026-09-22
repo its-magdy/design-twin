@@ -25,6 +25,12 @@
 //     a row marked "new" whose Figma key IS mapped in codeconnect.local.json, i.e. a component that
 //     exists in code was regenerated and the plan simply called it new.
 //   - unresolved MISSING rows the agent never surfaced a decision for.
+//   - token IDENTITY: two DIFFERENT Figma tokens mapped onto one code token. Values coincide per
+//     mode; identity does not, so this is a real defect that renders perfectly in the one exported
+//     mode and breaks the moment anyone switches theme. Seen live: `Schemes/On Primary` (#ffffff in
+//     Light) and `Schemes/On Surface` (#1b1b21 in Light) both resolve to #ffffff and #1b1b21 in
+//     SOME mode, and a build merged three distinct tokens into one because they happened to share a
+//     hex in the exported mode — then named the survivors after each other's roles.
 //   - files: `files[]` must list at least one built file and every entry must exist. The literal and
 //     import checks only read the files listed there, so an empty or stale list would pass them
 //     vacuously — the gate would approve code it never looked at.
@@ -39,7 +45,11 @@
 //     "screen": "login",
 //     "status": "pending" | "awaiting-user" | "verified" | "static-only" | "abandoned",
 //     "files": ["src/screens/Login.tsx", ...],
-//     "tokens": [{ "value": "#5B5FC7", "kind": "color", "codeToken": "brand-600"|null, "verdict": "exact"|"missing"|"decided", "decision": "..."?}],
+//     "tokens": [{ "value": "#5B5FC7", "kind": "color", "figmaName": "Schemes/On Primary"|null, "codeToken": "brand-600"|null, "verdict": "exact"|"missing"|"decided", "decision": "..."?}],
+//                 `figmaName` is the variable/style name the value is BOUND to in the export (null
+//                 when nothing is bound — a genuinely raw value). It is the token's identity;
+//                 `value` is only what that identity resolves to in the exported mode. Recording
+//                 both is what makes the collision check below possible.
 //     "components": [{ "name": "Button", "key": "...", "mapModule": "@/ui/Button"|null, "verdict": "reused"|"new"|"missing" }],
 //     "anchors": { "12:40": { "file": "src/screens/Login.tsx", "symbol": "LoginHeader" } },  (node id → code; read by sync-design, not checked here)
 //     "allowedLiterals": [{ "value": "#5B5FC7", "reason": "theme.ts defines brand-600" }],
@@ -243,6 +253,25 @@ function checkPlan({ plan }, cwd) {
     if ((verdictOf(row) === "missing" || !hasToken(row)) && !row.decision) {
       problems.push(`token ${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision — say what you did about it (a one-off literal is a legitimate answer; say so) before finishing`);
     }
+  }
+
+  // Token IDENTITY, not just token value. A Figma token's `value` is what it resolves to in the ONE
+  // mode this screen was exported in; its NAME is what it actually is. Two distinct names collapsed
+  // onto one code token therefore looks perfect in that mode and silently breaks in every other —
+  // the failure is invisible to a literal check, to a render, and to the eye. Only the plan knows
+  // both facts, so this is the only place it can be caught.
+  const byCodeToken = new Map();
+  for (const row of plan.tokens || []) {
+    if (!hasToken(row) || !row.figmaName) continue;
+    const code = String(row.codeToken).trim();
+    const names = byCodeToken.get(code) || new Map();
+    if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
+    byCodeToken.set(code, names);
+  }
+  for (const [code, names] of byCodeToken) {
+    if (names.size < 2) continue;
+    const listed = [...names].map(([n, v]) => `'${n}' (${v})`).join(" and ");
+    problems.push(`code token '${code}' is mapped from ${names.size} DIFFERENT Figma tokens — ${listed}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
   }
 
   const colors = colorLiterals(source);

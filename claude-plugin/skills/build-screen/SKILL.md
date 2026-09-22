@@ -156,7 +156,7 @@ Copy this checklist into your notes and keep it updated:
      final report — never a silent invention.
 
 2. **Map before coding.** Write the plan to **`design/plan/<screen>.json`** — not "in your notes":
-   `{screen, status:"pending", files:[], tokens:[{value,kind,codeToken,verdict,decision?}],
+   `{screen, status:"pending", files:[], tokens:[{value,kind,figmaName,codeToken,verdict,decision?}],
    components:[{name,key,mapModule,verdict}], anchors:{}, allowedLiterals:[{value,reason}]?}` (step 3
    fills `anchors`, step 5 adds `verification`). This file is what step 5's `Stop` hook (wired in this
    skill's frontmatter) checks the built code against, so it must exist and be accurate before step 3 —
@@ -168,7 +168,9 @@ Copy this checklist into your notes and keep it updated:
      or `verdict:"new"`. A new component for something that exists in the codebase is a bug; check by
      structure, not name — glob the project's actual component files/exports, don't rely on memory.
    - **Token map** → the `tokens[]` array. One row per distinct Figma color/spacing/radius/type-style/
-     effect value in the node tree. Prefer the variable's `codeSyntax.{WEB,ANDROID,iOS}` when Figma
+     effect value in the node tree, each recording **`figmaName`** — the variable or style the value
+     is bound to (`null` only when nothing is bound). See *Names come from Figma* below for why that
+     field carries the weight it does. Prefer the variable's `codeSyntax.{WEB,ANDROID,iOS}` when Figma
      provides one (see `references/export-layout.md`) — that's the designer's own code name and beats
      hand-mapping. Otherwise grep the project's actual palette/theme source file (`tailwind.config.*`,
      `--color-*`/`@theme` CSS vars, `theme.ts`, `*.xcassets` colorsets, `Color.kt`/`Dimens.kt`,
@@ -198,6 +200,39 @@ Copy this checklist into your notes and keep it updated:
    Then **self-review the plan**: every visible node accounted for? any literal where a token exists?
    any hand-built native control? any fixed size that should hug/fill? Fix the plan, then build.
    *Multi-screen:* scaffold navigation/routing and shared sample data first.
+
+   **Names come from Figma, not from you.** A token's `value` is what it resolves to in the one mode
+   this screen was exported in. Its **name is what it actually is**, and that name is the designer's,
+   carried in the export — use it. Derive the code identifier from it mechanically (`Schemes/On
+   Primary` → `on-primary` / `onPrimary` / `--color-schemes-on-primary`, per the profile) so anyone
+   can read the name in either direction and land on the same token. The same goes for component names
+   (the Figma component / `figma.name` in `codeconnect.local.json`). Assets are a slightly different
+   case worth getting right: the file inside `design/assets/` is named from the node id and is the
+   producer's — never re-derive or rename it there, that name is how a re-pull knows which icon
+   changed. The copy you place in the app may take a readable name, but then nothing connects the
+   two, so `sync-design` reporting "`assets/1053_16841.svg` was re-drawn" leaves the user hunting.
+   Either keep the exported filename in the app too, or note the mapping in the plan so the change
+   list stays followable.
+
+   Three ways this goes wrong, all of which render perfectly in the exported mode:
+   - **Merging two Figma tokens because their values coincide.** `Schemes/On Primary` and
+     `Schemes/On Surface` are `#ffffff` and `#1b1b21` in Light — and swap in Dark. A build that sees
+     one hex and writes one token has made theme switching wrong, invisibly. One Figma name, one code
+     token, always; the Stop hook fails a `codeToken` reached from two different `figmaName`s.
+   - **Renaming by role or usage.** A colour named `Outline Variant` that you happen to use on text
+     is still `outline-variant`, not `text-outline-variant`. Re-labelling it hides which token it is
+     and makes the next person's grep fail. (One real build named `Schemes/On Surface` "on-primary"
+     and `Schemes/On Primary` "on-surface" — the two ended up exactly inverted, and it looked right.)
+   - **Inventing a name for a value that has one.** If the export binds it, the name exists; go and
+     read it rather than describing the colour you see.
+
+   **When Figma genuinely has no name** — a raw unbound value, an ad-hoc gradient stop — there is no
+   name to be faithful to, and inventing one silently is how a codebase ends up with `gray-2` next to
+   `medium-gray`. Treat it as the decision it is: **ask the user what to call it**, offering the name
+   you'd pick and where you'd put it. If you're mid-build and it's small, name it, but record the
+   name and its origin in that row's `decision` and **list every such invented name in your step-6
+   report** so the user can rename before it spreads. The generated theme file (`tokens.js`) derives
+   its names straight from Figma, which is the other reason to prefer it over hand-writing one.
 
    **Two mistakes seen in practice — check the plan for them explicitly:**
    - A node named Status Bar / Home Indicator / 9:41 / Keyboard appears in the plan as a view or
@@ -314,8 +349,10 @@ Copy this checklist into your notes and keep it updated:
 
 6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
    <screen>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
-   states designed vs defaulted (with the defaults used); approximations; verification evidence (what
-   was rendered and compared, residual differences); open designer questions. If no component catalog
+   states designed vs defaulted (with the defaults used); approximations; **every name you invented**
+   (any token/component/asset the export did not name — list each with what you called it and where
+   it lives, so the user can rename it before it spreads); verification evidence (what was rendered
+   and compared, residual differences); open designer questions. If no component catalog
    was exported (step 1), say so in one line — "new" there means unverified against Figma's catalog.
    If the `Stop` hook (`${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js`) reported problems earlier in
    this turn, they must be resolved before this report is written — a report claiming "done" while
@@ -358,6 +395,9 @@ on its own, since it re-runs once per fix round — that reference explains why.
 
 - **Stack-native layout, never absolute positioning** unless the design is genuinely absolute.
 - **Tokens, not literals.** A hardcoded value where a token exists is a bug.
+- **Names come from Figma.** A token/component/asset keeps the designer's name, derived mechanically.
+  Never merge two Figma names because their values coincide in this mode, never re-label by role, and
+  when there is genuinely no name, ask — then report what you invented (step 2).
 - **Reuse, don't regenerate** — mapped components and native platform controls both.
 - **Don't invent icons.** Use the exported asset; never inline your own `<svg>`.
 - **Units are part of the value.** `lineHeight`/`letterSpacing` percent vs px, `rotation` in degrees,

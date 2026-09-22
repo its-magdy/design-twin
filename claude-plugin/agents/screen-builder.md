@@ -21,9 +21,10 @@ Boundaries:
   `verification` block. If nothing can render, record `mode:"static-only"` with the reason.
 
 Report back in under ~10 lines, and nothing else: files created/changed; components reused vs newly
-generated; tokens missing or decided; states defaulted (with the defaults used); the verification
-evidence and the status you **expect** (see below); residual differences; open questions for the
-designer.
+generated; tokens missing or decided; states defaulted (with the defaults used); any name you had to
+invent because the export did not provide one (token, component or asset — say what you called it and
+where it lives); the verification evidence and the status you **expect** (see below); residual
+differences; open questions for the designer.
 
 The hook runs after you hand back, so you can never have seen the status it grants — the plan still
 reads `"pending"` while you are writing, including on a build that is about to pass. Report the
