@@ -1,7 +1,7 @@
 // Offline tests for the design-to-code/ layer. No Figma, no dependencies:  node test/design-to-code.test.js
 // Hardened after an adversarial review — assertions pin VALUES (not just presence) and every
 // confirmed finding has a regression test. Tags: [Fn]/[An]/[Mn]/[Bn] map to review finding ids.
-const { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName } = require("../design-to-code/tokens");
+const { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName } = require("../design-to-code/tokens");
 const { validateMap } = require("../design-to-code/map-validate");
 const { driftLint } = require("../design-to-code/drift-lint");
 const { bootstrap } = require("../design-to-code/map-bootstrap");
@@ -540,6 +540,80 @@ check("[sec-mode-quote] the escaped selector still carries its declarations", qu
 check("[sec-mode-quote] rewrite is reported by lintTokens", lintTokens(modeDs(quoteMode)).some((w) => /escaped in its tokens\.css selector/.test(w)));
 check("[css-legit-mode] an ordinary mode name is NOT escaped", toCSS(modeDs("Dark")).includes('[data-theme="Dark"]'));
 check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("Dark")).some((w) => /escaped in its tokens\.css selector/.test(w)));
+
+// ---------- duplicate names collapse to ONE declaration (live run #16) --------------------------
+// A real file had THREE variables called "Schemes/On Primary" with distinct keys — one in collection
+// "M3", two in "material-theme". Each pushed its own line, so :root carried the identical
+// declaration three times and every mode block repeated the pattern: 22 copies of one property.
+// lintTokens already warned "later definition wins" and toDTCG already collapsed them (an object key
+// holds one value); only the CSS disagreed.
+(() => {
+  const dupDs = {
+    collections: [{ name: "A", modes: ["Light", "Dark"], default: "Light" }, { name: "B", modes: ["Light", "Dark"], default: "Light" }],
+    variables: [
+      { name: "on/primary", type: "COLOR", collection: "A", values: { Light: "#ffffff", Dark: "#111111" } },
+      { name: "on/primary", type: "COLOR", collection: "B", values: { Light: "#ffffff", Dark: "#222222" } },
+      { name: "on/primary", type: "COLOR", collection: "B", values: { Light: "#ffffff", Dark: "#333333" } },
+    ],
+  };
+  const css = toCSS(dupDs);
+  const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1];
+  check("[dup-css] three variables sharing a name emit ONE :root declaration, not three",
+    (root.match(/--on-primary:/g) || []).length === 1);
+  const dark = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  check("[dup-css] and one per mode block too", (dark.match(/--on-primary:/g) || []).length === 1);
+  check("[dup-css] the surviving value is the LAST definition — what the warning promises and what a browser would do",
+    /--on-primary: #333333;/.test(dark));
+  check("[dup-css] the collision is still WARNED about, not silently swallowed",
+    lintTokens(dupDs).filter((w) => /duplicate token name 'on\/primary'/.test(w)).length === 2);
+  check("[dup-css] distinct names are untouched — the dedup keys on the emitted property, not on being a dup",
+    (toCSS({ collections: [{ name: "A", modes: ["M"], default: "M" }], variables: [
+      { name: "a/one", type: "COLOR", collection: "A", values: { M: "#111" } },
+      { name: "a/two", type: "COLOR", collection: "A", values: { M: "#222" } }] }).match(/--a-/g) || []).length === 2);
+})();
+
+// ---------- --web tailwind: the web counterpart of --native (live run #18) ----------------------
+(() => {
+  const twDs = {
+    collections: [{ name: "Theme", modes: ["Light", "Dark"], default: "Light" }],
+    variables: [
+      { name: "gray/900", type: "COLOR", collection: "Theme", values: { Light: "#121319", Dark: "#121319" } },
+      { name: "color/primary", type: "COLOR", collection: "Theme", values: { Light: "#dec9ff", Dark: "#381e72" } },
+      { name: "bg/side-menu", type: "COLOR", collection: "Theme", values: { Light: { aliasOf: "gray/900" }, Dark: { aliasOf: "gray/900" } } },
+      { name: "space/md", type: "FLOAT", collection: "Theme", values: { Light: 16, Dark: 16 } },
+      { name: "radius/card", type: "FLOAT", collection: "Theme", scopes: ["CORNER_RADIUS"], values: { Light: 12, Dark: 12 } },
+      { name: "text/body", type: "FLOAT", collection: "Theme", scopes: ["FONT_SIZE"], values: { Light: 14, Dark: 14 } },
+      { name: "opacity/disabled", type: "FLOAT", collection: "Theme", scopes: ["OPACITY"], values: { Light: 0.5, Dark: 0.5 } },
+    ],
+  };
+  const tw = toTailwind(twDs);
+  // Tailwind v4 generates a utility from the NAMESPACE, so filing a token under the wrong one gives
+  // a custom property no class can reach. Each kind must land under the namespace that earns it.
+  check("[tw] colors -> --color-*, spacing -> --spacing-*, radius -> --radius-*, font size -> --text-*",
+    /--color-color-primary: #dec9ff;/.test(tw.text) && /--spacing-space-md: 16px;/.test(tw.text)
+    && /--radius-radius-card: 12px;/.test(tw.text) && /--text-text-body: 14px;/.test(tw.text));
+  check("[tw] a unitless FLOAT matches no namespace — emitted unprefixed rather than filed wrongly or dropped",
+    /\n {2}--opacity-disabled: 0\.5;/.test(tw.text) && !/--spacing-opacity-disabled/.test(tw.text));
+  check("[tw] an alias points at its TARGET's namespaced name, not the referrer's and not tokens.css's",
+    /--color-bg-side-menu: var\(--color-gray-900\);/.test(tw.text));
+  check("[tw] the file imports tailwind and opens a @theme block", /^@import "tailwindcss";/.test(tw.text) && /@theme \{/.test(tw.text));
+  // @theme cannot be nested in a selector, so non-default modes reassign the same properties outside it.
+  const modeBlock = (tw.text.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  check("[tw] a non-default mode reassigns the same custom properties OUTSIDE @theme",
+    /--color-color-primary: #381e72;/.test(modeBlock) && tw.text.indexOf("@theme") < tw.text.indexOf('[data-theme="Dark"]'));
+  check("[tw] a value identical across modes is not repeated in the mode block", !/--spacing-space-md/.test(modeBlock));
+  check("[tw] counts distinguish tokens emitted from tokens that actually generate a utility",
+    tw.tokens === 7 && tw.utilities === 6);
+  check("[tw] duplicate names collapse here too", (() => {
+    const d = toTailwind({ collections: [{ name: "A", modes: ["M"], default: "M" }], variables: [
+      { name: "on/primary", type: "COLOR", collection: "A", values: { M: "#fff" } },
+      { name: "on/primary", type: "COLOR", collection: "A", values: { M: "#000" } }] });
+    return (d.text.match(/--color-on-primary:/g) || []).length === 1 && /#000000/.test(d.text);
+  })());
+  check("[tw] a mode name cannot break out of its attribute selector (same escaping toCSS uses)",
+    !/dark"\]/.test(toTailwind({ collections: [{ name: "A", modes: ["Light", 'dark"] * { display: none } [x="'], default: "Light" }],
+      variables: [{ name: "c", type: "COLOR", collection: "A", values: { Light: "#fff", 'dark"] * { display: none } [x="': "#000" } }] }).text));
+})();
 
 // ---------- the design-system split: these CLIs must reject the slim manifest -----------------
 // design/design-system.json no longer carries variables/components. Handing it to tokens.js or

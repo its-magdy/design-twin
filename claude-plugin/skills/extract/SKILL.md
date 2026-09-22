@@ -112,14 +112,27 @@ right-click → Export) to `design/<screen>.png`.
 
 ## Tokens → a theme file the app can import
 
-"Get me the colors" is not finished when `design/design-system/tokens.json` lands — nothing in the
-app can import that. Turn it into the stack's own theme file once, instead of re-mapping values on
-every screen:
+"Get me the colors" is not finished when the raw variables land — nothing in the app can import
+those. Turn them into the stack's own theme file once, instead of re-mapping values on every screen.
+
+**The first argument is whichever variable file your pull produced**: `design/design-system/tokens.json`
+after a `--design-system` pull, or `design/variables.json` after a single-screen pull. There is no
+other input, and passing the one you don't have is the usual reason this command fails.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json design/                      # web: tokens.css + DTCG json
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json <theme dir> --native swiftui  # or compose | flutter | react-native  (+ --package com.acme.ui for Kotlin)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json design/                                 # DTCG json + tokens.css (plain custom properties)
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json <css dir> --web tailwind                # Tailwind v4: theme.css with an @theme block
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/variables.json <theme dir> --native swiftui            # or compose | flutter | react-native  (+ --package com.acme.ui for Kotlin)
 ```
+
+Pick the output by stack. `tokens.css` is plain `:root` custom properties — right for CSS Modules or
+vanilla CSS, but **Tailwind generates no utilities from it**, so on a Tailwind v4 project use
+`--web tailwind`: it writes `theme.css` (`@import "tailwindcss"` + an `@theme` block) with each
+variable under the namespace that earns it a utility — `--color-*` → `bg-`/`text-`, `--spacing-*` →
+`p-`/`gap-`, `--radius-*` → `rounded-`, `--text-*` → `text-<size>` — and every non-default mode
+reassigning those same properties in a `[data-theme="…"]` block. Import it as the app's entry CSS.
+Do not hand-write an `@theme` block from the bound token names: that is the per-screen re-mapping
+this step exists to stop.
 
 Read the warnings it prints (a skipped alias, a renamed identifier). The file is generated — say
 where it landed and how to wire it in (its header comment shows the one line), don't hand-edit it,

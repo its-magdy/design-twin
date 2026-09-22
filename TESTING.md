@@ -352,4 +352,4 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node design-to-code/map-bootstrap.js design/design-system/components.local.json --out codeconnect.local.json` | Scaffold codeconnect.local.json from the Figma catalog (re-running merges into it) |
 | `node design-to-code/drift-lint.js codeconnect.local.json design/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
 | `node design-to-code/get-component.js design/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
-| `node design-to-code/tokens.js design/design-system/tokens.json ./out` | Emit tokens.dtcg.json + tokens.css |
+| `node design-to-code/tokens.js <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → theme.css; `--native <p>` → a native token file) |

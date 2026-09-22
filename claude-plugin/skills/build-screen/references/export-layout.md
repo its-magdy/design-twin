@@ -130,7 +130,8 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   the field is genuinely absent — not when you looked in the other file's place for it. **Always read it** — JSON gives exact values, the image
   tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
-- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json design/`),
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <design/design-system/tokens.json or design/variables.json> design/`;
+  add `--web tailwind` for a Tailwind v4 `theme.css`, `--native <profile>` for a native token file),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
   token, in the form your target uses.
 - `codeconnect.local.json` (repo ROOT, not `design/`) — Figma component → **your** code component +

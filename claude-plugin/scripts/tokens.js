@@ -533,7 +533,7 @@ function toCSS(designSystem, opts) {
   const collections = designSystem && designSystem.collections || [];
   const vars = designSystem && designSystem.variables || [];
   const selectorFor = (mode) => opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`;
-  const rootLines = [];
+  const rootLines = /* @__PURE__ */ new Map();
   const perMode = /* @__PURE__ */ Object.create(null);
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -544,18 +544,74 @@ function toCSS(designSystem, opts) {
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
     const varName = cssVarName(v.name);
-    rootLines.push(`  ${varName}: ${cssValue(base, unit)};`);
+    rootLines.set(varName, `  ${varName}: ${cssValue(base, unit)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = [])).push(`  ${varName}: ${cssValue(values[m], unit)};`);
+      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(values[m], unit)};`);
     }
   }
-  let out = rootLines.length ? ":root {\n" + rootLines.join("\n") + "\n}\n" : "";
+  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
   for (const m of Object.keys(perMode)) out += `
 ${selectorFor(m)} {
-` + perMode[m].join("\n") + "\n}\n";
+` + [...perMode[m].values()].join("\n") + "\n}\n";
   return out;
+}
+var TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
+function twSlug(name) {
+  const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  return slug || "token";
+}
+var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
+function twKind(v, opts) {
+  if (v.type === "COLOR") return "color";
+  if (v.type === "STRING") return /font.?family|typeface/i.test(String(v.collection) + "/" + v.name) ? "fontFamily" : null;
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null;
+  const scopes = v.scopes || [];
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
+  if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
+  if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
+  if (!narrowed && /font.?size|text.?size|type.?size/i.test(String(v.collection) + "/" + v.name)) return "fontSize";
+  return "dimension";
+}
+function toTailwind(designSystem, opts) {
+  const collections = designSystem && designSystem.collections || [];
+  const vars = designSystem && designSystem.variables || [];
+  const theme = /* @__PURE__ */ new Map();
+  const perMode = /* @__PURE__ */ Object.create(null);
+  let utilities = 0;
+  for (const v of vars) {
+    if (!segs(v.name).length) continue;
+    const def = defaultModeName(v, collections);
+    const base = baseValue(v, collections, def);
+    if (base === void 0) continue;
+    const kind = twKind(v, opts);
+    const name = (kind ? TW_NAMESPACE[kind] : "--") + twSlug(v.name);
+    if (kind) utilities++;
+    const unit = numberUnit(v, opts);
+    const val = (raw) => isAlias(raw) ? aliasVar(raw, vars, opts) : cssValue(raw, unit);
+    const baseStr = JSON.stringify(base);
+    theme.set(name, `  ${name}: ${val(base)};`);
+    const values = v.values || {};
+    for (const m of Object.keys(values)) {
+      if (m === def || values[m] === void 0) continue;
+      if (JSON.stringify(values[m]) === baseStr) continue;
+      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(name, `  ${name}: ${val(values[m])};`);
+    }
+  }
+  let out = '@import "tailwindcss";\n';
+  if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
+  for (const m of Object.keys(perMode)) out += `
+[data-theme="${cssAttrEscape(m)}"] {
+` + [...perMode[m].values()].join("\n") + "\n}\n";
+  return { text: out, utilities, tokens: theme.size };
+}
+function aliasVar(raw, vars, opts) {
+  const target = vars.find((x) => x.name === raw.aliasOf);
+  const kind = target ? twKind(target, opts) : null;
+  return "var(" + (kind ? TW_NAMESPACE[kind] : "--") + twSlug(raw.aliasOf) + ")";
 }
 var RESOLVER_VERSION = "2025.10";
 var RESOLVER_SCHEMA = "https://www.designtokens.org/schemas/2025.10/resolver.json";
@@ -714,7 +770,7 @@ function emitTokens(designSystem, opts) {
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, resolver, resolverFiles: files, warnings };
 }
-module.exports = { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName };
+module.exports = { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName };
 Object.assign(module.exports, require_tokens_native()({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision }));
 if (require.main === module) {
   const fs = require("fs");
@@ -729,10 +785,11 @@ if (require.main === module) {
     return v === void 0 ? "" : v;
   };
   const native = flag("--native");
+  const web = flag("--web");
   const kotlinPackage = flag("--package");
   const input = args[0];
   const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>]";
+  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind]";
   if (args.includes("--help") || args.includes("-h")) {
     console.log(USAGE);
     process.exit(0);
@@ -753,6 +810,12 @@ ${USAGE}`);
 ${USAGE}`);
     process.exit(1);
   }
+  const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" };
+  if (web !== void 0 && !WEB_TARGETS[web]) {
+    console.error(`--web: unknown target "${web}" (known: tailwind)
+${USAGE}`);
+    process.exit(1);
+  }
   const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead.");
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true });
@@ -766,6 +829,15 @@ ${USAGE}`);
     fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
   }
   let nativeNote = "";
+  if (web !== void 0) {
+    const { toTailwind: toTailwind2 } = module.exports;
+    const tw = toTailwind2(ds);
+    const file = WEB_TARGETS[web];
+    fs.writeFileSync(path.join(outDir, file), tw.text);
+    nativeNote += ` + ${file}`;
+    if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight) \u2014 emitted unprefixed, usable via var() but generating no utility`);
+  }
   if (native !== void 0) {
     const n = toNative(ds, native, { package: kotlinPackage || void 0 });
     fs.writeFileSync(path.join(outDir, n.file), n.text);

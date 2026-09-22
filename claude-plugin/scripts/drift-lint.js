@@ -39,24 +39,68 @@ var require_snapshot_meta = __commonJS({
       if (Number.isNaN(t)) return { exportedAt, ageMs: void 0, problem: "unparseable" };
       return { exportedAt, ageMs: (now || Date.now()) - t };
     }
+    function looksLikeExport(doc) {
+      return !!doc && typeof doc === "object" && (Array.isArray(doc.nodes) || Array.isArray(doc.layers) || Array.isArray(doc.pageDirs) || Array.isArray(doc.components) || Array.isArray(doc.variables) || doc.files && typeof doc.files === "object");
+    }
+    function snapshotCandidates(dir) {
+      const out = [
+        { f: path.join(dir, "design-system.json"), named: true },
+        { f: path.join(dir, "pages", "index.json"), named: true }
+      ];
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return out;
+      }
+      const rest = [];
+      for (const e of entries) {
+        if (!e.isFile() || !e.name.endsWith(".json") || e.name === "design-system.json") continue;
+        const f = path.join(dir, e.name);
+        try {
+          rest.push({ f, mtime: fs.statSync(f).mtimeMs });
+        } catch {
+        }
+      }
+      rest.sort((a, b) => b.mtime - a.mtime);
+      return out.concat(rest.map((r) => ({ f: r.f, named: false })));
+    }
     function readSnapshotInfo(outDir) {
       const dir = outDir || process.env.FIGMA_EXPORT_DIR || "design";
-      const file = path.join(dir, "design-system.json");
-      let raw;
-      try {
-        raw = fs.readFileSync(file, "utf8");
-      } catch (e) {
-        return null;
+      const cands = snapshotCandidates(dir);
+      let file = null, doc = null, parseError = null, fallback = null;
+      for (const { f: cand, named } of cands) {
+        let raw;
+        try {
+          raw = fs.readFileSync(cand, "utf8");
+        } catch {
+          continue;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          if (named && parseError === null) parseError = { file: cand, error: path.basename(cand) + " is not valid JSON: " + errMsg2(e) };
+          continue;
+        }
+        if (!named && !looksLikeExport(parsed)) continue;
+        if (!parsed.exportedAt) {
+          if (fallback === null) fallback = { file: cand, doc: parsed };
+          continue;
+        }
+        file = cand;
+        doc = parsed;
+        break;
       }
-      let doc;
-      try {
-        doc = JSON.parse(raw);
-      } catch (e) {
-        return { file, error: "design-system.json is not valid JSON: " + errMsg2(e) };
+      if (file === null && fallback !== null) {
+        file = fallback.file;
+        doc = fallback.doc;
       }
-      const sourceFile = doc && doc.file;
+      if (file === null) return parseError;
+      const label = path.basename(file);
+      const sourceFile = doc && doc.file || (doc && typeof doc.screen === "string" ? doc.screen : void 0);
       const { exportedAt, ageMs, problem } = snapshotAge2(doc);
-      const warning = problem === "missing" ? "no exportedAt stamp \u2014 freshness unknown (re-export with the current plugin)" : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp` : void 0;
+      const warning = problem === "missing" ? `no exportedAt stamp in ${label} \u2014 freshness unknown (re-export with the current plugin)` : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp` : void 0;
       return { file, exportedAt, ageMs, sourceFile, warning };
     }
     module2.exports = { readSnapshotInfo, snapshotAge: snapshotAge2 };

@@ -58,11 +58,15 @@ it in step 1, don't read its files.
   publish **`key`**. Scaffold with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json
   --out codeconnect.local.json` (re-running merges, never overwrites your edits). *(Legacy name-keyed
   `design/components.json` may exist; prefer `codeconnect.local.json`.)*
-- **`design/tokens.dtcg.json`** (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json design/`)
-  plus **`design/tokens.json`** overrides — Figma value → your token. On a native stack add
-  `--native <profile>` (swiftui / android-compose / flutter / react-native): it also writes ONE token
-  source file (`DesignTokens.swift` / `.kt`, `design_tokens.dart`, `designTokens.ts`) with every mode
-  resolved, in the platform's own theming shape.
+- **`design/tokens.dtcg.json`** (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> design/`)
+  plus **`design/tokens.json`** overrides — Figma value → your token. The input is
+  `design/design-system/tokens.json` after a `--design-system` pull, or `design/variables.json` after
+  a single-screen pull — pass whichever you have. On a native stack add `--native <profile>`
+  (swiftui / android-compose / flutter / react-native): it also writes ONE token source file
+  (`DesignTokens.swift` / `.kt`, `design_tokens.dart`, `designTokens.ts`) with every mode resolved, in
+  the platform's own theming shape. On **Tailwind v4** add `--web tailwind` for the same deal on the
+  web: `theme.css` with an `@theme` block whose variables sit under the namespaces Tailwind turns into
+  utilities, plus a `[data-theme="…"]` block per non-default mode.
 - **`design/audit/<screen>.json|md`** — the pre-build audit, if run.
 - **`design/target.json`** — which stack to emit (optional; auto-detected in step 0).
 
@@ -171,11 +175,13 @@ Copy this checklist into your notes and keep it updated:
      `ColorScheme`/`ThemeExtension` in Dart — not `design/design-system/tokens.json`, which is Figma's
      raw values, never copy hex straight out of it). The verdict is either the **exact** matching token
      (same hex/value or token name actually found by grep — not "closest existing token") or
-     **MISSING**. On a native project that has **no** token source of its own yet, don't hand-write
-     one per screen — two screens built in separate sessions then disagree about what `color/primary`
-     is called. Generate it once with `tokens.js … --native <profile>`, move the file into the app's
-     source tree (ask where), list it in `files[]`, and have every screen import it; a project that
-     already has a theme keeps it, and its names win. Do not fill a MISSING row with a token defined for a different role/surface just
+     **MISSING**. On a project that has **no** token source of its own yet, don't hand-write one
+     per screen — two screens built in separate sessions then disagree about what `color/primary` is
+     called. Generate it once: `tokens.js … --native <profile>` on a native stack, `tokens.js …
+     --web tailwind` on Tailwind v4 (`theme.css`, an `@theme` block — do not hand-write one from the
+     bound token names), or plain `tokens.css` for CSS Modules/vanilla CSS. Move the file into the
+     app's source tree (ask where), list it in `files[]`, and have every screen import it; a project
+     that already has a theme keeps it, and its names win. Do not fill a MISSING row with a token defined for a different role/surface just
      because it's close or already imported elsewhere — that's silent hardcoding by proxy and the bug
      this rule exists to catch. Any **MISSING** row **blocks step 3**: set the plan's `status` to
      `"awaiting-user"`, stop and ask the user whether to add the token or which specific fallback to

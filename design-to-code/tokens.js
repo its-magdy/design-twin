@@ -332,7 +332,16 @@ function toCSS(designSystem, opts) {
   const vars = (designSystem && designSystem.variables) || [];
   const selectorFor = (mode) => (opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`);
 
-  const rootLines = [];
+  // Keyed by custom-property NAME, not pushed as lines, because two different Figma variables can
+  // normalise to the same property: a name repeated in two collections, or (seen live) three
+  // variables all called "Schemes/On Primary" with distinct keys — one in "M3", two in
+  // "material-theme". Emitting a line each put the identical declaration in :root three times over
+  // and once more per mode block, 22 copies in one real file. lintTokens already warns "duplicate
+  // token name … later definition wins" and toDTCG already collapses them (an object key can only
+  // hold one value); a Map makes the CSS agree with both — first occurrence's POSITION, last
+  // definition's VALUE, which is exactly what the warning promises and what a browser would do with
+  // the duplicates anyway.
+  const rootLines = new Map();
   // Null-prototype: keyed by MODE NAMES (free-form designer strings, reaching us through JSON.parse,
   // which creates a real own "__proto__" key). On a plain object `perMode["__proto__"]` resolves to
   // Object.prototype — truthy, but with no .push — so this line threw an uncaught TypeError and the
@@ -347,16 +356,99 @@ function toCSS(designSystem, opts) {
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
     const varName = cssVarName(v.name); // hoisted for the same reason: split/replace/join per mode otherwise
-    rootLines.push(`  ${varName}: ${cssValue(base, unit)};`);
+    rootLines.set(varName, `  ${varName}: ${cssValue(base, unit)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
-      (perMode[m] || (perMode[m] = [])).push(`  ${varName}: ${cssValue(values[m], unit)};`);
+      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(values[m], unit)};`);
     }
   }
-  let out = rootLines.length ? ":root {\n" + rootLines.join("\n") + "\n}\n" : "";
-  for (const m of Object.keys(perMode)) out += `\n${selectorFor(m)} {\n` + perMode[m].join("\n") + "\n}\n";
+  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
+  for (const m of Object.keys(perMode)) out += `\n${selectorFor(m)} {\n` + [...perMode[m].values()].join("\n") + "\n}\n";
   return out;
+}
+
+// --- Tailwind v4 theme ------------------------------------------------------------------------
+//
+// Why this exists (live run #18): `--native <profile>` gives a native project ONE checked-in token
+// file every screen imports. A web project had no equivalent — tokens.css is plain custom properties,
+// which Tailwind does not turn into utilities, so the builder hand-wrote an `@theme` block from the
+// bound token names and pasted the hexes into the plan's allowedLiterals. Two screens built in
+// separate sessions would then disagree about what `--color-primary` is called. Same fix as native:
+// generate it once.
+//
+// Tailwind v4 generates a utility from a theme variable's NAMESPACE (tailwindcss.com/docs/theme):
+// `--color-*` -> bg-/text-/border-, `--spacing-*` -> p-/m-/gap-, `--radius-*` -> rounded-,
+// `--text-*` -> text-<size>, `--font-*` -> font-. So a Figma variable has to be filed under the right
+// namespace or it produces a custom property nobody can reach from a class. A FLOAT that carries no
+// unit (opacity, font-weight) matches no Tailwind namespace at all; it is still emitted, unprefixed,
+// so `var(--x)` works, but it generates no utility — which is the honest outcome, not a silent drop.
+//
+// Modes: `@theme` cannot be nested in a selector, so the default mode's values live there and every
+// other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block. Tailwind's
+// generated utilities read `var(--color-…)`, so they follow the override with no extra work.
+const TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
+
+// The Tailwind key for a token name: kebab-case, lowercased, from the SAME segs() every other
+// emitter uses, so `--color-schemes-on-primary` and the DTCG `schemes.on.primary` describe one token.
+function twSlug(name) {
+  const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  return slug || "token";
+}
+
+const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
+function twKind(v, opts) {
+  if (v.type === "COLOR") return "color";
+  if (v.type === "STRING") return /font.?family|typeface/i.test(String(v.collection) + "/" + v.name) ? "fontFamily" : null;
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null; // unitless: opacity/weight — no Tailwind namespace fits
+  const scopes = v.scopes || [];
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
+  if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
+  if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
+  if (!narrowed && /font.?size|text.?size|type.?size/i.test(String(v.collection) + "/" + v.name)) return "fontSize";
+  return "dimension";
+}
+
+function toTailwind(designSystem, opts) {
+  const collections = (designSystem && designSystem.collections) || [];
+  const vars = (designSystem && designSystem.variables) || [];
+  const theme = new Map(); // same first-position/last-value dedup rule as toCSS
+  const perMode = Object.create(null);
+  let utilities = 0;
+  for (const v of vars) {
+    if (!segs(v.name).length) continue;
+    const def = defaultModeName(v, collections);
+    const base = baseValue(v, collections, def);
+    if (base === undefined) continue;
+    const kind = twKind(v, opts);
+    const name = (kind ? TW_NAMESPACE[kind] : "--") + twSlug(v.name);
+    if (kind) utilities++;
+    const unit = numberUnit(v, opts);
+    // An alias must point at the TAILWIND name of its target, not the tokens.css one.
+    const val = (raw) => (isAlias(raw) ? aliasVar(raw, vars, opts) : cssValue(raw, unit));
+    const baseStr = JSON.stringify(base);
+    theme.set(name, `  ${name}: ${val(base)};`);
+    const values = v.values || {};
+    for (const m of Object.keys(values)) {
+      if (m === def || values[m] === undefined) continue;
+      if (JSON.stringify(values[m]) === baseStr) continue;
+      (perMode[m] || (perMode[m] = new Map())).set(name, `  ${name}: ${val(values[m])};`);
+    }
+  }
+  let out = '@import "tailwindcss";\n';
+  if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
+  for (const m of Object.keys(perMode)) out += `\n[data-theme="${cssAttrEscape(m)}"] {\n` + [...perMode[m].values()].join("\n") + "\n}\n";
+  return { text: out, utilities, tokens: theme.size };
+}
+
+// An alias's target gets the namespace ITS OWN kind earns, which is not necessarily the referrer's —
+// so resolve the target variable rather than reusing the current name's prefix.
+function aliasVar(raw, vars, opts) {
+  const target = vars.find((x) => x.name === raw.aliasOf);
+  const kind = target ? twKind(target, opts) : null;
+  return "var(" + (kind ? TW_NAMESPACE[kind] : "--") + twSlug(raw.aliasOf) + ")";
 }
 
 // --- DTCG Resolver Module (2025.10) -------------------------------------------------------------
@@ -620,7 +712,7 @@ function emitTokens(designSystem, opts) {
   return { dtcg, css, resolver, resolverFiles: files, warnings };
 }
 
-module.exports = { toDTCG, toCSS, toResolver, lintTokens, emitTokens, hexToColorValue, cssVarName };
+module.exports = { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName };
 // tokens-native.js must agree with this file on names, default modes, aliases and units, so it is
 // built FROM these helpers (see the note at its top on why it does not require this file back).
 Object.assign(module.exports, require("./tokens-native.js")({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision }));
@@ -638,16 +730,20 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const flag = (name) => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined ? "" : v; };
   const native = flag("--native");
+  const web = flag("--web");
   const kotlinPackage = flag("--package");
   const input = args[0];
   const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>]";
+  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n" +
+    "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind]";
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = args.filter((a) => a.startsWith("-"));
   if (stray.length) { console.error(`tokens: unknown flag ${stray.join(", ")}\n${USAGE}`); process.exit(1); }
   if (!input) { console.error(USAGE); process.exit(1); }
   const { toNative, platformOf } = module.exports;
   if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
+  const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" }; // build-screen's profile name works too
+  if (web !== undefined && !WEB_TARGETS[web]) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); process.exit(1); }
   const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
@@ -665,6 +761,15 @@ if (require.main === module) {
     fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
   }
   let nativeNote = "";
+  if (web !== undefined) {
+    const { toTailwind } = module.exports;
+    const tw = toTailwind(ds);
+    const file = WEB_TARGETS[web];
+    fs.writeFileSync(path.join(outDir, file), tw.text);
+    nativeNote += ` + ${file}`;
+    if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight) — emitted unprefixed, usable via var() but generating no utility`);
+  }
   if (native !== undefined) {
     const n = toNative(ds, native, { package: kotlinPackage || undefined });
     fs.writeFileSync(path.join(outDir, n.file), n.text);
