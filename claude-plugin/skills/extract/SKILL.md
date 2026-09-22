@@ -51,6 +51,20 @@ Each command is shorthand for a flag that still works (`dtwin --list-libraries`,
 If a command hangs or times out, run **`dtwin doctor`** before anything else: it says whether the
 cause is the token, the port, the daemon or the plugin.
 
+**More than one Figma file open? Every command above needs `--client`.** The bridge routes per
+connected plugin, so with two files connected it refuses rather than guessing which one you meant:
+"2 Figma files are connected to the bridge — say which one to use". That is not a failure — add
+`--client <connId|fileKey|part of the file name>` to each command and re-run:
+
+```
+dtwin list clients                              # the address book: connId, file name, fileKey
+dtwin list --client TeamSmart                   # …then scope every command to one file
+dtwin pull design --node <id> --client TeamSmart
+```
+
+`dtwin doctor` names each connected file and says when disambiguation will be needed. MCP twin: a
+`client: "<id|name>"` argument on every plugin-reaching tool.
+
 **`dtwin` comes from the `designtwin` npm package.** If it isn't on PATH, you are probably working
 inside a clone of the Design Twin repo itself — there, every `dtwin` above is
 `node bridge/figma-pull.js`. If neither is available, the CLI isn't installed: fall back to Path A

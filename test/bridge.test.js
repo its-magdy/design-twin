@@ -1817,6 +1817,17 @@ async function disconnectErr(code, reason) {
   ok("[doctor] plugin: connected / nobody came / skipped",
     doctor.checkPlugin({ clients: [{ file: "F" }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
     && doctor.checkPlugin({ skipped: "why" }, 10).status === "warn");
+  // Live run #2: two files were connected, doctor reported a plain ✓, and the very next command
+  // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
+  (() => {
+    const one = doctor.checkPlugin({ clients: [{ file: "TeamSmart" }] }, 10);
+    const two = doctor.checkPlugin({ clients: [{ file: "TeamSmart" }, { file: "NERA" }] }, 10);
+    ok("[doctor] plugin: one connected file is a plain ✓ with no flag to add", one.status === "ok" && one.next === undefined);
+    ok("[doctor] plugin: several connected files stay ✓ but warn that commands must disambiguate",
+      two.status === "ok" && /2 files, so commands must say which/.test(two.detail) && /--client/.test(two.next));
+    ok("[doctor] plugin: both file names are still named either way",
+      /TeamSmart/.test(one.detail) && /TeamSmart/.test(two.detail) && /NERA/.test(two.detail));
+  })();
 
   const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-"));
   const byId = (checks, id) => checks.find((c) => c.id === id);

@@ -89,6 +89,11 @@ without overwriting anything, and prints the steps that are clicks in Figma. The
      is in play without disclosing it (flag forms: `--show-token` / `--rotate-token` /
      `--token-status`). Then `dtwin doctor` to confirm the plugin connects, and `dtwin list` to see
      what's there.
+     One bridge serves **several Figma files at once** — each open plugin window is one client. With
+     more than one connected, every command that reaches the plugin needs `--client
+     <connId|fileKey|part of the file name>`, or it refuses rather than guessing; `dtwin list clients`
+     is the address book and `dtwin doctor` says when you will need it. (MCP: a `client` argument on
+     each tool.)
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
      that project* pointing at the absolute path of `bridge/figma-mcp.mjs` (`dtwin init --mcp` writes
      it); enable it via `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.

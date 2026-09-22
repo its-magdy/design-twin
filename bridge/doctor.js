@@ -69,6 +69,20 @@ function checkToken(s) {
 
 const fileNames = (clients) => (clients || []).map((c) => c.file || "(unidentified)").join(", ");
 
+// One bridge serves several Figma files at once (one client per open plugin window). With more than
+// one connected, resolveClient() refuses any plugin-reaching command that doesn't say WHICH file —
+// correct, but doctor used to report both connections as a plain ✓, so the next command's refusal
+// came as a surprise (live run #2). A connected-and-ambiguous bridge is healthy AND needs a flag;
+// say both.
+function connectedDetail(clients, prefix) {
+  const detail = `${prefix}: ${fileNames(clients)}`;
+  if ((clients || []).length < 2) return { detail };
+  return {
+    detail: `${detail} — ${clients.length} files, so commands must say which`,
+    next: "add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)",
+  };
+}
+
 // `st` is daemon.status(port): null when none is running. No daemon is the normal state, not a problem.
 function checkDaemon(st, port) {
   if (!st) return ok("daemon", "Daemon", `none running on port ${port} (optional — \`dtwin serve\` keeps the connection open between pulls)`);
@@ -99,7 +113,10 @@ function checkPort(port, probe, st) {
 function checkPlugin(r, waitSec) {
   const title = "Figma plugin";
   if (r.skipped) return warn("plugin", title, `not checked — ${r.skipped}`, r.next);
-  if (r.clients && r.clients.length) return ok("plugin", title, `connected: ${fileNames(r.clients)}`);
+  if (r.clients && r.clients.length) {
+    const c = connectedDetail(r.clients, "connected");
+    return { id: "plugin", title, status: "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
+  }
   if (r.badToken) {
     return fail("plugin", title, `a plugin IS running, but with a different token (fingerprint ${r.badToken.fingerprint || "none — its token field is empty"} vs expected ${r.expected})`, "run `dtwin --show-token`, paste it into the plugin's \"Bridge token\" field, Save");
   }
@@ -226,7 +243,8 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
     if (st) {
       // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
       add(st.pluginConnected
-        ? ok("plugin", "Figma plugin", `connected (through the daemon): ${fileNames(st.clients)}`)
+        ? (() => { const c = connectedDetail(st.clients, "connected (through the daemon)");
+            return { id: "plugin", title: "Figma plugin", status: "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) }; })()
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`"));
     } else if (!probe.free) {
       add(checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined }));
