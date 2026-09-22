@@ -40,9 +40,9 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 `design-to-code/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/design-to-code.test.js       # expect: 257/257 checks passed, exit 0
-node test/audit.test.js                # expect: 61/61 checks passed, exit 0
-node test/verify-build.test.js         # expect: 48/48 checks passed, exit 0 — the build-screen Stop-hook gate,
+node test/design-to-code.test.js       # expect: 281/281 checks passed, exit 0
+node test/audit.test.js                # expect: 70/70 checks passed, exit 0
+node test/verify-build.test.js         # expect: 57/57 checks passed, exit 0 — the build-screen Stop-hook gate,
                                        # and that claude-plugin/scripts/ is in sync with design-to-code/
                                        # (stale? run: node claude-plugin/build-scripts.js)
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
@@ -52,7 +52,7 @@ node test/design-diff.test.js          # expect: 27/27 checks passed, exit 0 —
 node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.js            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js
+node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js
 ```
 
 `test/audit.test.js` drives `design-to-code/audit.js` (the pre-build design audit behind the
@@ -88,7 +88,9 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 482/482 checks passed, exit 0
+node test/bridge.test.js        # expect: 492/492 checks passed, exit 0
+# NOTE: run this with no dtwin daemon holding port 8787. A live daemon makes doctor's plugin
+# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (491/492).
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```
 
@@ -257,7 +259,7 @@ clobbering hand-authored fields.
 
 ## Layer C — design-to-code tooling on a REAL export (checklist)
 
-The `design-to-code/` suite (`test/design-to-code.test.js`, 204 checks) runs on **mock** data, so validate it against a
+The `design-to-code/` suite (`test/design-to-code.test.js`, 281 checks) runs on **mock** data, so validate it against a
 genuine `design-system.json` once (a full export from Layer B) to catch what the mocks can't. Work
 top-to-bottom; each box is a concrete pass/fail.
 
@@ -332,9 +334,9 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 | `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `395/395` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/design-to-code.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component) — expect `241/241` |
+| `node test/design-to-code.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `281/281` |
 | `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
-and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split) — expect `419/419` |
+and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note) — expect `492/492` |
 | `node bridge/figma-pull.js --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
 | `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
