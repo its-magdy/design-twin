@@ -999,6 +999,49 @@ async function disconnectErr(code, reason) {
   const badInfo = readSnapshotInfo(badJsonDir);
   ok("[status] unparseable design-system.json reports an error, not a crash", badInfo && typeof badInfo.error === "string");
 
+  // Live run #5: a single-screen pull writes design/<Screen>.json and NOTHING else that is stamped —
+  // no design-system.json, no pages/index.json. Reading only the first meant doctor told someone who
+  // had just exported a screen that nothing had been exported yet.
+  (() => {
+    const scrDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-screen-"));
+    const at = new Date(Date.now() - 2 * 3600000).toISOString();
+    fs.writeFileSync(path.join(scrDir, "Skills_list.json"), JSON.stringify({ exportedAt: at, screen: "Skills list", nodes: [{ id: "1:2" }], manifest: {} }));
+    const i = readSnapshotInfo(scrDir);
+    ok("[status] a single-screen export IS an export — its stamp is found with no design-system.json",
+      i && i.exportedAt === at && i.ageMs > 1.9 * 3600000);
+    ok("[status] and a screen doc's `screen` stands in for the source-file name",
+      i && i.sourceFile === "Skills list");
+    // design/ also holds files this tool GENERATES. None of them may be mistaken for the export.
+    fs.writeFileSync(path.join(scrDir, "target.json"), JSON.stringify({ profile: "web-tailwind" }));
+    fs.writeFileSync(path.join(scrDir, "tokens.dtcg.json"), JSON.stringify({ color: { bg: { $value: "#fff" } } }));
+    fs.writeFileSync(path.join(scrDir, "tokens.resolver.json"), JSON.stringify({ name: "r", sets: [] }));
+    ok("[status] generated files (target/tokens.*) are not mistaken for the export",
+      readSnapshotInfo(scrDir).file.endsWith("Skills_list.json"));
+    // variables.json IS export-shaped (variables[]) but carries no stamp of its own; a stamped doc
+    // sitting next to it must win, or the report reads "freshness unknown" for a fresh export.
+    fs.writeFileSync(path.join(scrDir, "variables.json"), JSON.stringify({ variables: [{ name: "x" }] }));
+    const withVars = readSnapshotInfo(scrDir);
+    ok("[status] an unstamped variables.json never outranks the stamped screen doc beside it",
+      withVars.exportedAt === at && withVars.warning === undefined);
+    // …but when it is genuinely the only export-shaped file, it is still reported (with the warning)
+    // rather than the caller being told nothing was exported at all.
+    const onlyVars = fs.mkdtempSync(path.join(os.tmpdir(), "figma-onlyvars-"));
+    fs.writeFileSync(path.join(onlyVars, "variables.json"), JSON.stringify({ variables: [] }));
+    const ov = readSnapshotInfo(onlyVars);
+    ok("[status] an unstamped export is reported WITH its warning, not as 'nothing exported'",
+      ov && ov.exportedAt === undefined && /variables\.json/.test(ov.warning));
+    // A page walk's index is the third shape.
+    const pagesDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-pages-"));
+    fs.mkdirSync(path.join(pagesDir, "pages"));
+    fs.writeFileSync(path.join(pagesDir, "pages", "index.json"), JSON.stringify({ exportedAt: at, pageDirs: [] }));
+    ok("[status] a page walk's pages/index.json is found too", readSnapshotInfo(pagesDir).exportedAt === at);
+    // And a directory with only generated output is still "nothing exported".
+    const genOnly = fs.mkdtempSync(path.join(os.tmpdir(), "figma-genonly-"));
+    fs.writeFileSync(path.join(genOnly, "target.json"), JSON.stringify({ profile: "web-tailwind" }));
+    ok("[status] a design/ holding only generated files still reports no export",
+      readSnapshotInfo(genOnly) === null);
+  })();
+
   ok("[status] FIGMA_EXPORT_DIR env is honored when no outDir arg is given", (() => {
     const prev = process.env.FIGMA_EXPORT_DIR;
     process.env.FIGMA_EXPORT_DIR = stampDir;

@@ -8,9 +8,10 @@ model: sonnet
 You verify; you do not fix. You have not seen how the screen was built — judge only what renders.
 
 Inputs you need (ask the caller once if missing): the screen name, where its export is
-(`design/pages/…/<screen>.json`; its root `reference` field is the reference image's path relative
-to `design/`, e.g. `assets/<id>_ref.png` — a hand-exported `design/<screen>.png` is the fallback when
-that field is absent), the plan at `design/plan/<screen>.json`, and how to reach the built screen
+(`design/pages/…/<screen>.json`, whose ROOT `reference` field is the reference image's path relative
+to `design/`, e.g. `assets/<id>_ref.png` — or `design/<screen>.json` from a single-screen pull, where
+that field sits on the node instead, at `nodes[0].reference`; a hand-exported `design/<screen>.png`
+is the fallback only when it is genuinely in neither place), the plan at `design/plan/<screen>.json`, and how to reach the built screen
 (route / component / preview name).
 
 1. **Find a renderer — check, don't assume.** Web: a dev server script + Playwright (or Puppeteer)

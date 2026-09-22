@@ -119,7 +119,10 @@ function checkProject(cwd, now = Date.now()) {
     out.push(hasTarget ? ok("project", "Project", "design/ and design/target.json present") : warn("project", "Project", "design/ present, but no design/target.json", "run `dtwin init` (it detects the stack), or build-screen will ask on first run"));
 
     const snap = readSnapshotInfo(designDir);
-    if (!snap) out.push(warn("export", "Export", "nothing exported yet (no design/design-system.json)", "dtwin list   →   dtwin pull design --page <name>"));
+    // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
+    // or a single-screen design/<Screen>.json (snapshot-meta.js checks all three; naming only the
+    // first sent someone who had just pulled a screen off to re-run a pull they had already run).
+    if (!snap) out.push(warn("export", "Export", "nothing exported yet (no design-system.json, pages/index.json or screen JSON in design/)", "dtwin list   →   dtwin pull design --node <id>   (or --page <name> / --design-system)"));
     else if (snap.error) out.push(warn("export", "Export", snap.error, "re-run the pull"));
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {

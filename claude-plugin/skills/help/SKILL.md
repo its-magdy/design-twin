@@ -97,7 +97,22 @@ without overwriting anything, and prints the steps that are clicks in Figma. The
    code token — hand-authored; do NOT confuse with the generated `design/design-system/tokens.json`,
    which is Figma's own raw values), and the component map `codeconnect.local.json` (scaffold it with
    `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json --out codeconnect.local.json`).
-   `build-screen` documents all three.
+   `build-screen` documents all three. Both `design/design-system/` paths above exist only after a
+   `dtwin pull design --design-system` (or a full pull) — see the table below.
+
+## What a pull actually writes
+
+Which files land depends on which pull ran, and expecting the full set after a single-screen pull is
+the most common way to conclude an export "failed" when it did exactly what was asked:
+
+| Pull | Writes |
+|---|---|
+| `dtwin pull design --node <id>` (or a selection) | `design/<Screen>.json` (`exportedAt`, `screen`, `nodes[]`, `manifest` — the reference PNG path is `nodes[0].reference`), `design/variables.json`, `design/assets/` |
+| `dtwin pull design --page <id>` / `--all-pages` | `design/pages/index.json` + `design/pages/<page>/` (each layer file has a ROOT `reference`), `design/assets/` |
+| `dtwin pull design --design-system` | `design/design-system.json` (slim pointer manifest) + `design/design-system/` (`tokens.json`, `components.local.json`, `styles.*.json`, `hygiene.json`). No page walk, no assets |
+
+A single-screen pull therefore writes **no `design/design-system/`**, and that is normal. `dtwin
+doctor` counts any of the three as an export.
 
 ## Then run it
 

@@ -118,11 +118,16 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 
 ## Single-screen exports, assets, config maps
 
-- `design/<screen>.json` — a single screen exported on its own (same tree shape), when not using
-  `design/pages/`.
-- The reference screenshot (visual ground truth) — the screen JSON's root `reference` field holds its
-  path relative to `design/` (e.g. `assets/<id>_ref.png`); a hand-exported `design/<screen>.png` is
-  the fallback when that field is absent. **Always read it** — JSON gives exact values, the image
+- `design/<screen>.json` — a single screen exported on its own, from `--node <id>` or a selection.
+  Root keys are `exportedAt`, `screen` (the human label), `nodes[]` (the trees, same shape as a layer
+  file's `tree`) and `manifest`. A single-screen pull also writes `design/variables.json` and
+  `design/assets/`, and does **not** write `design/design-system/`.
+- The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
+  `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
+  **root `reference`** of a page-walk layer file (`design/pages/<page>/<name>__<id>.json`, where it
+  sits beside `tree`), as a path relative to
+  `design/` (e.g. `assets/<id>_ref.png`). A hand-exported `design/<screen>.png` is the fallback when
+  the field is genuinely absent — not when you looked in the other file's place for it. **Always read it** — JSON gives exact values, the image
   tells you if the result *looks* right.
 - `design/assets/*` — real SVG/PNG icons/images referenced by `asset` fields. Never redraw an icon.
 - `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json design/`),

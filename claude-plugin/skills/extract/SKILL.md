@@ -88,12 +88,24 @@ Every export doc carries a **`manifest`**: `nodes`, `skipped`, `truncated`, `ass
 `warnings`. Read it. A truncated tree or a failed asset produces a screen that *looks* buildable and
 silently isn't, so say so now rather than letting `build-screen` discover it halfway through.
 
-Also confirm the shape on disk — `design/pages/index.json` (+ per-page dirs), or
-`design/<screen>.json`, plus `design/design-system/` and `design/assets/`.
+Also confirm the shape on disk. **What lands depends on the pull**, so check for what your command
+actually produces rather than the full set:
+- `--node <id>` / a selection → `design/<Screen>.json` (keys: `exportedAt`, `screen`, `nodes[]`,
+  `manifest`) + `design/variables.json` + `design/assets/`. **No `design/design-system/`** — that
+  directory needs its own pull, and its absence here is normal, not a failed export.
+- `--page <id>` / `--all-pages` → `design/pages/index.json` + per-page dirs + `design/assets/`.
+- `--design-system` → `design/design-system.json` (a slim pointer manifest) + `design/design-system/`
+  (`tokens.json`, `components.local.json`, `styles.*.json`, `hygiene.json`). No page walk, no assets.
+
+So a project that has only ever run a single-screen pull has no `design/design-system/` at all, and
+the token/component commands below need that pull first — they will say so if you forget.
 
 **Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
-points at it from the screen JSON's root `reference` field (a path relative to `design/`, e.g.
-`assets/<id>_ref.png`). `build-screen` validates against it, and without it fidelity checking is
+points at it from a `reference` field holding a path relative to `design/` (e.g.
+`assets/<id>_ref.png`). **Where that field sits depends on which export you ran**, and getting it
+wrong is the difference between finding the PNG and concluding there isn't one:
+`design/<screen>.json` (a single-screen pull) puts it on each node — `nodes[0].reference` — while a
+page-walk layer file (`design/pages/<page>/<name>__<id>.json`) puts it at the root, beside `tree`. `build-screen` validates against it, and without it fidelity checking is
 guesswork — so confirm that file exists. Only if `reference` is absent (the manifest `warnings` will
 say "reference screenshot failed/empty") ask the user to export a PNG of the frame by hand (Figma
 right-click → Export) to `design/<screen>.png`.
