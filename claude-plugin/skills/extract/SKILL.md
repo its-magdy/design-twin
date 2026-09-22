@@ -1,6 +1,6 @@
 ---
 name: extract
-description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, synced, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "re-sync the tokens", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen.
+description: Get a design OUT of Figma and onto disk as JSON + assets, using the local "Design Twin" plugin (free Figma plan, no Figma API, no network egress). Use this whenever the user wants design data pulled, exported, refreshed or re-pulled from Figma — "pull the login screen", "export this frame", "get the design system", "get me the colors", "set up my theme from Figma", "grab the components from Figma" — and ALSO whenever a build/codegen task needs files that aren't in design/ yet, or the ones there are stale. This is the step BEFORE writing any code; once files land in design/, hand off to build-screen. When a screen that is ALREADY built must catch up with a changed design, use sync-design — it snapshots before re-pulling.
 argument-hint: "[what to pull: page, frame name, node id or Figma URL]"
 ---
 
@@ -78,7 +78,8 @@ The server is registered as `designtwin`, so a tool's full name is `mcp__designt
 `mcp__designtwin__figma_list_pages`) — call it by that name if the short one isn't found.
 
 **Pass `writeToDisk: true` on any export past a quick look.** Inline results are capped (25k tokens by
-default), so a real page export is silently truncated without it — and asset bytes are never returned
+default). An export too large to return is written to disk on its own and the result's `note` says
+so, but asking for it up front is cheaper than discovering it — and asset bytes are never returned
 inline at all, so it's the only way to get `design/assets/`.
 
 ## Check what landed before declaring success
@@ -96,6 +97,23 @@ points at it from the screen JSON's root `reference` field (a path relative to `
 guesswork — so confirm that file exists. Only if `reference` is absent (the manifest `warnings` will
 say "reference screenshot failed/empty") ask the user to export a PNG of the frame by hand (Figma
 right-click → Export) to `design/<screen>.png`.
+
+## Tokens → a theme file the app can import
+
+"Get me the colors" is not finished when `design/design-system/tokens.json` lands — nothing in the
+app can import that. Turn it into the stack's own theme file once, instead of re-mapping values on
+every screen:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json design/                      # web: tokens.css + DTCG json
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/design-system/tokens.json <theme dir> --native swiftui  # or compose | flutter | react-native  (+ --package com.acme.ui for Kotlin)
+```
+
+Read the warnings it prints (a skipped alias, a renamed identifier). The file is generated — say
+where it landed and how to wire it in (its header comment shows the one line), don't hand-edit it,
+and re-run it after the next token pull. Variables only: text styles and shadows are not emitted yet.
+If the project already has a theme file, do not add a second one beside it — show the user the
+difference and ask which is the source of truth.
 
 ## Then hand off
 

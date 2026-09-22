@@ -343,6 +343,13 @@ every **enabled** team library — with each one's variable collections (and var
 many of its components this file uses. It's the library-scoped sibling of `--list`: same cost tier
 (no recursion, no node properties, no assets), same `--timeout`, prints to stdout and writes nothing.
 
+**Waiting for the plugin.** Every command that needs Figma first waits for the plugin to connect:
+`--timeout <seconds>` bounds that wait as well as the command itself. Without the flag it is 10
+minutes at a terminal and 90 seconds when stderr is not a TTY (an agent's shell, CI) — then
+`no Figma plugin connected within Ns`, exit 1, with the next step. A first word that is not a verb
+but is an obvious guess at one (`dtwin export`, `dtwin ls`, `dtwin check`) is refused with the real
+verb instead of being taken as an output folder; `dtwin pull export` still exports into `./export`.
+
 Three honest limits, because they change what the numbers mean:
 - **Component counts are usage-derived.** Figma exposes **no API to enumerate a library's contents**,
   so the count is "components of that library used in *this* file", not the library's size.
@@ -536,8 +543,11 @@ granularity it needs.
 Use it for anything past a quick look. Two things make it not optional:
 - **Asset bytes are never returned inline** (they'd dump megabytes of base64 into context), so
   `writeToDisk` is the *only* way to get `assets/` out of the MCP path.
-- **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`), so a real page
-  export is silently truncated without it.
+- **Inline MCP results are capped** (25k tokens by default, `MAX_MCP_OUTPUT_TOKENS`). The server
+  measures the result before returning it: one that would not fit is **written to disk on its own**
+  and the index's `note` says so (a real design-system export is ~590 KB ≈ 147k tokens). Passing
+  `writeToDisk: false` opts out of that — an oversized result is then an error naming the size,
+  never a payload cut off mid-JSON.
 
 `outDir` resolves against **the directory the MCP server was started in** — i.e. the project you're
 building, not this repo. Default `FIGMA_EXPORT_DIR` or `design/`, the same var `figma_status` reads.

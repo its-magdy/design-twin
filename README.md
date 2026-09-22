@@ -128,7 +128,9 @@ reusing yours, and the token drift check has nothing to compare against:
    design/design-system/components.local.json --out design/audit/<screen>`.
 4. Build: `/designtwin:build-screen <screen>` (or: "build <screen> from design/<screen>.json"). It reads
    the audit (or runs the script itself) and records every default it had to assume.
-5. When the design changes later: `/designtwin:sync-design <screen>`. It keeps the previous export,
+5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?") — renders
+   it, compares it with the export, lists the differences. It changes no code.
+6. When the design changes later: `/designtwin:sync-design <screen>`. It keeps the previous export,
    re-pulls, diffs the two by node id (`design-to-code/design-diff.js`) and patches only what moved —
    a rebuild would throw away every hand edit since step 4. Commit `design/` so a previous export
    always exists.

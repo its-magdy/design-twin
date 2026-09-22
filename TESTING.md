@@ -40,17 +40,18 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 `design-to-code/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/design-to-code.test.js       # expect: 254/254 checks passed, exit 0
+node test/design-to-code.test.js       # expect: 257/257 checks passed, exit 0
 node test/audit.test.js                # expect: 61/61 checks passed, exit 0
 node test/verify-build.test.js         # expect: 48/48 checks passed, exit 0 — the build-screen Stop-hook gate,
                                        # and that claude-plugin/scripts/ is in sync with design-to-code/
                                        # (stale? run: node claude-plugin/build-scripts.js)
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/design-diff.test.js          # expect: 11/11 checks passed, exit 0 — the sync-design change list (node-id diff, snapshot CLI)
+node test/design-diff.test.js          # expect: 27/27 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
+                                       # token diffs, baseline choice, re-drawn assets, snapshot CLI)
 node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
-node test/mcp-smoke.test.js            # expect: 9/9 checks passed, exit 0 — boots the real MCP server over stdio
-                                       # (port 8789, fixed token), lists tools, calls figma_write dryRun
+node test/mcp-smoke.test.js            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
+                                       # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
 node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js
 ```
 
@@ -87,7 +88,7 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 480/480 checks passed, exit 0
+node test/bridge.test.js        # expect: 482/482 checks passed, exit 0
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```
 
