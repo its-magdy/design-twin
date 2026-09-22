@@ -135,8 +135,14 @@ module.exports = { validateMap };
 if (require.main === module) {
   const fs = require("fs");
   const file = process.argv[2];
-  if (!file) {
-    console.error("usage: node design-to-code/map-validate.js <map.json>");
+  const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
+  if (file === "--help" || file === "-h") {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  if (!file || file.startsWith("-")) {
+    console.error((file ? `map-validate: unknown flag ${file}
+` : "") + USAGE);
     process.exit(1);
   }
   const res = validateMap(JSON.parse(fs.readFileSync(file, "utf8")));

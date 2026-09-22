@@ -642,10 +642,19 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   check("[native] a token named like a mode does not collide with the mode instance", /public static let lightMode = ThemeTokens\(/.test(sw.text) && /public let light: Color/.test(sw.text));
   check("[native] an alias that leaves the file, or loops, is skipped with a warning — never guessed",
     !/fromLibrary|loopA/.test(kt.text) && kt.warnings.filter((w) => /From\/Library|Loop\/A/.test(w)).length === 2);
-  check("[native] swiftui: struct + static modes + EnvironmentValues entry", /public struct ThemeTokens \{/.test(sw.text) && /static let defaultValue = ThemeTokens\.lightMode/.test(sw.text) && /var themeTokens: ThemeTokens \{/.test(sw.text)
+  check("[native] swiftui: struct + static modes + EnvironmentValues entry", /public struct ThemeTokens: Sendable, Equatable \{/.test(sw.text) && /public init\(/.test(sw.text) && /static let defaultValue = ThemeTokens\.lightMode/.test(sw.text) && /var themeTokens: ThemeTokens \{/.test(sw.text)
     && /Color\(\.sRGB, red: 0\.102, green: 0\.1686, blue: 0\.2353, opacity: 1\)/.test(sw.text));
   check("[native] flutter: ThemeExtension with copyWith + lerp", /class ThemeTokens extends ThemeExtension<ThemeTokens> \{/.test(da.text) && /ThemeTokens copyWith\(\{/.test(da.text) && /primaryPrimary: Color\.lerp\(primaryPrimary, other\.primaryPrimary, t\)!/.test(da.text));
   check("[native] react-native: typed per-mode record, colors as hex strings, numbers unitless", /export const themeTokens: Record<ThemeTokensMode, ThemeTokens> = \{/.test(ts.text) && /primaryPrimary: "#1a2b3c"/.test(ts.text) && /spaceMD: 16,/.test(ts.text));
+  check("[native] swiftui: the usage hint only offers colorScheme for a light/dark pair — any other axis names a real member", (() => {
+    const t = toNative({ collections: [{ name: "Sizes", modes: ["Desktop", "Mobile"], default: "Desktop" }, { name: "Theme", modes: ["Light", "Dark"], default: "Light" }], variables: [{ name: "gap", type: "FLOAT", collection: "Sizes", values: { Desktop: 24, Mobile: 16 } }, { name: "bg", type: "COLOR", collection: "Theme", values: { Light: "#fff", Dark: "#000" } }] }, "swiftui").text;
+    return /\\\.sizesTokens, \.mobile \/\* one of: \.desktop, \.mobile/.test(t) && /\\\.themeTokens, colorScheme == \.dark \? \.dark : \.light\)/.test(t) && !/sizesTokens, colorScheme/.test(t);
+  })());
+  check("[native] swiftui: a control character is escaped the Swift way (\\u{1}), not the JSON way", /"a\\u\{0001\}b"/.test(toNative({ collections: [{ name: "S", modes: ["M"], default: "M" }], variables: [{ name: "s", type: "STRING", collection: "S", values: { M: "a\u0001b" } }] }, "swiftui").text));
+  check("[native] compose: the JVM limit is counted in parameter UNITS (Color = 2) — 130 colors in a themed collection warns, 100 does not", (() => {
+    const ds = (n) => ({ collections: [{ name: "Big", modes: ["Light", "Dark"], default: "Light" }], variables: Array.from({ length: n }, (_, i) => ({ name: "c/" + i, type: "COLOR", collection: "Big", values: { Light: "#fff", Dark: "#000" } })) });
+    return toNative(ds(130), "android-compose").warnings.some((w) => /JVM parameter units/.test(w)) && !toNative(ds(100), "android-compose").warnings.some((w) => /JVM/.test(w));
+  })());
   check("[native] prototype-named modes/tokens cannot break the emitter", (() => { try { toNative({ collections: [{ name: "__proto__", modes: ["__proto__", "constructor"], default: "__proto__" }], variables: [{ name: "__proto__", type: "COLOR", collection: "__proto__", values: { __proto__: "#fff", constructor: "#000" } }] }, "flutter"); return true; } catch { return false; } })());
 })();
 

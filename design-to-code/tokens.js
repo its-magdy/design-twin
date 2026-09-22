@@ -642,6 +642,9 @@ if (require.main === module) {
   const input = args[0];
   const outDir = args[1] || ".";
   const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>]";
+  if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
+  const stray = args.filter((a) => a.startsWith("-"));
+  if (stray.length) { console.error(`tokens: unknown flag ${stray.join(", ")}\n${USAGE}`); process.exit(1); }
   if (!input) { console.error(USAGE); process.exit(1); }
   const { toNative, platformOf } = module.exports;
   if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
