@@ -107,8 +107,9 @@ function findPlans(cwd) {
     .filter(Boolean);
 }
 
-// "#abc" / "#aabbcc" / "#aabbccdd" -> "aabbcc" (alpha dropped: the literal forms below spell it
-// differently per platform, and the RGB part is what identifies the token).
+// "#abc" / "#aabbcc" / "#aabbccdd" -> "aabbcc" (alpha dropped). Kept because the RGB part alone is
+// what identifies a token in most places; `colorKey` below is what the literal check actually
+// compares on, and it does NOT drop alpha — see why there.
 function hex6(value) {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
   if (!m) return null;
@@ -116,17 +117,48 @@ function hex6(value) {
   return h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
 }
 
-// Every raw color literal in the source, normalised to rrggbb -> the spelling found (for the message).
+// The comparison key for the literal check: always 8 hex digits, rrggbb + alpha (opaque -> "ff").
+//
+// Alpha is part of the color's identity here, and folding it away was a real defect (live run #25).
+// `#ffffff` (opaque white) and `#ffffff1a` (white at 10%, a scrim) are different colors that a
+// designer binds to different tokens — or to none. Collapsed onto one key they cross-contaminate in
+// both directions: the failure message names whichever spelling the scan happened to see first (the
+// live run reported "#ffffff" for a plan row that said `#ffffff1a`, which reads like a hook bug),
+// and an `allowedLiterals` entry for one silently exempts the other. Keeping alpha keeps them apart.
+function colorKey(value) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  const full = h.length <= 4 ? h.split("").map((c) => c + c).join("") : h; // #abc/#abcd -> #aabbcc/#aabbccdd
+  return full.length === 6 ? full + "ff" : full;
+}
+
+// Every raw color literal in the source, normalised by colorKey -> the spelling found (for the
+// message). First spelling per key wins; distinct alphas are now distinct keys, so the spelling
+// reported back is the one that actually matches the plan row.
 function colorLiterals(source) {
   const found = new Map();
   const add = (h, lit) => { if (h && !found.has(h)) found.set(h, lit); };
-  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/g)) add(hex6(m[1]), m[0]);
-  // Compose `Color(0xFF5B5FC7)` / Flutter `Color(0xFF5B5FC7)` — AARRGGBB, or bare 0xRRGGBB.
-  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) add(m[1].slice(-6).toLowerCase(), m[0]);
-  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})[^)]*\)/g)) {
-    add([m[1], m[2], m[3]].map((n) => Math.min(255, Number(n)).toString(16).padStart(2, "0")).join(""), m[0]);
+  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
+  // Compose `Color(0xFF5B5FC7)` / Flutter `Color(0xFF5B5FC7)` — AARRGGBB (alpha FIRST), or bare 0xRRGGBB.
+  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
+    const h = m[1].toLowerCase();
+    add(h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff", m[0]);
+  }
+  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
+    const rgb = [m[1], m[2], m[3]].map((n) => Math.min(255, Number(n)).toString(16).padStart(2, "0")).join("");
+    add(rgb + alphaHex(m[4]), m[0]);
   }
   return found;
+}
+
+// rgba()'s 4th argument -> the same two hex digits the #rrggbbaa spelling uses. "50%" and "0.5" are
+// the same alpha in CSS, so both must land on the same key or the two spellings stop matching.
+function alphaHex(a) {
+  if (a === undefined || a === "") return "ff";
+  const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
+  if (!Number.isFinite(n)) return "ff";
+  return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 
 // Tailwind arbitrary dimensions: `gap-[14px]`, `p-[0.875rem]` -> px number -> the spelling found.
@@ -171,6 +203,20 @@ function checkVerification(plan, cwd) {
   return [`verification.mode must be "rendered" or "static-only", got ${JSON.stringify(v.mode)}`];
 }
 
+// Plan fields written by an agent are prose-adjacent: the documented spellings are lowercase
+// ("missing", "reused", "new") but a build honestly recording "MISSING" is saying the same thing.
+// Comparing case-sensitively meant the live run's `verdict: "MISSING"` matched nothing at all, so
+// the "MISSING with no recorded decision" check silently never ran on the one plan that needed it.
+const verdictOf = (row) => String((row && row.verdict) || "").trim().toLowerCase();
+
+// `codeToken` answers "which token is this value?", and MISSING is the documented answer meaning
+// "there is no token" — the same state as null, spelled out. Treating that string as a token NAME
+// produced the live run's unanswerable demand: "the plan resolved #f1efc4 to token 'MISSING' — use
+// the token, not the literal". There is no such token to use. A build that honestly records the
+// gap must not come off worse than one that omits the row entirely.
+const NO_TOKEN = new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
+const hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
+
 function checkPlan({ plan }, cwd) {
   const problems = [];
   const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
@@ -183,18 +229,20 @@ function checkPlan({ plan }, cwd) {
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason).map((a) => String(a.value).toLowerCase()));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
 
+  // A row with no token is fine — provided the build SAID what it did about it. That decision is
+  // the whole substance of the MISSING rule, so it is what gets enforced, in either spelling.
   for (const row of plan.tokens || []) {
-    if (row.verdict === "missing" && !row.decision) {
-      problems.push(`token ${row.value} (${row.kind}) is MISSING with no recorded decision — resolve or defer explicitly before finishing`);
+    if ((verdictOf(row) === "missing" || !hasToken(row)) && !row.decision) {
+      problems.push(`token ${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision — say what you did about it (a one-off literal is a legitimate answer; say so) before finishing`);
     }
   }
 
   const colors = colorLiterals(source);
   const dims = arbitraryPx(source);
   for (const row of plan.tokens || []) {
-    if (!row.codeToken) continue;
+    if (!hasToken(row)) continue; // no token exists -> the literal IS the only way to write it
     if (row.kind === "color") {
-      const h = hex6(row.value);
+      const h = colorKey(row.value);
       const lit = h && colors.get(h);
       if (lit && !isAllowed(row, lit)) problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' — use the token, not the literal (or add it to allowedLiterals with a reason)`);
     } else {
@@ -206,14 +254,15 @@ function checkPlan({ plan }, cwd) {
 
   const mapped = loadMapKeys(cwd);
   for (const row of plan.components || []) {
-    if (row.verdict === "reused" && row.mapModule) {
+    const verdict = verdictOf(row);
+    if (verdict === "reused" && row.mapModule) {
       if (!sources.some((s) => s.includes(row.mapModule))) problems.push(`component '${row.name}' was mapped to ${row.mapModule} in the plan, but no built file imports it — was it regenerated instead of reused?`);
     }
-    if (row.verdict === "new" && row.key && mapped.has(row.key)) {
+    if (verdict === "new" && row.key && mapped.has(row.key)) {
       const m = mapped.get(row.key);
       problems.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${m.module} in codeconnect.local.json — reuse the existing component`);
     }
-    if (row.verdict === "missing") {
+    if (verdict === "missing") {
       problems.push(`component '${row.name}' has no recorded reuse/new decision — resolve before finishing`);
     }
   }
@@ -292,6 +341,6 @@ function main() {
   process.exit(0);
 }
 
-module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
 
 if (require.main === module) main();

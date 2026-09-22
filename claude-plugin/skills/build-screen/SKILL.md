@@ -283,10 +283,15 @@ Copy this checklist into your notes and keep it updated:
      before you ask — a step-1 pause comes before the plan exists, so create it then with just
      `{screen, status:"awaiting-user", files:[]}` — and set it back to `"pending"` the moment you resume — the hook skips a paused
      plan but never approves one, so a build left at `"awaiting-user"` is not done.
-     The hook fails a literal only where the plan resolved that value to a token (in any spelling:
-     `#hex`, `0xFF…`, `rgb()`, `[16px]`); a value with no token (a one-off shadow `rgba()`, `text-[15px]`)
-     is fine. A resolved value that must appear literally (the theme file that defines it is in
-     `files[]`) goes in `allowedLiterals` with a reason.
+     The hook fails a literal only where the plan resolved that value to a **real** token (in any
+     spelling: `#hex`, `0xFF…`, `rgb()`, `[16px]`); a value with no token — `codeToken: null`, or the
+     word `MISSING`/`none`/`n/a`, which all mean the same thing — is fine, and so is a one-off shadow
+     `rgba()` or `text-[15px]`. What such a row **does** need is a `decision` saying what you did
+     about it ("no token exists, kept as a one-off literal" is a perfectly good answer). Recording
+     the gap honestly must never cost you more than leaving the row out. A resolved value that must
+     appear literally (the theme file that defines it is in `files[]`) goes in `allowedLiterals` with
+     a reason. Alpha is part of a colour's identity throughout: `#ffffff1a` is a different value from
+     `#ffffff`, needs its own row, and is not covered by the other's `allowedLiterals` entry.
 
 6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
    <screen>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);

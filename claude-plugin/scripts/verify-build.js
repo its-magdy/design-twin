@@ -43,17 +43,34 @@ function hex6(value) {
   const h = m[1].toLowerCase();
   return h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
 }
+function colorKey(value) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  const full = h.length <= 4 ? h.split("").map((c) => c + c).join("") : h;
+  return full.length === 6 ? full + "ff" : full;
+}
 function colorLiterals(source) {
   const found = /* @__PURE__ */ new Map();
   const add = (h, lit) => {
     if (h && !found.has(h)) found.set(h, lit);
   };
-  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b/g)) add(hex6(m[1]), m[0]);
-  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) add(m[1].slice(-6).toLowerCase(), m[0]);
-  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})[^)]*\)/g)) {
-    add([m[1], m[2], m[3]].map((n) => Math.min(255, Number(n)).toString(16).padStart(2, "0")).join(""), m[0]);
+  for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
+  for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
+    const h = m[1].toLowerCase();
+    add(h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff", m[0]);
+  }
+  for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
+    const rgb = [m[1], m[2], m[3]].map((n) => Math.min(255, Number(n)).toString(16).padStart(2, "0")).join("");
+    add(rgb + alphaHex(m[4]), m[0]);
   }
   return found;
+}
+function alphaHex(a) {
+  if (a === void 0 || a === "") return "ff";
+  const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
+  if (!Number.isFinite(n)) return "ff";
+  return Math.round(Math.min(1, Math.max(0, n)) * 255).toString(16).padStart(2, "0");
 }
 function arbitraryPx(source) {
   const found = /* @__PURE__ */ new Map();
@@ -93,6 +110,9 @@ function checkVerification(plan, cwd) {
   }
   return [`verification.mode must be "rendered" or "static-only", got ${JSON.stringify(v.mode)}`];
 }
+var verdictOf = (row) => String(row && row.verdict || "").trim().toLowerCase();
+var NO_TOKEN = /* @__PURE__ */ new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
+var hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 function checkPlan({ plan }, cwd) {
   const problems = [];
   const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
@@ -105,16 +125,16 @@ function checkPlan({ plan }, cwd) {
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason).map((a) => String(a.value).toLowerCase()));
   const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
   for (const row of plan.tokens || []) {
-    if (row.verdict === "missing" && !row.decision) {
-      problems.push(`token ${row.value} (${row.kind}) is MISSING with no recorded decision \u2014 resolve or defer explicitly before finishing`);
+    if ((verdictOf(row) === "missing" || !hasToken(row)) && !row.decision) {
+      problems.push(`token ${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision \u2014 say what you did about it (a one-off literal is a legitimate answer; say so) before finishing`);
     }
   }
   const colors = colorLiterals(source);
   const dims = arbitraryPx(source);
   for (const row of plan.tokens || []) {
-    if (!row.codeToken) continue;
+    if (!hasToken(row)) continue;
     if (row.kind === "color") {
-      const h = hex6(row.value);
+      const h = colorKey(row.value);
       const lit = h && colors.get(h);
       if (lit && !isAllowed(row, lit)) problems.push(`raw literal ${lit} found in built code, but the plan resolved ${row.value} to token '${row.codeToken}' \u2014 use the token, not the literal (or add it to allowedLiterals with a reason)`);
     } else {
@@ -125,14 +145,15 @@ function checkPlan({ plan }, cwd) {
   }
   const mapped = loadMapKeys(cwd);
   for (const row of plan.components || []) {
-    if (row.verdict === "reused" && row.mapModule) {
+    const verdict = verdictOf(row);
+    if (verdict === "reused" && row.mapModule) {
       if (!sources.some((s) => s.includes(row.mapModule))) problems.push(`component '${row.name}' was mapped to ${row.mapModule} in the plan, but no built file imports it \u2014 was it regenerated instead of reused?`);
     }
-    if (row.verdict === "new" && row.key && mapped.has(row.key)) {
+    if (verdict === "new" && row.key && mapped.has(row.key)) {
       const m = mapped.get(row.key);
       problems.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${m.module} in codeconnect.local.json \u2014 reuse the existing component`);
     }
-    if (row.verdict === "missing") {
+    if (verdict === "missing") {
       problems.push(`component '${row.name}' has no recorded reuse/new decision \u2014 resolve before finishing`);
     }
   }
@@ -192,5 +213,5 @@ function main() {
   }
   process.exit(0);
 }
-module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, isStale };
+module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
 if (require.main === module) main();

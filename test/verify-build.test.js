@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { checkPlan, passedStatus, colorLiterals, arbitraryPx, hex6, isStale } = require("../design-to-code/verify-build");
+const { checkPlan, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale } = require("../design-to-code/verify-build");
 const { check, report } = require("./assert");
 
 const HOOK = require.resolve("../design-to-code/verify-build.js");
@@ -33,9 +33,32 @@ const gap16 = { value: "16", kind: "spacing", codeToken: "spacing-4", verdict: "
 
 console.log("literal parsing:");
 check("hex6 normalises 3/6/8-digit hex, rejects junk", hex6("#abc") === "aabbcc" && hex6("#5B5FC7") === "5b5fc7" && hex6("#5B5FC7CC") === "5b5fc7" && hex6("red") === null);
-check("colorLiterals reads #hex, 0xAARRGGBB and rgb()", (() => {
+check("colorLiterals reads #hex, 0xAARRGGBB and rgb(), keyed rrggbb+alpha", (() => {
   const c = colorLiterals("a #5B5FC7 b Color(0xFF112233) c rgba(255, 0, 10, 0.5)");
-  return c.has("5b5fc7") && c.has("112233") && c.has("ff000a");
+  // opaque -> "ff"; 0xAARRGGBB puts alpha FIRST, so it must be moved to the end; rgba's 0.5 -> 80.
+  return c.has("5b5fc7ff") && c.has("112233ff") && c.has("ff000a80");
+})());
+// Live run #25: alpha was folded away, so #ffffff and #ffffff1a shared one key. The scan then
+// reported whichever spelling it saw first — the live run said "raw literal #ffffff" for a plan row
+// that read #ffffff1a, which looks like a hook bug — and an allowedLiterals entry for one exempted
+// the other. They are different colors (opaque white vs a 10% scrim) and must stay different keys.
+check("[alpha] 8-digit hex keeps its alpha, so it cannot collide with the opaque form", (() => {
+  const c = colorLiterals("bg-[#ffffff1a] and #ffffff");
+  return c.get("ffffff1a") === "#ffffff1a" && c.get("ffffffff") === "#ffffff" && c.size === 2;
+})());
+check("[alpha] colorKey normalises every spelling to 8 digits; 3- and 4-digit shorthand expand",
+  colorKey("#abc") === "aabbccff" && colorKey("#abcd") === "aabbccdd" && colorKey("#5B5FC7") === "5b5fc7ff"
+  && colorKey("#5B5FC7CC") === "5b5fc7cc" && colorKey("red") === null);
+check("[alpha] rgba() percent and decimal alpha land on the SAME key as the #rrggbbaa spelling", (() => {
+  const c = colorLiterals("rgba(255,255,255,0.1) rgb(1,2,3)");
+  return c.has("ffffff1a") && colorLiterals("rgba(255,255,255,10%)").has("ffffff1a") && c.has("010203ff");
+})());
+check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the opaque colour", (() => {
+  const scrim = { value: "#ffffff1a", kind: "color", codeToken: "bg-scrim", verdict: "exact" };
+  const pr = problems({ "a.tsx": "bg-[#ffffff1a]" }, { files: ["a.tsx"], tokens: [scrim],
+    allowedLiterals: [{ value: "#ffffff", reason: "theme defines white" }], verification: STATIC });
+  // …and the message names the spelling that is actually in the code, not the other one.
+  return pr.length === 1 && /raw literal #ffffff1a\b/.test(pr[0]) && /bg-scrim/.test(pr[0]);
 })());
 check("arbitraryPx reads [Npx] and [Nrem] as px", (() => { const d = arbitraryPx("gap-[14px] p-[1.5rem]"); return d.has(14) && d.has(24); })());
 
@@ -51,8 +74,34 @@ check("allowedLiterals with a reason exempts it", problems({ "theme.ts": "brand6
 check("allowedLiterals WITHOUT a reason does not", problems({ "theme.ts": "'#5B5FC7'" }, { files: ["theme.ts"], tokens: [brand], allowedLiterals: [{ value: "#5B5FC7" }], verification: STATIC }).length === 1);
 check("a MISSING token with no decision fails; with one passes", (() => {
   const row = { value: "#123456", kind: "color", codeToken: null, verdict: "missing" };
-  return has(problems({}, { tokens: [row], verification: STATIC }), /MISSING with no recorded decision/)
+  return has(problems({}, { tokens: [row], verification: STATIC }), /no token .* and no recorded decision/)
     && problems({ "a.tsx": "" }, { files: ["a.tsx"], tokens: [{ ...row, decision: "deferred — asked designer" }], verification: STATIC }).length === 0;
+})());
+// Live run #25: the builder honestly wrote codeToken "MISSING" — the documented "no token exists"
+// answer, spelled out rather than as null — and the gate read it as a token NAME, demanding "use the
+// token, not the literal" for a token that by definition does not exist. Honesty must not cost more
+// than omitting the row.
+check("[no-token] codeToken \"MISSING\" is no token at all, not a token named MISSING", (() => {
+  const row = { value: "#f1efc4", kind: "color", codeToken: "MISSING", verdict: "MISSING",
+    decision: "avatar fill, unbound in the export — one-off literal" };
+  return problems({ "a.tsx": "bg-[#f1efc4]" }, { files: ["a.tsx"], tokens: [row], verification: STATIC }).length === 0;
+})());
+check("[no-token] every no-token spelling behaves the same way", (() => {
+  const base = { value: "#f1efc4", kind: "color", decision: "one-off" };
+  return ["MISSING", "missing", "none", "n/a", "-", null].every((codeToken) =>
+    problems({ "a.tsx": "bg-[#f1efc4]" }, { files: ["a.tsx"], tokens: [{ ...base, codeToken }], verification: STATIC }).length === 0);
+})());
+check("[no-token] but a row with no token AND no decision still fails — the rule keeps its teeth", (() => {
+  const pr = problems({ "a.tsx": "bg-[#f1efc4]" }, { files: ["a.tsx"],
+    tokens: [{ value: "#f1efc4", kind: "color", codeToken: "MISSING", verdict: "MISSING" }], verification: STATIC });
+  return pr.length === 1 && /no recorded decision/.test(pr[0]);
+})());
+check("[no-token] a REAL token is still enforced — the sentinel list is not a blanket escape",
+  has(problems({ "a.tsx": "bg-[#5b5fc7]" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC }), /raw literal .*brand-600/));
+check("[case] an uppercase component verdict is read the same as the documented lowercase one", (() => {
+  const row = { name: "Button", mapModule: "@/ui/Button", verdict: "REUSED" };
+  return has(problems({ "a.tsx": "nothing imported here" }, { files: ["a.tsx"], components: [row], verification: STATIC }),
+    /'Button' was mapped to @\/ui\/Button/);
 })());
 
 console.log("component checks:");
