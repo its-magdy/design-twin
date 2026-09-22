@@ -32,7 +32,26 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    module2.exports = { assertNotManifest, isManifest };
+    function readJsonFile(file, what, hint) {
+      const fs = require("fs");
+      let raw;
+      try {
+        raw = fs.readFileSync(file, "utf8");
+      } catch (e) {
+        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
+        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+        process.exit(2);
+      }
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
+        process.exit(2);
+      }
+    }
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
 
@@ -133,7 +152,7 @@ function bootstrap(catalog, existing) {
 module.exports = { bootstrap };
 if (require.main === module) {
   const fs = require("fs");
-  const { assertNotManifest } = require_catalog_input();
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
   const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]";
   const argv = process.argv.slice(2);
   let outFile = null;
@@ -157,10 +176,10 @@ ${usage}`);
     console.error(usage);
     process.exit(1);
   }
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const existingFile = existingArg || outFile;
-  const existing = existingFile && fs.existsSync(existingFile) ? JSON.parse(fs.readFileSync(existingFile, "utf8")) : null;
+  const existing = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   const json = JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);

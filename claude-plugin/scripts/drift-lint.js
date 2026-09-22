@@ -79,7 +79,26 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    module2.exports = { assertNotManifest, isManifest };
+    function readJsonFile(file, what, hint) {
+      const fs = require("fs");
+      let raw;
+      try {
+        raw = fs.readFileSync(file, "utf8");
+      } catch (e) {
+        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
+        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+        process.exit(2);
+      }
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
+        process.exit(2);
+      }
+    }
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
 
@@ -212,8 +231,7 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
 }
 module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 if (require.main === module) {
-  const fs = require("fs");
-  const { assertNotManifest } = require_catalog_input();
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
   const argv = process.argv.slice(2);
   const maxAgeIdx = argv.indexOf("--max-age");
   let maxAgeHours;
@@ -237,9 +255,10 @@ if (require.main === module) {
     console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]");
     process.exit(2);
   }
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
-  const res = driftLint(JSON.parse(fs.readFileSync(mapFile, "utf8")), catalog, { maxAgeMs });
+  const map = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;

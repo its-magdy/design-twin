@@ -634,7 +634,7 @@ Object.assign(module.exports, require("./tokens-native.js")({ segs, isAlias, nor
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
-  const { assertNotManifest } = require("./catalog-input.js");
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require("./catalog-input.js");
   const args = process.argv.slice(2);
   const flag = (name) => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined ? "" : v; };
   const native = flag("--native");
@@ -648,7 +648,7 @@ if (require.main === module) {
   if (!input) { console.error(USAGE); process.exit(1); }
   const { toNative, platformOf } = module.exports;
   if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
-  const ds = JSON.parse(fs.readFileSync(input, "utf8"));
+  const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
   const { dtcg, css, resolver, resolverFiles, warnings } = emitTokens(ds); // one pass: emit + lint share the same opts and traversal

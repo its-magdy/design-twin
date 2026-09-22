@@ -181,8 +181,7 @@ module.exports = { driftLint, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AG
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
 if (require.main === module) {
-  const fs = require("fs");
-  const { assertNotManifest } = require("./catalog-input.js");
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require("./catalog-input.js");
   const argv = process.argv.slice(2);
   const maxAgeIdx = argv.indexOf("--max-age");
   let maxAgeHours;
@@ -198,9 +197,10 @@ if (require.main === module) {
 
   const [mapFile, catalogFile] = argv;
   if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--max-age <hours>]"); process.exit(2); }
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
-  const res = driftLint(JSON.parse(fs.readFileSync(mapFile, "utf8")), catalog, { maxAgeMs });
+  const map = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;

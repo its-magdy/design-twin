@@ -24,7 +24,26 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    module2.exports = { assertNotManifest: assertNotManifest2, isManifest };
+    function readJsonFile(file, what, hint) {
+      const fs2 = require("fs");
+      let raw;
+      try {
+        raw = fs2.readFileSync(file, "utf8");
+      } catch (e) {
+        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
+        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+        process.exit(2);
+      }
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
+        process.exit(2);
+      }
+    }
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    module2.exports = { assertNotManifest: assertNotManifest2, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
 

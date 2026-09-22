@@ -556,6 +556,49 @@ check("[manifest-guard] an EMPTY payload array still passes — zero variables i
 check("[manifest-guard] junk/undefined input does not throw or false-positive",
   !isManifest(null, "variables") && !isManifest({ files: ["a"] }, "variables"));
 
+// ---------- a missing input file is a SENTENCE, not an ENOENT stack trace --------------------
+// Live-run finding #15: a --node/single-screen pull never writes design/design-system/, so every
+// one of these CLIs is routinely pointed at a file that legitimately does not exist. Dying with a
+// raw stack whose top frame is a line number inside this repo reads like the tool broke. These run
+// as real subprocesses because the behaviour under test IS the process exit + what lands on stderr.
+(() => {
+  const { spawnSync } = require("child_process");
+  const D2C = path.join(__dirname, "..", "design-to-code");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-enoent-"));
+  const run = (script, args) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd });
+  const GONE = "design/design-system/components.local.json";
+  const cases = [
+    ["map-bootstrap.js", [GONE, "--out", "codeconnect.local.json"], /component catalog/],
+    ["drift-lint.js", ["codeconnect.local.json", GONE], /component catalog/],
+    ["tokens.js", ["design/design-system/tokens.json", "out"], /token catalog/],
+    ["map-validate.js", ["codeconnect.local.json"], /component map/],
+    ["audit.js", ["design/Nope.json"], /screen export/],
+    ["design-diff.js", ["design/Nope.json"], /export/],
+  ];
+  for (const [script, args, what] of cases) {
+    const r = run(script, args);
+    const err = r.stderr || "";
+    check(`[enoent-${script}] a missing input exits 2 with one 'does not exist' line, no stack`,
+      r.status === 2 && /^error {2}/m.test(err) && what.test(err) && /does not exist/.test(err)
+      && !/ENOENT/.test(err) && !/\n {4}at /.test(err));
+  }
+  // The hint is the actionable half: it must name the pull that WOULD create the missing file.
+  const boot = run("map-bootstrap.js", [GONE, "--out", "codeconnect.local.json"]).stderr;
+  check("[enoent-hint] the catalog tools explain that a single-screen pull writes no design-system/",
+    /--design-system/.test(boot) && /--node/.test(boot) && /every instance then counts as new/.test(boot));
+  check("[enoent-hint] tokens.js points at the file a single-screen pull DOES write",
+    /design\/variables\.json/.test(run("tokens.js", ["design/design-system/tokens.json", "out"]).stderr));
+  // …and a file that exists but is not JSON is its own sentence, not a SyntaxError stack.
+  fs.writeFileSync(path.join(cwd, "broken.json"), "{oops");
+  const bad = run("map-validate.js", ["broken.json"]);
+  check("[enoent-badjson] unparseable JSON is reported as such, with the parser's reason",
+    bad.status === 2 && /is not valid JSON/.test(bad.stderr) && !/\n {4}at /.test(bad.stderr));
+  // Guard the opposite direction: a file that IS there must still be processed normally.
+  fs.writeFileSync(path.join(cwd, "ok.json"), JSON.stringify({ version: 1, components: {} }));
+  check("[enoent-negative] an existing, valid file is unaffected by the guard",
+    run("map-validate.js", ["ok.json"]).status === 0);
+})();
+
 // ---------- get-component.js: resolve a catalog entry -> its variantsFile detail -----------------
 (() => {
   const gcDs = {

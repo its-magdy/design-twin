@@ -1,4 +1,51 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __commonJS = (cb, mod) => function __require() {
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
+};
+
+// design-to-code/catalog-input.js
+var require_catalog_input = __commonJS({
+  "design-to-code/catalog-input.js"(exports2, module2) {
+    function isManifest(doc, payloadKey) {
+      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+    }
+    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+      if (isManifest(doc, payloadKey)) {
+        console.error(
+          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
+        );
+        process.exit(2);
+      }
+    }
+    function readJsonFile(file, what, hint) {
+      const fs = require("fs");
+      let raw;
+      try {
+        raw = fs.readFileSync(file, "utf8");
+      } catch (e) {
+        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
+        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+        process.exit(2);
+      }
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
+        process.exit(2);
+      }
+    }
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+  }
+});
 
 // design-to-code/map-validate.js
 var STATUSES = ["active", "deprecated", "needs-review"];
@@ -133,7 +180,7 @@ function validateProp(p, at, err) {
 }
 module.exports = { validateMap };
 if (require.main === module) {
-  const fs = require("fs");
+  const { readJsonFile } = require_catalog_input();
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
   if (file === "--help" || file === "-h") {
@@ -145,7 +192,7 @@ if (require.main === module) {
 ` : "") + USAGE);
     process.exit(1);
   }
-  const res = validateMap(JSON.parse(fs.readFileSync(file, "utf8")));
+  const res = validateMap(readJsonFile(file, "component map"));
   if (res.ok) {
     console.log("map valid");
     process.exit(0);

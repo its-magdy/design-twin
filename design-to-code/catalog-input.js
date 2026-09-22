@@ -27,4 +27,38 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
   }
 }
 
-module.exports = { assertNotManifest, isManifest };
+// The second half of the same "never hand back a confusing failure" job: a raw
+// `fs.readFileSync` on a path the user typed dies with an ENOENT stack trace whose top frame is a
+// line number inside THIS repo, which reads like the tool crashed rather than like the file is
+// simply not there. A `--node`/single-screen pull legitimately produces no `design/design-system/`
+// at all, so "that file does not exist" is a NORMAL outcome of a normal workflow and deserves a
+// sentence, not a stack. `hint` says what to do about it.
+function readJsonFile(file, what, hint) {
+  const fs = require("fs");
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    const why = e && e.code === "ENOENT" ? "does not exist"
+      : e && e.code === "EISDIR" ? "is a directory, not a file"
+      : e && e.code === "EACCES" ? "is not readable (permission denied)"
+      : `could not be read (${(e && e.code) || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `\n       ${hint}` : ""));
+    process.exit(2);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error(`error  ${what}: '${file}' is not valid JSON — ${(e && e.message) || e}`);
+    process.exit(2);
+  }
+}
+
+// The one reason design/design-system/ is usually missing, stated once: a --node/single-screen pull
+// exports that screen and nothing else. Callers append their own "…and here is what to do instead",
+// which differs per tool (the map tools can proceed without a map; tokens.js has variables.json).
+const NO_DESIGN_SYSTEM_HINT =
+  "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen — it does not\n" +
+  "       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+
+module.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };

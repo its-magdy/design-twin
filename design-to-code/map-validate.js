@@ -136,12 +136,12 @@ module.exports = { validateMap };
 
 // CLI: node design-to-code/map-validate.js <codeconnect.local.json>
 if (require.main === module) {
-  const fs = require("fs");
+  const { readJsonFile } = require("./catalog-input.js");
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
   if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }
   if (!file || file.startsWith("-")) { console.error((file ? `map-validate: unknown flag ${file}\n` : "") + USAGE); process.exit(1); }
-  const res = validateMap(JSON.parse(fs.readFileSync(file, "utf8")));
+  const res = validateMap(readJsonFile(file, "component map"));
   if (res.ok) { console.log("map valid"); process.exit(0); }
   res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
   console.error(`\n${res.errors.length} error(s)`);

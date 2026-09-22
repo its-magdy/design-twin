@@ -472,9 +472,10 @@ if (require.main === module) {
   const stray = argv.filter((a) => a.startsWith("-"));
   if (stray.length || !argv.length) { console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
   if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); process.exit(2); }
-  const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
-  const inputs = argv.map((f) => ({ doc: read(f), label: path.basename(f, ".json") }));
-  const catalog = catalogFile ? read(catalogFile) : undefined;
+  const { readJsonFile } = require("./catalog-input.js");
+  const read = (f, what) => readJsonFile(f, what);
+  const inputs = argv.map((f) => ({ doc: read(f, "screen export"), label: path.basename(f, ".json") }));
+  const catalog = catalogFile ? read(catalogFile, "component catalog") : undefined;
   const res = audit(inputs, { platform, catalog, grid: gridArg ? Number(gridArg) : undefined });
   const md = jsonOnly ? "" : toMarkdown(res);
   if (jsonOnly) {

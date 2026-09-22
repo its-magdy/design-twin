@@ -316,7 +316,8 @@ function main(argv) {
   const json = argv.includes("--json");
   const file = argv.find((a) => !a.startsWith("--"));
   if (!file) { console.error(USAGE); process.exit(2); }
-  const current = JSON.parse(fs.readFileSync(file, "utf8"));
+  const { readJsonFile } = require("./catalog-input.js");
+  const current = readJsonFile(file, "export");
   const prev = previous(file, against, process.cwd(), current);
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against — no snapshot in design/.sync/, and it is not committed in git.\nNext time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);

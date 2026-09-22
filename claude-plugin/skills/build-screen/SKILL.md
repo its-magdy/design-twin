@@ -105,16 +105,29 @@ Copy this checklist into your notes and keep it updated:
    - Read the export `manifest` (`truncated`/`assetsFailed`/`warnings`). Anything incomplete → tell
      the user before building. Missing screen → hand off to `/designtwin:extract`; never build from the
      `.png` alone.
-   - Run the drift check: `mcp__designtwin__design_drift_lint` MCP tool (or
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" codeconnect.local.json
-     design/design-system/components.local.json`). Fix an `ok:false` map before generating
-     against it; heed a stale-snapshot warning. No `codeconnect.local.json` at all → **stop**: run
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json
-     --out codeconnect.local.json` and have the user confirm the stub
-     entries before continuing. After any hand edit to the map, check its shape with
-     `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" codeconnect.local.json` — drift-lint
-     assumes a well-formed map. Building without a map means every component instance is legitimately
-     "new" — that's the failure this skill exists to prevent, not an edge case to shrug past.
+   - **Component map — check for the catalog FIRST.** Every command below reads
+     `design/design-system/components.local.json`, and a single-screen pull
+     (`dtwin pull design --node <id>`) does **not** write it: that pull exports the screen, its assets
+     and `design/variables.json`, nothing else. So `ls design/design-system/components.local.json`
+     before anything, and take exactly one of these two branches:
+     - **The catalog exists.** Run the drift check: `mcp__designtwin__design_drift_lint` MCP tool (or
+       `node "${CLAUDE_PLUGIN_ROOT}/scripts/drift-lint.js" codeconnect.local.json
+       design/design-system/components.local.json`). Fix an `ok:false` map before generating against
+       it; heed a stale-snapshot warning. No `codeconnect.local.json` at all → **stop**: run
+       `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/design-system/components.local.json
+       --out codeconnect.local.json` and have the user confirm the stub entries before continuing.
+       After any hand edit to the map, check its shape with
+       `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" codeconnect.local.json` — drift-lint
+       assumes a well-formed map.
+     - **The catalog does not exist** (the normal single-screen case). This is **not** a stop, and it
+       is not a reason to run map-bootstrap anyway — it will just tell you the file is missing.
+       Offer the one-command fix: `dtwin pull design --design-system` writes
+       `design/design-system/` and is cheap (tokens/styles/components only — no page walk, no
+       assets), after which you take the branch above. If the user declines, or no bridge is
+       available, **build without a map**: every `INSTANCE` gets `verdict:"new"` in the plan's
+       `components[]`, you still check the codebase by structure for something to reuse (step 2), and
+       the step-6 report says in one line that no component catalog was exported, so "new" here means
+       "unverified against Figma's catalog", not "confirmed absent from the design system".
    - Read the `.png`, then skim the tree top-down. Collect every `annotations[]` and `devStatusNote`.
      Theme first: `variableModes`/`resolvedModes` tell you which mode this frame shows.
    - **Audit.** If `design/audit/<screen>.json` exists, read its verdict, findings and questions. If

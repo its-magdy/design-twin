@@ -309,7 +309,26 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    module2.exports = { assertNotManifest, isManifest };
+    function readJsonFile(file, what, hint) {
+      const fs = require("fs");
+      let raw;
+      try {
+        raw = fs.readFileSync(file, "utf8");
+      } catch (e) {
+        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
+        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+        process.exit(2);
+      }
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
+        process.exit(2);
+      }
+    }
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
 
@@ -700,7 +719,7 @@ Object.assign(module.exports, require_tokens_native()({ segs, isAlias, normHex, 
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
-  const { assertNotManifest } = require_catalog_input();
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
   const args = process.argv.slice(2);
   const flag = (name) => {
     const i = args.indexOf(name);
@@ -734,7 +753,7 @@ ${USAGE}`);
 ${USAGE}`);
     process.exit(1);
   }
-  const ds = JSON.parse(fs.readFileSync(input, "utf8"));
+  const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead.");
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true });
   const { dtcg, css, resolver, resolverFiles, warnings } = emitTokens(ds);

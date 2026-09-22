@@ -120,7 +120,7 @@ module.exports = { bootstrap };
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
 if (require.main === module) {
   const fs = require("fs");
-  const { assertNotManifest } = require("./catalog-input.js");
+  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require("./catalog-input.js");
   const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]";
   const argv = process.argv.slice(2);
   let outFile = null;
@@ -134,10 +134,10 @@ if (require.main === module) {
   if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
   const [catalogFile, existingArg] = argv;
   if (!catalogFile) { console.error(usage); process.exit(1); }
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const existingFile = existingArg || outFile;
-  const existing = existingFile && fs.existsSync(existingFile) ? JSON.parse(fs.readFileSync(existingFile, "utf8")) : null;
+  const existing = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   const json = JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);
