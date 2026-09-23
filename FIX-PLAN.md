@@ -188,3 +188,9 @@ editing, and the orchestrator routes it.
   311 audit.js still reads the union). All routed back to the owning agents in one parallel round
   (P1: 311/318/326; P3: 310/313/315/319; P5: 312/320/322/323/324/327; P2b: 314/316/317/325;
   P4: 321/328/329). Orchestrator re-checks the five failed criteria after the merges.
+- Regression round merged: P2b (307cb26, 48662b5), P1 (f118b05), P4 (58b371c), P3 (8e473bc), P5
+  (e088029, after a rebase to resolve `bridge/doctor.js` against P4's token check). Two textual
+  merges of generated bundles needed rebuild commits (acc513c, f08eddb). Final suites all green;
+  bridge 593/593 with the daemon running. Orchestrator re-checked the five failed re-test
+  criteria on the livetest-4 export: all pass. `main` and `refactor/design-to-code-layer` are
+  fast-forwarded to the final head at the end (owner's request; both were direct ancestors).

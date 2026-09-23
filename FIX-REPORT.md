@@ -20,18 +20,18 @@ Suites at the final head (all run from the merged tree, `dtwin serve` daemon liv
 
 | suite | before | after |
 |---|---|---|
-| test/design-to-code.test.js | 281 | 292 |
-| test/audit.test.js | 70 | 96 |
-| test/verify-build.test.js | 77 | 134 |
+| test/design-to-code.test.js | 281 | 293 |
+| test/audit.test.js | 70 | 102 |
+| test/verify-build.test.js | 77 | 151 |
 | test/plan-skeleton.test.js | — | 31 (new) |
 | test/ui.test.js | 14 | 14 |
-| test/cross-check.test.js | 47 | 56 |
-| test/verify-screen.test.js | 44 | 120 |
-| test/design-diff.test.js | 27 | 31 |
+| test/cross-check.test.js | 47 | 63 |
+| test/verify-screen.test.js | 44 | 122 |
+| test/design-diff.test.js | 27 | 41 |
 | test/identity.test.js | — | 48 (new) |
-| test/resolve-screen.test.js | — | 27 (new) |
+| test/resolve-screen.test.js | — | 33 (new) |
 | test/harness.js (plugin, mock figma) | 414 | 414 |
-| test/bridge.test.js | 528/529 | 577/577 (the old environmental failure is fixed: the doctor tests now pin a spare port) |
+| test/bridge.test.js | 528/529 | 593/593 (the old environmental failure is fixed: the doctor tests pin a spare port) |
 
 Every new test is driven by fixtures pruned from the real export in the test directory
 (`test/fixtures/livetest3/**`, each with a `build.js`/`build.py` that regenerates it and asserts the
@@ -289,4 +289,23 @@ to the wrong frame (310), the first build gate re-raises the false `Space 4` blo
 skills quote a path that does not exist in the user's project (313), and half of sync-design's diffs
 error (312).
 
-**Second pass (after the routed fixes):** _see the end of this file._
+**Second pass (after the routed fixes, orchestrator re-check on the livetest-4 export, head e088029):**
+
+| re-test fail | now |
+|---|---|
+| 310 | with both title-holders pulled (`7314:87192` + `7314:83742`), "Job Roles" stops with both candidates (`[matched: indexed title]` / `[matched: exact layer name, indexed title]`), exit 1 |
+| 311 | `audit.js --gate` on Job Roles raises the same 3 blockers as cross-check (`catalog-rekeyed`, `text-style-near-miss`, `(Space 3)`); the `Space 4` false blocker is gone |
+| 312 | all nine design-system files diff cleanly after `--snapshot` (styles ×4, hygiene, tokens, components ×2, manifest) with zero "not found" lines |
+| 313 | `grep -rn "design-to-code/" claude-plugin/skills claude-plugin/agents` → 0 (one named exception in troubleshooting) |
+| 315 | a second `--expect --out <nickname>` for an already-indexed node is refused naming the existing file (`--force` overrides); same for `audit.js` |
+
+Also closed from the re-test: 314, 316, 317 (status freshness by content hash, @1 reports not quoted,
+per-file code hashes + `gitHead` in the report, explicit precedence and a non-empty `why`), 318
+(coverage buckets partition 41/38 + hidden-only), 319 (documented: the first pull needs the node
+id), 320–326, 328, 329, and 327 (plugin version baked into the bundle, shown by `list clients` /
+`whoami` / `doctor`, doctor warns when a plugin is older than the bridge or reports no version).
+Not closed: 168 (unchanged). Suites at e088029: all green, bridge 593/593.
+
+**Still owner-only:** re-run the plugin in both Figma files and restart `dtwin serve` (until then
+`list clients` shows `pluginVersion` unknown and doctor warns about it); the no-daemon checks; the
+four Figma edits; the consumer-session skill runs.
