@@ -35,7 +35,7 @@ const K24 = "e26d506ea43ae0582896add59d9e04156fb3f6d5", K16 = "64928e3a5f094c0d9
 console.log("tokens.js on the merged variables.json:");
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, "variables.json"), out, "--web", "tailwind", "--also-generic"]);
+  const r = node("tokens.ts", [path.join(FX, "variables.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
   const dtcg = fs.existsSync(path.join(out, "tokens.dtcg.json")) ? JSON.parse(fs.readFileSync(path.join(out, "tokens.dtcg.json"), "utf8")) : {};
@@ -58,14 +58,14 @@ console.log("tokens.js on the merged variables.json:");
   // Order must not decide anything: the old emitters kept "the later one".
   const rev = clone(read("variables.json")); rev.variables.reverse();
   const revDir = tmp(); fs.writeFileSync(path.join(revDir, "v.json"), JSON.stringify(rev));
-  node("tokens.js", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
+  node("tokens.ts", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
   const decls = (t: any) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
   const a = decls(theme), b = decls(fs.existsSync(path.join(revDir, "theme.css")) ? fs.readFileSync(path.join(revDir, "theme.css"), "utf8") : "");
   ok("[44] reversing the input rows changes no name→value pair in theme.css", a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x)));
 }
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind", "--also-generic"]);
+  const r = node("tokens.ts", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   ok("[95] a screen's OWN .vars.json (Job Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
     r.status === 0 && /--spacing-figma-space-4: 24px;/.test(theme));
@@ -74,7 +74,7 @@ console.log("tokens.js on the merged variables.json:");
 }
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, "design-system/tokens.json"), out, "--web", "tailwind", "--also-generic"]);
+  const r = node("tokens.ts", [path.join(FX, "design-system/tokens.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
   ok("[183] no generated @theme variable redefines Tailwind's own scale: 0 lines of `--radius-xl:` (rounded-xl stays 12px)",
@@ -82,7 +82,7 @@ console.log("tokens.js on the merged variables.json:");
   ok("[183] Figma's XL radius is still there, under its own namespace", /--radius-figma-xl: 16px;/.test(theme));
   ok("[96] the 1e9 'fully rounded' sentinel never reaches CSS — 9999px instead", !/1000000000/.test(theme + css) && /--radius-figma-full: 9999px;/.test(theme) && /--Full: 9999px;/.test(css));
   const sw = tmp();
-  node("tokens.js", [path.join(FX, "design-system/tokens.json"), sw, "--native", "swiftui"]);
+  node("tokens.ts", [path.join(FX, "design-system/tokens.json"), sw, "--native", "swiftui"]);
   const swift = fs.existsSync(path.join(sw, "DesignTokens.swift")) ? fs.readFileSync(path.join(sw, "DesignTokens.swift"), "utf8") : "";
   ok("[96] …and SwiftUI gets `.infinity`, not 1000000000", /full: CGFloat = \.infinity/.test(swift) && !/1000000000/.test(swift));
 }
@@ -90,7 +90,7 @@ console.log("tokens.js on the merged variables.json:");
 // ------------------------------------------------------------------ design-diff.js (211)
 console.log("design-diff.js — tokens are keyed by Figma key:");
 {
-  const dd = await tryImport(path.join(D2C, "design-diff.js"));
+  const dd = await tryImport(path.join(D2C, "design-diff.ts"));
   const base = read("variables.json");
   const bump = (key: any, f: any) => { const d = clone(base); for (const v of d.variables) if (v.key === key) f(v); return d; };
   const d1 = dd && dd.diffTokens(base, bump(K24, (v: any) => { v.values = { "Mode 1": 25 }; }));
@@ -127,7 +127,7 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
 // ------------------------------------------------------------------ cross-check.js (40, 106, 137, 226)
 console.log("cross-check.js — attribution and the re-keyed catalog:");
 const cc = (screenRel: any, extra?: any): any => {
-  const r = node("cross-check.js", [path.join(FX, screenRel + ".json"), "--design-system", path.join(FX, "design-system"), "--variables", path.join(FX, "variables.json"), "--json", ...(extra || [])]);
+  const r = node("cross-check.ts", [path.join(FX, screenRel + ".json"), "--design-system", path.join(FX, "design-system"), "--variables", path.join(FX, "variables.json"), "--json", ...(extra || [])]);
   try { return JSON.parse(r.stdout); } catch (e) { return { findings: [], coverage: {}, componentProposals: [] }; }
 };
 const blockerOn = (res: any, code: any, token?: any) => res.findings.some((f: any) => f.severity === "blocker" && f.code === code && (!token || f.token === token));
@@ -181,7 +181,7 @@ const blockerOn = (res: any, code: any, token?: any) => res.findings.some((f: an
     if (c.type === "COMPONENT") c.type = "COMPONENT_SET";
   }
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(cat));
-  const r = node("cross-check.js", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
+  const r = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res: any = {}; try { res = JSON.parse(r.stdout); } catch (e) { /* stays empty */ }
   ok("[226] an unrelated catalog (same names, different prop signatures) still reports catalog-covers-nothing, with no proposals",
     Array.isArray(res.findings) && res.findings.some((f: any) => f.code === "catalog-covers-nothing") && !res.findings.some((f: any) => f.code === "catalog-rekeyed") && !(res.componentProposals || []).length);
@@ -194,7 +194,7 @@ const blockerOn = (res: any, code: any, token?: any) => res.findings.some((f: an
   screen.nodes.forEach(walk);
   for (const c of same.components) if (keyOf.has(c.name)) c.key = keyOf.get(c.name);
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(same));
-  const r2 = node("cross-check.js", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
+  const r2 = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res2: any = {}; try { res2 = JSON.parse(r2.stdout); } catch (e) { /* stays empty */ }
   ok("[226] control: when the keys DO match, it is key coverage, not a re-key proposal",
     Array.isArray(res2.findings) && !res2.findings.some((f: any) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && res2.coverage.matchedByLocalKey > 0);
@@ -207,28 +207,28 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const report0 = path.join(dir, "pos.cross.json");
   fs.writeFileSync(report0, JSON.stringify(cc(POS)));
   const map = path.join(dir, "codeconnect.local.json");
-  const none = node("map-bootstrap.js", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
+  const none = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
   ok("[226] nothing confirmed → nothing written, exit 1 (proposals are never accepted automatically)", none.status === 1 && !fs.existsSync(map));
   const rep = JSON.parse(fs.readFileSync(report0, "utf8"));
   const accept = new Set(["Button", "Header", "Pagination"]);
   for (const p of rep.componentProposals || []) if (accept.has(p.name)) p.confirmed = true;
   fs.writeFileSync(report0, JSON.stringify(rep));
-  const yes = node("map-bootstrap.js", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
+  const yes = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
   const m = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) : { components: {} };
   const btn = (rep.componentProposals || []).find((p: any) => p.name === "Button") || { instanceKeys: [] };
   ok("[226] stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
     yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog.key);
-  ok("[226] the stub map is schema-valid", node("map-validate.js", [map]).status === 0);
-  node("map-bootstrap.js", [path.join(FX, "design-system/components.local.json"), "--out", map]);
+  ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
+  node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
   const m2 = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) : { components: {} };
   ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
     !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog.key]);
-  const dl = node("drift-lint.js", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
+  const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 
   const fresh = path.join(dir, "fresh.json");
-  node("map-bootstrap.js", [path.join(FX, "design-system/components.local.json"), "--out", fresh]);
-  const dl0 = node("drift-lint.js", [fresh, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
+  node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", fresh]);
+  const dl0 = node("drift-lint.ts", [fresh, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] with a catalog-only map, drift-lint names the re-key case instead of 'not the library this screen is built from'",
     dl0.status === 1 && /\[catalog-rekeyed\]/.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
 }

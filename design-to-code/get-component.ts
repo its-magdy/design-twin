@@ -1,4 +1,4 @@
-// get-component.js — resolve ONE entry in components.local.json and print its full detail: variants
+// get-component.ts — resolve ONE entry in components.local.json and print its full detail: variants
 // with their real serialized node trees, from the sibling file its `variantsFile` pointer names.
 //
 // Since the components.local.json / design-system/components/*.json split (bridge/design-system-
@@ -9,15 +9,26 @@
 //
 // Resolution mirrors drift-lint's identity rule (key is the stable identity, then id, then name) so the
 // same handle that drift-lint or map-bootstrap printed for a component also works here.
+import fs from "node:fs";
+import path from "node:path";
+import { assertNotManifest } from "./catalog-input.ts";
+import dsl from "../bridge/design-system-layout.js";
+import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
 
-const fs = require("fs");
-const path = require("path");
-const { assertNotManifest } = require("./catalog-input.js");
-const { DESIGN_SYSTEM_DIR } = require("../bridge/design-system-layout.js");
+// bridge/design-system-layout.d.ts declares only buildDesignSystemLayout, so the constant the CJS
+// module also exports (verified at runtime: DESIGN_SYSTEM_DIR === "design-system") is read off the
+// default import — which IS module.exports — through this local declaration. Two steps through
+// `unknown` because the .d.ts's namespace type and this interface do not overlap.
+interface DesignSystemLayoutConstants { DESIGN_SYSTEM_DIR: string }
+const { DESIGN_SYSTEM_DIR } = dsl as unknown as DesignSystemLayoutConstants;
+
+export type GetComponentResult =
+  | { found: false }
+  | { found: true; component: CatalogComponent; detail: ComponentDetailFile | null; detailPath?: string };
 
 // entry: a COMPONENT/COMPONENT_SET row from components.local.json (or .library.json — library entries
 // never carry a variantsFile since they have no node trees to export in the first place).
-function findComponent(catalog, handle) {
+function findComponent(catalog: ComponentsCatalog | null | undefined, handle: string): CatalogComponent | null {
   const comps = (catalog && catalog.components) || [];
   const byKey = comps.find((c) => c.key === handle);
   if (byKey) return byKey;
@@ -26,7 +37,7 @@ function findComponent(catalog, handle) {
   const byName = comps.filter((c) => c.name === handle);
   if (byName.length === 1) return byName[0];
   if (byName.length > 1) {
-    const err = new Error(`'${handle}' matches ${byName.length} components by name — use its key or id instead (${byName.map((c) => c.key || c.id).join(", ")})`);
+    const err: Error & { code?: string } = new Error(`'${handle}' matches ${byName.length} components by name — use its key or id instead (${byName.map((c) => c.key || c.id).join(", ")})`);
     err.code = "ambiguous-name";
     throw err;
   }
@@ -39,14 +50,16 @@ function findComponent(catalog, handle) {
 // the layout module places components.local.json directly under design-system/ and detail files under
 // design-system/<subdir>/ — so re-derive root the same way for either directory-mode or a caller-
 // supplied root, rather than assuming a fixed relative depth.
-function resolveVariantsFile(catalogFile, variantsFile) {
+function resolveVariantsFile(catalogFile: string, variantsFile: string): string {
   const catalogDir = path.dirname(catalogFile); // .../design-system
   const root = path.basename(catalogDir) === DESIGN_SYSTEM_DIR ? path.dirname(catalogDir) : catalogDir;
   return path.join(root, variantsFile);
 }
 
-function getComponent(catalogFile, handle) {
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+function getComponent(catalogFile: string, handle: string): GetComponentResult {
+  // Both files are this repo's own writer's output (bridge/design-system-layout.js), read as the shape
+  // they were written in; assertNotManifest refuses the one wrong file people pass here.
+  const catalog: ComponentsCatalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
@@ -55,14 +68,14 @@ function getComponent(catalogFile, handle) {
   const pointer = comp.variantsFile || comp.nodeFile;
   if (!pointer) return { found: true, component: comp, detail: null }; // no exported node tree for this entry
   const detailPath = resolveVariantsFile(catalogFile, pointer);
-  const detail = JSON.parse(fs.readFileSync(detailPath, "utf8"));
+  const detail: ComponentDetailFile = JSON.parse(fs.readFileSync(detailPath, "utf8"));
   return { found: true, component: comp, detail, detailPath };
 }
 
-module.exports = { getComponent, findComponent, resolveVariantsFile };
+export { getComponent, findComponent, resolveVariantsFile };
 
-// CLI: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>
-if (require.main === module) {
+// CLI: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
+if (import.meta.main) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
     console.error("usage: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>");
@@ -81,7 +94,9 @@ if (require.main === module) {
     }
     process.stdout.write(JSON.stringify(res.detail, null, 2) + "\n");
   } catch (e) {
-    console.error(`error  ${e.message}`);
+    // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
+    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
+    console.error(`error  ${message}`);
     process.exit(2);
   }
 }

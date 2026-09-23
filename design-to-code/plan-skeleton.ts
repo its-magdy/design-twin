@@ -1,4 +1,4 @@
-// plan-skeleton.js — generate design/plan/<screen>.json's skeleton FROM THE EXPORT, so the model fills
+// plan-skeleton.ts — generate design/plan/<screen>.json's skeleton FROM THE EXPORT, so the model fills
 // in only what is genuinely a decision. P2b (livetest-3 §2.9 f; findings 79, 151, 155, 156, 196).
 //
 // Why: build-screen used to have the model hand-transcribe the whole plan — the token table, the
@@ -16,7 +16,7 @@
 //                 bind it. A token bound only by hidden layers is pre-marked `verdict:"hidden-only"`.
 //   components[]  every VISIBLE instance (hidden layers are not built, so they are not planned), with
 //                 key/setKey/name/variant/props and its identity: the design-system catalog entry it
-//                 matches — by key, or by P1's name+prop-signature matcher (component-match.js) when a
+//                 matches — by key, or by P1's name+prop-signature matcher (component-match.ts) when a
 //                 duplicated file re-keyed everything — and the codeconnect.local.json mapping when one
 //                 exists. Component identity comes from here, never from a hand-placed attribute.
 //   anchors{}     every VISIBLE node id → {name, type, parent, mapModule:""}. Fill `mapModule` on
@@ -24,8 +24,8 @@
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
 //   hidden[]      the roots of every hidden subtree (`hidden: true`), with how many nodes each hides.
 //
-// Hidden predicate — the ONE rule (design-to-code/hidden.js, shared with verify-screen/audit/drift-lint
-// and, through visibility() below, verify-build.js): a node is hidden when it or any ancestor carries
+// Hidden predicate — the ONE rule (design-to-code/hidden.ts, shared with verify-screen/audit/drift-lint
+// and, through visibility() below, verify-build.ts): a node is hidden when it or any ancestor carries
 // `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
 // name in this export (`"visible": "Show Breadcrumb"`), finding 34.
 //
@@ -34,10 +34,17 @@
 // every top-level field the skeleton does not own (files, architecture, verification, deviations,
 // status, …) is kept; rows that no longer exist in the export are dropped and counted on stderr.
 
-const fs = require("fs");
-const path = require("path");
-const { matchByNameAndSignature, parseVariant } = require("./component-match");
-const { walkWithHidden } = require("./hidden");
+import fs from "node:fs";
+import path from "node:path";
+import { matchByNameAndSignature, parseVariant } from "./component-match.ts";
+import { walkWithHidden } from "./hidden.ts";
+import { auditGateStatus } from "./audit-gate.ts";
+import { isJsonObject } from "./types.ts";
+import type {
+  CodeConnectMap, ComponentsCatalog, ComponentPropValues, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
+  PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
+  VariableType, VisibleInstance,
+} from "./types.ts";
 
 const USAGE = [
   "usage: node plan-skeleton.js <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]",
@@ -62,24 +69,30 @@ const USAGE = [
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
 ].join("\n");
 
-const readJson = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
-const readJsonOr = (f, fallback) => { try { return readJson(f); } catch { return fallback; } };
+// Every file read here is one this repo's own writers produced (a screen export, a .vars.json, the
+// design-system split files, a plan, an index), so it is parsed as the shape it was written in.
+const readJson = <T,>(f: string): T => JSON.parse(fs.readFileSync(f, "utf8"));
+const readJsonOr = <T,>(f: string, fallback: T): T => { try { return readJson<T>(f); } catch { return fallback; } };
 
 // The screen doc's roots, in any of the shapes the exporter writes (single-screen pull: `nodes[]`;
 // page-walk layer file: `tree`; or a bare node).
-function rootsOf(doc) {
+function rootsOf(doc: ScreenDoc | null | undefined): IrNode[] {
   if (!doc) return [];
   if (Array.isArray(doc.nodes)) return doc.nodes;
   if (doc.tree) return [doc.tree];
-  if (doc.id || doc.type) return [doc];
+  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
+  if (doc.id || doc.type) return [doc as IrNode];
   return [];
 }
 
-// Walk every node with its ancestry and hidden state, through the ONE shared predicate (hidden.js:
+/** What walkNodes hands its visitor beside the node. */
+export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoot: boolean; insideInstance: string | null }
+
+// Walk every node with its ancestry and hidden state, through the ONE shared predicate (hidden.ts:
 // the node or an ancestor carries `hidden`; never `visible`). `insideInstance` is the nearest INSTANCE
 // above the node — its internals belong to that component.
-function walkNodes(doc, visit) {
-  const instAbove = new Map();
+function walkNodes(doc: ScreenDoc | null | undefined, visit: (n: IrNode, ctx: NodeContext) => void): void {
+  const instAbove = new Map<IrNode, string | null>();
   for (const r of rootsOf(doc)) {
     walkWithHidden(r, (n, c) => {
       const above = c.parent ? (c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null) : null;
@@ -89,10 +102,13 @@ function walkNodes(doc, visit) {
   }
 }
 
+export interface VisibleEntry { node: IrNode; parentId: string | null; insideInstance: string | null }
+export interface Visibility { visible: Map<string, VisibleEntry>; hidden: Set<string>; hiddenRoots: PlanHiddenRoot[] }
+
 // { visible: Map(id -> {node, parentId}), hidden: Set(id), hiddenRoots: [...] }
-function visibility(doc) {
-  const visible = new Map(), hidden = new Set(), hiddenRoots = [];
-  const count = new Map();
+function visibility(doc: ScreenDoc | null | undefined): Visibility {
+  const visible = new Map<string, VisibleEntry>(), hidden = new Set<string>(), hiddenRoots: PlanHiddenRoot[] = [];
+  const count = new Map<string, PlanHiddenRoot>();
   walkNodes(doc, (n, ctx) => {
     if (!n.id) return;
     if (ctx.hidden) {
@@ -101,10 +117,10 @@ function visibility(doc) {
     } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
   });
   // how many nodes each hidden root hides (itself included)
-  const tally = (n, root) => {
+  const tally = (n: IrNode | null | undefined, root: string | null): void => {
     if (!n || typeof n !== "object") return;
     const r = root || (count.has(n.id) ? n.id : null);
-    if (r) count.get(r).nodes++;
+    if (r) count.get(r)!.nodes++;
     for (const c of n.children || []) tally(c, r);
   };
   for (const r of rootsOf(doc)) tally(r, null);
@@ -113,15 +129,18 @@ function visibility(doc) {
 
 // ---------------------------------------------------------------- tokens
 
+export interface Binding { name: string; field: string }
+
 // Every (name, field) a node binds: its own `tokens` map, and `tokens` maps nested in fills / strokes /
 // effects / textRangeFills … (NOT in children — those are other nodes).
-function bindingsOf(node) {
-  const out = [];
-  const collect = (o, where) => {
+function bindingsOf(node: IrNode): Binding[] {
+  const out: Binding[] = [];
+  // `o` is whatever sits under a node field (a paint, an effect, a run…): walked as plain JSON.
+  const collect = (o: unknown, where: string): void => {
     if (Array.isArray(o)) { for (const x of o) collect(x, where); return; }
-    if (!o || typeof o !== "object") return;
+    if (!isJsonObject(o)) return;
     if (o.tokens && typeof o.tokens === "object") {
-      for (const [field, v] of Object.entries(o.tokens)) for (const name of [].concat(v)) if (typeof name === "string") out.push({ name, field: where ? `${where}.${field}` : field });
+      for (const [field, v] of Object.entries(o.tokens)) for (const name of Array.isArray(v) ? v : [v]) if (typeof name === "string") out.push({ name, field: where ? `${where}.${field}` : field });
     }
     for (const [k, v] of Object.entries(o)) if (k !== "tokens" && k !== "children" && v && typeof v === "object") collect(v, where || k);
   };
@@ -129,7 +148,7 @@ function bindingsOf(node) {
   return out;
 }
 
-function kindOf(variable, fields) {
+function kindOf(variable: Variable | null | undefined, fields: string[]): TokenKind {
   const t = variable && variable.type;
   if (t === "COLOR") return "color";
   if (t === "STRING") return /fontStyle|fontFamily|fontName/.test(fields.join(" ")) ? "fontStyle" : "string";
@@ -147,21 +166,23 @@ function kindOf(variable, fields) {
   return "number";
 }
 
-const isAlias = (v) => v && typeof v === "object" && typeof v.aliasOf === "string";
+const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+
+interface Resolved { value: JsonValue | null; mode: string | null; via?: string }
 
 // A variable's value in the mode this frame renders. The frame's `resolvedModes` names a mode per
 // COLLECTION; an alias hops to another collection, whose own mode is looked up the same way.
-function resolver(sources, resolvedModes) {
-  const byName = new Map();
-  const collections = new Map();
+function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolvedModes: ModeMap): (v: Variable | null | undefined) => Resolved {
+  const byName = new Map<string, Variable>();
+  const collections = new Map<string, NonNullable<TokensDoc["collections"]>[number]>();
   for (const src of sources) {
     for (const v of (src && src.variables) || []) if (v && v.name && !byName.has(v.name)) byName.set(v.name, v);
     for (const c of (src && src.collections) || []) if (c && c.name && !collections.has(c.name)) collections.set(c.name, c);
   }
-  const modeFor = (v) => {
+  const modeFor = (v: Variable): string => {
     const vals = v.values || {};
     const keys = Object.keys(vals);
-    const want = resolvedModes && resolvedModes[v.collection];
+    const want: string | undefined = resolvedModes[v.collection];
     if (want !== undefined && want in vals) return want;
     // case-only differences ("desktop" vs "Desktop") are the same mode
     if (want !== undefined) { const k = keys.find((x) => x.toLowerCase() === String(want).toLowerCase()); if (k) return k; }
@@ -169,7 +190,7 @@ function resolver(sources, resolvedModes) {
     if (c && c.default && c.default in vals) return c.default;
     return keys[0];
   };
-  function resolve(v, depth) {
+  function resolve(v: Variable | null | undefined, depth: number): Resolved {
     if (!v || depth > 10) return { value: null, mode: null };
     const mode = modeFor(v);
     const raw = (v.values || {})[mode];
@@ -183,50 +204,61 @@ function resolver(sources, resolvedModes) {
   return (v) => resolve(v, 0);
 }
 
-function normValue(type, raw) {
+// ts-port: legacy/producer-mismatch read kept as-is — a COLOR value spelled as {r,g,b,a} (the producer
+// writes a hex string; variables.ts). Declared as a JSON object so it stays a JsonValue on the way out.
+type LegacyRgba = JsonObject & { r: number; g: number; b: number };
+const isLegacyRgba = (v: object): v is LegacyRgba => "r" in v;
+
+function normValue(type: VariableType | undefined, raw: string | number | boolean | LegacyRgba | null | undefined): JsonValue | null {
   if (raw === undefined || raw === null) return null;
   if (type === "COLOR" && typeof raw === "string") {
     const h = raw.trim().toLowerCase();
     return /^#[0-9a-f]{8}$/.test(h) && h.endsWith("ff") ? h.slice(0, 7) : h;
   }
-  if (type === "COLOR" && typeof raw === "object" && "r" in raw) {
-    const to = (x) => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, "0");
-    const a = raw.a === undefined ? 1 : raw.a;
+  if (type === "COLOR" && typeof raw === "object" && isLegacyRgba(raw)) {
+    const to = (x: number): string => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, "0");
+    const a = raw.a === undefined ? 1 : Number(raw.a);
     return "#" + to(raw.r) + to(raw.g) + to(raw.b) + (a < 1 ? to(a) : "");
   }
   return raw;
 }
 
-function buildTokens(doc, vis, vars, ds, resolvedModes) {
-  const uses = new Map(); // name -> { fields:Set, visible, hidden }
+/** A token row as the skeleton writes it: `sites` is always present here (PlanTokenRow leaves it optional). */
+export interface SkeletonTokenRow extends PlanTokenRow { sites: { visible: number; hidden: number } }
+/** The same row while buildTokens is still filling it (codeToken/verdict come last). */
+type TokenRowDraft = Omit<SkeletonTokenRow, "codeToken" | "verdict"> & { codeToken?: string | null; verdict?: PlanTokenVerdict | null };
+
+function buildTokens(doc: ScreenDoc | null | undefined, vis: Visibility, vars: TokensDoc | null | undefined, ds: TokensDoc | null | undefined, resolvedModes: ModeMap): SkeletonTokenRow[] {
+  const uses = new Map<string, { fields: Set<string>; visible: number; hidden: number }>(); // name -> { fields:Set, visible, hidden }
   walkNodes(doc, (n, ctx) => {
     for (const b of bindingsOf(n)) {
       if (!uses.has(b.name)) uses.set(b.name, { fields: new Set(), visible: 0, hidden: 0 });
-      const u = uses.get(b.name);
+      const u = uses.get(b.name)!;
       u.fields.add(b.field);
       if (ctx.hidden) u.hidden++; else u.visible++;
     }
   });
-  const own = new Map();
-  for (const v of (vars && vars.variables) || []) { if (!own.has(v.name)) own.set(v.name, []); own.get(v.name).push(v); }
-  const dsByKey = new Map(), dsByName = new Map();
+  const own = new Map<string, Variable[]>();
+  for (const v of (vars && vars.variables) || []) { if (!own.has(v.name)) own.set(v.name, []); own.get(v.name)!.push(v); }
+  const dsByKey = new Map<string, Variable>(), dsByName = new Map<string, Variable[]>();
   for (const v of (ds && ds.variables) || []) {
     if (v.key) dsByKey.set(v.key, v);
     if (!dsByName.has(v.name)) dsByName.set(v.name, []);
-    dsByName.get(v.name).push(v);
+    dsByName.get(v.name)!.push(v);
   }
   const ownResolve = resolver([vars, ds], resolvedModes);
   const dsResolve = resolver([ds], resolvedModes);
 
-  const rows = [];
+  const rows: SkeletonTokenRow[] = [];
   for (const [name, u] of uses) {
     const fields = [...u.fields].sort();
     const cands = own.get(name) || [];
     const v = cands[0] || null;
     const r = v ? ownResolve(v) : { value: null, mode: null };
-    const row = {
+    // Built in the order the plan file shows its keys; codeToken/verdict are filled last (below).
+    const row: TokenRowDraft = {
       figmaName: name,
-      key: cands.length === 1 ? v.key || null : null,
+      key: cands.length === 1 ? v!.key || null : null,
       collection: v ? v.collection : null,
       kind: kindOf(v, fields),
       value: r.value,
@@ -245,14 +277,14 @@ function buildTokens(doc, vis, vars, ds, resolvedModes) {
     }
     if (!v) row.note = `'${name}' is bound on the frame but not defined in the screen's .vars.json — re-pull the screen`;
     // Design-system definition: by KEY; a name-only match is a labelled fallback, never silently the value.
-    let dv = null, how = null;
-    for (const c of cands) if (c.key && dsByKey.has(c.key)) { dv = dsByKey.get(c.key); how = "key"; break; }
+    let dv: Variable | null = null, how: "key" | "name" | null = null;
+    for (const c of cands) if (c.key && dsByKey.has(c.key)) { dv = dsByKey.get(c.key)!; how = "key"; break; }
     if (!dv && dsByName.has(name)) {
-      const same = dsByName.get(name).filter((x) => !v || x.collection === v.collection);
-      dv = (same.length ? same : dsByName.get(name))[0];
+      const same = dsByName.get(name)!.filter((x) => !v || x.collection === v.collection);
+      dv = (same.length ? same : dsByName.get(name)!)[0];
       how = "name";
     }
-    if (dv) {
+    if (dv && how) {
       const dr = dsResolve(dv);
       row.designSystem = { match: how, key: dv.key || null, value: dr.value, agrees: JSON.stringify(dr.value) === JSON.stringify(r.value) };
     } else row.designSystem = null;
@@ -261,31 +293,40 @@ function buildTokens(doc, vis, vars, ds, resolvedModes) {
       row.verdict = "hidden-only";
       row.decision = "bound only by hidden layers — not built, so no code token is needed";
     } else row.verdict = null;
-    rows.push(row);
+    rows.push({ ...row, codeToken: row.codeToken ?? null, verdict: row.verdict ?? null });
   }
-  rows.sort((a, b) => (b.sites.visible > 0) - (a.sites.visible > 0) || a.figmaName.localeCompare(b.figmaName));
+  rows.sort((a, b) => Number(b.sites.visible > 0) - Number(a.sites.visible > 0) || a.figmaName.localeCompare(b.figmaName));
   return rows;
 }
 
 // ---------------------------------------------------------------- components
 
-function loadMap(file) {
-  const map = readJsonOr(file, null);
-  const keys = new Map();
+/** One codeconnect.local.json entry as loadMap() flattens it, keyed by figma.key and by map key. */
+export interface MapKeyEntry { name: string; module: string | null; export: string | null; status: MapStatus | null }
+
+function loadMap(file: string): Map<string, MapKeyEntry> {
+  const map = readJsonOr<CodeConnectMap | null>(file, null);
+  const keys = new Map<string, MapKeyEntry>();
   for (const [name, e] of Object.entries((map && map.components) || {})) {
     if (!e || !e.figma) continue;
-    const entry = { name: e.figma.name || name, module: (e.code && e.code.module) || null, export: (e.code && e.code.export) || null, status: e.status || null };
+    const entry: MapKeyEntry = { name: e.figma.name || name, module: (e.code && e.code.module) || null, export: (e.code && e.code.export) || null, status: e.status || null };
     if (e.figma.key) keys.set(e.figma.key, entry);
     if (!keys.has(name)) keys.set(name, entry);
   }
   return keys;
 }
 
-function buildComponents(doc, catalog, library, mapKeys) {
-  const insts = [];
+// A visible instance as the plan lists it: keys are `null` (not absent) when the export has none.
+interface SkeletonInstance {
+  nodeId: string; layer: string; name: string; key: string | null; setKey: string | null; remote: boolean;
+  variant: Record<string, string> | null; props: ComponentPropValues; insideInstance: string | null;
+}
+
+function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsCatalog | null | undefined, library: ComponentsCatalog | null | undefined, mapKeys: Map<string, MapKeyEntry>): PlanComponentRow[] {
+  const insts: SkeletonInstance[] = [];
   walkNodes(doc, (n, ctx) => {
     if (ctx.hidden || n.type !== "INSTANCE") return;
-    const mc = n.mainComponent || {};
+    const mc: Partial<NonNullable<IrNode["mainComponent"]>> = n.mainComponent || {};
     insts.push({
       nodeId: n.id,
       layer: n.name,
@@ -298,21 +339,24 @@ function buildComponents(doc, catalog, library, mapKeys) {
       insideInstance: ctx.insideInstance || null,
     });
   });
-  const catKeys = new Map();
+  const catKeys = new Map<string, ComponentsCatalog["components"][number]>();
   for (const c of (catalog && catalog.components) || []) if (c.key) catKeys.set(c.key, c);
-  const byName = new Map();
-  if (catalog) for (const r of matchByNameAndSignature(insts, catalog, library).rows) byName.set(r.name, r);
+  const byName = new Map<string, MatchRow>();
+  // The matcher reads the same fields under component-match.ts's VisibleInstance shape (keys absent
+  // rather than null, a screen label it only lists); the plan rows below keep this file's own shape.
+  const asVisible = (i: SkeletonInstance): VisibleInstance => ({ screen: "", nodeId: i.nodeId, layer: i.layer, name: i.name, key: i.key ?? undefined, setKey: i.setKey ?? undefined, remote: i.remote, variant: i.variant, props: i.props });
+  if (catalog) for (const r of matchByNameAndSignature(insts.map(asVisible), catalog, library).rows) byName.set(r.name, r);
 
   return insts.map((i) => {
-    let match = null;
+    let match: PlanComponentMatch | null = null;
     const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
-    if (k) { const c = catKeys.get(k); match = { by: "key", id: c.id, key: c.key, name: c.name }; }
-    else if (byName.has(i.name) && byName.get(i.name).match) {
-      const r = byName.get(i.name);
-      match = { by: r.evidence || "name+signature", id: r.match.id, key: r.match.key, name: r.match.name, confirmed: false };
+    if (k) { const c = catKeys.get(k)!; match = { by: "key", id: c.id, key: c.key, name: c.name }; }
+    else if (byName.has(i.name) && byName.get(i.name)!.match) {
+      const r = byName.get(i.name)!;
+      match = { by: r.evidence || "name+signature", id: r.match!.id, key: r.match!.key, name: r.match!.name, confirmed: false };
     }
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
-    const row = {
+    const row: PlanComponentRow = {
       nodeId: i.nodeId,
       name: i.name,
       layer: i.layer,
@@ -332,14 +376,25 @@ function buildComponents(doc, catalog, library, mapKeys) {
 
 // ---------------------------------------------------------------- the plan
 
-function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }) {
+/** skeleton()'s input bag. */
+export interface SkeletonInput {
+  doc: ScreenDoc; vars?: TokensDoc | null; ds?: TokensDoc | null; catalog?: ComponentsCatalog | null; library?: ComponentsCatalog | null;
+  mapKeys?: Map<string, MapKeyEntry>; screenFile?: string | null; cwd?: string; route?: string | null; indexRow?: IndexRow | null;
+}
+/** The plan as this file writes it: every skeleton-owned field is present (Plan leaves them optional). */
+export interface SkeletonPlan extends Plan {
+  tokens: SkeletonTokenRow[]; components: PlanComponentRow[]; anchors: Record<string, PlanAnchor>; hidden: PlanHiddenRoot[];
+  counts: NonNullable<Plan["counts"]>;
+}
+
+function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }: SkeletonInput): SkeletonPlan {
   const vis = visibility(doc);
   const roots = rootsOf(doc);
-  const root = roots[0] || {};
+  const root: Partial<IrNode> = roots[0] || {};
   const resolvedModes = root.resolvedModes || {};
   const tokens = buildTokens(doc, vis, vars, ds, resolvedModes);
   const components = buildComponents(doc, catalog, library, mapKeys || new Map());
-  const anchors = {};
+  const anchors: Record<string, PlanAnchor> = {};
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = doc.nodeId || root.id || null;
   const title = indexRow && indexRow.title;
@@ -349,14 +404,16 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
   // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
   // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
-  let auditGate = null;
+  let auditGate: PlanAuditGate | null = null;
   try {
-    const { auditGateStatus } = require("./audit-gate.js");
     const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
       auditGate = { auditFile: g.auditFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
     }
-  } catch { /* audit-gate.js is best-effort here; plan-skeleton must never fail on it */ }
+  } catch { /* the auditGate pre-fill is best-effort: plan-skeleton must never fail on reading an audit */ }
+  // (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
+  // skip" fallback — is gone, since a static import cannot fail at this point. The try/catch stays
+  // around the CALL: a malformed audit file must not fail the skeleton.)
   return {
     schema: "designtwin/plan@2",
     screen: screenFile ? path.basename(screenFile).replace(/\.json$/, "") : null,
@@ -385,12 +442,14 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   };
 }
 
+export interface MergeResult { plan: Plan; dropped: { tokens: number; components: number; anchors: number } }
+
 // Merge a fresh skeleton into an existing plan without losing anything a person or the model wrote.
-const FILLED_TOKEN = ["codeToken", "verdict", "decision"];
-const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"];
-function merge(fresh, prev) {
+const FILLED_TOKEN = ["codeToken", "verdict", "decision"] as const;
+const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"] as const;
+function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };
-  const out = Object.assign({}, prev, {
+  const out: Plan = Object.assign({}, prev, {
     schema: fresh.schema,
     screenName: prev.screenName || fresh.screenName,
     nodeId: fresh.nodeId,
@@ -403,24 +462,24 @@ function merge(fresh, prev) {
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
-  const tk = (t) => t.key || t.figmaName;
-  const prevTok = new Map((Array.isArray(prev.tokens) ? prev.tokens : []).map((t) => [tk(t), t]));
+  const tk = (t: PlanTokenRow): string => t.key || t.figmaName;
+  const prevTok = new Map((Array.isArray(prev.tokens) ? prev.tokens : []).map((t): [string, PlanTokenRow] => [tk(t), t]));
   out.tokens = fresh.tokens.map((t) => {
     const p = prevTok.get(tk(t)) || prevTok.get(t.figmaName);
-    const row = Object.assign({}, t);
-    if (p) for (const f of FILLED_TOKEN) if (p[f] !== undefined && p[f] !== null && p[f] !== "") row[f] = p[f];
+    const row: PlanTokenRow = Object.assign({}, t);
+    if (p) for (const f of FILLED_TOKEN) if (p[f] !== undefined && p[f] !== null && p[f] !== "") Object.assign(row, { [f]: p[f] });
     return row;
   });
   dropped.tokens = [...prevTok.keys()].filter((k) => !fresh.tokens.some((t) => tk(t) === k || t.figmaName === k)).length;
-  const prevComp = new Map((Array.isArray(prev.components) ? prev.components : []).filter((c) => c && c.nodeId).map((c) => [c.nodeId, c]));
+  const prevComp = new Map((Array.isArray(prev.components) ? prev.components : []).filter((c): c is PlanComponentRow & { nodeId: string } => !!(c && c.nodeId)).map((c): [string, PlanComponentRow] => [c.nodeId, c]));
   out.components = fresh.components.map((c) => {
-    const p = prevComp.get(c.nodeId);
-    const row = Object.assign({}, c);
-    if (p) for (const f of FILLED_COMPONENT) if (p[f] !== undefined && p[f] !== null && p[f] !== "") row[f] = p[f];
+    const p = prevComp.get(c.nodeId!);
+    const row: PlanComponentRow = Object.assign({}, c);
+    if (p) for (const f of FILLED_COMPONENT) if (p[f] !== undefined && p[f] !== null && p[f] !== "") Object.assign(row, { [f]: p[f] });
     return row;
   });
   dropped.components = [...prevComp.keys()].filter((id) => !fresh.components.some((c) => c.nodeId === id)).length;
-  const pa = prev.anchors && typeof prev.anchors === "object" ? prev.anchors : {};
+  const pa: Record<string, PlanAnchor> = prev.anchors && typeof prev.anchors === "object" ? prev.anchors : {};
   out.anchors = {};
   for (const [id, a] of Object.entries(fresh.anchors)) {
     const p = pa[id];
@@ -430,11 +489,11 @@ function merge(fresh, prev) {
   return { plan: out, dropped };
 }
 
-function findIndexRow(screenFile, nodeId) {
+function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
   // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json
   const dir = path.dirname(path.resolve(screenFile));
   for (const idx of [path.join(dir, "..", "index.json"), path.join(dir, "index.json")]) {
-    const d = readJsonOr(idx, null);
+    const d = readJsonOr<PagesRootIndex | PageIndex | null>(idx, null);
     const rows = d && Array.isArray(d.layers) ? d.layers : [];
     const hit = rows.find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -442,10 +501,10 @@ function findIndexRow(screenFile, nodeId) {
   return null;
 }
 
-function main(argv) {
+function main(argv: string[]): number {
   const args = argv.slice();
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); return 0; }
-  const take = (flag) => { const i = args.indexOf(flag); if (i === -1) return undefined; const v = args[i + 1]; args.splice(i, 2); return v; };
+  const take = (flag: string): string | undefined => { const i = args.indexOf(flag); if (i === -1) return undefined; const v = args[i + 1]; args.splice(i, 2); return v; };
   const out = take("--out"), mapFlag = take("--map"), route = take("--route");
   const stray = args.filter((a) => a.startsWith("-"));
   if (stray.length || args.length !== 3 || [out, mapFlag, route].some((v) => v === "" )) {
@@ -453,23 +512,24 @@ function main(argv) {
     return 2;
   }
   const [screenFile, varsFile, dsDir] = args;
-  let doc, vars;
-  try { doc = readJson(screenFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e.message}`); return 1; }
-  try { vars = readJson(varsFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e.message}`); return 1; }
+  let doc: ScreenDoc, vars: TokensDoc;
+  try { doc = readJson<ScreenDoc>(screenFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : e}`); return 1; }
+  try { vars = readJson<TokensDoc>(varsFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : e}`); return 1; }
   const hasDs = dsDir && fs.existsSync(dsDir) && fs.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} — token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
-  const ds = hasDs ? readJsonOr(path.join(dsDir, "tokens.json"), null) : null;
-  const catalog = hasDs ? readJsonOr(path.join(dsDir, "components.local.json"), null) : null;
-  const library = hasDs ? readJsonOr(path.join(dsDir, "components.library.json"), null) : null;
+  const ds = hasDs ? readJsonOr<TokensDoc | null>(path.join(dsDir, "tokens.json"), null) : null;
+  const catalog = hasDs ? readJsonOr<ComponentsCatalog | null>(path.join(dsDir, "components.local.json"), null) : null;
+  const library = hasDs ? readJsonOr<ComponentsCatalog | null>(path.join(dsDir, "components.library.json"), null) : null;
   const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
-  const mapKeys = mapFile ? loadMap(mapFile) : new Map();
-  const nodeId = doc.nodeId || (rootsOf(doc)[0] || {}).id;
+  const mapKeys = mapFile ? loadMap(mapFile) : new Map<string, MapKeyEntry>();
+  const root0: Partial<IrNode> = rootsOf(doc)[0] || {};
+  const nodeId = doc.nodeId || root0.id;
   const fresh = skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
-    const prev = fs.existsSync(out) ? readJsonOr(out, undefined) : null;
+    const prev = fs.existsSync(out) ? readJsonOr<Plan | undefined>(out, undefined) : null;
     if (prev === undefined) { console.error(`plan-skeleton: ${out} exists but is not valid JSON — refusing to overwrite it`); return 1; }
     const { plan, dropped } = merge(fresh, prev);
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
@@ -480,7 +540,7 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { skeleton, merge, visibility, walkNodes, rootsOf, bindingsOf, buildTokens, buildComponents, USAGE };
+export { skeleton, merge, visibility, walkNodes, rootsOf, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
-if (require.main === module) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main) process.exitCode = main(process.argv.slice(2));

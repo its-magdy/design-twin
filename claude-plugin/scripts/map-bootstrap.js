@@ -1,250 +1,91 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
-  }
-};
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
 
-// design-to-code/kinds.js
-var require_kinds = __commonJS({
-  "design-to-code/kinds.js"(exports2, module2) {
-    var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
-    module2.exports = { TYPE_TO_KIND };
-  }
-});
+// design-to-code/map-bootstrap.ts
+import fs2 from "node:fs";
 
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/kinds.ts
+var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
+
+// design-to-code/catalog-input.ts
+import fs from "node:fs";
+function isManifest(doc, payloadKey) {
+  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  if (isManifest(doc, payloadKey)) {
+    console.error(
+      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs = require("fs");
-      let raw;
-      try {
-        raw = fs.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+    );
+    process.exit(2);
+  }
+}
+function readJsonFile(file, what, hint) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    process.exit(2);
   }
-});
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    process.exit(2);
+  }
+}
+var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
-// design-to-code/component-match.js
-var require_component_match = __commonJS({
-  "design-to-code/component-match.js"(exports2, module2) {
-    function visibleInstances(doc, label) {
-      const out = [];
-      const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
-      const walk = (n) => {
-        if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
-        if (n.type === "INSTANCE" && n.mainComponent) {
-          const mc = n.mainComponent;
-          out.push({
-            screen: label,
-            nodeId: n.id,
-            layer: n.name,
-            name: mc.setName || mc.name || n.name,
-            key: mc.key,
-            setKey: mc.setKey,
-            remote: mc.remote === true,
-            variant: parseVariant(n.component) || parseVariant(mc.variant),
-            props: n.props && typeof n.props === "object" ? n.props : {}
-          });
-        }
-        for (const c of n.children || []) walk(c);
-      };
-      for (const r of roots) walk(r);
-      return out;
-    }
-    function parseVariant(s) {
-      if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
-      if (!s || typeof s !== "string" || !s.includes("=")) return null;
-      const out = {};
-      for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
-        const i = part.indexOf("=");
-        if (i < 0) continue;
-        out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
-      }
-      return Object.keys(out).length ? out : null;
-    }
-    var baseProp = (p) => String(p).split("#")[0];
-    var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
-    function signature(inst, cand) {
-      const props = {};
-      for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
-      const reasons = [];
-      let score = 40, verified = true;
-      reasons.push("name matches catalog entry verbatim");
-      const variant = inst.variant;
-      if (variant) {
-        const axes = Object.keys(variant);
-        const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
-        if (known.length === axes.length) {
-          score += 25;
-          reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
-        } else {
-          verified = false;
-          score += known.length ? 10 : -15;
-          reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
-        }
-        const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
-        if (known.length && !bad.length) {
-          score += 25;
-          reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
-        } else if (bad.length) {
-          verified = false;
-          score -= 20;
-          reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
-        }
-      } else if (cand.type === "COMPONENT") {
-        score += 15;
-        reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
-      } else {
-        verified = false;
-        reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
-      }
-      const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
-      if (own.length) {
-        const typed = own.filter((k) => {
-          const d = props[baseProp(k)], v = inst.props[k];
-          if (!d) return false;
-          if (typeof v === "boolean") return d.type === "BOOLEAN";
-          return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
-        });
-        if (typed.length === own.length) {
-          score += 15;
-          reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
-        } else {
-          verified = false;
-          score += typed.length ? 5 : -10;
-          reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
-        }
-      }
-      if (SHARED_PAGE.test(String(cand.page || ""))) {
-        score += 5;
-        reasons.push(`lives on a shared page (${cand.page})`);
-      }
-      return { verified, score, reasons };
-    }
-    var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
-    function matchByNameAndSignature(instances, catalog, library) {
-      const comps = catalog && catalog.components || [];
-      const byName = /* @__PURE__ */ new Map();
-      comps.forEach((c, i) => {
-        if (!byName.has(c.name)) byName.set(c.name, []);
-        byName.get(c.name).push(Object.assign({ _order: i }, c));
+// design-to-code/component-match.ts
+function visibleInstances(doc, label) {
+  const out = [];
+  const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
+  const walk = (n) => {
+    if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent;
+      out.push({
+        screen: label,
+        nodeId: n.id,
+        layer: n.name,
+        name: mc.setName || mc.name || n.name,
+        key: mc.key,
+        setKey: mc.setKey,
+        remote: mc.remote === true,
+        variant: parseVariant(n.component) || parseVariant(mc.variant),
+        props: n.props && typeof n.props === "object" ? n.props : {}
       });
-      const catKeys = new Set(comps.map((c) => c.key).filter(Boolean));
-      const libKeys = new Set((library && library.components || []).map((c) => c.key).filter(Boolean));
-      const libNames = new Set((library && library.components || []).map((c) => c.name));
-      const groups = /* @__PURE__ */ new Map();
-      for (const inst of instances) {
-        if (!groups.has(inst.name)) groups.set(inst.name, []);
-        groups.get(inst.name).push(inst);
-      }
-      const rows = [];
-      for (const [name, list] of groups) {
-        const byKey = list.some((i) => catKeys.has(i.key) || catKeys.has(i.setKey));
-        const row = {
-          name,
-          instances: list.length,
-          nodeIds: list.map((i) => i.nodeId),
-          screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
-          instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter(Boolean))],
-          remote: list.every((i) => i.remote),
-          byKey,
-          match: null,
-          alternatives: [],
-          reasons: []
-        };
-        const cands = byName.get(name) || [];
-        if (!cands.length) {
-          const inLibrary = list.some((i) => libKeys.has(i.key) || libKeys.has(i.setKey));
-          row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
-          row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
-          rows.push(row);
-          continue;
-        }
-        const scored = cands.map((c) => {
-          const per = list.map((i) => signature(i, c));
-          return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
-        }).sort((a, b) => b.verified - a.verified || b.score - a.score || a.c._order - b.c._order);
-        const best = scored[0];
-        if (!best.verified) {
-          row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
-          rows.push(row);
-          continue;
-        }
-        const verifiedOnes = scored.filter((s) => s.verified);
-        const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-        row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
-        row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
-        row.reasons = best.reasons.slice();
-        if (ties.length) {
-          const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
-          row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
-          row.tie = identical ? "duplicate-definitions" : "different-signatures";
-        } else if (scored.length > 1) {
-          row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
-        }
-        row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
-        row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
-        rows.push(row);
-      }
-      const proposals = rows.filter((r) => r.match && !r.byKey);
-      return {
-        rows,
-        proposals,
-        summary: {
-          instances: instances.length,
-          names: rows.length,
-          byKey: rows.filter((r) => r.byKey).length,
-          proposed: proposals.length,
-          proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
-          withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
-          unmatched: rows.filter((r) => !r.match).length,
-          remote: instances.filter((i) => i.remote).length
-        }
-      };
     }
-    var REKEY_MIN_PROPOSALS = 3;
-    var REKEY_MIN_SHARE = 0.5;
-    function isRekeyed(result) {
-      const s = result.summary;
-      return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
-    }
-    module2.exports = { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
+    for (const c of n.children || []) walk(c);
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+function parseVariant(s) {
+  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
+  if (!s || typeof s !== "string" || !s.includes("=")) return null;
+  const out = {};
+  for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
   }
-});
+  return Object.keys(out).length ? out : null;
+}
 
-// design-to-code/map-bootstrap.js
-var { TYPE_TO_KIND: KIND } = require_kinds();
+// design-to-code/map-bootstrap.ts
 var clone = (o) => JSON.parse(JSON.stringify(o));
 var words = (name) => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
 function pascal(name) {
@@ -257,7 +98,7 @@ function camel(name) {
   return /^[A-Za-z]/.test(p) ? p : "prop";
 }
 function propEntry(name, def) {
-  const kind = KIND[def.type];
+  const kind = TYPE_TO_KIND[def.type];
   if (kind === "enum") {
     const values = {};
     for (const opt of def.options || []) values[opt] = opt;
@@ -287,8 +128,9 @@ function freshEntry(c) {
   if (c.id) figma.id = c.id;
   const entry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
   const props = {};
-  for (const pn of Object.keys(c.props || {})) {
-    const pe = propEntry(pn, c.props[pn]);
+  const defs = c.props || {};
+  for (const pn of Object.keys(defs)) {
+    const pe = propEntry(pn, defs[pn]);
     if (pe) props[pn] = pe;
   }
   if (Object.keys(props).length) entry.props = props;
@@ -313,22 +155,23 @@ function bootstrap(catalog, existing) {
     const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x));
     const prevKey = matchKey ? prevByIdent.get(matchKey) : null;
     const prevEntry = prevKey ? prev[prevKey] : null;
-    if (prevEntry) {
+    if (prevKey && prevEntry) {
       usedPrev.add(prevKey);
       const entry = clone(prevEntry);
       entry.figma = Object.assign({}, entry.figma, { name: c.name || entry.figma && entry.figma.name || "Unnamed" });
       if (c.id) entry.figma.id = c.id;
       if (c.key) entry.figma.key = c.key;
       else if (!entry.figma.key) entry.figma.unstable = true;
-      entry.props = entry.props || {};
-      for (const pn of Object.keys(c.props || {})) {
-        const cdef = c.props[pn], kind = KIND[cdef.type], ex = entry.props[pn];
+      const props = entry.props = entry.props || {};
+      const defs = c.props || {};
+      for (const pn of Object.keys(defs)) {
+        const cdef = defs[pn], kind = TYPE_TO_KIND[cdef.type], ex = props[pn];
         if (!ex || kind && ex.kind && ex.kind !== kind) {
           const pe = propEntry(pn, cdef);
-          if (pe) entry.props[pn] = pe;
+          if (pe) props[pn] = pe;
         }
       }
-      if (!Object.keys(entry.props).length) delete entry.props;
+      if (!Object.keys(props).length) delete entry.props;
       out.components[prevKey !== c.key && prevKey !== c.id ? prevKey : id] = entry;
     } else {
       out.components[id] = freshEntry(c);
@@ -369,16 +212,14 @@ function bootstrapFromProposals(proposals, catalog, existing) {
   }
   return { map: out, report };
 }
+var isProposalList = (x) => Array.isArray(x);
 function proposalsIn(doc) {
-  if (Array.isArray(doc)) return doc;
-  if (doc && Array.isArray(doc.componentProposals)) return doc.componentProposals;
-  if (doc && doc.crossFile && Array.isArray(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
+  if (isProposalList(doc)) return doc;
+  if (isJsonObject(doc) && isProposalList(doc.componentProposals)) return doc.componentProposals;
+  if (isJsonObject(doc) && isJsonObject(doc.crossFile) && isProposalList(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
   return null;
 }
-module.exports = { bootstrap, bootstrapFromProposals, proposalsIn };
-if (require.main === module) {
-  const fs = require("fs");
-  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
+if (import.meta.main) {
   const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
   let outFile = null, proposalsFile = null, screenFile = null;
@@ -420,10 +261,11 @@ ${usage}`);
     console.error(usage);
     process.exit(1);
   }
-  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
+  const catalogDoc = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
+  assertNotManifest(catalogDoc, catalogFile, "components", "design-system/components.local.json");
+  const catalog = catalogDoc;
   const existingFile = existingArg || outFile;
-  const existing = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existing = existingFile && fs2.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
@@ -437,7 +279,7 @@ ${usage}`);
       process.exit(1);
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs.writeFileSync(outFile, out);
+    if (outFile) fs2.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
@@ -445,7 +287,6 @@ ${usage}`);
   }
   let scopedCatalog = catalog;
   if (screenFile) {
-    const { visibleInstances } = require_component_match();
     const screenDoc = readJsonFile(screenFile, "screen export");
     const used = /* @__PURE__ */ new Set();
     for (const i of visibleInstances(screenDoc, "screen")) {
@@ -461,9 +302,15 @@ ${usage}`);
   if (!outFile) {
     process.stdout.write(json);
   } else {
-    fs.writeFileSync(outFile, json);
-    const entries = Object.values(JSON.parse(json).components);
+    fs2.writeFileSync(outFile, json);
+    const written = JSON.parse(json);
+    const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }
 }
+export {
+  bootstrap,
+  bootstrapFromProposals,
+  proposalsIn
+};

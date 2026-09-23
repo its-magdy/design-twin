@@ -1,4 +1,4 @@
-// catalog-input.js — the ONE guard that stops these CLIs from being handed the wrong catalog file.
+// catalog-input.ts — the ONE guard that stops these CLIs from being handed the wrong catalog file.
 //
 // Since the design-system split (bridge/design-system-layout.js), `design/design-system.json` is a
 // slim pointer manifest: stamp + `files` map + `counts`, and NO `variables`/`components` payload.
@@ -10,12 +10,15 @@
 // The tell is unambiguous and needs no filename sniffing: a manifest has a `files` pointer map and
 // lacks the payload key the caller needs.
 // Split out from the exiting wrapper so the decision itself is testable without a subprocess.
-function isManifest(doc, payloadKey) {
-  return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) &&
-    !Array.isArray(doc[payloadKey]));
+import fs from "node:fs";
+import type { DesignSystemManifest } from "./types.ts";
+
+function isManifest(doc: unknown, payloadKey: string): doc is DesignSystemManifest {
+  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) &&
+    !Array.isArray((doc as Record<string, unknown>)[payloadKey]));
 }
 
-function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, wantFile: string): void {
   if (isManifest(doc, payloadKey)) {
     console.error(
       `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.\n` +
@@ -33,32 +36,35 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
 // simply not there. A `--node`/single-screen pull legitimately produces no `design/design-system/`
 // at all, so "that file does not exist" is a NORMAL outcome of a normal workflow and deserves a
 // sentence, not a stack. `hint` says what to do about it.
-function readJsonFile(file, what, hint) {
-  const fs = require("fs");
-  let raw;
+// Returns the parsed JSON as `unknown`: the path is one the user typed, so nothing about its shape is
+// known here — callers narrow (isManifest/assertNotManifest, a type guard) before reading fields.
+function readJsonFile(file: string, what: string, hint?: string): unknown {
+  let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
-    const why = e && e.code === "ENOENT" ? "does not exist"
-      : e && e.code === "EISDIR" ? "is a directory, not a file"
-      : e && e.code === "EACCES" ? "is not readable (permission denied)"
-      : `could not be read (${(e && e.code) || e})`;
+    const code = e && typeof e === "object" && "code" in e ? e.code : undefined;
+    const why = code === "ENOENT" ? "does not exist"
+      : code === "EISDIR" ? "is a directory, not a file"
+      : code === "EACCES" ? "is not readable (permission denied)"
+      : `could not be read (${code || e})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `\n       ${hint}` : ""));
     process.exit(2);
   }
   try {
     return JSON.parse(raw);
   } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON — ${(e && e.message) || e}`);
+    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
+    console.error(`error  ${what}: '${file}' is not valid JSON — ${message || e}`);
     process.exit(2);
   }
 }
 
 // The one reason design/design-system/ is usually missing, stated once: a --node/single-screen pull
 // exports that screen and nothing else. Callers append their own "…and here is what to do instead",
-// which differs per tool (the map tools can proceed without a map; tokens.js has variables.json).
+// which differs per tool (the map tools can proceed without a map; tokens.ts has variables.json).
 const NO_DESIGN_SYSTEM_HINT =
   "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
   "       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
-module.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+export { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };

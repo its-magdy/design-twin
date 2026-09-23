@@ -1,5 +1,11 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -7,49 +13,26 @@ var __commonJS = (cb, mod) => function __require() {
     throw mod = 0, e;
   }
 };
-
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest2(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs2 = require("fs");
-      let raw;
-      try {
-        raw = fs2.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest: assertNotManifest2, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
   }
-});
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 
 // bridge/pages-layout.js
 var require_pages_layout = __commonJS({
-  "bridge/pages-layout.js"(exports2, module2) {
+  "bridge/pages-layout.js"(exports, module) {
     "use strict";
     function safe(id) {
       return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -200,13 +183,13 @@ var require_pages_layout = __commonJS({
       }
       return result;
     }
-    module2.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
+    module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
   }
 });
 
 // bridge/design-system-layout.js
 var require_design_system_layout = __commonJS({
-  "bridge/design-system-layout.js"(exports2, module2) {
+  "bridge/design-system-layout.js"(exports, module) {
     "use strict";
     var { safe } = require_pages_layout();
     var DIR = "design-system";
@@ -318,7 +301,7 @@ var require_design_system_layout = __commonJS({
       files.push({ path: MANIFEST, data: manifest });
       return { files, manifest, counts, dir: DIR };
     }
-    module2.exports = {
+    module.exports = {
       buildDesignSystemLayout,
       isLibraryEntry,
       DESIGN_SYSTEM_DIR: DIR,
@@ -338,11 +321,28 @@ var require_design_system_layout = __commonJS({
   }
 });
 
-// design-to-code/get-component.js
-var fs = require("fs");
-var path = require("path");
-var { assertNotManifest } = require_catalog_input();
-var { DESIGN_SYSTEM_DIR } = require_design_system_layout();
+// design-to-code/get-component.ts
+import fs from "node:fs";
+import path from "node:path";
+
+// design-to-code/catalog-input.ts
+function isManifest(doc, payloadKey) {
+  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  if (isManifest(doc, payloadKey)) {
+    console.error(
+      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
+       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
+    );
+    process.exit(2);
+  }
+}
+
+// design-to-code/get-component.ts
+var import_design_system_layout = __toESM(require_design_system_layout(), 1);
+var { DESIGN_SYSTEM_DIR } = import_design_system_layout.default;
 function findComponent(catalog, handle) {
   const comps = catalog && catalog.components || [];
   const byKey = comps.find((c) => c.key === handle);
@@ -374,8 +374,7 @@ function getComponent(catalogFile, handle) {
   const detail = JSON.parse(fs.readFileSync(detailPath, "utf8"));
   return { found: true, component: comp, detail, detailPath };
 }
-module.exports = { getComponent, findComponent, resolveVariantsFile };
-if (require.main === module) {
+if (import.meta.main) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
     console.error("usage: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>");
@@ -394,7 +393,13 @@ if (require.main === module) {
     }
     process.stdout.write(JSON.stringify(res.detail, null, 2) + "\n");
   } catch (e) {
-    console.error(`error  ${e.message}`);
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${message}`);
     process.exit(2);
   }
 }
+export {
+  findComponent,
+  getComponent,
+  resolveVariantsFile
+};

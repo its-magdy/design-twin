@@ -28,14 +28,16 @@ import path from "node:path";
 import os from "node:os";
 import { ok, report } from "./assert.ts";
 import * as pagesLayoutMod from "../bridge/pages-layout.js";
-import * as resolveScreenMod from "../design-to-code/resolve-screen.js";
+import { resolveScreen } from "../design-to-code/resolve-screen.ts";
+import type { ResolveScreenResult } from "../design-to-code/types.ts";
 
-// bridge/pages-layout.js and design-to-code/resolve-screen.js are still untyped CJS in this step; TS's
-// static export/return-type analysis for these disagrees with the actual runtime shape (a `resolved` |
-// `ambiguous` | `needs-confirmation` | `not-found` union the tests deliberately narrow by hand), so
-// destructure/cast through `any` at the boundary.
+// bridge/pages-layout.js is still untyped CJS in this step (ports in step 4); TS's allowJs-inferred
+// export analysis for it is too narrow for these calls, so destructure through `any` at the boundary.
 const { deriveTitle, collectTexts } = pagesLayoutMod as any;
-const { resolveScreen } = resolveScreenMod as any;
+// ts-port: the union arms a few assertions read without a status check (they throw if the arm is wrong,
+// which is itself the failure signal — keep that, only tell the checker which arm is expected).
+type Resolved = Extract<ResolveScreenResult, { status: "resolved" }>;
+type Unresolved = Exclude<ResolveScreenResult, { status: "resolved" }>;
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
 
@@ -74,7 +76,7 @@ ok("[resolve] #90 'Job Roles' (visible title; the layer is named `positions ` wi
   (() => { const r = resolveScreen(FIXTURE, "Job Roles"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
 
 ok("[resolve] #70 'Job Roles' never resolves to 'Job Role Details' (20174:143363) — no fuzzy fallback",
-  resolveScreen(FIXTURE, "Job Roles").row.id !== "20174:143363");
+  (resolveScreen(FIXTURE, "Job Roles") as Resolved).row.id !== "20174:143363");
 
 ok("[resolve] #120 'Global Policies' resolves to the ONE screen actually titled that (1359:21337), not the sidebar match on all three",
   (() => { const r = resolveScreen(FIXTURE, "Global Policies"); return r.status === "resolved" && r.row.id === "1359:21337"; })());
@@ -172,7 +174,7 @@ ok("[round2] 'Job Role' on the LEGACY (title-less) export does NOT resolve — n
   (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
 
 ok("[round2] and the message says the export predates title indexing",
-  (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.noTitles === true; })());
+  (() => { const r = resolveScreen(LEGACY, "Job Role") as Unresolved; return "noTitles" in r && r.noTitles === true; })());
 
 ok("[round2] a query matching NOTHING on the legacy export also flags noTitles",
   (() => { const r = resolveScreen(LEGACY, "Totally Unknown"); return r.status === "not-found" && r.noTitles === true; })());
@@ -250,10 +252,10 @@ ok("[round3] finding 310: 'Job Roles' with BOTH a layer-name hit (Job roles, cas
 
 ok("[round3] the candidate list says WHICH field each row matched on",
   (() => {
-    const r = resolveScreen(SIBLING_FIXTURE, "Job Roles");
+    const r = resolveScreen(SIBLING_FIXTURE, "Job Roles") as Unresolved;
     const empty = r.candidates.find((c: any) => c.id === "7314:83742");
     const real = r.candidates.find((c: any) => c.id === "7314:87192");
-    return empty.matchedVia.includes("exact layer name") && real.matchedVia.includes("indexed title");
+    return empty!.matchedVia!.includes("exact layer name") && real!.matchedVia!.includes("indexed title");
   })());
 
 ok("[round3] lower/upper case of the layer name ('job roles') still joins the SAME union, still stops",

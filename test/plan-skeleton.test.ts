@@ -1,4 +1,4 @@
-// Offline tests for design-to-code/plan-skeleton.js — the build-screen plan, generated from the export
+// Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export
 // (livetest-3 §2.9 f; P2b). Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
 // by its build.js (visibility, bindings and instances are the export's own — see the counts below).
 //   node test/plan-skeleton.test.ts
@@ -6,10 +6,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { skeleton, merge, visibility } from "../design-to-code/plan-skeleton.js";
+import { skeleton, merge, visibility } from "../design-to-code/plan-skeleton.ts";
 import { check, report } from "./assert.ts";
+import type { ScreenDoc } from "../design-to-code/types.ts";
 
-const SKEL = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.js");
+const SKEL = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.ts");
 const BUNDLE = path.join(import.meta.dirname, "..", "claude-plugin", "scripts", "plan-skeleton.js");
 const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "plan");
 const PAGE = path.join(FX, "export", "pages", "__Organization_management_");
@@ -110,7 +111,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
     gp.tokens.length === 50 && gp.components.length === 42 && Object.keys(gp.anchors).length === 207 && Object.keys(gp.anchors).every((id) => !gh.has(id)));
 }
 check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node (finding 34)", (() => {
-  const v = visibility({ nodes: [{ id: "1:1", type: "FRAME", children: [{ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false }, { id: "1:3", hidden: true, children: [{ id: "1:4" }] }] }] });
+  const v = visibility({ nodes: [{ id: "1:1", type: "FRAME", children: [{ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false }, { id: "1:3", hidden: true, children: [{ id: "1:4" }] }] }] } as unknown as ScreenDoc); // ts-port: hand-built fixture
   return v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4") && v.hiddenRoots.length === 1 && v.hiddenRoots[0].nodes === 2;
 })());
 

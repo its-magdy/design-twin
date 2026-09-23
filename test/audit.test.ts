@@ -1,4 +1,4 @@
-// Offline tests for design-to-code/audit.js — the pre-implementation design audit.
+// Offline tests for design-to-code/audit.ts — the pre-implementation design audit.
 //   node test/audit.test.ts
 // The fixture is a deliberately flawed login screen: every seeded flaw has one assertion that the
 // audit reports it, and the clean parts have assertions that it does NOT (no false positives).
@@ -6,13 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync, execFileSync } from "node:child_process";
-import * as auditNS from "../design-to-code/audit.js";
+import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind } from "../design-to-code/audit.ts";
+import type { AuditInput } from "../design-to-code/audit.ts";
+import type { ComponentsCatalog, IrNode, TokensDoc } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-
-// audit.js is still untyped CJS (design-to-code/ ports in step 3); its allowJs-inferred structural
-// types are wrong/over-narrow for a strict consumer, so treat the whole module as `any` at this
-// boundary rather than sprinkling annotations through the test (R8).
-const { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind } = auditNS as any;
 
 const screen = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), "utf8"));
 const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "audit", "components.local.json"), "utf8"));
@@ -20,11 +17,11 @@ const codes = (res: any, code: any) => res.findings.filter((f: any) => f.code ==
 const onNode = (res: any, code: any, id: any) => codes(res, code).some((f: any) => f.nodeId === id);
 
 console.log("color math:");
-check("parseHex reads 6- and 8-digit hex", parseHex("#ff0000").r === 255 && Math.abs(parseHex("#0000001a").a - 26 / 255) < 1e-9);
+check("parseHex reads 6- and 8-digit hex", parseHex("#ff0000")!.r === 255 && Math.abs(parseHex("#0000001a")!.a - 26 / 255) < 1e-9);
 check("parseHex rejects junk", parseHex("red") === null && parseHex(undefined) === null);
-check("contrast black/white = 21:1", Math.abs(contrastRatio(parseHex("#000000"), parseHex("#ffffff")) - 21) < 0.01);
-check("contrast #767676 on white ≈ 4.54 (the AA boundary)", Math.abs(contrastRatio(parseHex("#767676"), parseHex("#ffffff")) - 4.54) < 0.02);
-check("ΔE of near-identical colors < 3, distinct colors > 3", deltaE(parseHex("#4f46e5"), parseHex("#4f46e6")) < 3 && deltaE(parseHex("#4f46e5"), parseHex("#e54f46")) > 3);
+check("contrast black/white = 21:1", Math.abs(contrastRatio(parseHex("#000000")!, parseHex("#ffffff")!) - 21) < 0.01);
+check("contrast #767676 on white ≈ 4.54 (the AA boundary)", Math.abs(contrastRatio(parseHex("#767676")!, parseHex("#ffffff")!) - 4.54) < 0.02);
+check("ΔE of near-identical colors < 3, distinct colors > 3", deltaE(parseHex("#4f46e5")!, parseHex("#4f46e6")!) < 3 && deltaE(parseHex("#4f46e5")!, parseHex("#e54f46")!) > 3);
 check("controlKind classifies common names", controlKind("Text Field") === "input" && controlKind("Primary Button") === "button" && controlKind("Toggle") === "toggle" && controlKind("Tabs") === "tab" && controlKind("Avatar") === null);
 
 console.log("audit — ios:");
@@ -58,7 +55,7 @@ console.log("audit — component states:");
 const btn = ios.components.find((c: any) => c.name === "Button");
 const field = ios.components.find((c: any) => c.name === "Text Field");
 check("Button on iOS is missing pressed + disabled (hover doesn't count on touch)", btn && btn.missing.join(",") === "pressed,disabled");
-check("Button 'hover' variant VALUE detected despite property named 'Property 1'", btn.present.includes("hover"));
+check("Button 'hover' variant VALUE detected despite property named 'Property 1'", btn!.present.includes("hover"));
 check("Text Field has focus/error/disabled → nothing missing", field && field.missing.length === 0);
 check("missing-component-states is a warning for a local component", codes(ios, "missing-component-states").some((f: any) => f.component === "Button" && f.severity === "warning"));
 check("Status Bar (remote, not a control) not in state table", !ios.components.some((c: any) => c.name === "Status Bar"));
@@ -78,7 +75,7 @@ const android = audit(screen, { platform: "android", catalog });
 check("web: 32px close button passes the 24px WCAG 2.5.8 minimum", !onNode(web, "small-touch-target", "1:8"));
 check("android: 32dp close flagged below 48dp", codes(android, "small-touch-target").find((f: any) => f.nodeId === "1:8").min === 48);
 check("web: no fake-status-bar check (no system chrome on web)", codes(web, "fake-status-bar").length === 0);
-check("web: Button needs hover+pressed+focus+disabled → missing pressed/focus/disabled", web.components.find((c: any) => c.name === "Button").missing.join(",") === "pressed,focus,disabled");
+check("web: Button needs hover+pressed+focus+disabled → missing pressed/focus/disabled", web.components.find((c: any) => c.name === "Button")!.missing.join(",") === "pressed,focus,disabled");
 check("android: corner smoothing flagged (no native squircle)", onNode(android, "corner-smoothing", "1:7"));
 check("unknown platform falls back to web", audit(screen, { platform: "watchos" }).platform === "web");
 
@@ -86,7 +83,7 @@ console.log("audit — input shapes + manifest gates:");
 const bare = audit(screen.nodes[0], { platform: "ios" });
 check("bare layer tree accepted", bare.screens[0] === "Login" && onNode(bare, "fake-status-bar", "1:2"));
 check("{tree} wrapper accepted", audit({ tree: screen.nodes[0] }, { platform: "ios" }).findings.length === bare.findings.length);
-check("no catalog → component states unknown, not invented", bare.components.find((c: any) => c.name === "Button").known === false);
+check("no catalog → component states unknown, not invented", bare.components.find((c: any) => c.name === "Button")!.known === false);
 const truncated = audit(Object.assign({}, screen, { manifest: { truncated: 2, assetsFailed: 1 } }), { platform: "ios" });
 check("truncated export is a blocker", codes(truncated, "export-truncated")[0].severity === "blocker");
 check("failed assets are a blocker", codes(truncated, "assets-failed")[0].severity === "blocker");
@@ -95,16 +92,16 @@ const drawnStates = JSON.parse(JSON.stringify(screen));
 drawnStates.nodes[0].children.push({ type: "FRAME", name: "Skeleton", id: "3:1", hidden: true }, { type: "FRAME", name: "Error toast", id: "3:2", hidden: true });
 const ds = audit(drawnStates, { platform: "ios" });
 check("hidden 'Skeleton' / 'Error toast' count as designed states", ds.screenStates.loading === "designed" && ds.screenStates.error === "designed" && ds.screenStates.empty === "not-found");
-check("garbage input doesn't throw", audit(null).findings.length === 0 && audit([{}, 42]).screens.length === 0);
+check("garbage input doesn't throw", audit(null).findings.length === 0 && audit([{}, 42] as unknown as AuditInput[]).screens.length === 0); // ts-port: hand-built fixture
 
 console.log("audit — regressions:");
 const styled = audit({ nodes: [{ type: "FRAME", name: "S", id: "9:1", children: [
   { type: "INSTANCE", name: "Delete", id: "9:2", component: "Button", mainComponent: { key: "K", setKey: "KS", setName: "Button" }, box: { w: 120, h: 44 } },
   { type: "TEXT", name: "T", id: "9:3", text: "x", autoResize: "height", font: { size: 14, color: "#111111" }, fills: [{ type: "solid", color: "#111111" }] },
-] }] }, { platform: "ios", catalog: { components: [{ name: "Button", type: "COMPONENT_SET", key: "KS", props: { Variant: { type: "VARIANT", options: ["Primary", "Danger", "Destructive"] } } }] } });
+] }] } as unknown as AuditInput, { platform: "ios", catalog: { components: [{ name: "Button", type: "COMPONENT_SET", key: "KS", props: { Variant: { type: "VARIANT", options: ["Primary", "Danger", "Destructive"] } } }] } as unknown as ComponentsCatalog }); // ts-port: hand-built fixture
 check("'Danger'/'Destructive' style variants are not an error state", !styled.components[0].present.includes("error"));
 check("TEXT node fills not double-counted as a second color", styled.tokenBinding.color.total === 1);
-const stroked = audit({ type: "FRAME", name: "Search", id: "8:1", strokes: { colors: ["#d4d4d8"], weight: 1, align: "outside" } }, { platform: "web" });
+const stroked = audit({ type: "FRAME", name: "Search", id: "8:1", strokes: { colors: ["#d4d4d8"], weight: 1, align: "outside" } } as unknown as AuditInput, { platform: "web" }); // ts-port: hand-built fixture
 check("outside stroke flagged with the web border/outline note", onNode(stroked, "stroke-align", "8:1") && /outline/.test(codes(stroked, "stroke-align")[0].message));
 check("inside stroke (the Figma default for borders) not flagged", !onNode(ios, "stroke-align", "1:6"));
 
@@ -114,7 +111,7 @@ check("markdown has summary, binding table, states, questions", /# Design audit 
 check("markdown lists blockers before warnings", md.indexOf("## Blockers") < md.indexOf("## Warnings"));
 
 console.log("CLI:");
-const cli = path.join(import.meta.dirname, "..", "design-to-code", "audit.js");
+const cli = path.join(import.meta.dirname, "..", "design-to-code", "audit.ts");
 const out = execFileSync(process.execPath, [cli, path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), "--platform", "android", "--catalog", path.join(import.meta.dirname, "fixtures/audit/components.local.json"), "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 const parsed = JSON.parse(out);
 check("CLI --json emits the audit for the chosen platform", parsed.platform === "android" && parsed.summary.blockers === 1);
@@ -178,7 +175,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     nodes: [{ type: "FRAME", name: "positions ", id: "7314:87192", box: { w: 100, h: 100 }, children: [] }],
     manifest: { nodes: 1, truncated: 0, assetsFailed: 0, warnings: [] },
   }));
-  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "audit.js");
+  const scriptPath = path.join(import.meta.dirname, "..", "design-to-code", "audit.ts");
   const r = spawnSync(process.execPath, [scriptPath, screenFile], { encoding: "utf8", cwd });
   check("[cli-out] with no --out, a report pair is written under design/audit/<the input file's own basename>",
     r.status === 0 &&
@@ -255,7 +252,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 40 }, layout: { display: "flex", flexDirection: "row", padding: [8, 0, 8, 0] },
       children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 8+24+8=40 == declared 40: exact fit
   };
-  const resFixed = audit([{ doc: { nodes: [consistentFixed] }, label: "consistent-fixed" }], { platform: "web" });
+  const resFixed = audit([{ doc: { nodes: [consistentFixed as unknown as IrNode] }, label: "consistent-fixed" }], { platform: "web" }); // ts-port: hand-built fixture
   check("[172] a FIXED box with children fitting exactly (8+24+8=40, declared 40) does not fire", !resFixed.findings.some((f: any) => f.code === "self-inconsistent-geometry"));
 
   // A FIXED box with children SHORTER than the box (the sidebar-row shape) must NOT fire.
@@ -264,7 +261,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 220, h: 40 }, layout: { display: "flex", flexDirection: "row", padding: [0, 4, 0, 12] },
       children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 0+24+0=24 < declared 40: content fits with room to spare
   };
-  const resShorter = audit([{ doc: { nodes: [shorterFixed] }, label: "shorter-fixed" }], { platform: "web" });
+  const resShorter = audit([{ doc: { nodes: [shorterFixed as unknown as IrNode] }, label: "shorter-fixed" }], { platform: "web" }); // ts-port: hand-built fixture
   check("[172] a FIXED box whose content is SHORTER than the declared box (normal centred auto-layout) does not fire", !resShorter.findings.some((f: any) => f.code === "self-inconsistent-geometry"));
 
   // A HUG box whose declared size DOES equal its content must NOT fire.
@@ -273,7 +270,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 56 }, heightMode: "hug", layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
       children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }],
   };
-  const resHug = audit([{ doc: { nodes: [consistentHug] }, label: "consistent-hug" }], { platform: "web" });
+  const resHug = audit([{ doc: { nodes: [consistentHug as unknown as IrNode] }, label: "consistent-hug" }], { platform: "web" }); // ts-port: hand-built fixture
   check("[172] a HUG box whose declared size equals its content (16+24+16=56, declared 56) does not fire", !resHug.findings.some((f: any) => f.code === "self-inconsistent-geometry"));
 
   // A HUG box whose declared size is SMALLER than its content must fire (a hug mismatch, not just overflow).
@@ -282,7 +279,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 40 }, heightMode: "hug", layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
       children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }], // 16+24+16=56 != declared 40
   };
-  const resShortHug = audit([{ doc: { nodes: [shortHug] }, label: "short-hug" }], { platform: "web" });
+  const resShortHug = audit([{ doc: { nodes: [shortHug as unknown as IrNode] }, label: "short-hug" }], { platform: "web" }); // ts-port: hand-built fixture
   check("[172] a HUG box whose declared size is smaller than its content (40 vs computed 56) DOES fire", resShortHug.findings.some((f: any) => f.code === "self-inconsistent-geometry"));
 })();
 
@@ -292,7 +289,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     collections: [{ name: "Spacing", variables: [
       { valuesByMode: { Mode1: 8 } }, { valuesByMode: { Mode1: 16 } }, { valuesByMode: { Mode1: 24 } },
     ] }],
-  };
+  } as unknown as TokensDoc; // ts-port: hand-built fixture
   const withDefault = audit([{ doc: screen, label: "s" }], { catalog: catalog.components, designSystem: { tokens: dsTokens } });
   check("[grid] the default (no --grid given) is recorded as assumed", withDefault.gridAssumed === true && withDefault.grid === 4);
   check("[grid] an 8px design-system spacing scale is detected and reported as a mismatch", withDefault.gridMismatch === 8);
@@ -314,13 +311,13 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const CAT = path.join(FX, "pages/In_progress/Create_Activity_Type__18411_84111.json");
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "audit-311-"));
   const runAudit = (f: any, tag: any) => {
-    const r = spawnSync(process.execPath, [path.join(D2C, "audit.js"), f, "--platform", "web", "--design-system", path.join(FX, "design-system"), "--out", path.join(out, tag), "--gate", "--grid", "4"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [path.join(D2C, "audit.ts"), f, "--platform", "web", "--design-system", path.join(FX, "design-system"), "--out", path.join(out, tag), "--gate", "--grid", "4"], { encoding: "utf8" });
     let json: any = { findings: [], crossFile: { findings: [] } };
     try { json = JSON.parse(fs.readFileSync(path.join(out, tag + ".json"), "utf8")); } catch (e) { /* stays empty */ }
     return { r, json, md: fs.existsSync(path.join(out, tag + ".md")) ? fs.readFileSync(path.join(out, tag + ".md"), "utf8") : "" };
   };
   const runCross = (f: any) => {
-    const r = spawnSync(process.execPath, [path.join(D2C, "cross-check.js"), f, "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [path.join(D2C, "cross-check.ts"), f, "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
     try { return JSON.parse(r.stdout); } catch (e) { return { findings: [] }; }
   };
   const blockerSet = (findings: any) => findings.filter((f: any) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f: any) => `${f.code}|${f.token || ""}|${f.key || ""}`).sort();

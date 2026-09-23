@@ -372,11 +372,11 @@ function loadLayer(mod, tool) {
     );
   }
 }
-const getComponent = (catalogFile, handle) => loadLayer("get-component.js", "design_get_component").getComponent(
+const getComponent = (catalogFile, handle) => loadLayer("get-component.ts", "design_get_component").getComponent(
   catalogFile,
   handle
 );
-const driftLint = (map, catalog, opts) => loadLayer("drift-lint.js", "design_drift_lint").driftLint(
+const driftLint = (map, catalog, opts) => loadLayer("drift-lint.ts", "design_drift_lint").driftLint(
   map,
   catalog,
   opts

@@ -1,18 +1,14 @@
-// Offline tests for design-to-code/design-diff.js (the sync-design skill's change list).
+// Offline tests for design-to-code/design-diff.ts (the sync-design skill's change list).
 //   node test/design-diff.test.ts
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import * as designDiffMod from "../design-to-code/design-diff.js";
+import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
+import type { ComponentsCatalog, TokensDoc } from "../design-to-code/types.ts";
 
-// design-diff.js is still untyped CJS in this step; TS's allowJs infers narrow structural signatures
-// from its implementation that these deliberately-loose fixture doubles don't match. Cast the whole
-// module at the boundary (same pattern as tokens.js's toNative/platformOf — see step-2 rules R3).
-const { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } = designDiffMod as any;
-
-const CLI = path.join(import.meta.dirname, "..", "design-to-code", "design-diff.js");
+const CLI = path.join(import.meta.dirname, "..", "design-to-code", "design-diff.ts");
 const clone = (o: any) => JSON.parse(JSON.stringify(o));
 const screen = (): any => ({ exportedAt: "2026-01-01", manifest: { nodes: 5 }, tree: { id: "1:1", name: "Login", type: "FRAME", box: { w: 390, h: 844, x: 0, y: 0 }, layout: { display: "flex", gap: 16 }, children: [
   { id: "1:2", name: "Title", type: "TEXT", text: "Welcome", font: { size: 24 }, widthMode: "hug", heightMode: "hug", box: { w: 120, h: 32, x: 24, y: 80 } },
@@ -22,7 +18,7 @@ const screen = (): any => ({ exportedAt: "2026-01-01", manifest: { nodes: 5 }, t
 ] } });
 
 console.log("screen diff:");
-check("identical exports → nothing, even with a new exportedAt/manifest", (() => { const b = screen(); b.exportedAt = "2026-09-21"; b.manifest.nodes = 9; const s = diffScreens(screen(), b).summary; return s.added + s.removed + s.changed + s.reordered + s.positionOnly === 0; })());
+check("identical exports → nothing, even with a new exportedAt/manifest", (() => { const b = screen(); b.exportedAt = "2026-09-21"; b.manifest.nodes = 9; const s = diffScreens(screen(), b).summary; return s.added + s.removed + s.changed + s.reordered! + s.positionOnly! === 0; })());
 check("a text edit is ONE change, categorised, with before → after", (() => {
   const b = screen(); b.tree.children[0].text = "Welcome back";
   const d = diffScreens(screen(), b);
@@ -182,12 +178,12 @@ check("a truncated NEW export warns that removals may be false", (() => { const 
 check("root-level facts beside the tree (a new prototype flow) are a change", (() => { const b = screen(); b.flows = [{ name: "Onboarding", startNodeId: "1:1" }]; const d = diffScreens(screen(), b); return d.summary.changed === 1 && d.document[0].field === "flows" && /Beside the tree/.test(markdown(d, "x")); })());
 check("children without ids don't crash the reorder report", (() => { const a = screen(), b = screen(); a.tree.children.push({ name: "anon" }); b.tree.children.unshift({ name: "anon" }); try { diffScreens(a, b); return true; } catch { return false; } })());
 check("tokens: the same NAME in two collections is two tokens", (() => {
-  const t = (v: any) => ({ variables: [{ name: "size/md", collection: "Space", values: { M: v } }, { name: "size/md", collection: "Type", values: { M: 14 } }] });
+  const t = (v: any) => ({ variables: [{ name: "size/md", collection: "Space", values: { M: v } }, { name: "size/md", collection: "Type", values: { M: 14 } }] }) as unknown as TokensDoc; // ts-port: hand-built fixture
   const d = diffTokens(t(16), t(20));
   return d.changed.length === 1 && d.changed[0].name === "Space / size/md" && d.changed[0].modes[0].after === "20";
 })());
 check("tokens: a new MODE on a collection is reported", (() => {
-  const t = (modes: any) => ({ collections: [{ name: "Theme", modes, default: "Light" }], variables: [] });
+  const t = (modes: any) => ({ collections: [{ name: "Theme", modes, default: "Light" }], variables: [] }) as unknown as TokensDoc; // ts-port: hand-built fixture
   const d = diffTokens(t(["Light", "Dark"]), t(["Light", "Dark", "High contrast"]));
   return d.summary.changed === 1 && d.collections[0].field === "Theme.modes[2]" && /Collections \/ modes/.test(markdown(d, "x"));
 })());
@@ -197,7 +193,7 @@ check("catalog: removed / added components and a new variant option are all seen
   const d = diffDocs(cat(), b);
   return d.kind === "catalog" && d.removed[0].name === "Chip" && d.added[0].name === "Badge" && d.changed.length === 1 && d.changed[0].fields.length === 1 && d.changed[0].fields[0].field === "variantProps.State[2]" && /every built screen/.test(markdown(d, "x"));
 })());
-check("a catalog-sized catalog: dropping 3 components is 3 removals", (() => { const real = { components: Array.from({ length: 40 }, (_, i) => ({ key: "k" + i, id: "1:" + i, name: "Component " + i, type: i % 3 ? "COMPONENT" : "COMPONENT_SET", page: "DS", ...(i % 3 ? {} : { variantProps: { State: ["default", "pressed"] } }) })) }; const b = clone(real); b.components = b.components.slice(3); return diffCatalog(real, b).removed.length === 3; })());
+check("a catalog-sized catalog: dropping 3 components is 3 removals", (() => { const real = { components: Array.from({ length: 40 }, (_, i) => ({ key: "k" + i, id: "1:" + i, name: "Component " + i, type: i % 3 ? "COMPONENT" : "COMPONENT_SET", page: "DS", ...(i % 3 ? {} : { variantProps: { State: ["default", "pressed"] } }) })) }; const b = clone(real); b.components = b.components.slice(3); return diffCatalog(real as unknown as ComponentsCatalog, b).removed.length === 3; })()); // ts-port: hand-built fixture
 check("a file that is none of the three kinds is refused, not reported as unchanged", (() => { try { diffDocs({ a: 1 }, { a: 2 }); return false; } catch (e: any) { return /nothing here can be diffed/.test(e.message); } })());
 
 console.log("CLI — baseline choice, asset bytes, flags:");

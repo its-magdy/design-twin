@@ -1,53 +1,29 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+
+// design-to-code/catalog-input.ts
+import fs from "node:fs";
+function readJsonFile(file, what, hint) {
+  let raw;
   try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    raw = fs.readFileSync(file, "utf8");
   } catch (e) {
-    throw mod = 0, e;
-  }
-};
-
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs = require("fs");
-      let raw;
-      try {
-        raw = fs.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    process.exit(2);
   }
-});
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    process.exit(2);
+  }
+}
 
-// design-to-code/map-validate.js
+// design-to-code/map-validate.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
@@ -67,7 +43,7 @@ var KEYS = {
 };
 var PROP_KINDS = Object.keys(KEYS.prop);
 var isStr = (v) => typeof v === "string";
-var isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isBool = (v) => typeof v === "boolean";
 var noExtra = (obj, allowed, at, err) => {
   if (!Array.isArray(allowed)) return;
@@ -119,7 +95,7 @@ function validateMap(map) {
         }
       }
     }
-    if (e.status !== void 0 && !STATUSES.includes(e.status)) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
     if (e.props !== void 0) {
       if (!isObj(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
@@ -178,9 +154,10 @@ function validateProp(p, at, err) {
   if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
   if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
 }
-module.exports = { validateMap };
-if (require.main === module) {
-  const { readJsonFile } = require_catalog_input();
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+if (import.meta.main) {
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
   if (file === "--help" || file === "-h") {
@@ -202,3 +179,7 @@ if (require.main === module) {
 ${res.errors.length} error(s)`);
   process.exit(1);
 }
+export {
+  isCodeConnectMap,
+  validateMap
+};

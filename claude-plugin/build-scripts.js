@@ -1,47 +1,77 @@
-// Bundles design-to-code/*.js -> claude-plugin/scripts/*.js (committed; the skills call them as
+// Bundles design-to-code/*.ts -> claude-plugin/scripts/*.js (committed; the skills call them as
 // ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js).
 //
 // Why a bundle and not a copy or a symlink: an installed plugin is ONLY the claude-plugin/ directory.
-// drift-lint.js and get-component.js require ../bridge/*.js, which does not exist there, and a symlink
+// drift-lint.ts and get-component.ts import ../bridge/*.js, which does not exist there, and a symlink
 // pointing outside the plugin directory is not installed at all — so either one ships a plugin whose
-// Stop hook and every scripts/ call fail. bundle:true inlines those requires, so each output file is
+// Stop hook and every scripts/ call fail. bundle:true inlines those imports, so each output file is
 // self-contained (Node builtins only).
 //
+// Why one esbuild build PER ENTRY, with the inlined-CLI-guard plugin: every design-to-code module ends in
+// an `if (import.meta.main) { …CLI… }` block. In an ESM bundle every inlined module's `import.meta` IS the
+// bundle's own, so `import.meta.main` is true for all of them — verify-build.js would run cross-check's
+// CLI (then exit) instead of its own, silently no-op'ing the Stop hook. (Under CJS the equivalent
+// `require.main === module` compared against the inner module object and was false.) So each entry is
+// built on its own, and in every OTHER design-to-code module the plugin rewrites `import.meta.main` to
+// `false` before esbuild sees it; only the entry keeps a live guard (exactly one per bundle).
+//
 // Run from the repo root:  node claude-plugin/build-scripts.js [outDir]
-// test/design-to-code.test.js rebuilds into a temp dir and fails if scripts/ is stale — the same
+// test/verify-build.test.ts rebuilds into a temp dir and fails if scripts/ is stale — the same
 // committed-artifact gate figma-plugin/code.js and bridge/figma-mcp.mjs have.
-const path = require("path");
-const fs = require("fs");
+import path from "node:path";
+import fs from "node:fs";
+// esbuild is a devDependency of the bridge/ and figma-plugin/ workspaces, hoisted to the repo-root
+// node_modules — the bare specifier resolves there.
+import esbuild from "esbuild";
 
-// esbuild is a devDependency of bridge/ (and figma-plugin/); resolution walks upward to the
-// hoisted root node_modules too.
-const esbuild = require(require.resolve("esbuild", { paths: [path.join(__dirname, "..", "bridge"), path.join(__dirname, "..", "figma-plugin")] }));
-
-const SRC = path.join(__dirname, "..", "design-to-code");
-// The CLI entry points. kinds.js / catalog-input.js are libraries — they get inlined, not shipped.
+const SRC = path.join(import.meta.dirname, "..", "design-to-code");
+// The CLI entry points. kinds.ts / catalog-input.ts are libraries — they get inlined, not shipped.
 const ENTRIES = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
+
+// Inside an ESM bundle, a CommonJS module's `require("fs")` goes through esbuild's __require shim, which
+// throws "Dynamic require of "fs" is not supported" — this banner gives the bundle a real `require`.
+// It exists ONLY while bridge/*.js (inlined by drift-lint / design-diff / get-component) is CommonJS:
+// remove it in step 4 when the bridge becomes ESM.
+const REQUIRE_SHIM = 'import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);';
+
+// Rewrites `import.meta.main` to `false` in every design-to-code module except `entry` (see header).
+function inlinedCliGuard(entry) {
+  return {
+    name: "inlined-cli-guard",
+    setup(b) {
+      b.onLoad({ filter: /[\\/]design-to-code[\\/][^\\/]+\.ts$/ }, async (args) => {
+        const src = await fs.promises.readFile(args.path, "utf8");
+        return { contents: path.resolve(args.path) === entry ? src : src.replaceAll("import.meta.main", "false"), loader: "ts" };
+      });
+    },
+  };
+}
 
 function build(outDir) {
   fs.mkdirSync(outDir, { recursive: true });
-  return esbuild.build({
-    entryPoints: ENTRIES.map((n) => path.join(SRC, n + ".js")),
-    outdir: outDir,
-    // esbuild writes each inlined module's path (relative to the working dir) into the output as a
-    // comment — pin it to the repo root so the bytes don't depend on where the build was run from.
-    absWorkingDir: path.join(__dirname, ".."),
-    bundle: true,
-    format: "cjs",
-    platform: "node",
-    target: "node18",
-    banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild." },
-    logLevel: "silent",
-  });
+  return Promise.all(ENTRIES.map((n) => {
+    const entry = path.resolve(SRC, n + ".ts");
+    return esbuild.build({
+      entryPoints: [entry],
+      outdir: outDir,
+      // esbuild writes each inlined module's path (relative to the working dir) into the output as a
+      // comment — pin it to the repo root so the bytes don't depend on where the build was run from.
+      absWorkingDir: path.join(import.meta.dirname, ".."),
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      target: "node24",
+      banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.\n" + REQUIRE_SHIM },
+      plugins: [inlinedCliGuard(entry)],
+      logLevel: "silent",
+    });
+  }));
 }
 
-module.exports = { build, ENTRIES };
+export { build, ENTRIES };
 
-if (require.main === module) {
-  const outDir = path.resolve(process.argv[2] || path.join(__dirname, "scripts"));
+if (import.meta.main) {
+  const outDir = path.resolve(process.argv[2] || path.join(import.meta.dirname, "scripts"));
   build(outDir)
     .then(() => console.log(`[build-scripts] wrote ${ENTRIES.length} scripts to ${outDir}`))
     .catch((e) => { console.error(e); process.exit(1); });

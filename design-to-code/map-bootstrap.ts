@@ -1,4 +1,4 @@
-// map-bootstrap.js — scaffold a codeconnect.local.json from the extractor's component catalog.
+// map-bootstrap.ts — scaffold a codeconnect.local.json from the extractor's component catalog.
 //
 // The free-plan equivalent of `figma connect create`: pre-fills every component (keyed by its stable
 // publish key) with its real props translated to the transform vocabulary, marked status:"needs-review".
@@ -10,68 +10,75 @@
 //     `orphaned-entry` surfaces it loudly — bootstrap must not silently delete it).
 //   - Only genuinely new components get a fresh needs-review stub.
 // The `existing` argument is never mutated (entries are deep-cloned).
+import fs from "node:fs";
+import type {
+  BooleanPropMap, CatalogComponent, CodeConnectMap, ComponentPropDef, ComponentProposal, ComponentsCatalog, EnumPropMap, MapEntry, PropMap, ScreenDoc,
+} from "./types.ts";
+import { isJsonObject } from "./types.ts";
+import { TYPE_TO_KIND as KIND } from "./kinds.ts"; // shared vocab — kept in sync with drift-lint
+import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { visibleInstances } from "./component-match.ts";
 
-const { TYPE_TO_KIND: KIND } = require("./kinds"); // shared vocab — kept in sync with drift-lint
-
-const clone = (o) => JSON.parse(JSON.stringify(o));
+const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o));
 
 // Split an arbitrary name into alphanumeric words (drops "/", punctuation, whitespace).
-const words = (name) => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+const words = (name: string | null | undefined): string[] => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
 
-function pascal(name) {
+function pascal(name: string | null | undefined): string {
   // Join ALL "/" segments so "Button/Primary/Danger" keeps its namespace instead of collapsing to "Danger".
   const p = words(name).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
   return /^[A-Za-z]/.test(p) ? p : "Component";
 }
-function camel(name) {
+function camel(name: string | null | undefined): string {
   const base = String(name || "").split("/").pop() || ""; // camel keys off the LEAF segment only
   const p = words(base).map((w, i) => (i === 0 ? w.charAt(0).toLowerCase() : w.charAt(0).toUpperCase()) + w.slice(1)).join("");
   return /^[A-Za-z]/.test(p) ? p : "prop";
 }
 
-function propEntry(name, def) {
+function propEntry(name: string, def: ComponentPropDef): PropMap | null {
   const kind = KIND[def.type];
   if (kind === "enum") {
-    const values = {}; for (const opt of def.options || []) values[opt] = opt; // identity map to start
-    const p = { kind, codeProp: camel(name), values };
+    const values: Record<string, string> = {}; for (const opt of def.options || []) values[opt] = opt; // identity map to start
+    const p: EnumPropMap = { kind, codeProp: camel(name), values };
     if (typeof def.default === "string" || typeof def.default === "number" || typeof def.default === "boolean") { p.default = def.default; p.omitDefault = true; }
     return p;
   }
-  if (kind === "boolean") { const p = { kind, codeProp: camel(name) }; if (def.default !== undefined) { p.default = !!def.default; p.omitDefault = true; } return p; }
+  if (kind === "boolean") { const p: BooleanPropMap = { kind, codeProp: camel(name) }; if (def.default !== undefined) { p.default = !!def.default; p.omitDefault = true; } return p; }
   if (kind === "string") return { kind, codeProp: /label|text|title/i.test(name) ? "children" : camel(name) };
   if (kind === "instance") return { kind, slot: camel(name) };
   return null;
 }
 
-function freshEntry(c) {
-  const figma = { name: c.name || c.key || c.id || "Unnamed" }; // figma.name must always be a string
+function freshEntry(c: CatalogComponent): MapEntry {
+  const figma: MapEntry["figma"] = { name: c.name || c.key || c.id || "Unnamed" }; // figma.name must always be a string
   if (c.key) figma.key = c.key; else figma.unstable = true;
   if (c.id) figma.id = c.id;
-  const entry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
-  const props = {};
-  for (const pn of Object.keys(c.props || {})) { const pe = propEntry(pn, c.props[pn]); if (pe) props[pn] = pe; }
+  const entry: MapEntry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
+  const props: Record<string, PropMap> = {};
+  const defs = c.props || {};
+  for (const pn of Object.keys(defs)) { const pe = propEntry(pn, defs[pn]); if (pe) props[pn] = pe; }
   if (Object.keys(props).length) entry.props = props;
   return entry;
 }
 
-function bootstrap(catalog, existing) {
+function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: CodeConnectMap | null): CodeConnectMap {
   // components is a string-keyed map; use a null-prototype object so a component whose key/id is
   // literally "__proto__"/"constructor" becomes a real own entry instead of silently vanishing
   // (which would violate the "never destroys human work" contract). Serializes to JSON normally.
-  const out = { version: 1, components: Object.create(null) };
+  const out: CodeConnectMap = { version: 1, components: Object.create(null) };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
-  const prev = (existing && existing.components) || {};
+  const prev: Record<string, MapEntry> = (existing && existing.components) || {};
   // Index prev entries by EVERY identifier they carry (their map key + figma.key + figma.id), so a
   // component that changes how it's identified (e.g. an id-keyed entry whose component later gains a
   // publish key) reuses its existing entry instead of producing a duplicate.
-  const prevByIdent = new Map();
+  const prevByIdent = new Map<string, string>();
   for (const pk of Object.keys(prev)) {
     if (!prevByIdent.has(pk)) prevByIdent.set(pk, pk);
-    const pf = prev[pk].figma || {};
+    const pf: Partial<MapEntry["figma"]> = prev[pk].figma || {};
     if (pf.key && !prevByIdent.has(pf.key)) prevByIdent.set(pf.key, pk);
     if (pf.id && !prevByIdent.has(pf.id)) prevByIdent.set(pf.id, pk);
   }
-  const usedPrev = new Set();
+  const usedPrev = new Set<string>();
 
   for (const c of (catalog && catalog.components) || []) {
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
@@ -81,7 +88,7 @@ function bootstrap(catalog, existing) {
     const prevKey = matchKey ? prevByIdent.get(matchKey) : null;
     const prevEntry = prevKey ? prev[prevKey] : null;
 
-    if (prevEntry) {
+    if (prevKey && prevEntry) { // prevEntry implies prevKey — spelled out for the type
       // Preserve ALL human work regardless of status — a `needs-review` stub can still carry half-
       // finished edits (a renamed export, mapped props) before its import path is filled, so we never
       // regenerate wholesale. Refresh only advisory metadata, add newly-appeared props, and regenerate
@@ -92,12 +99,13 @@ function bootstrap(catalog, existing) {
       entry.figma = Object.assign({}, entry.figma, { name: c.name || (entry.figma && entry.figma.name) || "Unnamed" });
       if (c.id) entry.figma.id = c.id;
       if (c.key) entry.figma.key = c.key; else if (!entry.figma.key) entry.figma.unstable = true;
-      entry.props = entry.props || {};
-      for (const pn of Object.keys(c.props || {})) {
-        const cdef = c.props[pn], kind = KIND[cdef.type], ex = entry.props[pn];
-        if (!ex || (kind && ex.kind && ex.kind !== kind)) { const pe = propEntry(pn, cdef); if (pe) entry.props[pn] = pe; }
+      const props = entry.props = entry.props || {};
+      const defs = c.props || {};
+      for (const pn of Object.keys(defs)) {
+        const cdef = defs[pn], kind = KIND[cdef.type], ex = props[pn];
+        if (!ex || (kind && ex.kind && ex.kind !== kind)) { const pe = propEntry(pn, cdef); if (pe) props[pn] = pe; }
       }
-      if (!Object.keys(entry.props).length) delete entry.props;
+      if (!Object.keys(props).length) delete entry.props;
       // An entry filed under a key that is NOT one of this component's own identifiers was put there on
       // purpose — a confirmed re-key proposal is filed under the SCREEN's instance key (the catalog's
       // key was re-minted by a file duplication, livetest-3 #226) so an instance lookup finds it. Keep it
@@ -114,25 +122,27 @@ function bootstrap(catalog, existing) {
   return out;
 }
 
-// Stubs for CONFIRMED name+prop-signature matches only (cross-check.js `componentProposals`, see
-// component-match.js). Why a separate path: when a file was duplicated, 0 of the screen's instance
+export interface ProposalsReport { confirmed: number; added: number; kept: number; skipped: string[] }
+
+// Stubs for CONFIRMED name+prop-signature matches only (cross-check.ts `componentProposals`, see
+// component-match.ts). Why a separate path: when a file was duplicated, 0 of the screen's instance
 // keys are in the catalog, and a full bootstrap wrote 318 stubs of which none was on the screen
 // (livetest-3 #103) — a list nobody can evaluate. Here every stub is one the user already said yes
 // to, filed under the screen's OWN instance key (what build-screen looks an instance up by), with
 // figma.key/id pointing at the catalog component whose props it was matched on.
 // Never auto-accepts: an entry without `confirmed: true` is skipped. Never overwrites: an existing
 // entry under the same key is kept as it is.
-function bootstrapFromProposals(proposals, catalog, existing) {
-  const out = { version: 1, components: Object.create(null) };
+function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null | undefined, catalog: ComponentsCatalog | null | undefined, existing?: CodeConnectMap | null): { map: CodeConnectMap; report: ProposalsReport } {
+  const out: CodeConnectMap = { version: 1, components: Object.create(null) };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
-  const prev = (existing && existing.components) || {};
+  const prev: Record<string, MapEntry> = (existing && existing.components) || {};
   for (const pk of Object.keys(prev)) out.components[pk] = clone(prev[pk]);
   const comps = (catalog && catalog.components) || [];
-  const report = { confirmed: 0, added: 0, kept: 0, skipped: [] };
+  const report: ProposalsReport = { confirmed: 0, added: 0, kept: 0, skipped: [] };
   for (const p of proposals || []) {
     if (!p || p.confirmed !== true) continue;
     report.confirmed++;
-    const want = p.catalog || {};
+    const want: { key?: string; id?: string } = p.catalog || {};
     const c = comps.find((x) => (want.key && x.key === want.key) || (want.id && x.id === want.id));
     const mapKey = (p.instanceKeys || [])[0];
     if (!c) { report.skipped.push(`'${p.name}': catalog component ${want.id || want.key || "?"} is not in this catalog`); continue; }
@@ -146,28 +156,29 @@ function bootstrapFromProposals(proposals, catalog, existing) {
   return { map: out, report };
 }
 
-// A cross-check report, an audit report (its crossFile), or a bare array.
-function proposalsIn(doc) {
-  if (Array.isArray(doc)) return doc;
-  if (doc && Array.isArray(doc.componentProposals)) return doc.componentProposals;
-  if (doc && doc.crossFile && Array.isArray(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
+// A cross-check report, an audit report (its crossFile), or a bare array. The rows are read as what
+// cross-check.ts wrote (a person only adds `confirmed: true` to them); bootstrapFromProposals still
+// checks each row before acting on it.
+const isProposalList = (x: unknown): x is ComponentProposal[] => Array.isArray(x);
+function proposalsIn(doc: unknown): ComponentProposal[] | null {
+  if (isProposalList(doc)) return doc;
+  if (isJsonObject(doc) && isProposalList(doc.componentProposals)) return doc.componentProposals;
+  if (isJsonObject(doc) && isJsonObject(doc.crossFile) && isProposalList(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
   return null;
 }
 
-module.exports = { bootstrap, bootstrapFromProposals, proposalsIn };
+export { bootstrap, bootstrapFromProposals, proposalsIn };
 
-// CLI: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]
+// CLI: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>]
 // The catalog argument is the SPLIT component file, not design-system.json — that is a slim pointer
 // manifest since the split and carries no `components` array (see bridge/design-system-layout.js).
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
-if (require.main === module) {
-  const fs = require("fs");
-  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require("./catalog-input.js");
+if (import.meta.main) {
   const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
-  let outFile = null, proposalsFile = null, screenFile = null;
+  let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     proposalsFile = argv[pi + 1];
@@ -190,10 +201,13 @@ if (require.main === module) {
   if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
   const [catalogFile, existingArg] = argv;
   if (!catalogFile) { console.error(usage); process.exit(1); }
-  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
+  const catalogDoc = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
+  assertNotManifest(catalogDoc, catalogFile, "components", "design-system/components.local.json");
+  // Past the manifest guard, the file is the split catalog this repo's own writer produced.
+  const catalog = catalogDoc as ComponentsCatalog;
   const existingFile = existingArg || outFile;
-  const existing = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  // A person's map (hand-edited): bootstrap merges whatever it carries, exactly as the JS did.
+  const existing = existingFile && fs.existsSync(existingFile) ? (readJsonFile(existingFile, "existing map") as CodeConnectMap) : null;
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
@@ -216,11 +230,11 @@ if (require.main === module) {
   // VISIBLE instances actually reference first, so the "confirm the stubs" step is small and every
   // entry is one the screen actually needs. Run the screen-coverage/cross-check BEFORE this (the
   // skill's own ordering), then pass its screen json here.
-  let scopedCatalog = catalog;
+  let scopedCatalog: ComponentsCatalog = catalog;
   if (screenFile) {
-    const { visibleInstances } = require("./component-match.js");
-    const screenDoc = readJsonFile(screenFile, "screen export");
-    const used = new Set();
+    // A screen export this repo's own pull wrote; visibleInstances() duck-types its three shapes.
+    const screenDoc = readJsonFile(screenFile, "screen export") as ScreenDoc;
+    const used = new Set<string>();
     for (const i of visibleInstances(screenDoc, "screen")) {
       if (i.key) used.add(i.key);
       if (i.setKey) used.add(i.setKey);
@@ -235,7 +249,8 @@ if (require.main === module) {
     process.stdout.write(json);
   } else {
     fs.writeFileSync(outFile, json);
-    const entries = Object.values(JSON.parse(json).components);
+    const written: CodeConnectMap = JSON.parse(json);
+    const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} — ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }

@@ -1,4 +1,4 @@
-// map-validate.js — structural validation of a codeconnect.local.json map.
+// map-validate.ts — structural validation of a codeconnect.local.json map.
 //
 // No runtime dependency (matches this repo's zero-dep style). This file IS the source of truth for the
 // map shape: the KEYS/PROP tables below encode additionalProperties:false, the per-kind prop field
@@ -11,6 +11,8 @@
 // needed, GENERATE it from these tables so there is still one source.
 //
 // Returns { ok, errors:[{path,message}] }; never throws on bad data.
+import type { CodeConnectMap, MapValidationResult } from "./types.ts";
+import { readJsonFile } from "./catalog-input.ts";
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).
@@ -18,7 +20,12 @@ const STATUSES = ["active", "deprecated", "needs-review"];
 // object literal would resolve kind:"constructor"/"toString"/"valueOf"/"__proto__" to an inherited
 // Object.prototype member, which is truthy and then blows up on `.includes` — turning a validation
 // error into an uncaught TypeError and breaking this file's "never throws on bad data" contract.
-const KEYS = {
+interface KeyTables {
+  root: string[]; entry: string[]; figma: string[]; code: string[]; target: string[]; vo: string[]; voCode: string[]; children: string[];
+  /** looked up by an untrusted `kind` — undefined for anything that is not one of the four */
+  prop: Record<string, string[] | undefined>;
+}
+const KEYS: KeyTables = {
   root: ["version", "figmaFileKey", "components"],
   entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
   figma: ["key", "id", "name", "unstable"],
@@ -36,21 +43,23 @@ const KEYS = {
 };
 const PROP_KINDS = Object.keys(KEYS.prop);
 
+type Err = (path: string, message: string) => void;
+
 // Pure predicates — module scope, not rebuilt per validateMap call and not threaded into validateProp
 // as a helper bag just to cross a function boundary.
-const isStr = (v) => typeof v === "string";
-const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
-const isBool = (v) => typeof v === "boolean";
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 // additionalProperties:false — flag any key not in the allowed list.
 // `allowed` is always one of the KEYS lists; the Array.isArray guard is belt-and-braces so a
 // non-list can never turn a validation error into a thrown TypeError (see KEYS.prop above).
-const noExtra = (obj, allowed, at, err) => { if (!Array.isArray(allowed)) return; for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)"); };
+const noExtra = (obj: Record<string, unknown>, allowed: string[] | undefined, at: string, err: Err): void => { if (!Array.isArray(allowed)) return; for (const k of Object.keys(obj)) if (!allowed.includes(k)) err(`${at}.${k}`, "unknown property (additionalProperties:false)"); };
 // "present but not a string" — the schema's most repeated rule, spelled once next to noExtra.
-const optStrings = (obj, keys, at, err) => { for (const k of keys) if (obj[k] !== undefined && !isStr(obj[k])) err(`${at}.${k}`, "must be a string"); };
+const optStrings = (obj: Record<string, unknown>, keys: string[], at: string, err: Err): void => { for (const k of keys) if (obj[k] !== undefined && !isStr(obj[k])) err(`${at}.${k}`, "must be a string"); };
 
-function validateMap(map) {
-  const errors = [];
-  const err = (path, message) => errors.push({ path, message });
+function validateMap(map: unknown): MapValidationResult {
+  const errors: MapValidationResult["errors"] = [];
+  const err: Err = (path, message) => errors.push({ path, message });
 
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
@@ -87,7 +96,8 @@ function validateMap(map) {
       }
     }
 
-    if (e.status !== undefined && !STATUSES.includes(e.status)) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    // A non-string status is "not one of the statuses" (Array.prototype.includes never matches it).
+    if (e.status !== undefined && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
 
     if (e.props !== undefined) {
       if (!isObj(e.props)) err(`${at}.props`, "must be an object");
@@ -96,7 +106,7 @@ function validateMap(map) {
 
     if (e.variantOverrides !== undefined) {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
-      else e.variantOverrides.forEach((vo, i) => {
+      else e.variantOverrides.forEach((vo: unknown, i: number) => {
         const va = `${at}.variantOverrides[${i}]`;
         if (!isObj(vo)) { err(va, "must be an object"); return; }
         noExtra(vo, KEYS.vo, va, err);
@@ -115,7 +125,7 @@ function validateMap(map) {
   return { ok: errors.length === 0, errors };
 }
 
-function validateProp(p, at, err) {
+function validateProp(p: unknown, at: string, err: Err): void {
   if (!isObj(p)) { err(at, "prop must be an object"); return; }
   const allowed = typeof p.kind === "string" ? KEYS.prop[p.kind] : undefined;
   if (!Array.isArray(allowed)) { err(`${at}.kind`, `must be one of ${PROP_KINDS.join("|")}`); return; }
@@ -132,11 +142,15 @@ function validateProp(p, at, err) {
   if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== undefined && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
 }
 
-module.exports = { validateMap };
+/** The validator as a type guard: a parsed file that passes validateMap IS a CodeConnectMap. */
+function isCodeConnectMap(x: unknown): x is CodeConnectMap {
+  return validateMap(x).ok;
+}
 
-// CLI: node design-to-code/map-validate.js <codeconnect.local.json>
-if (require.main === module) {
-  const { readJsonFile } = require("./catalog-input.js");
+export { validateMap, isCodeConnectMap };
+
+// CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
+if (import.meta.main) {
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
   if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }

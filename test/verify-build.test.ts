@@ -1,4 +1,4 @@
-// Offline tests for design-to-code/verify-build.js (the build-screen Stop-hook gate) and for the
+// Offline tests for design-to-code/verify-build.ts (the build-screen Stop-hook gate) and for the
 // committed claude-plugin/scripts/ bundles it ships in.
 //   node test/verify-build.test.ts
 import fs from "node:fs";
@@ -6,22 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
-import * as verifyBuildNS from "../design-to-code/verify-build.js";
-import * as auditNS from "../design-to-code/audit.js";
-import * as contentHashNS from "../design-to-code/content-hash.js";
-import * as buildScriptsNS from "../claude-plugin/build-scripts.js";
+import { checkPlan, computeStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
+  scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
+import { blockerIds } from "../design-to-code/audit.ts";
+import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/content-hash.ts";
+import { build, ENTRIES } from "../claude-plugin/build-scripts.js";
+import type { PlanFile, ReportRef } from "../design-to-code/verify-build.ts";
+import type { Plan } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
-// design-to-code/ and claude-plugin/build-scripts.js are still untyped CJS (ports in step 3); their
-// allowJs-inferred structural types are wrong/over-narrow for a strict consumer, so treat these
-// modules as `any` at the boundary rather than sprinkling annotations through the test (R8).
-const { checkPlan, computeStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
-  scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } = verifyBuildNS as any;
-const { blockerIds } = auditNS as any;
-const { exportContentSha256, fileHashes: hashFiles } = contentHashNS as any;
-const { build, ENTRIES } = buildScriptsNS as any;
-
-const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.js");
+const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts");
 
 // A throwaway consumer project: files + a plan, returns its root.
 function project(files: any, plan: any, map?: any) {
@@ -40,7 +34,7 @@ const planOf = (root: any) => JSON.parse(fs.readFileSync(path.join(root, "design
 // checkPlan returns { blocking, warnings }. `problems` is both, minus the two warnings every hand-made
 // test plan triggers (no plan header, no export to check anchors against) — tests about those say so.
 const AMBIENT = /plan header is missing|could not find this plan's screen export/;
-const split = (files: any, plan: any, map?: any) => { const root = project(files, plan, map); return checkPlan({ plan }, root); };
+const split = (files: any, plan: any, map?: any) => { const root = project(files, plan, map); return checkPlan({ plan } as unknown as PlanFile, root); }; // ts-port: hand-built fixture
 const problems = (files: any, plan: any, map?: any) => { const r = split(files, plan, map); return [...r.blocking, ...r.warnings.filter((w: any) => !AMBIENT.test(w))]; };
 const blocks = (files: any, plan: any, map?: any) => split(files, plan, map).blocking;
 const has = (list: any, re: any) => list.some((m: any) => re.test(m));
@@ -530,7 +524,7 @@ console.log("P2b [156] the verification block is checked against itself; [196] d
   const jr = checkLive(root, JR);
   check("[156] the live Job Roles plan: a11y.violations 0 beside coverage.notChecked 'axe/a11y automated scan' is flagged as a contradiction",
     jr.warnings.some((w: any) => /contradicts itself: `a11y` records 0 violation/.test(w) && /axe\/a11y automated scan/.test(w)));
-  check("[156] a report that fails beside a plan claiming pass is flagged", verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [{ rel: "design/verify/x.report.json", verdict: "fail" }]).some((w: any) => /cannot overrule/.test(w)));
+  check("[156] a report that fails beside a plan claiming pass is flagged", verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [{ rel: "design/verify/x.report.json", verdict: "fail" }] as unknown as ReportRef[]).some((w: any) => /cannot overrule/.test(w))); // ts-port: hand-built fixture
   check("[156] a consistent block raises nothing", verificationContradictions({ verification: { a11y: { tool: "axe", violations: 0 }, coverage: { rendered: ["default"], notChecked: [{ what: "rtl" }] } } }, []).length === 0);
   const gp = checkLive(root, GP);
   check("[196] the live Global Policies plan: its 7 prose-only deviations are flagged as missing nodeId/field/designed/built",
@@ -542,7 +536,7 @@ console.log("P2b [156] the verification block is checked against itself; [196] d
 console.log("P2b end to end — plan-skeleton.js writes the plan, the hook checks it:");
 {
   const root = liveProject({});
-  const SK = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.js");
+  const SK = path.join(import.meta.dirname, "..", "design-to-code", "plan-skeleton.ts");
   const E = "design/export/pages/__Organization_management_";
   const planRel = "design/plan/" + JR + ".json";
   const g = spawnSync(process.execPath, [SK, `${E}/${JR}.json`, `${E}/${JR}.vars.json`, "design/export/design-system", "--out", planRel], { cwd: root, encoding: "utf8" });
@@ -594,7 +588,7 @@ console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a cha
 
 console.log("P2b round 2 — freshness by content, never by clock (livetest-4 findings 314, 316, 317, 325):");
 {
-  const VS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.js");
+  const VS = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
   const before = path.join(FX, "repull", "before.json"), after = path.join(FX, "repull", "after.json");
   const rawB = fs.readFileSync(before, "utf8"), rawA = fs.readFileSync(after, "utf8");
   check("[314] the real no-change re-pull pair: the files differ (exportedAt), the export content hash does not",
@@ -703,7 +697,7 @@ console.log("P2b follow-up — --status on the untouched live plan: precedence, 
 }
 
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
-const BOOT = path.join(import.meta.dirname, "..", "design-to-code", "map-bootstrap.js");
+const BOOT = path.join(import.meta.dirname, "..", "design-to-code", "map-bootstrap.ts");
 const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
 const catalogFile = path.join(bootDir, "components.local.json");
 const mapFile = path.join(bootDir, "codeconnect.local.json");
@@ -734,7 +728,7 @@ check("every entry is a committed REAL file (a symlink out of the plugin dir is 
   return fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink();
 }));
 check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n: any) =>
-  !/require\(["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
+  !/(require\(|from )["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
@@ -758,6 +752,9 @@ build(tmp).then(async () => {
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
     fs.copyFileSync(path.join(SCRIPTS, "drift-lint.js"), path.join(out, "drift-lint.js"));
+    // The installed plugin dir carries claude-plugin/package.json ({"type": "module"}); without it Node
+    // would fall back to syntax detection for these ESM bundles.
+    fs.copyFileSync(path.join(SCRIPTS, "..", "package.json"), path.join(out, "package.json"));
     const r = spawnSync(process.execPath, [path.join(out, "drift-lint.js")], { encoding: "utf8" });
     return /usage:/.test(r.stdout + r.stderr);
   })());
@@ -827,20 +824,20 @@ build(tmp).then(async () => {
     }
     {
       const cwd = mkCwd();
-      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: [ids[0], ids[1]], reason: "provenance issues, not build issues" } };
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: [ids[0], ids[1]], reason: "provenance issues, not build issues" } } as unknown as Plan; // ts-port: hand-built fixture
       const w = auditGateWarnings(plan, cwd, null);
       check("[P6-136] an auditGate that overrides only 2 of 5 blockers WARNS about the 3 not covered",
         w.length === 1 && ids.slice(2).every((id: any) => w[0].includes(id)) && !w[0].includes(ids[0]));
     }
     {
       const cwd = mkCwd();
-      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids } };
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids } } as unknown as Plan; // ts-port: hand-built fixture
       const w = auditGateWarnings(plan, cwd, null);
       check("[P6-136] every blocker overridden but no `reason` still WARNS (a reason is required)", w.length === 1 && /reason/.test(w[0]));
     }
     {
       const cwd = mkCwd();
-      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-09-23" } };
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-09-23" } } as unknown as Plan; // ts-port: hand-built fixture
       const w = auditGateWarnings(plan, cwd, null);
       check("[P6-136] every blocker overridden with a reason: no warning at all", w.length === 0);
     }

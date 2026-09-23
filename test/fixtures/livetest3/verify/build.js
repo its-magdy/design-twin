@@ -30,8 +30,8 @@ const prune = (n) => {
   if (Array.isArray(n.children)) o.children = n.children.map(prune);
   return o;
 };
-const { buildExpectation } = require("../../../../design-to-code/verify-screen.js");
-const { audit } = require("../../../../design-to-code/audit.js");
+const { buildExpectation } = require("../../../../design-to-code/verify-screen.ts");
+const { audit } = require("../../../../design-to-code/audit.ts");
 for (const s of SCREENS) {
   const full = read(path.join(P, s + ".json"));
   const pruned = { exportedAt: full.exportedAt, screen: full.screen, page: full.page, pageId: full.pageId, nodeId: full.nodeId, manifest: full.manifest, nodes: full.nodes.map(prune) };

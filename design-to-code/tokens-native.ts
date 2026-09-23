@@ -1,6 +1,6 @@
-// tokens-native.js — Figma variables → ONE checked-in native token file per platform.
+// tokens-native.ts — Figma variables → ONE checked-in native token file per platform.
 //
-// Why this exists: tokens.js emits DTCG + CSS, which is all a web build needs. A native build had
+// Why this exists: tokens.ts emits DTCG + CSS, which is all a web build needs. A native build had
 // nothing — so the agent hand-mapped "color/primary" to a Swift/Kotlin/Dart symbol per screen, and two
 // screens built in separate sessions could disagree about what that symbol is. One generated file that
 // every screen imports turns "map every time" into "map once".
@@ -8,7 +8,7 @@
 // Why not Style Dictionary / Terrazzo: checked 2026-09 — Style Dictionary (v5.5) does not read DTCG
 // 2025.10 or the Resolver module yet (style-dictionary#1590, open), and its native formats are one
 // file per theme; Terrazzo has a Swift plugin but none for Compose or Dart. This emitter reads the same
-// design-system/tokens.json tokens.js does, so modes survive into the output.
+// design-system/tokens.json tokens.ts does, so modes survive into the output.
 //
 // The shape of each file follows that platform's own documented pattern for a custom design system:
 //   compose       @Immutable data class + one instance per mode + staticCompositionLocalOf
@@ -21,24 +21,60 @@
 // Aliases are RESOLVED per mode (a native constant cannot reference "whatever the theme says"), into
 // the alias target's same-named mode when it has one, else its default mode. An alias that leaves the
 // file (a library variable that was not exported) is skipped with a warning, never guessed.
+import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
 
-// tokens.js hands its helpers in (names, default modes, aliases, units must agree with the DTCG/CSS
-// output) rather than this file requiring tokens.js back: a require cycle makes the bundler wrap
-// tokens.js as an inner module, and its `require.main === module` CLI guard then never fires.
-module.exports = function nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel }) {
+/** The px-vs-unitless override every emitter honours (tokens.ts unitDecision): the names a caller declared unitless. */
+export interface UnitOpts {
+  unitless?: { has: (name: string) => boolean };
+}
+/** tokens.ts unitDecision(): WHO decided a FLOAT's unit. */
+export type UnitDecision = "override" | "scopes" | "name" | "px";
+/** What toNative takes beside the design system. */
+export interface NativeOpts extends UnitOpts {
+  /** Kotlin package of the Compose file (default `design.tokens`). */
+  package?: string;
+}
 
-// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens.js). A field holding it is
+// tokens.ts hands its helpers in (names, default modes, aliases, units must agree with the DTCG/CSS
+// output) rather than this file importing tokens.ts back: an import cycle makes the bundler wrap
+// tokens.ts as an inner module, and its `import.meta.main` CLI guard then never fires.
+/** The seven tokens.ts helpers this emitter is built from — typed from their definitions there. */
+export interface NativeHelpers {
+  segs: (name: string | null | undefined) => string[];
+  isAlias: (v: unknown) => v is VariableAlias;
+  normHex: (v: unknown) => string | null;
+  defaultModeName: (variable: Variable, collections: VariableCollection[] | undefined) => string;
+  baseValue: (variable: Variable, collections: VariableCollection[] | undefined, def?: string) => VariableValue | undefined;
+  unitDecision: (variable: Variable, opts?: UnitOpts) => UnitDecision;
+  isSentinel: (v: Variable | null | undefined, raw: unknown) => boolean;
+}
+
+type NativeKind = "color" | "bool" | "string" | "fontSize" | "dimension" | "number";
+/** A resolved (alias-free) per-mode value, or the "fully rounded" marker. */
+type Concrete = string | number | boolean | typeof FULL;
+interface NativeMode { name: string; id: string }
+interface NativeField { id: string; kind: NativeKind; source: string; values: Record<string, Concrete> }
+interface NativeCollection { name: string; type: string; modes: NativeMode[]; default: string; defaultId: string; fields: NativeField[] }
+interface Candidate { v: Variable; kind: NativeKind; values: Record<string, Concrete>; id: string; final?: string }
+type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
+export interface NativeFile { file: string; text: string; warnings: string[] }
+
+// Figma's "fully rounded" corner exports as 1e9 (see isSentinel in tokens.ts). A field holding it is
 // written as each platform's own idiom — never as the literal (livetest-3 #96).
 const FULL = Object.freeze({ fullyRounded: true });
 
-const PLATFORMS = {
+export default function nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel }: NativeHelpers) {
+
+// A plain string-keyed object on purpose (as the JS was): `platformOf` looks a caller's word up in it
+// with a truthiness test, so an inherited name behaves exactly as it did.
+const PLATFORMS: Record<string, { file: string }> = {
   swiftui: { file: "DesignTokens.swift" },
   compose: { file: "DesignTokens.kt" },
   flutter: { file: "design_tokens.dart" },
   "react-native": { file: "designTokens.ts" },
 };
 // build-screen profile names → the platform key above.
-const PROFILE_ALIASES = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
+const PROFILE_ALIASES: Record<string, string> = { "android-compose": "compose", ios: "swiftui", swift: "swiftui", android: "compose", rn: "react-native", dart: "flutter" };
 
 // Union of the four languages' reserved words that a token path can realistically spell.
 const RESERVED = new Set(("default,class,object,in,is,as,do,if,else,for,while,return,var,val,let,func,fun,import,package,switch,case,break," +
@@ -46,8 +82,8 @@ const RESERVED = new Set(("default,class,object,in,is,as,do,if,else,for,while,re
   "typealias,interface,when,try,catch,throw,void,with,get,set,dynamic,external,factory,mixin,part,required,show,hide,on,type,function,delete," +
   "export,yield,await,async,inout,repeat,guard,defer,where,any,some,lerp,copyWith,hashCode,toString,description").split(","));
 
-const words = (s) => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
-function camel(parts) {
+const words = (s: string): string[] => String(s).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(Boolean);
+function camel(parts: string[]): string {
   const w = parts.flatMap(words);
   let id = w.map((x, i) => (i === 0 ? x.charAt(0).toLowerCase() + x.slice(1) : x.charAt(0).toUpperCase() + x.slice(1))).join("");
   if (!id) id = "token";
@@ -55,17 +91,17 @@ function camel(parts) {
   if (RESERVED.has(id)) id += "Token";
   return id;
 }
-const pascal = (parts) => { const c = camel(parts); return c.charAt(0).toUpperCase() + c.slice(1); };
+const pascal = (parts: string[]): string => { const c = camel(parts); return c.charAt(0).toUpperCase() + c.slice(1); };
 
 // A font size must scale with the user's setting on Android (sp), a spacing must not (dp). Scopes say
 // so when the designer narrowed them; Figma's default is ALL_SCOPES, so fall back to the name.
-function isFontSize(v) {
+function isFontSize(v: Variable): boolean {
   const scopes = v.scopes || [];
   if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
   return /font.?size|text.?size|type.?size/i.test(v.collection + "/" + v.name);
 }
 
-function kindOf(v, opts) {
+function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
   if (v.type === "COLOR") return "color";
   if (v.type === "BOOLEAN") return "bool";
   if (v.type === "STRING") return "string";
@@ -73,9 +109,9 @@ function kindOf(v, opts) {
   return null;
 }
 
-function resolve(byName, collections, v, mode, seen) {
+function resolve(byName: Map<string, Variable>, collections: VariableCollection[], v: Variable, mode: string, seen?: Set<string>): string | number | boolean | undefined {
   const values = v.values || {};
-  let raw = values[mode];
+  let raw: VariableValue | undefined = values[mode];
   if (raw === undefined) raw = baseValue(v, collections, defaultModeName(v, collections));
   if (!isAlias(raw)) return raw;
   const target = byName.get(raw.aliasOf);
@@ -86,12 +122,12 @@ function resolve(byName, collections, v, mode, seen) {
 }
 
 // → [{ name, type, modes:[{name,id}], default, fields:[{id, kind, source, values:{modeName: concrete}}] }]
-function model(designSystem, warnings, opts) {
+function model(designSystem: TokensDoc | null | undefined, warnings: string[], opts?: NativeOpts): NativeCollection[] {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
-  const byName = new Map(vars.map((v) => [v.name, v]));
-  const typeNames = new Set();
-  const out = [];
+  const byName = new Map(vars.map((v): [string, Variable] => [v.name, v]));
+  const typeNames = new Set<string>();
+  const out: NativeCollection[] = [];
   for (const c of collections) {
     const mine = vars.filter((v) => v.collection === c.name);
     const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
@@ -99,13 +135,13 @@ function model(designSystem, warnings, opts) {
     let type = pascal([c.name]) + "Tokens";
     for (let n = 2; typeNames.has(type); n++) type = pascal([c.name]) + "Tokens" + n;
     typeNames.add(type);
-    const ids = new Set();
-    const fields = [];
-    const cands = [];
+    const ids = new Set<string>();
+    const fields: NativeField[] = [];
+    const cands: Candidate[] = [];
     for (const v of mine) {
       const kind = kindOf(v, opts);
       if (!kind || !segs(v.name).length) continue;
-      const values = {};
+      const values: Record<string, Concrete> = {};
       let ok = true;
       for (const m of modeNames) {
         const r = resolve(byName, collections, v, m);
@@ -119,12 +155,12 @@ function model(designSystem, warnings, opts) {
     // Identical in every mode → one field, nothing lost. Otherwise BOTH are real, and neither may win by
     // arriving first: every one of them carries its key (`space4_e26d506e`), so the identifier says which
     // Figma variable it is. A bare counter (`space42`) said nothing and read as a number.
-    const tag = (v) => (v.key ? String(v.key).slice(0, 8).toLowerCase() : null);
-    const label = (x) => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}…)` : ""} = ${JSON.stringify(x.v.values || {})}`;
-    const byId = new Map();
-    for (const x of cands) { if (!byId.has(x.id)) byId.set(x.id, []); byId.get(x.id).push(x); }
+    const tag = (v: Variable): string | null => (v.key ? String(v.key).slice(0, 8).toLowerCase() : null);
+    const label = (x: Candidate): string => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}…)` : ""} = ${JSON.stringify(x.v.values || {})}`;
+    const byId = new Map<string, Candidate[]>();
+    for (const x of cands) { if (!byId.has(x.id)) byId.set(x.id, []); byId.get(x.id)!.push(x); }
     for (const [id, list] of byId) {
-      const distinct = [];
+      const distinct: Candidate[] = [];
       for (const x of list) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
       if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
       if (distinct.length === 1) { distinct[0].final = id; continue; }
@@ -134,7 +170,7 @@ function model(designSystem, warnings, opts) {
       const sameName = distinct.every((x) => x.v.name === distinct[0].v.name);
       const lossless = distinct.filter((x) => /^[A-Za-z0-9 /_-]+$/.test(String(x.v.name)));
       const keeper = sameName ? null : lossless.length === 1 ? lossless[0] : distinct[0];
-      const names = [];
+      const names: string[] = [];
       distinct.forEach((x, i) => {
         if (x === keeper) { x.final = id; ids.add(id); names.push(`${label(x)} → "${id}"`); return; }
         let next = tag(x.v) ? `${id}_${tag(x.v)}` : `${id}${i + 1}`;
@@ -159,8 +195,8 @@ function model(designSystem, warnings, opts) {
     // fields + the receiver + a marker. An all-Color collection therefore tops out near 120 fields.
     const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
     if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) — over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
-    const modeIds = new Set();
-    const modes = modeNames.map((name) => {
+    const modeIds = new Set<string>();
+    const modes = modeNames.map((name): NativeMode => {
       let id = camel([name]);
       if (ids.has(id)) id += "Mode"; // a token literally named "light" must not collide with the Light instance
       for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
@@ -168,21 +204,22 @@ function model(designSystem, warnings, opts) {
       return { name, id };
     });
     const def = modeNames.includes(String(c.default)) ? String(c.default) : modeNames[0];
-    out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def).id, fields });
+    out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def)!.id, fields });
   }
   return out;
 }
 
-const num = (raw) => { const n = Number(raw); return Number.isFinite(n) ? String(Math.round(n * 10000) / 10000) : "0"; };
-const str = (raw) => JSON.stringify(String(raw));
-const bool = (raw) => String(raw === true || raw === "true"); // every target spells it true/false
-const argb = (raw) => { const h = normHex(raw); return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase(); };
+const num = (raw: unknown): string => { const n = Number(raw); return Number.isFinite(n) ? String(Math.round(n * 10000) / 10000) : "0"; };
+const str = (raw: unknown): string => JSON.stringify(String(raw));
+const bool = (raw: unknown): string => String(raw === true || raw === "true"); // every target spells it true/false
+// Only ever called on a "color" field, whose every value model() has already passed through normHex.
+const argb = (raw: unknown): string => { const h = normHex(raw)!; return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase(); };
 const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json — do not edit by hand; re-run after a token pull.";
 
 // ------------------------------------------------------------------------------------ compose
-function compose(cols, opts) {
-  const T = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
-  const lit = (k, r) => r === FULL ? (k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' — use CircleShape */") : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
+function compose(cols: NativeCollection[], opts?: NativeOpts): string {
+  const T: Record<NativeKind, string> = { color: "Color", dimension: "Dp", fontSize: "TextUnit", number: "Float", bool: "Boolean", string: "String" };
+  const lit = (k: NativeKind, r: Concrete): string => r === FULL ? (k === "fontSize" ? "9999.sp" : k === "number" ? "9999f" : "9999.dp /* Figma 'fully rounded' — use CircleShape */") : k === "color" ? `Color(${argb(r)})` : k === "dimension" ? `${num(r)}.dp` : k === "fontSize" ? `${num(r)}.sp` : k === "number" ? `${num(r)}f` : k === "bool" ? bool(r) : str(r).replace(/\$/g, "\\$");
   const L = [`// ${HEADER}`, `package ${(opts && opts.package) || "design.tokens"}`, "",
     "import androidx.compose.runtime.Immutable", "import androidx.compose.runtime.staticCompositionLocalOf", "import androidx.compose.ui.graphics.Color",
     "import androidx.compose.ui.unit.Dp", "import androidx.compose.ui.unit.TextUnit", "import androidx.compose.ui.unit.dp", "import androidx.compose.ui.unit.sp"];
@@ -194,7 +231,7 @@ function compose(cols, opts) {
     }
     L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, f.values[m.name])},`), ")");
-    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default).id])}) { … }`,
+    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default)!.id])}) { … }`,
       `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`);
   }
   return L.join("\n") + "\n";
@@ -203,18 +240,18 @@ function compose(cols, opts) {
 // ------------------------------------------------------------------------------------ swiftui
 // Only a light/dark pair follows the system color scheme. Any other axis (desktop/mobile, brand,
 // contrast) is the app's decision — name a real member instead of `.dark`, which would not compile.
-function swiftModeHint(c) {
+function swiftModeHint(c: NativeCollection): string {
   const ids = c.modes.map((m) => m.id);
   if (ids.includes("light") && ids.includes("dark")) return "colorScheme == .dark ? .dark : .light" + (ids.length > 2 ? ` /* also: ${ids.filter((i) => i !== "light" && i !== "dark").map((i) => "." + i).join(", ")} */` : "");
   return `.${(c.modes.find((m) => m.name !== c.default) || c.modes[0]).id} /* one of: ${ids.map((i) => "." + i).join(", ")} — the app picks */`;
 }
 
-function swiftui(cols) {
-  const T = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
-  const chan = (h, i) => num(parseInt(h.slice(i, i + 2), 16) / 255);
-  const lit = (k, r) => {
+function swiftui(cols: NativeCollection[]): string {
+  const T: Record<NativeKind, string> = { color: "Color", dimension: "CGFloat", fontSize: "CGFloat", number: "Double", bool: "Bool", string: "String" };
+  const chan = (h: string, i: number): string => num(parseInt(h.slice(i, i + 2), 16) / 255);
+  const lit = (k: NativeKind, r: Concrete): string => {
     if (r === FULL) return ".infinity";
-    if (k === "color") { const h = normHex(r); return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`; }
+    if (k === "color") { const h = normHex(r)!; return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`; }
     // Swift spells a unicode escape \u{1F}, not JSON's \u001f — the only escape the two disagree on.
     return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
   };
@@ -242,10 +279,10 @@ function swiftui(cols) {
 }
 
 // ------------------------------------------------------------------------------------ flutter
-function flutter(cols) {
-  const T = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
-  const lit = (k, r) => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
-  const lerp = (f) => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
+function flutter(cols: NativeCollection[]): string {
+  const T: Record<NativeKind, string> = { color: "Color", dimension: "double", fontSize: "double", number: "double", bool: "bool", string: "String" };
+  const lit = (k: NativeKind, r: Concrete): string => r === FULL ? "double.infinity" : k === "color" ? `Color(${argb(r)})` : k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\$/g, "\\$") : num(r);
+  const lerp = (f: NativeField): string => f.kind === "color" ? `Color.lerp(${f.id}, other.${f.id}, t)!` : T[f.kind] === "double" ? `lerpDouble(${f.id}, other.${f.id}, t)!` : `t < 0.5 ? ${f.id} : other.${f.id}`;
   const L = [`// ${HEADER}`, "// ignore_for_file: constant_identifier_names", "import 'dart:ui' show lerpDouble;", "", "import 'package:flutter/material.dart';"];
   for (const c of cols) {
     L.push("", `/// Figma collection "${c.name}"`);
@@ -266,9 +303,9 @@ function flutter(cols) {
 }
 
 // ------------------------------------------------------------------------------------ react-native
-function reactNative(cols) {
-  const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-  const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str("#" + normHex(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+function reactNative(cols: NativeCollection[]): string {
+  const T: Record<NativeKind, string> = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
+  const lit = (k: NativeKind, r: Concrete): string => r === FULL ? "9999" : k === "color" ? str("#" + normHex(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
@@ -286,22 +323,22 @@ function reactNative(cols) {
   return L.join("\n") + "\n";
 }
 
-const EMIT = { compose, swiftui, flutter, "react-native": reactNative };
+const EMIT: Record<string, Emit> = { compose, swiftui, flutter, "react-native": reactNative };
 
-function platformOf(name) {
+function platformOf(name: unknown): string | null {
   const key = String(name || "").toLowerCase();
   const p = PROFILE_ALIASES[key] || key;
   return PLATFORMS[p] ? p : null;
 }
 
 // → { file, text, warnings[] }. `platform` accepts a build-screen profile name too (android-compose).
-function toNative(designSystem, platform, opts) {
+function toNative(designSystem: TokensDoc | null | undefined, platform: unknown, opts?: NativeOpts): NativeFile {
   const p = platformOf(platform);
   if (!p) throw new Error(`unknown native platform "${platform}" — use one of: ${Object.keys(PLATFORMS).join(", ")}`);
-  const warnings = [];
+  const warnings: string[] = [];
   const cols = model(designSystem, warnings, opts);
   return { file: PLATFORMS[p].file, text: EMIT[p](cols, opts), warnings };
 }
 
 return { toNative, platformOf, PLATFORMS };
-};
+}

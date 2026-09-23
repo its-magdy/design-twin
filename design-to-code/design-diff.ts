@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// design-diff.js — what CHANGED between two exports of the same screen (or the same token file).
+// design-diff.ts — what CHANGED between two exports of the same screen (or the same token file).
 //
 // A re-pull overwrites the export in place, and "the designer changed the header" then has no answer
 // except rebuilding the screen — which discards every hand edit made since the first build. This is
@@ -32,12 +32,28 @@
 //   - sublayers of an instance whose main component was swapped: their ids (`I<instance>;<child>`)
 //     are derived from the main component, so every one of them "disappears" and "appears". The swap
 //     is the change; the sublayers are counted on it, not listed.
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import type {
+  Box, CatalogBrief, CatalogComponent, CatalogDiff, ComponentsCatalog, DesignSystemManifest, DiffCategory, DiffNodeRef, DiffReport, DiffResult,
+  EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
+  StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
+} from "./types.ts";
+import { readJsonFile } from "./catalog-input.ts";
+import { normalizeForCompare, sha1Hex } from "../bridge/asset-compare.js";
+import dsl from "../bridge/design-system-layout.js";
 
-const fs = require("fs");
-const path = require("path");
-const { execFileSync } = require("child_process");
+// The generic key loops below compare WHATEVER a document or node carries, named field or not. The
+// interfaces in types.ts name SOME keys and have no string index, so those loops read through this:
+// every JS object is a string-keyed bag of unknowns. Two steps through `unknown` because an interface
+// and Record<string, unknown> do not overlap for a direct assertion.
+function bag(o: object): Record<string, unknown> {
+  const u: unknown = o;
+  return u as Record<string, unknown>;
+}
 
-const CATEGORY = {
+const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
   typography: ["font", "textTokens", "missingFont"],
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
@@ -51,36 +67,40 @@ const CATEGORY = {
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"],
 };
-const CATEGORY_OF = new Map(Object.entries(CATEGORY).flatMap(([cat, fields]) => fields.map((f) => [f, cat])));
+// Object.entries widens CATEGORY's keys to string; they are the DiffCategory keys declared just above.
+const CATEGORY_OF = new Map((Object.entries(CATEGORY) as Array<[DiffCategory, string[]]>).flatMap(([cat, fields]) => fields.map((f): [string, DiffCategory] => [f, cat])));
 const IGNORED = new Set(["children", "box", "renderBox", "id", "css", "measurements", "pluginData", "sharedData"]);
 
-const roots = (doc) => (Array.isArray(doc.nodes) ? doc.nodes : doc.tree && typeof doc.tree === "object" ? [doc.tree] : []);
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const brief = (v) => { const s = typeof v === "string" ? v : JSON.stringify(v); return s === undefined ? undefined : s.length > 160 ? s.slice(0, 157) + "…" : s; };
+const roots = (doc: ScreenDoc): IrNode[] => (Array.isArray(doc.nodes) ? doc.nodes : doc.tree && typeof doc.tree === "object" ? [doc.tree] : []);
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const brief = (v: unknown): string | undefined => { const s = typeof v === "string" ? v : JSON.stringify(v); return s === undefined ? undefined : s.length > 160 ? s.slice(0, 157) + "…" : s; };
 
 // Every differing LEAF under a field, as `fills[0].stops[2].color`. Reporting a nested value whole
 // meant a one-stop gradient edit printed as two blobs truncated to the same 157 characters — "paint
 // changed", with nothing to say what. A value that changes TYPE (object ↔ scalar, array ↔ object) is a leaf.
 const MAX_LEAVES = 12;
-const isObj = (v) => v !== null && typeof v === "object";
-function leaves(before, after, at, out = []) {
+interface Leaf { at: string; before: unknown; after: unknown }
+const isObj = (v: unknown): v is object => v !== null && typeof v === "object";
+function leaves(before: unknown, after: unknown, at: string, out: Leaf[] = []): Leaf[] {
   if (same(before, after)) return out;
   if (!isObj(before) || !isObj(after) || Array.isArray(before) !== Array.isArray(after)) { out.push({ at, before, after }); return out; }
-  const keys = Array.isArray(before) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [...new Set([...Object.keys(before), ...Object.keys(after)])];
-  for (const k of keys) leaves(before[k], after[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
+  // Past the guard above both sides are arrays or neither is.
+  const keys: Array<string | number> = Array.isArray(before) && Array.isArray(after) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  for (const k of keys) leaves(bag(before)[k], bag(after)[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
   return out;
 }
-function fieldDiffs(key, before, after, category) {
+function fieldDiffs(key: string, before: unknown, after: unknown, category: DiffCategory): FieldDiff[] {
   const all = leaves(before, after, key);
-  const out = all.slice(0, MAX_LEAVES).map((l) => ({ field: l.at, category, before: brief(l.before), after: brief(l.after) }));
+  const out: FieldDiff[] = all.slice(0, MAX_LEAVES).map((l) => ({ field: l.at, category, before: brief(l.before), after: brief(l.after) }));
   if (all.length > MAX_LEAVES) out.push({ field: key, category, before: undefined, after: `… and ${all.length - MAX_LEAVES} more difference(s) under \`${key}\`` });
   return out;
 }
 
 // id -> { node, parentId, path, childIds }
-function index(doc) {
-  const out = new Map();
-  const walk = (node, parentId, trail) => {
+interface IndexEntry { node: IrNode; parentId: string | null; path: string; childIds: string[] }
+function index(doc: ScreenDoc): Map<string, IndexEntry> {
+  const out = new Map<string, IndexEntry>();
+  const walk = (node: IrNode, parentId: string | null, trail: string[]): void => {
     if (!node || typeof node !== "object" || node.id === undefined) return;
     const here = [...trail, node.name || node.type || node.id];
     const kids = Array.isArray(node.children) ? node.children : [];
@@ -92,31 +112,39 @@ function index(doc) {
 }
 
 const ROOT_IGNORED = new Set(["tree", "nodes", "exportedAt", "manifest", "snapshot", "assets", "screen", "file", "reference"]);
-const nameOf = (idx, id) => { const e = idx.get(id); return e ? e.node.name || e.node.type || id : id; };
-const describe = (e) => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
+const nameOf = (idx: Map<string, IndexEntry>, id: string): string => { const e = idx.get(id); return e ? e.node.name || e.node.type || id : id; };
+const describe = (e: IndexEntry): DiffNodeRef => ({ id: String(e.node.id), name: e.node.name, type: e.node.type, path: e.path, parentId: e.parentId });
 
-function nodeFields(before, after) {
-  const fields = [];
+function nodeFields(before: IrNode, after: IrNode): FieldDiff[] {
+  const fields: FieldDiff[] = [];
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (IGNORED.has(key) || same(before[key], after[key])) continue;
-    fields.push(...fieldDiffs(key, before[key], after[key], CATEGORY_OF.get(key) || "other"));
+    if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
+    fields.push(...fieldDiffs(key, bag(before)[key], bag(after)[key], CATEGORY_OF.get(key) || "other"));
   }
   // A fixed-size node's own size is a design decision; a hug/fill node's size only echoes other changes.
   const fixedW = !after.widthMode && !before.widthMode, fixedH = !after.heightMode && !before.heightMode;
-  const b = before.box || {}, a = after.box || {};
+  const b: Partial<Box> = before.box || {}, a: Partial<Box> = after.box || {};
   if ((fixedW && b.w !== a.w) || (fixedH && b.h !== a.h)) fields.push({ field: "size", category: "layout", before: `${b.w}×${b.h}`, after: `${a.w}×${a.h}` });
   return fields;
 }
 
-function diffScreens(oldDoc, newDoc, opts = {}) {
-  const redrawn = opts.redrawn || new Set();
+interface SwapCount { gone: number; came: number }
+// ts-port: legacy/producer-mismatch read kept as-is — the producer (state.ts) writes `truncated` as a
+// count; an older export wrote `true`, and the message below still spells that case out.
+interface LegacyManifest { truncated?: number | boolean }
+const truncatedOf = (m: LegacyManifest | undefined): number | boolean | undefined => m && m.truncated;
+function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set<string> } = {}): ScreenDiff {
+  const redrawn = opts.redrawn || new Set<string>();
   const A = index(oldDoc), B = index(newDoc);
-  const added = [], removed = [], changed = [], reordered = [];
+  const added: DiffNodeRef[] = [], removed: DiffNodeRef[] = [], changed: ScreenDiff["changed"] = [], reordered: ScreenDiff["reordered"] = [];
   let positionOnly = 0;
   // Instances whose main component was swapped: their sublayer ids are regenerated (see the header).
-  const swapped = new Map(); // instance id -> { gone, came }
+  const swapped = new Map<string, SwapCount>(); // instance id -> { gone, came }
   for (const [id, b] of B) { const a = A.get(id); if (a && !same(a.node.mainComponent, b.node.mainComponent)) swapped.set(id, { gone: 0, came: 0 }); }
-  const underSwap = (idx, e) => { for (let p = e.parentId; p !== null && p !== undefined; p = (idx.get(p) || {}).parentId) if (swapped.has(p)) return swapped.get(p); return null; };
+  const underSwap = (idx: Map<string, IndexEntry>, e: IndexEntry): SwapCount | null => {
+    for (let p: string | null | undefined = e.parentId; p !== null && p !== undefined; p = idx.get(p)?.parentId) { const sw = swapped.get(p); if (sw) return sw; }
+    return null;
+  };
   // Top-most only: a node whose parent is ALSO new/gone is covered by that parent's entry.
   for (const [id, e] of B) if (!A.has(id)) { const sw = underSwap(B, e); if (sw) sw.came++; else if (e.parentId === null || A.has(e.parentId)) added.push(describe(e)); }
   for (const [id, e] of A) if (!B.has(id)) { const sw = underSwap(A, e); if (sw) sw.gone++; else if (e.parentId === null || B.has(e.parentId)) removed.push(describe(e)); }
@@ -135,12 +163,12 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   }
   // Facts that live beside the tree, not in it: prototype flows, the modes the frame resolves in,
   // dev resources. A new flow changes what has to be built as surely as a new layer does.
-  const document = [];
+  const document: FieldDiff[] = [];
   for (const key of new Set([...Object.keys(oldDoc), ...Object.keys(newDoc)])) {
-    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, oldDoc[key], newDoc[key], "document"));
+    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, bag(oldDoc)[key], bag(newDoc)[key], "document"));
   }
-  const warnings = [];
-  const trunc = newDoc.manifest && newDoc.manifest.truncated;
+  const warnings: string[] = [];
+  const trunc = truncatedOf(newDoc.manifest);
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) — anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
   return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
 }
@@ -152,14 +180,14 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
 // (livetest-3 #211). `[collection, name]` is only the fallback for a row with no key (hand-written
 // or very old files), and the human LABEL: a name shared by several variables is labelled with its
 // collection and its key, so the report says WHICH one changed.
-function diffTokens(oldDoc, newDoc) {
-  const idOf = (v) => (typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]));
-  const keyed = (doc) => new Map((doc.variables || []).map((v) => [idOf(v), v]));
+function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
+  const idOf = (v: Variable): string => (typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]));
+  const keyed = (doc: TokensDoc): Map<string, Variable> => new Map((doc.variables || []).map((v): [string, Variable] => [idOf(v), v]));
   const A = keyed(oldDoc), B = keyed(newDoc);
   // A row that carries a key on one side only (an export from before keys were written) still pairs
   // with its keyless twin when [collection, name] names exactly one variable on each side.
-  const byName = (m) => { const o = new Map(); for (const [id, v] of m) { const n = JSON.stringify([v.collection || "", v.name]); o.set(n, o.has(n) ? null : id); } return o; };
-  const nA = byName(A), nB = byName(B), pairs = new Map(); // B id -> A id
+  const byName = (m: Map<string, Variable>): Map<string, string | null> => { const o = new Map<string, string | null>(); for (const [id, v] of m) { const n = JSON.stringify([v.collection || "", v.name]); o.set(n, o.has(n) ? null : id); } return o; };
+  const nA = byName(A), nB = byName(B), pairs = new Map<string, string>(); // B id -> A id
   for (const [id, v] of B) {
     if (A.has(id)) { pairs.set(id, id); continue; }
     const n = JSON.stringify([v.collection || "", v.name]), aId = nA.get(n);
@@ -167,12 +195,12 @@ function diffTokens(oldDoc, newDoc) {
   }
   const pairedA = new Set(pairs.values());
   // Which names need more than the name to say which variable they are.
-  const identities = new Map();
+  const identities = new Map<string, Map<string, string>>();
   for (const v of [...A.values(), ...B.values()]) {
     if (!identities.has(v.name)) identities.set(v.name, new Map());
-    identities.get(v.name).set(idOf(v), v.collection || "");
+    identities.get(v.name)!.set(idOf(v), v.collection || "");
   }
-  const label = (v) => {
+  const label = (v: Variable): string => {
     const ids = identities.get(v.name);
     if (!ids || ids.size < 2) return v.name;
     const sameColl = [...ids.values()].filter((c) => c === (v.collection || "")).length > 1;
@@ -180,9 +208,10 @@ function diffTokens(oldDoc, newDoc) {
   };
   const added = [...B].filter(([k]) => !pairs.has(k)).map(([, v]) => label(v));
   const removed = [...A].filter(([k]) => !pairedA.has(k)).map(([, v]) => label(v));
-  const changed = [];
+  const changed: TokensDiff["changed"] = [];
   for (const [k, b] of B) {
-    const a = pairs.has(k) ? A.get(pairs.get(k)) : null;
+    const pk = pairs.get(k); // every paired B id maps to an A id
+    const a = pk !== undefined ? A.get(pk) : null;
     if (!a) continue;
     const modes = [...new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
     if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
@@ -190,28 +219,28 @@ function diffTokens(oldDoc, newDoc) {
   // A new or renamed MODE changes every themed token at once, yet no single variable says so.
   // Collections too are keyed by key where there is one: the same export holds TWO collections called
   // `Spacing`, and a name-keyed Map compared whichever came last on each side.
-  const collNames = new Map();
-  for (const c of [...(oldDoc.collections || []), ...(newDoc.collections || [])]) collNames.set(c.name, (collNames.get(c.name) || new Set()).add(c.key || c.name));
-  const colLabel = (c) => (collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
-  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
-  const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
-  for (const id of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, (CA.get(id) || {}).v, (CB.get(id) || {}).v, "collection"));
+  const collNames = new Map<string, Set<string>>();
+  for (const c of [...(oldDoc.collections || []), ...(newDoc.collections || [])]) collNames.set(c.name, (collNames.get(c.name) || new Set<string>()).add(c.key || c.name));
+  const colLabel = (c: VariableCollection): string => (collNames.get(c.name)!.size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
+  const cols = (doc: TokensDoc) => new Map((doc.collections || []).map((c): [string, { label: string; v: { modes: string[]; default?: string } }] => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
+  const CA = cols(oldDoc), CB = cols(newDoc), collections: FieldDiff[] = [];
+  for (const id of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id))!.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 
 // The component catalog (components.local.json / components.library.json). Keyed by the component
 // `key` (what codeconnect.local.json maps), else id. This is where a new "Loading" variant or a
 // deleted component shows up — and it ripples to every screen that uses it, not just the one in hand.
-function diffCatalog(oldDoc, newDoc) {
-  const keyed = (doc) => new Map((doc.components || []).map((c) => [String(c.key || c.id), c]));
+function diffCatalog(oldDoc: ComponentsCatalog, newDoc: ComponentsCatalog): CatalogDiff {
+  const keyed = (doc: ComponentsCatalog): Map<string, CatalogComponent> => new Map((doc.components || []).map((c): [string, CatalogComponent] => [String(c.key || c.id), c]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief1 = (c) => ({ key: c.key, id: c.id, name: c.name, type: c.type });
-  const added = [...B].filter(([k]) => !A.has(k)).map(([, c]) => brief1(c)), removed = [...A].filter(([k]) => !B.has(k)).map(([, c]) => brief1(c)), changed = [];
+  const brief1 = (c: CatalogComponent): CatalogBrief => ({ key: c.key, id: c.id, name: c.name, type: c.type });
+  const added = [...B].filter(([k]) => !A.has(k)).map(([, c]) => brief1(c)), removed = [...A].filter(([k]) => !B.has(k)).map(([, c]) => brief1(c)), changed: CatalogDiff["changed"] = [];
   for (const [k, b] of B) {
     const a = A.get(k);
     if (!a) continue;
-    const fields = [];
-    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "component"));
+    const fields: FieldDiff[] = [];
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "component"));
     if (fields.length) changed.push({ ...brief1(b), fields });
   }
   return { kind: "catalog", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -225,22 +254,23 @@ const CATALOG_IGNORED = new Set(["page", "pageId", "box", "renderBox"]);
 // design-system change was exactly as undetectable as the skill warns it would be without them. Keyed
 // by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle all
 // have one), falling back to `name` for a style that somehow has none.
-function styleKey(s) {
+type AnyStyle = PaintStyle | TextStyle | EffectStyle | GridStyle;
+function styleKey(s: { key?: string; name?: string } | null | undefined): string {
   return (s && typeof s.key === "string" && s.key) ? "k:" + s.key : "n:" + String((s && s.name) || "");
 }
 const STYLE_IGNORED = new Set(["key", "id"]);
-function diffStyles(oldDoc, newDoc) {
-  const keyed = (doc) => new Map((doc.styles || []).map((s) => [styleKey(s), s]));
+function diffStyles(oldDoc: StylesDoc, newDoc: StylesDoc): StylesDiff {
+  const keyed = (doc: StylesDoc): Map<string, AnyStyle> => new Map((doc.styles || []).map((s): [string, AnyStyle] => [styleKey(s), s]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief = (s) => ({ key: s.key, id: s.id, name: s.name });
+  const brief = (s: AnyStyle): StyleBrief => ({ key: s.key, id: s.id, name: s.name });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief(s));
   const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief(s));
-  const changed = [];
+  const changed: StylesDiff["changed"] = [];
   for (const [k, b] of B) {
     const a = A.get(k);
     if (!a) continue;
-    const fields = [];
-    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "style"));
+    const fields: FieldDiff[] = [];
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "style"));
     if (fields.length) changed.push({ ...brief(b), fields });
   }
   return { kind: "styles", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -249,7 +279,7 @@ function diffStyles(oldDoc, newDoc) {
 // hygiene.json is `{ ..., hygiene: [<sentence>, ...] }` — a flat list of lint-style lines, not keyed
 // records, so the diff is by LINE: a sentence present in one and not the other is added/removed. Order
 // doesn't carry meaning here (collect.ts appends as it walks), so it's compared as a set.
-function diffHygiene(oldDoc, newDoc) {
+function diffHygiene(oldDoc: HygieneDoc, newDoc: HygieneDoc): HygieneDiff {
   const A = new Set((oldDoc.hygiene || []).map(String)), B = new Set((newDoc.hygiene || []).map(String));
   const added = [...B].filter((h) => !A.has(h));
   const removed = [...A].filter((h) => !B.has(h));
@@ -267,40 +297,45 @@ function diffHygiene(oldDoc, newDoc) {
 // climbing is "more lint warnings appeared" without opening hygiene.json, `counts.components` dropping
 // is components removed, etc.
 const MANIFEST_IGNORED = new Set(["exportedAt"]);
-function diffManifest(oldDoc, newDoc) {
-  const fields = [];
+function diffManifest(oldDoc: DesignSystemManifest | null | undefined, newDoc: DesignSystemManifest | null | undefined): ManifestDiff {
+  const fields: FieldDiff[] = [];
   for (const key of new Set([...Object.keys(oldDoc || {}), ...Object.keys(newDoc || {})])) {
     if (MANIFEST_IGNORED.has(key)) continue;
-    fields.push(...fieldDiffs(key, (oldDoc || {})[key], (newDoc || {})[key], "manifest"));
+    fields.push(...fieldDiffs(key, bag(oldDoc || {})[key], bag(newDoc || {})[key], "manifest"));
   }
   return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
 }
 
-const isTokens = (doc) => Array.isArray(doc && doc.variables);
-const isCatalog = (doc) => Array.isArray(doc && doc.components);
+// The kind sniffers take the parsed file as `unknown` (a user-named path) and narrow it to the document
+// type its shape proves; each is the same duck-type test the JS ran.
+const isTokens = (doc: unknown): doc is TokensDoc => !!doc && typeof doc === "object" && "variables" in doc && Array.isArray(doc.variables);
+const isCatalog = (doc: unknown): doc is ComponentsCatalog => !!doc && typeof doc === "object" && "components" in doc && Array.isArray(doc.components);
 // Checked AFTER tokens/catalog/styles/hygiene (none of which this can also match — none of THEM carry
 // both `counts` and `files` as plain objects) so ordering is safe either way, but kept last among the
 // design-system kinds since it is the least specific shape (an object with two nested objects).
-const isManifest = (doc) => !!doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts)
-  && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
-const isStyles = (doc) => Array.isArray(doc && doc.styles);
-const isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
-const isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || (doc.tree && typeof doc.tree === "object"));
-function diffDocs(oldDoc, newDoc, opts) {
-  if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
-  if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
-  if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
-  if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
-  if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  if (isManifest(newDoc)) return diffManifest(oldDoc, newDoc);
+const isManifest = (doc: unknown): doc is DesignSystemManifest => !!doc && typeof doc === "object"
+  && "counts" in doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts)
+  && "files" in doc && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
+const isStyles = (doc: unknown): doc is StylesDoc => !!doc && typeof doc === "object" && "styles" in doc && Array.isArray(doc.styles);
+const isHygiene = (doc: unknown): doc is HygieneDoc => !!doc && typeof doc === "object" && "hygiene" in doc && Array.isArray(doc.hygiene);
+const isScreen = (doc: unknown): doc is ScreenDoc => !!doc && typeof doc === "object" && (("nodes" in doc && Array.isArray(doc.nodes)) || ("tree" in doc && !!doc.tree && typeof doc.tree === "object"));
+function diffDocs(oldDoc: unknown, newDoc: unknown, opts?: { redrawn?: Set<string> }): DiffReport {
+  // The baseline is read as the kind the CURRENT file proved to be — the JS duck-typed both sides the
+  // same way (a baseline of another kind simply diffs as "everything added"), so it is cast, not re-sniffed.
+  if (isTokens(newDoc)) return diffTokens(oldDoc as TokensDoc, newDoc);
+  if (isCatalog(newDoc)) return diffCatalog(oldDoc as ComponentsCatalog, newDoc);
+  if (isStyles(newDoc)) return diffStyles(oldDoc as StylesDoc, newDoc);
+  if (isHygiene(newDoc)) return diffHygiene(oldDoc as HygieneDoc, newDoc);
+  if (isScreen(newDoc)) return diffScreens(oldDoc as ScreenDoc, newDoc, opts);
+  if (isManifest(newDoc)) return diffManifest(oldDoc as DesignSystemManifest, newDoc);
   throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) — nothing here can be diffed");
 }
-function markdown(d, label) {
+function markdown(d: DiffReport, label: string): string {
   const s = d.summary, L = [`# What changed — ${label}`, ""];
   for (const w of d.warnings || []) L.push(`> **Warning:** ${w}`, "");
   const total = s.added + s.removed + s.changed + (s.reordered || 0);
   if (!total) return L.concat(d.kind === "screen" && s.positionOnly ? `Nothing changed (${s.positionOnly} node(s) only moved with their surroundings).` : "Nothing changed.").join("\n") + "\n";
-  const line = (f) => `  - \`${f.field}\`: ${f.before === undefined ? "—" : f.before} → ${f.after === undefined ? "—" : f.after}`;
+  const line = (f: FieldDiff): string => `  - \`${f.field}\`: ${f.before === undefined ? "—" : f.before} → ${f.after === undefined ? "—" : f.after}`;
   if (d.kind === "tokens") {
     if (d.changed.length) L.push("## Token values changed", ...d.changed.map((c) => `- \`${c.name}\` — ${c.modes.map((m) => `${m.mode}: ${m.before} → ${m.after}`).join("; ")}`), "");
     if (d.collections.length) L.push("## Collections / modes changed", ...d.collections.map(line), "");
@@ -309,7 +344,7 @@ function markdown(d, label) {
     return L.join("\n") + "\n";
   }
   if (d.kind === "catalog") {
-    const one = (c) => `- **${c.name}** (${c.type || "component"}, key \`${c.key || c.id}\`)`;
+    const one = (c: CatalogBrief): string => `- **${c.name}** (${c.type || "component"}, key \`${c.key || c.id}\`)`;
     L.push("_A catalog change affects every built screen that uses the component — check each `design/plan/*.json` `components[]`, not only the screen in hand._", "");
     if (d.changed.length) L.push("## Components changed", ...d.changed.flatMap((c) => [one(c), ...c.fields.map(line)]), "");
     if (d.added.length) L.push("## Components added", ...d.added.map(one), "");
@@ -317,7 +352,7 @@ function markdown(d, label) {
     return L.join("\n") + "\n";
   }
   if (d.kind === "styles") {
-    const one = (s) => `- **${s.name}** (key \`${s.key || s.id}\`)`;
+    const one = (s: StyleBrief): string => `- **${s.name}** (key \`${s.key || s.id}\`)`;
     if (d.changed.length) L.push("## Styles changed", ...d.changed.flatMap((s) => [one(s), ...s.fields.map(line)]), "");
     if (d.added.length) L.push("## Styles added", ...d.added.map(one), "");
     if (d.removed.length) L.push("## Styles removed", ...d.removed.map(one), "");
@@ -342,7 +377,7 @@ function markdown(d, label) {
 }
 
 // design/pages/home/login.json -> design/.sync/pages__home__login.json (relative to the project root)
-function snapshotPath(file, cwd = process.cwd()) {
+function snapshotPath(file: string, cwd: string = process.cwd()): string {
   const rel = path.relative(path.join(cwd, "design"), path.resolve(cwd, file));
   const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
   return path.join(cwd, "design", ".sync", flat);
@@ -363,32 +398,43 @@ function snapshotPath(file, cwd = process.cwd()) {
 // 4.97596 -> 4.98, only 0.00195 apart) and split into different hashes anyway — verified against the
 // real eight arrow-down*.svg variants in test/fixtures/livetest3/arrow-down/, which are the fixture
 // for this exact tolerance choice.
-const { normalizeForCompare, sha1Hex } = require("../bridge/asset-compare.js");
-function hashAssetBytes(fileName, buf) {
+function hashAssetBytes(fileName: string, buf: Buffer | string): string {
   return sha1Hex(normalizeForCompare(fileName, buf));
 }
-function assetPaths(doc) {
-  const out = new Set();
-  const walk = (n) => { if (!n || typeof n !== "object") return; if (typeof n.asset === "string") out.add(n.asset); for (const k of Array.isArray(n.children) ? n.children : []) walk(k); };
+function assetPaths(doc: ScreenDoc): string[] {
+  const out = new Set<string>();
+  const walk = (n: IrNode): void => { if (!n || typeof n !== "object") return; if (typeof n.asset === "string") out.add(n.asset); for (const k of Array.isArray(n.children) ? n.children : []) walk(k); };
   for (const r of roots(doc)) walk(r);
   return [...out];
 }
 // Asset paths are relative to the export root (design/), which may be several directories above a page file.
-function assetRoot(file, assets) {
+function assetRoot(file: string, assets: string[]): string | null {
   let dir = path.dirname(path.resolve(file));
   for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs.existsSync(path.join(dir, a)))) return dir;
   return null;
 }
-function assetHashes(file, doc) {
-  const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
+function assetHashes(file: string, doc: ScreenDoc): { root: string | null; hashes: Record<string, string> } {
+  const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out: Record<string, string> = {};
   if (root) for (const a of assets) { try { out[a] = hashAssetBytes(a, fs.readFileSync(path.join(root, a))); } catch { /* not exported (--no-assets) */ } }
   return { root, hashes: out };
 }
-function redrawnAssets(file, newDoc, prev, cwd) {
-  const now = assetHashes(file, newDoc), out = new Set();
+
+/** The baseline previous() picked: the parsed older document, where it came from, and its asset-hash sidecar. */
+export interface Baseline {
+  doc: unknown;
+  source: string;
+  kind: "file" | "snapshot" | "git";
+  assets?: Record<string, string> | null;
+  notes: string[];
+  /** every candidate was the SAME export as the current file — the diff says nothing */
+  same?: true;
+}
+
+function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: string): Set<string> {
+  const now = assetHashes(file, newDoc), out = new Set<string>();
   if (!now.root) return out;
   for (const [a, h] of Object.entries(now.hashes)) {
-    let before;
+    let before: string | undefined;
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") { try { before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
     if (before && before !== h) out.add(a);
@@ -397,16 +443,16 @@ function redrawnAssets(file, newDoc, prev, cwd) {
 }
 
 // See the header: drop a baseline that IS the current export, then the most recent one wins.
-function previous(file, against, cwd = process.cwd(), current = null) {
+function previous(file: string, against: string | undefined, cwd: string = process.cwd(), current: unknown = null): Baseline | null {
   if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
-  const found = [];
+  const found: Array<Omit<Baseline, "notes">> = [];
   const snap = snapshotPath(file, cwd);
   if (fs.existsSync(snap)) {
-    let assets = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")); } catch { /* older snapshot, or no assets */ }
+    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")); } catch { /* older snapshot, or no assets */ }
     found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
   // Finding 322: `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
-  // (design-to-code/design-diff.js's own --snapshot handler) specifically so it stays available as a
+  // (design-to-code/design-diff.ts's own --snapshot handler) specifically so it stays available as a
   // diff baseline — but `previous()` never looked for it. The exact shape this closes: snapshot taken
   // (B0) -> re-pull (E1) -> a MISTAKEN second `--snapshot` refused (dest still B0) -> `--force` (dest
   // becomes E1, B0 saved as dest.prev) -> the current export IS E1, so the primary snapshot is now the
@@ -414,7 +460,7 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   // baseline — leaving `.prev` (B0) as the only genuinely older copy, which used to go unmentioned and
   // unused ("There is no OLDER export to compare against" while it sat right there).
   if (fs.existsSync(snap + ".prev")) {
-    let assets = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")); } catch { /* no assets sidecar was kept */ }
+    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")); } catch { /* no assets sidecar was kept */ }
     try { found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); } catch { /* corrupt .prev — ignore rather than fail the whole diff */ }
   }
   try {
@@ -435,16 +481,16 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   // value comparison in diffTokens() is still by variable key (Prompt 1's `keyed()`/`diffTokens`), so a
   // `_slices[].at` that re-appends on every re-pull (finding 223) does not, by itself, manufacture a
   // fake "changed" token — it only lets `previous()` recognise which baseline is newer.
-  const at = (d) => {
-    if (!d) return null;
-    if (typeof d.exportedAt === "string") return d.exportedAt;
-    if (Array.isArray(d._slices) && d._slices.length) {
-      const times = d._slices.map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+  const at = (d: unknown): string | null => {
+    if (!d || typeof d !== "object") return null;
+    if ("exportedAt" in d && typeof d.exportedAt === "string") return d.exportedAt;
+    if ("_slices" in d && Array.isArray(d._slices) && d._slices.length) {
+      const times = d._slices.map((s: unknown) => s && typeof s === "object" && "at" in s && typeof s.at === "string" ? s.at : null).filter((t): t is string => !!t);
       if (times.length) return times.reduce((mx, t) => (t > mx ? t : mx));
     }
     return null;
   };
-  const now = at(current), notes = [];
+  const now = at(current), notes: string[] = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) — ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
   if (!useful.length) return { ...found[0], notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
@@ -456,13 +502,19 @@ function previous(file, against, cwd = process.cwd(), current = null) {
 // Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file
 // this returns that doesn't exist is simply skipped by the --snapshot loop (`fs.existsSync` check
 // already there), the same as a caller-requested file that isn't there yet.
-const { DESIGN_SYSTEM_FILES } = require("../bridge/design-system-layout.js");
+// bridge/design-system-layout.d.ts declares only buildDesignSystemLayout, and Node's CJS lexer does not
+// expose DESIGN_SYSTEM_FILES (a nested object literal) as a named export either — so it is read off the
+// default import (= module.exports) through this local declaration of what the module really carries
+// (verified at runtime: ten string file names, e.g. MANIFEST === "design-system.json"). Two steps
+// through `unknown` because the .d.ts's namespace type and this interface do not overlap.
+interface DesignSystemLayoutConstants { DESIGN_SYSTEM_FILES: Record<string, string> }
+const { DESIGN_SYSTEM_FILES } = dsl as unknown as DesignSystemLayoutConstants;
 const DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
-function siblingFilesOf(f) {
+function siblingFilesOf(f: string): string[] {
   const abs = path.resolve(f);
   const dir = path.dirname(abs);
   const base = path.basename(abs);
-  const out = [];
+  const out: string[] = [];
   if (DS_FILE_NAMES.includes(base)) {
     // 8 of the 9 design-system files (tokens/styles.*/components.*/hygiene) live flat in the
     // design-system/ SUBDIRECTORY together — but the 9th, the MANIFEST (`design-system.json`), lives
@@ -501,7 +553,7 @@ function siblingFilesOf(f) {
   return out;
 }
 
-function main(argv) {
+function main(argv: string[]): void {
   const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); process.exit(argv.length ? 0 : 2); }
   const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
@@ -559,7 +611,7 @@ function main(argv) {
       // pages/index.json or a .vars.json/.assets.json copy is JSON but has none, and would otherwise
       // get a spurious empty "<name>.assets.json" sidecar written beside its own real content.
       try {
-        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
+        const parsed: unknown = JSON.parse(fs.readFileSync(f, "utf8"));
         if (isScreen(parsed)) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
@@ -571,32 +623,35 @@ function main(argv) {
     if (refused) process.exitCode = 1; // exitCode, not exit(): let every already-printed line flush first
     return;
   }
-  const take = (flag) => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
+  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
   const against = take("--against"), out = take("--out");
   const json = argv.includes("--json");
   const file = argv.find((a) => !a.startsWith("--"));
   if (!file) { console.error(USAGE); process.exit(2); }
-  const { readJsonFile } = require("./catalog-input.js");
   const current = readJsonFile(file, "export");
   const prev = previous(file, against, process.cwd(), current);
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against — no snapshot in design/.sync/, and it is not committed in git.\nNext time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
     process.exit(2);
   }
-  let diff;
+  let diff: DiffReport;
   try { diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : new Set() }); }
-  catch (e) { console.error(`design-diff: ${file}: ${e.message}`); process.exit(2); }
+  catch (e) {
+    // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
+    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
+    console.error(`design-diff: ${file}: ${message}`); process.exit(2);
+  }
   diff.warnings = [...prev.notes, ...(diff.warnings || [])];
   // `warned`/`baseline` let a script decide "should I trust this diff" without re-parsing the markdown
   // or counting `warnings.length` itself — the same two facts `tokens.json`'s human-readable warnings
   // already convey (finding 218's "zero warnings" complaint was specifically that variables.json had
   // no equivalent of this at all).
-  const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
+  const result: DiffResult = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) { fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true }); fs.writeFileSync(out, text); console.log(`wrote ${out} — ${JSON.stringify(result.summary)}${result.warnings.length ? ` — ${result.warnings.length} warning(s), read them` : ""}`); }
   else process.stdout.write(text);
 }
 
-if (require.main === module) main(process.argv.slice(2));
+if (import.meta.main) main(process.argv.slice(2));
 
-module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+export { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

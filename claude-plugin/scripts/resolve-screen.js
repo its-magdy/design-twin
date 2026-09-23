@@ -1,8 +1,9 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
 
-// design-to-code/resolve-screen.js
-var fs = require("fs");
-var path = require("path");
+// design-to-code/resolve-screen.ts
+import fs from "node:fs";
+import path from "node:path";
 function readJsonOr(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -60,7 +61,7 @@ function resolveScreen(exportDir, query, opts) {
   }
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
-  const planIds = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
+  const planIds = new Set(planHit.map((p) => p.nodeId).filter((id) => !!id));
   const union = /* @__PURE__ */ new Map();
   const join = (row, via) => {
     const key = row.id || row.file || JSON.stringify(row);
@@ -95,8 +96,7 @@ function resolveScreen(exportDir, query, opts) {
   }
   return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
-module.exports = { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
-if (require.main === module) {
+if (import.meta.main) {
   const [exportDir, query, planDir] = process.argv.slice(2);
   if (!exportDir || !query) {
     console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
@@ -128,3 +128,10 @@ if (require.main === module) {
   if (res.noTitles) console.error(NOTITLES_NOTE);
   process.exit(1);
 }
+export {
+  NODE_ID_RE,
+  allRows,
+  describe,
+  planRows,
+  resolveScreen
+};

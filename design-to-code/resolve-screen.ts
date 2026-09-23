@@ -1,4 +1,4 @@
-// resolve-screen.js — the ONE screen-name resolution procedure, called by every skill instead of each
+// resolve-screen.ts — the ONE screen-name resolution procedure, called by every skill instead of each
 // re-inventing (or half-implementing) it. P3 #16/#17/#19/#70/#71/#72/#73/#90/#120/#150/#151/#152/#200.
 //
 // The defect this closes: the export indexes only the Figma LAYER name, which in a real file is
@@ -34,10 +34,13 @@
 // a text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
 // resolve by node id — never as `resolved`. This is what "never take a near-match" / "do not make
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
-const fs = require("fs");
-const path = require("path");
+import fs from "node:fs";
+import path from "node:path";
+import type { IndexRow, PageIndex, PagesRootIndex, Plan, ResolveScreenResult, ScreenCandidate } from "./types.ts";
 
-function readJsonOr(file, fallback) {
+// Every file read here is one this repo's own writers produced (pages/index.json, a page's index.json,
+// design/plan/*.json), so it is read as the shape it was written in; anything unreadable is `fallback`.
+function readJsonOr<T>(file: string, fallback: T): T {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
 }
 
@@ -49,29 +52,32 @@ const NODE_ID_RE = /^\d+:\d+$/;
 // Every screen row this export knows about, wherever it is indexed. Prefers the root index's
 // flattened `layers` (P3 #16 — the file every skill is told to read); falls back to walking each
 // page's own index.json for an export written before that field existed.
-function allRows(exportDir) {
+function allRows(exportDir: string): IndexRow[] {
   const rootFile = path.join(exportDir, "pages", "index.json");
-  const root = readJsonOr(rootFile, null);
+  const root = readJsonOr<PagesRootIndex | null>(rootFile, null);
   if (!root) return [];
   if (Array.isArray(root.layers)) return root.layers;
-  const rows = [];
+  const rows: IndexRow[] = [];
   for (const pd of root.pageDirs || []) {
-    const idx = readJsonOr(path.join(exportDir, pd.dir ? path.join("pages", pd.dir, "index.json") : ""), null);
+    const idx = readJsonOr<PageIndex | null>(path.join(exportDir, pd.dir ? path.join("pages", pd.dir, "index.json") : ""), null);
     if (idx && Array.isArray(idx.layers)) rows.push(...idx.layers);
   }
   return rows;
 }
 
-// design/plan/*.json's schema'd header (screenName, nodeId, route, file — see verify-build.js) is a
+/** The plan header fields resolveScreen consults (design/plan/<screen>.json). */
+export interface PlanRow { file: string; screenName?: string | null; nodeId?: string | null; route?: string | null }
+
+// design/plan/*.json's schema'd header (screenName, nodeId, route, file — see verify-build.ts) is a
 // secondary lookup, never primary (finding 151/180): it only works when a human wrote a good
 // screenName, and finding 151's sibling plan for the SAME run had nothing useful in it. Used here only
 // to map a query to a nodeId, which is then resolved through the same row list as everything else.
-function planRows(planDir) {
+function planRows(planDir: string | null | undefined): PlanRow[] {
   if (!planDir || !fs.existsSync(planDir)) return [];
-  const out = [];
+  const out: PlanRow[] = [];
   for (const f of fs.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
-    const doc = readJsonOr(path.join(planDir, f), null);
+    const doc = readJsonOr<Plan | null>(path.join(planDir, f), null);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, screenName: doc.screenName, nodeId: doc.nodeId, route: doc.route });
   }
   return out;
@@ -83,8 +89,8 @@ function planRows(planDir) {
 // field(s) in the exact union this particular row matched on (finding 310 — the report must say
 // WHICH field, not just that it matched, since two rows can carry the same title under different
 // layer names).
-function describe(row, matchedVia) {
-  const out = {
+function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
+  const out: ScreenCandidate = {
     name: row.name,
     id: row.id,
     title: row.title || null,
@@ -98,7 +104,7 @@ function describe(row, matchedVia) {
   return out;
 }
 
-const fold = (s) => String(s || "").trim().toLowerCase();
+const fold = (s: unknown): string => String(s || "").trim().toLowerCase();
 
 // Returns one of:
 //   { status: "resolved", row, stage }                          — node id alone, or exactly one row
@@ -111,7 +117,7 @@ const fold = (s) => String(s || "").trim().toLowerCase();
 //     `noTitles: true` when NOT ONE row in this export carries a `title` at all, meaning the export
 //     predates title indexing and a re-pull (not a smarter query) is the fix.
 // Never throws on a query that matches nothing or matches many — that is the expected, handled case.
-function resolveScreen(exportDir, query, opts) {
+function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: string | null }): ResolveScreenResult {
   const options = opts || {};
   const rows = allRows(exportDir);
   const q = String(query || "").trim();
@@ -131,13 +137,13 @@ function resolveScreen(exportDir, query, opts) {
   // is recorded so the candidate list (if the union has >1 row) says which.
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
-  const planIds = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
+  const planIds = new Set(planHit.map((p) => p.nodeId).filter((id): id is string => !!id));
 
-  const union = new Map(); // row.id -> { row, via: Set<string> }
-  const join = (row, via) => {
+  const union = new Map<string, { row: IndexRow; via: Set<string> }>(); // row.id -> { row, via: Set<string> }
+  const join = (row: IndexRow, via: string): void => {
     const key = row.id || row.file || JSON.stringify(row);
     if (!union.has(key)) union.set(key, { row, via: new Set() });
-    union.get(key).via.add(via);
+    union.get(key)!.via.add(via);
   };
   for (const r of rows) {
     if (fold(r.name) === qFold) join(r, "exact layer name");
@@ -166,20 +172,20 @@ function resolveScreen(exportDir, query, opts) {
       (Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold)))
   );
   if (textMatches.length) {
-    return Object.assign(
+    return Object.assign<Extract<ResolveScreenResult, { status: "needs-confirmation" }>, { noTitles: true } | null>(
       { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe(r)) },
       noTitles ? { noTitles: true } : null
     );
   }
 
-  return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
+  return Object.assign<Extract<ResolveScreenResult, { status: "not-found" }>, { noTitles: true } | null>({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
 
-module.exports = { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
+export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 
 // CLI: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]
-// (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.js).
-if (require.main === module) {
+// (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
+if (import.meta.main) {
   const [exportDir, query, planDir] = process.argv.slice(2);
   if (!exportDir || !query) {
     console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
@@ -188,7 +194,7 @@ if (require.main === module) {
   const NOTITLES_NOTE =
     "note   this export's index carries no titles (pulled before title indexing) — re-pull the " +
     "screen (`dtwin pull --node <id>`) to enable lookup by title";
-  const listCandidates = (candidates) => {
+  const listCandidates = (candidates: ScreenCandidate[]): void => {
     for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}${c.matchedVia ? ` [matched: ${c.matchedVia.join(", ")}]` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
   };
   const res = resolveScreen(exportDir, query, { planDir });

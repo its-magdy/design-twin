@@ -1,4 +1,4 @@
-// verify-build.js — the Stop-hook gate for the build-screen skill, and the ONE place a plan's status
+// verify-build.ts — the Stop-hook gate for the build-screen skill, and the ONE place a plan's status
 // is computed.
 //
 // Registered in two places. build-screen/SKILL.md's frontmatter (Stop): active only for a session
@@ -20,11 +20,11 @@
 //      element as a literal. A value the plan did NOT resolve to a token is not a violation (the
 //      profiles prescribe one-off literals where no token exists), and neither is the line that
 //      DEFINES the token (`--color-figma-brand-600: #5B5FC7`). This is a source check, not a DOM
-//      check: the rendered comparison is verify-screen.js's job, and its report feeds the status.
+//      check: the rendered comparison is verify-screen.ts's job, and its report feeds the status.
 //   2. a VISIBLE design node with no anchor in the plan: a node the export draws (not `hidden`, no
 //      hidden ancestor) that neither it nor any ancestor maps to code in `anchors{}`. The plan is the
 //      map from design to code; a visible subtree missing from it is a piece of the screen nobody
-//      accounted for. `plan-skeleton.js` lists every visible node, so this is only ever a fill-in.
+//      accounted for. `plan-skeleton.ts` lists every visible node, so this is only ever a fill-in.
 // Everything else — token identity merges (finding 130, right), a11y/coverage evidence (101, right),
 // arbitrary px, file existence, `mapModule` imports (131), MISSING rows with no decision, the plan
 // header (P3), the verification block's self-consistency (156), `deviations[]` shape (196) — is a
@@ -62,37 +62,49 @@
 // is cut off at DTWIN_HOOK_TIMEOUT_MS (60 s) with a message naming what it was waiting on (exit 1 —
 // a non-blocking error, because a stall of ours is not the agent's defect).
 //
-// Plan shape: see plan-skeleton.js (which writes it) and build-screen/SKILL.md step 2.
+// Plan shape: see plan-skeleton.ts (which writes it) and build-screen/SKILL.md step 2.
 
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-const { visibility, rootsOf } = require("./plan-skeleton");
-const contentHash = require("./content-hash");
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { visibility, rootsOf } from "./plan-skeleton.ts";
+import * as contentHash from "./content-hash.ts";
+import { auditGateStatus } from "./audit-gate.ts";
+import { isJsonObject } from "./types.ts";
+import type {
+  CodeConnectMap, CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, PagesRootIndex, PageIndex, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
+  PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyExpectation, VerifyReport,
+} from "./types.ts";
 
 // ================================================================ input / timeouts
 
-const HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 60000;
-const STDIN_WAIT_MS = () => { const n = Number(process.env.DTWIN_HOOK_STDIN_WAIT_MS); return Number.isFinite(n) && n >= 0 && process.env.DTWIN_HOOK_STDIN_WAIT_MS !== "" ? n : 1000; };
+const HOOK_TIMEOUT_MS = (): number => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 60000;
+const STDIN_WAIT_MS = (): number => { const n = Number(process.env.DTWIN_HOOK_STDIN_WAIT_MS); return Number.isFinite(n) && n >= 0 && process.env.DTWIN_HOOK_STDIN_WAIT_MS !== "" ? n : 1000; };
 
 let phase = "starting";
-const setPhase = (p) => { phase = p; };
+const setPhase = (p: string): void => { phase = p; };
+
+/** The Stop-hook payload as read off stdin: arbitrary JSON from Claude Code, so a plain JSON object. */
+export type HookPayload = JsonObject;
+/** readHookInput()'s result: a payload and where it came from, or an error naming what stalled. */
+export interface HookRead { payload?: HookPayload; source?: string; error?: string }
 
 // The hook JSON, read only when stdin is not a terminal. A regular file or /dev/null reads to EOF at
 // once; a pipe/socket is read asynchronously with two deadlines, so an inherited pipe that never
 // closes (finding 133: "same command, two different outcomes") cannot stall the build.
-function readHookInput() {
+function readHookInput(): Promise<HookRead> {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
-  let st;
+  let st: fs.Stats;
   try { st = fs.fstatSync(0); } catch { return Promise.resolve({ payload: {}, source: "closed" }); }
-  const parse = (raw) => { try { return raw.trim() ? JSON.parse(raw) : {}; } catch { return {}; } };
+  // Whatever the pipe carried: only a JSON object is a payload (anything else reads as an empty one).
+  const parse = (raw: string): HookPayload => { try { const v: unknown = raw.trim() ? JSON.parse(raw) : {}; return isJsonObject(v) ? v : {}; } catch { return {}; } };
   if (st.isFile() || st.isCharacterDevice()) {
     try { return Promise.resolve({ payload: parse(fs.readFileSync(0, "utf8")), source: "file" }); } catch { return Promise.resolve({ payload: {}, source: "unreadable" }); }
   }
   return new Promise((resolve) => {
-    const chunks = [];
+    const chunks: Buffer[] = [];
     let bytes = 0, finished = false;
-    const done = (value) => {
+    const done = (value: HookRead): void => {
       if (finished) return;
       finished = true;
       clearTimeout(first); clearTimeout(hard);
@@ -103,7 +115,7 @@ function readHookInput() {
     const first = setTimeout(() => { if (!bytes) done({ payload: {}, source: "silent-pipe" }); }, STDIN_WAIT_MS());
     // a little inside the process watchdog, so this (more specific) message is the one printed
     const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | node verify-build.js` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
-    process.stdin.on("data", (c) => { bytes += c.length; chunks.push(c); });
+    process.stdin.on("data", (c: Buffer) => { bytes += c.length; chunks.push(c); });
     process.stdin.on("end", () => done({ payload: parse(Buffer.concat(chunks).toString("utf8")), source: "pipe" }));
     process.stdin.on("error", () => done({ payload: {}, source: "error" }));
     process.stdin.resume();
@@ -114,30 +126,33 @@ function readHookInput() {
 
 const STALE_HOURS = 12;
 
-function staleCutoffMs() {
+function staleCutoffMs(): number {
   const raw = process.env.DTWIN_PLAN_STALE_HOURS;
   const h = raw === undefined || raw === "" ? STALE_HOURS : Number(raw);
   return Number.isFinite(h) && h > 0 ? h * 3600 * 1000 : 0;
 }
 
-function isStale(file, now = Date.now()) {
+function isStale(file: string, now: number = Date.now()): boolean {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try { return now - fs.statSync(file).mtimeMs > cutoff; } catch { return false; }
 }
 
-function readPlan(file) {
+/** A plan file on disk, parsed. design/plan/*.json is this repo's own writer's output (plan-skeleton.ts). */
+export interface PlanFile { file: string; plan: Plan }
+
+function readPlan(file: string): PlanFile | null {
   try { return { file, plan: JSON.parse(fs.readFileSync(file, "utf8")) }; } catch { return null; }
 }
 
-function findPlans(cwd) {
+function findPlans(cwd: string): PlanFile[] {
   const dir = path.join(cwd, "design", "plan");
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f))).filter(Boolean);
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f))).filter((p): p is PlanFile => !!p);
 }
 
 // The project root a plan belongs to: <root>/design/plan/<x>.json → <root>.
-function rootOfPlan(file, fallback) {
+function rootOfPlan(file: string, fallback?: string): string {
   const abs = path.resolve(file);
   const dir = path.dirname(abs);
   if (path.basename(dir) === "plan" && path.basename(path.dirname(dir)) === "design") return path.dirname(path.dirname(dir));
@@ -147,24 +162,25 @@ function rootOfPlan(file, fallback) {
 // Lifecycle states a PERSON sets. Anything else stored in `status` ("verified", "static-only", from an
 // older hook) is a computed value that must not be trusted, and counts as pending.
 const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
-const LIFECYCLE = new Set(["pending", "awaiting-user", "abandoned"]);
-const COMPUTED_STORED = new Set(["verified", "static-only"]);
-const lifecycleOf = (plan) => {
+const LIFECYCLE = new Set<string>(["pending", "awaiting-user", "abandoned"]);
+const COMPUTED_STORED = new Set<string>(["verified", "static-only"]);
+const isLifecycle = (s: string): s is PlanLifecycle => LIFECYCLE.has(s);
+const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
   const s = String((plan && plan.status) || "pending").trim().toLowerCase();
-  return LIFECYCLE.has(s) ? s : "pending";
+  return isLifecycle(s) ? s : "pending";
 };
 
 // ================================================================ hashing
 
-const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
+const sha = (buf: string | Buffer): string => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 
-function fileHashes(plan, cwd) {
+function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, string | null> {
   return contentHash.fileHashes(plan && plan.files, cwd); // the same hashes verify-screen --compare records
 }
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance.
-function planHash(plan) {
-  const copy = JSON.parse(JSON.stringify(plan || {}));
+function planHash(plan: Plan | null | undefined): string {
+  const copy: Plan = JSON.parse(JSON.stringify(plan || {}));
   delete copy.status;
   if (copy.verification && typeof copy.verification === "object") {
     delete copy.verification.hook;
@@ -173,18 +189,18 @@ function planHash(plan) {
   return sha(JSON.stringify(copy));
 }
 
-function changedFiles(plan, cwd) {
+function changedFiles(plan: Plan, cwd: string): string[] | null {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
   const now = fileHashes(plan, cwd);
-  const changed = [];
+  const changed: string[] = [];
   const all = new Set([...Object.keys(hook.files), ...Object.keys(now)]);
   for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === undefined ? `${f} (no longer in files[])` : hook.files[f] === undefined ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
   return changed;
 }
 
 // OPEN = the hook still has work on this plan.
-function isOpen(p, cwd) {
+function isOpen(p: PlanFile, cwd: string): boolean {
   if (lifecycleOf(p.plan) !== "pending") return false;
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
@@ -200,18 +216,18 @@ function isOpen(p, cwd) {
 // images, Dockerfiles) is not scanned for literals: a colour there is data, not a styling decision.
 const SOURCE_EXT = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte", "astro", "css", "scss", "sass", "less", "styl", "html", "htm",
   "swift", "kt", "kts", "java", "dart", "xml", "m", "mm", "h", "cs", "xaml"]);
-const extOf = (rel) => String(rel).toLowerCase().split(".").pop();
-const isSourceFile = (rel) => SOURCE_EXT.has(extOf(rel));
+const extOf = (rel: string): string => String(rel).toLowerCase().split(".").pop()!;
+const isSourceFile = (rel: string): boolean => SOURCE_EXT.has(extOf(rel));
 
 // A string literal that is prose — a provenance note like "bound to Neutrals/Neutral 0, #121319 in
 // Dark" — rather than a style value. Three plain words in a row is prose; `1px solid #fff`,
 // `bg-[#fff] px-4` and `#fff` are not.
 const PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
-const isProse = (s) => PROSE.test(s) && !/-\[|\[#/.test(s);
+const isProse = (s: string): boolean => PROSE.test(s) && !/-\[|\[#/.test(s);
 
 // The text the literal scan looks at: comments removed; prose strings blanked. Keeps line structure
 // (newlines survive) so per-line definition detection still works.
-function scanText(rel, text) {
+function scanText(rel: string, text: string): string {
   const ext = extOf(rel);
   const lineComments = !["css", "html", "htm", "xml", "xaml"].includes(ext);
   const htmlComments = ["html", "htm", "xml", "xaml", "vue", "svelte", "astro"].includes(ext);
@@ -238,7 +254,7 @@ function scanText(rel, text) {
 }
 
 // "#abc" / "#aabbcc" / "#aabbccdd" -> "aabbcc" (alpha dropped).
-function hex6(value) {
+function hex6(value: unknown): string | null {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
   if (!m) return null;
   const h = m[1].toLowerCase();
@@ -248,7 +264,7 @@ function hex6(value) {
 // The comparison key for the literal check: always 8 hex digits, rrggbb + alpha (opaque -> "ff").
 // Alpha is part of the colour's identity (live run #25): `#ffffff` and `#ffffff1a` are different
 // colours bound to different tokens, and folding them together cross-contaminated both directions.
-function colorKey(value) {
+function colorKey(value: unknown): string | null {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
   if (!m) return null;
   const h = m[1].toLowerCase();
@@ -257,9 +273,9 @@ function colorKey(value) {
 }
 
 // Every raw colour literal in the source, keyed by colorKey -> the spelling found.
-function colorLiterals(source) {
-  const found = new Map();
-  const add = (h, lit) => { if (h && !found.has(h)) found.set(h, lit); };
+function colorLiterals(source: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const add = (h: string | null, lit: string): void => { if (h && !found.has(h)) found.set(h, lit); };
   for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
   // Compose / Flutter `Color(0xFF5B5FC7)` — AARRGGBB (alpha FIRST), or bare 0xRRGGBB.
   for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
@@ -273,7 +289,7 @@ function colorLiterals(source) {
   return found;
 }
 
-function alphaHex(a) {
+function alphaHex(a: string | undefined): string {
   if (a === undefined || a === "") return "ff";
   const n = String(a).endsWith("%") ? Number(String(a).slice(0, -1)) / 100 : Number(a);
   if (!Number.isFinite(n)) return "ff";
@@ -282,7 +298,7 @@ function alphaHex(a) {
 
 // Tailwind arbitrary dimensions: the utility PREFIX says which kind the number is (live finding 88:
 // `rounded-[20px]` is not the 20px a fontSize token resolves to).
-const UTILITY_KIND = [
+const UTILITY_KIND: Array<[RegExp, string]> = [
   [/^rounded(-[a-z]+)?$/, "radius"],
   [/^text$/, "fontSize"],
   [/^leading$/, "lineHeight"],
@@ -293,7 +309,7 @@ const UTILITY_KIND = [
   [/^(w|h|min-w|min-h|max-w|max-h|size|basis)$/, "size"],
   [/^border(-[trblxyse]+)?$/, "borderWidth"],
 ];
-const KIND_MATCHES = {
+const KIND_MATCHES: Record<string, string[]> = {
   radius: ["radius", "borderradius", "cornerradius"],
   fontSize: ["fontsize", "font-size", "type", "typography"],
   lineHeight: ["lineheight", "line-height"],
@@ -302,23 +318,24 @@ const KIND_MATCHES = {
   size: ["size", "spacing", "space", "dimension", "width", "height"],
   borderWidth: ["borderwidth", "border-width", "border", "stroke"],
 };
-function utilityKind(utility) {
+function utilityKind(utility: string | null | undefined): string | null {
   const u = String(utility || "").replace(/^-/, "");
   for (const [re, kind] of UTILITY_KIND) if (re.test(u)) return kind;
   return null;
 }
-function kindsCompatible(utility, rowKind) {
+function kindsCompatible(utility: string | null | undefined, rowKind: unknown): boolean {
   const uk = utilityKind(utility);
   if (!uk) return true;
   const rk = String(rowKind || "").toLowerCase().replace(/[^a-z]/g, "");
   if (!rk) return true;
   return (KIND_MATCHES[uk] || []).some((k) => k.replace(/[^a-z]/g, "") === rk);
 }
-function arbitraryPx(source) {
-  const found = new Map();
+interface PxHit { literal: string; utility: string | null }
+function arbitraryPx(source: string): Map<number, PxHit[]> {
+  const found = new Map<number, PxHit[]>();
   for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const entry: PxHit = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
     const list = found.get(px) || [];
     if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
     found.set(px, list);
@@ -334,8 +351,8 @@ function arbitraryPx(source) {
 
 // Module specifiers a source file imports: ES `import … from`, bare `import "x"`, `export … from`,
 // dynamic `import("x")`, CommonJS `require("x")`, CSS `@import`.
-function importsOf(text) {
-  const out = [];
+function importsOf(text: string): string[] {
+  const out: string[] = [];
   const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
   for (const m of text.matchAll(re)) out.push(m[1] || m[2] || m[3] || m[4]);
   return out;
@@ -345,12 +362,15 @@ const SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart
 // "app/src/components/PageTitle.tsx" / "@/components/PageTitle" / "../../../components/PageTitle/index"
 // → ["components", "PageTitle"] style segments, extension and trailing /index dropped, alias
 // prefixes (`@/`, `~/`, `#/`, `@alias/`) and `.`/`..` removed.
-function moduleSegments(spec) {
+function moduleSegments(spec: unknown): string[] {
   let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
   const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
   if (segs.length && /^[@~#]$/.test(segs[0])) segs.shift();
   return segs;
 }
+
+/** One file of a plan's files[] with its text (rel is project-relative). */
+export interface FileText { rel: string; text: string }
 
 // Does any built file import the module a plan row says it reuses? Relative specifiers are resolved
 // against the importing file, then compared with mapModule by path SUFFIX; alias / bare specifiers are
@@ -358,10 +378,10 @@ function moduleSegments(spec) {
 // therefore matches `'../../../components/PageTitle'` and `'@/components/PageTitle'` alike — the
 // unsatisfiable substring test of finding 131 is gone. Non-JS stacks (Swift/Kotlin/Dart import
 // modules, not files): the component's own name used as an identifier counts.
-function moduleImported(mapModule, byFile, cwd) {
+function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boolean {
   const want = moduleSegments(mapModule);
   if (!want.length) return true;
-  const suffixMatch = (have) => {
+  const suffixMatch = (have: string[]): boolean => {
     const k = Math.min(have.length, want.length);
     if (!k) return false;
     for (let i = 1; i <= k; i++) if (have[have.length - i].toLowerCase() !== want[want.length - i].toLowerCase()) return false;
@@ -385,76 +405,85 @@ function moduleImported(mapModule, byFile, cwd) {
 
 // ================================================================ the export behind a plan
 
-function readJsonOr(file, fallback) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
+// Every JSON read here is one this repo's own writers produced (an export, its index, a plan, a
+// verify report/expectation, a component map), so it is parsed as the shape it was written in.
+function readJsonOr<T>(file: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
 
-function exportDirOf(cwd) {
+function exportDirOf(cwd: string): string {
   const e = path.join(cwd, "design", "export");
   return fs.existsSync(path.join(e, "pages")) ? e : path.join(cwd, "design"); // pre-split projects
 }
 
 // Node id from a `<Screen>__<a>_<b>` stem (the exporter's own file naming).
-const idFromStem = (s) => { const m = /__(I?\d+)_(\d+)$/.exec(String(s || "")); return m ? `${m[1]}:${m[2]}` : null; };
+const idFromStem = (s: unknown): string | null => { const m = /__(I?\d+)_(\d+)$/.exec(String(s || "")); return m ? `${m[1]}:${m[2]}` : null; };
 
-function indexRows(exportDir) {
-  const root = readJsonOr(path.join(exportDir, "pages", "index.json"), null);
+function indexRows(exportDir: string): IndexRow[] {
+  const root = readJsonOr<PagesRootIndex | null>(path.join(exportDir, "pages", "index.json"), null);
   if (!root) return [];
   if (Array.isArray(root.layers)) return root.layers;
-  const rows = [];
+  const rows: IndexRow[] = [];
   for (const pd of root.pageDirs || []) {
-    const idx = readJsonOr(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), null);
+    const idx = readJsonOr<PageIndex | null>(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), null);
     if (idx && Array.isArray(idx.layers)) rows.push(...idx.layers);
   }
   return rows;
 }
 
+/** locateExport()'s result: the screen export a plan describes, plus what the index knows about it. */
+export interface ExportHit { file: string; doc: ScreenDoc; row: IndexRow | null; nodeId: string | null; layerName: string; sameNameRows: number }
+
 // The screen export a plan describes: its `file` header (project-relative, or relative to
 // design/export as the index writes it), else its `nodeId`, else the node id in its `screen` stem or
 // its own filename, looked up in the export index. Returns { file, doc, row } or null.
-function locateExport(plan, planFile, cwd) {
+function locateExport(plan: Plan, planFile: string | undefined, cwd: string): ExportHit | null {
   const exportDir = exportDirOf(cwd);
-  const tryFile = (rel) => {
+  const tryFile = (rel: string | null | undefined): { file: string; doc: ScreenDoc } | null => {
     if (!rel) return null;
     for (const f of [path.resolve(cwd, rel), path.resolve(exportDir, rel)]) {
-      const doc = fs.existsSync(f) ? readJsonOr(f, null) : null;
+      const doc = fs.existsSync(f) ? readJsonOr<ScreenDoc | null>(f, null) : null;
       if (doc) return { file: f, doc };
     }
     return null;
   };
   let hit = tryFile(plan.file && /\.json$/i.test(plan.file) ? plan.file : null);
   const rows = indexRows(exportDir);
-  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path.basename(planFile, ".json")) : null].filter(Boolean);
-  let row = null;
-  for (const id of ids) { row = rows.find((r) => r.id === id); if (row) break; }
+  const ids = [plan.nodeId, idFromStem(plan.screen), planFile ? idFromStem(path.basename(planFile, ".json")) : null].filter((id): id is string => !!id);
+  let row: IndexRow | null = null;
+  for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
-  const root = rootsOf(hit.doc)[0] || {};
+  const root: Partial<IrNode> = rootsOf(hit.doc)[0] || {};
   if (!row) row = rows.find((r) => r.id === (hit.doc.nodeId || root.id)) || null;
   return Object.assign(hit, { row, nodeId: hit.doc.nodeId || root.id || null, layerName: String(hit.doc.screen || root.name || ""), sameNameRows: rows.filter((r) => String(r.name || "").trim() === String(hit.doc.screen || root.name || "").trim()).length });
 }
 
 // ================================================================ anchors (block 2)
 
-const anchored = (a) => !!a && typeof a === "object" && ["mapModule", "file", "symbol", "omitted"].some((k) => typeof a[k] === "string" && a[k].trim());
+const anchored = (a: PlanAnchor | undefined): boolean => !!a && typeof a === "object" && (["mapModule", "file", "symbol", "omitted"] as const).some((k) => { const v = a[k]; return typeof v === "string" && !!v.trim(); });
 
-function anchorCoverage(plan, doc) {
+interface NodeRef { id: string; name: string; type: IrNodeType }
+/** anchorCoverage()'s result. */
+export interface AnchorCoverage { visible: number; unmapped: NodeRef[]; unmappedNodes: number; wrappers: NodeRef[]; hiddenAnchored: string[]; unknown: string[] }
+
+function anchorCoverage(plan: Plan, doc: ScreenDoc): AnchorCoverage {
   const { visible, hidden } = visibility(doc);
-  const anchors = plan.anchors && typeof plan.anchors === "object" ? plan.anchors : {};
-  const covered = new Map();
-  const isCovered = (id) => {
-    if (covered.has(id)) return covered.get(id);
+  const anchors: Record<string, PlanAnchor> = plan.anchors && typeof plan.anchors === "object" ? plan.anchors : {};
+  const covered = new Map<string, boolean>();
+  const isCovered = (id: string): boolean => {
+    if (covered.has(id)) return covered.get(id)!;
     const v = visible.get(id);
     const r = anchored(anchors[id]) || (!!v && !!v.parentId && visible.has(v.parentId) && isCovered(v.parentId));
     covered.set(id, r);
     return r;
   };
   // which uncovered nodes have an anchored node somewhere below them (pure wrappers — a warning)
-  const hasAnchoredBelow = new Set();
+  const hasAnchoredBelow = new Set<string>();
   for (const id of visible.keys()) {
     if (!anchored(anchors[id])) continue;
-    let p = visible.get(id).parentId;
-    while (p && visible.has(p) && !hasAnchoredBelow.has(p)) { hasAnchoredBelow.add(p); p = visible.get(p).parentId; }
+    let p = visible.get(id)!.parentId;
+    while (p && visible.has(p) && !hasAnchoredBelow.has(p)) { hasAnchoredBelow.add(p); p = visible.get(p)!.parentId; }
   }
-  const unmapped = [], wrappers = [];
+  const unmapped: NodeRef[] = [], wrappers: NodeRef[] = [];
   for (const [id, v] of visible) {
     if (isCovered(id)) continue;
     if (hasAnchoredBelow.has(id)) { wrappers.push({ id, name: v.node.name, type: v.node.type }); continue; }
@@ -473,16 +502,16 @@ function anchorCoverage(plan, doc) {
 
 // ================================================================ the checks
 
-const verdictOf = (row) => String((row && row.verdict) || "").trim().toLowerCase();
+const verdictOf = (row: { verdict?: unknown } | null | undefined): string => String((row && row.verdict) || "").trim().toLowerCase();
 // `codeToken: "MISSING"` (or none / n/a / null) means "there is no token" — not a token NAME.
 const NO_TOKEN = new Set(["missing", "none", "n/a", "na", "-", "null", "tbd"]);
-const hasToken = (row) => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
+const hasToken = (row: PlanTokenRow): row is PlanTokenRow & { codeToken: string } => !!row.codeToken && !NO_TOKEN.has(String(row.codeToken).trim().toLowerCase());
 
-function loadMapKeys(cwd) {
+function loadMapKeys(cwd: string): Map<string, { name: string; module: string }> {
   for (const f of [path.join(cwd, "design", "codeconnect.local.json"), path.join(cwd, "codeconnect.local.json")]) {
-    const map = readJsonOr(f, null);
+    const map = readJsonOr<CodeConnectMap | null>(f, null);
     if (!map) continue;
-    const keys = new Map();
+    const keys = new Map<string, { name: string; module: string }>();
     for (const [name, e] of Object.entries(map.components || {})) {
       if (e && e.figma && e.figma.key && e.code && e.code.module && e.status !== "deprecated") keys.set(e.figma.key, { name, module: e.code.module });
     }
@@ -491,7 +520,7 @@ function loadMapKeys(cwd) {
   return new Map();
 }
 
-function checkVerification(plan, cwd) {
+function checkVerification(plan: Plan, cwd: string): string[] {
   const v = plan.verification;
   if (!v || typeof v !== "object" || v.mode === undefined) {
     return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or {mode:\"static-only\", reason} if the project genuinely has no way to render"];
@@ -511,33 +540,40 @@ function checkVerification(plan, cwd) {
 }
 
 // Missing evidence worth having (a warning, never a block).
-function verificationWarnings(plan) {
+function verificationWarnings(plan: Plan): string[] {
   const v = plan.verification;
   if (!v || v.mode !== "rendered") return [];
-  const out = [];
+  const out: string[] = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
   if (!v.a11y) out.push("verification.a11y is missing — no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
   return out;
 }
 
+/** A verify report as locateReports() summarises it for the status computation. */
+export interface ReportRef {
+  rel: string; matchedBy: string; schema: string | null; verdict: string | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
+  exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
+  expectationChanged: boolean; expectationRel: string | null;
+}
+
 // Finding 156: the verification block contradicting itself in adjacent keys.
 const A11Y = /\b(a11y|axe|accessib)/i;
-function verificationContradictions(plan, reports) {
+function verificationContradictions(plan: Plan, reports: ReportRef[] | null | undefined): string[] {
   const v = plan.verification;
   if (!v || typeof v !== "object") return [];
-  const out = [];
+  const out: string[] = [];
   const notChecked = (v.coverage && Array.isArray(v.coverage.notChecked)) ? v.coverage.notChecked : [];
-  const what = (e) => String(e && typeof e === "object" ? e.what || "" : e || "");
+  const what = (e: string | { what?: string; why?: string } | null | undefined): string => String(e && typeof e === "object" ? e.what || "" : e || "");
   const rendered = (v.coverage && Array.isArray(v.coverage.rendered)) ? v.coverage.rendered.map((x) => String(x).trim().toLowerCase()) : [];
   if (v.a11y && typeof v.a11y === "object" && v.a11y.violations !== undefined) {
     const nc = notChecked.find((e) => A11Y.test(what(e)));
-    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
+    if (nc) out.push(`verification contradicts itself: \`a11y\` records ${JSON.stringify(v.a11y.violations)} violation(s) from ${JSON.stringify(v.a11y.tool || "an a11y scan")}, while \`coverage.notChecked\` says "${what(nc)}" was not checked${typeof nc === "object" && nc.why ? ` (${nc.why})` : ""} — keep the one that is true`);
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
     if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) — copy them (or the ones you judged real, with why) into the plan`);
-    for (const k of ["verifyScreenVerdict", "verdict"]) {
+    for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
       if (typeof s === "string" && /pass/i.test(s) && r.verdict !== "pass") out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
@@ -548,11 +584,11 @@ function verificationContradictions(plan, reports) {
 
 // Finding 196: a deviation is only reviewable when it says WHICH node, WHICH field, what was designed,
 // what was built, and why.
-const DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"];
-function deviationWarnings(plan) {
+const DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"] as const;
+function deviationWarnings(plan: Plan): string[] {
   if (plan.deviations === undefined) return [];
   if (!Array.isArray(plan.deviations)) return ["`deviations` must be an array of {nodeId, field, designed, built, reason}"];
-  const bad = [];
+  const bad: string[] = [];
   plan.deviations.forEach((d, i) => {
     const miss = DEVIATION_FIELDS.filter((k) => {
       if (k === "nodeId") return !(d && ((typeof d.nodeId === "string" && d.nodeId) || (Array.isArray(d.nodeIds) && d.nodeIds.length)));
@@ -563,10 +599,10 @@ function deviationWarnings(plan) {
   return bad.length ? [`${bad.length} deviation(s) are missing fields — each needs {nodeId, field, designed, built, reason} so a reviewer can check it against the export: ${bad.slice(0, 6).join("; ")}${bad.length > 6 ? `; +${bad.length - 6} more` : ""}`] : [];
 }
 
-// P3 #150/#151/#180: the header every other skill resolves a plan by. A warning — plan-skeleton.js
+// P3 #150/#151/#180: the header every other skill resolves a plan by. A warning — plan-skeleton.ts
 // writes it, so a plan without it was hand-written.
-function validatePlanHeader(plan) {
-  const missing = ["screenName", "nodeId", "route", "file"].filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
+function validatePlanHeader(plan: Plan): string[] {
+  const missing = (["screenName", "nodeId", "route", "file"] as const).filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
     `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (plan-skeleton.js writes the header; only the route is yours to fill)`,
@@ -578,16 +614,16 @@ function validatePlanHeader(plan) {
 // `--brand-600: #5b5fc7`, `brand600: "#5b5fc7"`, `val brand600 = Color(0xFF5B5FC7)`. The declared
 // name must be the TOKEN's — `color: #5b5fc7` inside a component declares a CSS property.
 const DECLARATION = /(^|[\s;{,(])(--[\w-]+|[\w$][\w$-]*)\s*[:=]\s*[^;,}\n]*$/;
-const slug = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const slug = (x: unknown): string => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 // Strip what differs between a CSS variable and the utility/token that uses it: the category prefix
 // (`--color-`, `bg-`, `text-`, `gap-`, `rounded-` …), the `figma-` namespace, and a `-<8 hex>` key suffix.
-function tokenCore(x) {
+function tokenCore(x: unknown): string {
   let s = String(x || "").toLowerCase().replace(/^--/, "").replace(/^var\(--|\)$/g, "");
   s = s.replace(/^(color|colors|spacing|space|radius|rounded|text|font|font-size|font-weight|leading|tracking|shadow|bg|border|fill|stroke|ring|outline|gap|gap-[xy]|p[xytrbl]?|m[xytrbl]?|w|h|size|inset|top|left|right|bottom)-/, "");
   s = s.replace(/^figma-/, "").replace(/-[0-9a-f]{8}$/, "");
   return slug(s);
 }
-function declaresToken(line, literal, codeToken) {
+function declaresToken(line: string, literal: string, codeToken: string): boolean {
   const at = line.indexOf(literal);
   if (at === -1) return false;
   const m = DECLARATION.exec(line.slice(0, at));
@@ -598,24 +634,28 @@ function declaresToken(line, literal, codeToken) {
   return declared === token || declared.includes(token) || token.includes(declared) || (!!dc && !!tc && (dc === tc || dc.includes(tc) || tc.includes(dc)));
 }
 
+/** checkPlan()'s optional pre-located inputs (the CLI locates each once and passes them through). */
+export interface CheckPlanOptions { export?: ExportHit | null; reports?: ReportRef[] }
+export interface CheckPlanResult { blocking: string[]; warnings: string[] }
+
 // Returns { blocking: [...], warnings: [...] }.
-function checkPlan({ plan, file }, cwd, opts) {
+function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOptions): CheckPlanResult {
   const o = opts || {};
-  const blocking = [], warnings = [];
+  const blocking: string[] = [], warnings: string[] = [];
   const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
   const absent = listed.filter((f) => !fs.existsSync(path.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty — list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} — fix the path(s) (relative to the project root) or remove entries for files that were not written`);
 
-  const byFile = listed.filter((rel) => fs.existsSync(path.join(cwd, rel)) && fs.statSync(path.join(cwd, rel)).isFile())
+  const byFile: FileText[] = listed.filter((rel) => fs.existsSync(path.join(cwd, rel)) && fs.statSync(path.join(cwd, rel)).isFile())
     .map((rel) => ({ rel, text: fs.readFileSync(path.join(cwd, rel), "utf8") }));
-  const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
+  const code: FileText[] = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
 
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== undefined).map((a) => String(a.value).toLowerCase()));
   const allowedFiles = (plan.allowedLiterals || []).filter((a) => a && a.reason && a.file).map((a) => String(a.file));
-  const isAllowed = (row, literal) => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
-  function definedOnlyInTokenSource(literal, codeToken) {
+  const isAllowed = (row: PlanTokenRow, literal: string): boolean => allowed.has(String(row.value).toLowerCase()) || allowed.has(String(literal).toLowerCase());
+  function definedOnlyInTokenSource(literal: string, codeToken: string): boolean {
     if (!literal) return false;
     let seen = false;
     for (const f of code) {
@@ -641,11 +681,11 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
 
   // Token IDENTITY: two DIFFERENT Figma tokens on one code token (finding 130 — right, and kept).
-  const byCodeToken = new Map();
+  const byCodeToken = new Map<string, Map<string, PlanTokenRow["value"]>>();
   for (const row of live) {
     if (!hasToken(row) || !row.figmaName) continue;
     const c = String(row.codeToken).trim();
-    const names = byCodeToken.get(c) || new Map();
+    const names = byCodeToken.get(c) || new Map<string, PlanTokenRow["value"]>();
     if (!names.has(row.figmaName)) names.set(row.figmaName, row.value);
     byCodeToken.set(c, names);
   }
@@ -658,14 +698,14 @@ function checkPlan({ plan, file }, cwd, opts) {
   // BLOCK 1: an unexplained colour literal. One message per LITERAL, however many plan rows resolve it
   // (finding 100 raised two problems for one comment).
   const colors = colorLiterals(source);
-  const colourHits = new Map();
+  const colourHits = new Map<string, { value: PlanTokenRow["value"]; tokens: string[] }>();
   for (const row of live) {
     if (!hasToken(row) || String(row.kind).toLowerCase() !== "color") continue;
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
     if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
       if (!colourHits.has(lit)) colourHits.set(lit, { value: row.value, tokens: [] });
-      const e = colourHits.get(lit);
+      const e = colourHits.get(lit)!;
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
@@ -680,14 +720,14 @@ function checkPlan({ plan, file }, cwd, opts) {
   const dims = arbitraryPx(source);
   for (const row of live) {
     if (!hasToken(row) || String(row.kind).toLowerCase() === "color") continue;
-    const n = parseFloat(row.value);
+    const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
     const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
     if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' — use the token (or add it to allowedLiterals with a reason)`);
   }
 
   const mapped = loadMapKeys(cwd);
-  const seenModule = new Set();
+  const seenModule = new Set<string>();
   for (const row of Array.isArray(plan.components) ? plan.components : []) {
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
@@ -695,7 +735,7 @@ function checkPlan({ plan, file }, cwd, opts) {
       if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused?`);
     }
     if (verdict === "new" && row.key && mapped.has(row.key)) {
-      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mapped.get(row.key).module} in codeconnect.local.json — reuse the existing component`);
+      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mapped.get(row.key)!.module} in codeconnect.local.json — reuse the existing component`);
     }
     if (verdict === "missing") warnings.push(`component '${row.name}' has no recorded reuse/new decision`);
   }
@@ -728,12 +768,12 @@ function checkPlan({ plan, file }, cwd, opts) {
 // unanchored node). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
 // plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
 // be indistinguishable, on disk, from one that never read it.
-function auditGateWarnings(plan, cwd, exp) {
-  let auditGateStatus;
-  try { ({ auditGateStatus } = require("./audit-gate.js")); } catch { return []; }
+// (audit-gate.ts is a static import now; the CJS version's lazy require — and its "could not load →
+// no warnings" fallback — is gone, since a static import cannot fail at this point.)
+function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | undefined): string[] {
   const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
   const screenName = plan.screenName || (exp && exp.layerName) || null;
-  let g;
+  let g: ReturnType<typeof auditGateStatus>;
   try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
   if (!g || !g.auditFile || !g.blockers || !g.blockers.length) return [];
   const gate = plan.auditGate;
@@ -756,7 +796,7 @@ function auditGateWarnings(plan, cwd, exp) {
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|fail|incomplete,
 // `headline`, `inputs.expectationSha256` — the expectation it was computed against).
-function locateReports(plan, planFile, cwd, exp) {
+function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
   const dir = path.join(cwd, "design", "verify");
   if (!fs.existsSync(dir)) return [];
   const e = exp === undefined ? locateExport(plan, planFile, cwd) : exp;
@@ -765,22 +805,22 @@ function locateReports(plan, planFile, cwd, exp) {
     e ? path.basename(e.file).replace(/\.json$/i, "") : null,
     planFile ? path.basename(planFile, ".json") : null,
     plan.screen ? String(plan.screen) : null,
-  ].filter(Boolean));
+  ].filter((s): s is string => !!s));
   const nodeId = plan.nodeId || (e && e.nodeId) || idFromStem(plan.screen) || (planFile ? idFromStem(path.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
-  const out = [];
+  const out: ReportRef[] = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path.join(dir, f);
-    const r = readJsonOr(abs, null);
+    const r = readJsonOr<VerifyReport | null>(abs, null);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
-    let by = null;
+    let by: string | null = null;
     const expFile = path.join(dir, stem + ".expected.json");
-    const expFrame = () => { const x = readJsonOr(expFile, null); return x && x.frame && x.frame.nodeId; };
+    const expFrame = (): string | null | undefined => { const x = readJsonOr<VerifyExpectation | null>(expFile, null); return x && x.frame && x.frame.nodeId; };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
-    else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
+    else if (layer && e!.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
@@ -798,19 +838,21 @@ function locateReports(plan, planFile, cwd, exp) {
 
 // ================================================================ computed status
 
+interface Verdict { status: PlanComputedStatus; reasons: string[] }
+
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
 // failed | unverified | static-only | verified. Never empty reasons.
-function reportVerdict(plan, cwd, exp, reports) {
+function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[]): Verdict {
   const mode = plan.verification && plan.verification.mode;
   if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${plan.verification.reason || "no reason recorded"})`] };
+    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${plan.verification!.reason || "no reason recorded"})`] };
     return { status: "unverified", reasons: ["no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"] };
   }
   // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"
   // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
   if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
-  const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
   const failing = reports.filter((r) => r.verdict === "fail");
   if (failing.length) return { status: "failed", reasons: failing.map(said) };
   // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
@@ -837,6 +879,10 @@ function reportVerdict(plan, cwd, exp, reports) {
   return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
 }
 
+/** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
+export interface StatusOptions { cwd?: string; planFile?: string; export?: ExportHit | null; reports?: ReportRef[] }
+export interface StatusResult { status: PlanComputedStatus; reasons: string[]; reports: ReportRef[] }
+
 // The computed status. PRECEDENCE (first match wins; also in --status --help):
 //   1. abandoned / awaiting-user  — set by a person; nothing is evaluated
 //   2. failed    — a verify report (schema @2) for this screen says fail: a measured defect is never
@@ -848,10 +894,10 @@ function reportVerdict(plan, cwd, exp, reports) {
 // `reasons` is never empty for a non-verified status: it always carries the hook's state AND what the
 // report(s) say (a report too old to trust is named with its schema), plus a note when a stored
 // "verified"/"static-only" was ignored.
-function computeStatus(plan, opts) {
+function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   const o = opts || {};
   const cwd = o.cwd || (o.planFile ? rootOfPlan(o.planFile) : process.cwd());
-  const notes = [];
+  const notes: string[] = [];
   const stored = String((plan && plan.status) || "").trim().toLowerCase();
   if (COMPUTED_STORED.has(stored)) notes.push(`the stored "status": "${plan.status}" was not confirmed by the current hook and is ignored — status is computed, never stored`);
   const life = lifecycleOf(plan);
@@ -860,7 +906,7 @@ function computeStatus(plan, opts) {
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
   const rv = reportVerdict(plan, cwd, exp, reports);
   const hook = plan.verification && plan.verification.hook;
-  let hookState = null, hookWhy = [];
+  let hookState: PlanComputedStatus | null = null, hookWhy: string[] = [];
   if (!hook || !hook.result) { hookState = "pending"; hookWhy = ["the build-screen Stop hook has not checked this plan"]; }
   else if (hook.planHash && hook.planHash !== planHash(plan)) { hookState = "pending"; hookWhy = ["the plan changed after the hook's last check"]; }
   else if (hook.result !== "pass") { hookState = "blocked"; hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]; }
@@ -881,12 +927,13 @@ function computeStatus(plan, opts) {
 // when the payload names one, else the session's) — on positive evidence only: a transcript that
 // mentions NO plan file at all keeps every open plan. A transcript that mentions only plans the hook
 // already closed narrows to nothing: agent A, finished, is not blocked on agent B's half-built plan.
-function ownPlans(open, input, all) {
+function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null | undefined): PlanFile[] {
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
-  if (!file) return open;
-  let text;
+  // (a non-string path would have thrown in readFileSync and been caught the same way)
+  if (!file || typeof file !== "string") return open;
+  let text: string;
   try { text = fs.readFileSync(file, "utf8"); } catch { return open; }
-  const mentioned = (p) => { const base = path.basename(p.file); return text.includes("plan/" + base) || text.includes("plan\\\\" + base); };
+  const mentioned = (p: PlanFile): boolean => { const base = path.basename(p.file); return text.includes("plan/" + base) || text.includes("plan\\\\" + base); };
   const known = all && all.length ? all : open;
   if (!known.some(mentioned)) return open;
   return open.filter(mentioned);
@@ -916,7 +963,9 @@ const USAGE = [
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}.",
 ].join("\n");
 
-function checkAndRecord(p, cwd, input) {
+interface RecordResult { blocking: string[]; warnings: string[]; cleared: PlanStoredStatus | null | undefined; status: StatusResult }
+
+function checkAndRecord(p: PlanFile, cwd: string, input: HookPayload): RecordResult {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
   setPhase(`checking ${path.basename(p.file)}`);
@@ -936,7 +985,7 @@ function checkAndRecord(p, cwd, input) {
   };
   // The plan's mtime is the staleness clock — it measures the BUILDER's last edit. The hook's own
   // write must not reset it, or a blocked leftover plan would stay "fresh" (and nag) forever.
-  let times = null;
+  let times: [Date, Date] | null = null;
   try { const s = fs.statSync(p.file); times = [s.atime, s.mtime]; } catch { /* new file */ }
   fs.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
   if (times) try { fs.utimesSync(p.file, times[0], times[1]); } catch { /* ignore */ }
@@ -944,7 +993,7 @@ function checkAndRecord(p, cwd, input) {
   return { blocking, warnings, cleared, status: st };
 }
 
-async function main(argv) {
+async function main(argv: string[]): Promise<number> {
   const args = argv.slice();
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); return 0; }
   const statusMode = args.includes("--status");
@@ -955,8 +1004,8 @@ async function main(argv) {
 
   if (statusMode) {
     setPhase("computing plan status");
-    const plans = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))).filter(Boolean) : findPlans(process.cwd());
-    const show = (f) => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
+    const plans = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))).filter((p): p is PlanFile => !!p) : findPlans(process.cwd());
+    const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
     const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
@@ -964,12 +1013,13 @@ async function main(argv) {
     return 0;
   }
 
-  let input = {};
-  let targets;
+  let input: HookPayload = {};
+  let targets: PlanFile[] | undefined;
   if (planArgs.length) {
-    targets = planArgs.map((f) => readPlan(path.resolve(f)));
-    const bad = planArgs.filter((f, i) => !targets[i]);
+    const read = planArgs.map((f) => readPlan(path.resolve(f)));
+    const bad = planArgs.filter((f, i) => !read[i]);
     if (bad.length) { console.error(`verify-build: cannot read plan(s): ${bad.join(", ")}`); return 1; }
+    targets = read.filter((p): p is PlanFile => !!p);
   } else {
     setPhase("reading the hook payload on stdin");
     const r = await readHookInput();
@@ -978,7 +1028,7 @@ async function main(argv) {
     if (input.stop_hook_active) return 0; // avoid re-entrant loops on the same turn
   }
 
-  const all = [];
+  const all: Array<{ p: PlanFile; cwd: string }> = [];
   if (targets) {
     for (const p of targets) {
       const cwd = rootOfPlan(p.file);
@@ -987,7 +1037,8 @@ async function main(argv) {
       all.push({ p, cwd });
     }
   } else {
-    const cwd = input.cwd || process.cwd();
+    // (a hook payload's cwd is a string; anything else falls back to the process cwd)
+    const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     setPhase("finding open plans in design/plan/");
     const plans = findPlans(cwd);
     const open = plans.filter((p) => isOpen(p, cwd));
@@ -995,7 +1046,7 @@ async function main(argv) {
     for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
   }
 
-  const blockedOut = [];
+  const blockedOut: string[] = [];
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd, input);
     const name = path.basename(p.file);
@@ -1014,13 +1065,13 @@ async function main(argv) {
   return 0;
 }
 
-module.exports = {
+export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, hex6, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 
-if (require.main === module) {
+if (import.meta.main) {
   const watchdog = setTimeout(() => {
     console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s while ${phase} — nothing was blocked; re-run \`node verify-build.js <plan.json>\` to check the plan directly`);
     process.exit(1);
@@ -1029,5 +1080,5 @@ if (require.main === module) {
   // exitCode, not exit(): on macOS a pipe write is asynchronous, and exit() would cut a long --json
   // listing or the itemised block message short. stdin is paused+unref'd and the watchdog unref'd, so
   // nothing keeps the process alive once main() is done.
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => { console.error(`verify-build: ${e && e.stack || e}`); process.exitCode = 1; });
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => { console.error(`verify-build: ${(e instanceof Error && e.stack) || e}`); process.exitCode = 1; });
 }

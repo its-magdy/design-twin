@@ -1,4 +1,4 @@
-// component-match.js — which design-system component is this instance, when the KEYS cannot say?
+// component-match.ts — which design-system component is this instance, when the KEYS cannot say?
 //
 // A component's identity is its publish `key`, and every tool here resolves by key first. But
 // duplicating a Figma file re-mints every key in the copy (livetest-3 finding 226: `TeamSmart (Copy)`
@@ -18,18 +18,23 @@
 //     plain COMPONENT;
 //   * same-named candidates are ranked by that evidence, then by living on a shared page, then by
 //     catalog order; candidates with identical signatures are reported as harmless ties;
-//   * NOTHING here is ever auto-accepted. The result is a confirmation list: cross-check.js reports
-//     it (`catalog-rekeyed`), and map-bootstrap.js stubs only the entries a person marked confirmed.
+//   * NOTHING here is ever auto-accepted. The result is a confirmation list: cross-check.ts reports
+//     it (`catalog-rekeyed`), and map-bootstrap.ts stubs only the entries a person marked confirmed.
 //
 // The reference this was checked against is livetest-3's hand-written scripts-test/map-components.mjs:
 // same visible-instance walk, same name rule, same variant/prop evidence and tie-breaks.
+import type {
+  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchResult, MatchRow, ScreenDoc, VisibleInstance,
+} from "./types.ts";
 
 // Hidden layers are not built, so they are not mapped either (and a hidden subtree's instances are
 // skipped with it).
-function visibleInstances(doc, label) {
-  const out = [];
-  const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
-  const walk = (n) => {
+function visibleInstances(doc: ScreenDoc | null | undefined, label: string): VisibleInstance[] {
+  const out: VisibleInstance[] = [];
+  // `[doc as IrNode]`: the duck-type check just before it (`doc.id || doc.type`) is what says the
+  // document IS a bare node tree — the third shape the export writes (see types.ts ScreenDoc).
+  const roots: IrNode[] = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc as IrNode] : [];
+  const walk = (n: IrNode): void => {
     if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
@@ -53,10 +58,10 @@ function visibleInstances(doc, label) {
 
 // The export spells the variant either as a string ("Type=Primary, Status=Default") or, when the
 // instance carries per-prop overrides, as an object ({ Dashboard: "default" }).
-function parseVariant(s) {
-  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
+function parseVariant(s: unknown): Record<string, string> | null {
+  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s as Record<string, string>) : null;
   if (!s || typeof s !== "string" || !s.includes("=")) return null;
-  const out = {};
+  const out: Record<string, string> = {};
   for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
     const i = part.indexOf("=");
     if (i < 0) continue;
@@ -65,15 +70,17 @@ function parseVariant(s) {
   return Object.keys(out).length ? out : null;
 }
 
-const baseProp = (p) => String(p).split("#")[0];
+const baseProp = (p: string): string => String(p).split("#")[0];
 const SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
+
+interface Signature { verified: boolean; score: number; reasons: string[] }
 
 // Evidence that `cand` is the definition `inst` was made from. `verified` is the gate; `score` only
 // ranks candidates that share a name.
-function signature(inst, cand) {
-  const props = {};
+function signature(inst: VisibleInstance, cand: CatalogComponent): Signature {
+  const props: Record<string, ComponentPropDef> = {};
   for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
-  const reasons = [];
+  const reasons: string[] = [];
   let score = 40, verified = true;
   reasons.push("name matches catalog entry verbatim");
   const variant = inst.variant;
@@ -105,34 +112,38 @@ function signature(inst, cand) {
   return { verified, score, reasons };
 }
 
-const sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
+const sigOf = (c: CatalogComponent): string => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
+
+// A catalog entry with its position in the catalog (the last tie-break).
+type OrderedComponent = CatalogComponent & { _order: number };
+interface Scored { c: OrderedComponent; verified: boolean; score: number; reasons: string[]; failing: Signature | undefined }
 
 // instances: visibleInstances() output (any number of screens). catalog: components.local.json.
 // library: components.library.json (optional) — only used to say WHY a residual did not match.
 // Returns one row per distinct instance NAME (a screen using six Button variants proposes Button once),
 // in first-seen order.
-function matchByNameAndSignature(instances, catalog, library) {
+function matchByNameAndSignature(instances: readonly VisibleInstance[], catalog: ComponentsCatalog | null | undefined, library?: ComponentsCatalog | null): MatchResult {
   const comps = (catalog && catalog.components) || [];
-  const byName = new Map();
-  comps.forEach((c, i) => { if (!byName.has(c.name)) byName.set(c.name, []); byName.get(c.name).push(Object.assign({ _order: i }, c)); });
-  const catKeys = new Set(comps.map((c) => c.key).filter(Boolean));
-  const libKeys = new Set(((library && library.components) || []).map((c) => c.key).filter(Boolean));
+  const byName = new Map<string, OrderedComponent[]>();
+  comps.forEach((c, i) => { if (!byName.has(c.name)) byName.set(c.name, []); byName.get(c.name)!.push(Object.assign({ _order: i }, c)); });
+  const catKeys = new Set(comps.map((c) => c.key).filter((k): k is string => !!k));
+  const libKeys = new Set(((library && library.components) || []).map((c) => c.key).filter((k): k is string => !!k));
   const libNames = new Set(((library && library.components) || []).map((c) => c.name));
 
-  const groups = new Map();
+  const groups = new Map<string, VisibleInstance[]>();
   for (const inst of instances) {
     if (!groups.has(inst.name)) groups.set(inst.name, []);
-    groups.get(inst.name).push(inst);
+    groups.get(inst.name)!.push(inst);
   }
-  const rows = [];
+  const rows: MatchRow[] = [];
   for (const [name, list] of groups) {
-    const byKey = list.some((i) => catKeys.has(i.key) || catKeys.has(i.setKey));
-    const row = {
+    const byKey = list.some((i) => catKeys.has(i.key ?? "") || catKeys.has(i.setKey ?? ""));
+    const row: MatchRow = {
       name,
       instances: list.length,
       nodeIds: list.map((i) => i.nodeId),
       screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
-      instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter(Boolean))],
+      instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k): k is string => !!k))],
       remote: list.every((i) => i.remote),
       byKey,
       match: null,
@@ -141,7 +152,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     };
     const cands = byName.get(name) || [];
     if (!cands.length) {
-      const inLibrary = list.some((i) => libKeys.has(i.key) || libKeys.has(i.setKey));
+      const inLibrary = list.some((i) => libKeys.has(i.key ?? "") || libKeys.has(i.setKey ?? ""));
       row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
       row.reasons.push(inLibrary
         ? "its key IS in components.library.json — a third-party library both files consume, not the design system's own component"
@@ -153,10 +164,10 @@ function matchByNameAndSignature(instances, catalog, library) {
     }
     // Every instance of the name must agree with the winner — one mismatching variant is enough to
     // refuse the proposal, since a mapping is per component, not per instance.
-    const scored = cands.map((c) => {
+    const scored: Scored[] = cands.map((c) => {
       const per = list.map((i) => signature(i, c));
       return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
-    }).sort((a, b) => (b.verified - a.verified) || (b.score - a.score) || (a.c._order - b.c._order));
+    }).sort((a, b) => (Number(b.verified) - Number(a.verified)) || (b.score - a.score) || (a.c._order - b.c._order));
     const best = scored[0];
     if (!best.verified) {
       row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` +
@@ -182,7 +193,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s): MatchAlternative => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog — re-keyed)"));
     rows.push(row);
   }
@@ -207,10 +218,10 @@ function matchByNameAndSignature(instances, catalog, library) {
 // (almost) nothing resolves by key, yet most names that DO exist in the catalog agree on signature.
 const REKEY_MIN_PROPOSALS = 3;
 const REKEY_MIN_SHARE = 0.5;
-function isRekeyed(result) {
+function isRekeyed(result: MatchResult): boolean {
   const s = result.summary;
   return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS &&
     s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
 }
 
-module.exports = { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
+export { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };

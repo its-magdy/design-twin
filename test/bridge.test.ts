@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 // "ws" has no types of its own; see test/ws.d.ts for the ambient shim.
 import WebSocket from "ws";
 import { ok, report } from "./assert.ts";
+import type { Baseline } from "../design-to-code/design-diff.ts";
 
 // A fixed token so verifyClient's comparisons are deterministic. server-core reads this at require
 // time, so it must be set BEFORE the module is loaded.
@@ -1266,8 +1267,8 @@ async function disconnectErr(code: number, reason: string) {
     ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
     ok("[lib-layout] tokens.json exists", fs.existsSync(path.join(base, "libraries", dirName, "tokens.json")));
     const tok = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "tokens.json"), "utf8"));
-    // The shape contract: a top-level `variables` array is what keeps design-to-code/catalog-input.js from
-    // rejecting this as the slim manifest, and what lets design-to-code/tokens.js run on it unchanged.
+    // The shape contract: a top-level `variables` array is what keeps design-to-code/catalog-input.ts from
+    // rejecting this as the slim manifest, and what lets design-to-code/tokens.ts run on it unchanged.
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
     ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
@@ -2660,7 +2661,7 @@ async function disconnectErr(code: number, reason: string) {
   // ---------------------------------------------------------------- P5: design-diff.js asset-hash tolerance (findings 25/222)
   console.log("\ndesign-diff.js — SVG re-export noise tolerance (findings 25/222), on the REAL arrow-down*.svg fixtures:");
   {
-    const diffMod = await import("../design-to-code/design-diff.js") as any;
+    const diffMod = await import("../design-to-code/design-diff.ts");
     const dirFix = path.join(import.meta.dirname, "fixtures", "livetest3", "arrow-down");
     const read = (f: string) => fs.readFileSync(path.join(dirFix, f), "utf8");
     // Same setup redrawnAssets() actually runs: ONE node, ONE asset path, on-disk bytes that change
@@ -2682,7 +2683,7 @@ async function disconnectErr(code: number, reason: string) {
       const prevAssetPath = path.join(tmp, "assets"); fs.mkdirSync(prevAssetPath);
       fs.writeFileSync(path.join(prevAssetPath, "arrow-down.svg"), content);
       const { hashes } = diffMod.assetHashes(path.join(tmp, "screen.json"), docFor());
-      return { kind: "snapshot", assets: hashes };
+      return { kind: "snapshot", assets: hashes } as unknown as Baseline; // ts-port: hand-built fixture
     };
     const now3ea6be = setup(read("arrow-down-3ea6be.svg"));
     // 3ea6be and ccfd6b are the SAME icon (finding 25's own example, ≤0.002px drift) — must NOT be

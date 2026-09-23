@@ -71,10 +71,10 @@ node test/resolve-screen.test.ts       # expect: 27/27 checks passed, exit 0 —
 node test/mcp-share.test.ts            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.ts            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js design-to-code/cross-check.js design-to-code/verify-screen.js design-to-code/component-match.js design-to-code/slice-sources.js design-to-code/plan-skeleton.js design-to-code/resolve-screen.js
+node --check design-to-code/tokens.ts design-to-code/map-validate.ts design-to-code/drift-lint.ts design-to-code/map-bootstrap.ts design-to-code/audit.ts design-to-code/catalog-input.ts design-to-code/verify-build.ts design-to-code/design-diff.ts design-to-code/cross-check.ts design-to-code/verify-screen.ts design-to-code/component-match.ts design-to-code/slice-sources.ts design-to-code/plan-skeleton.ts design-to-code/resolve-screen.ts
 ```
 
-`test/audit.test.ts` drives `design-to-code/audit.js` (the pre-build design audit behind the
+`test/audit.test.ts` drives `design-to-code/audit.ts` (the pre-build design audit behind the
 `audit-design` skill) over `test/fixtures/audit/flawed-login.json` — a login screen seeded with one of
 each flaw (drawn status bar, 32pt close button, #bbb text on white, fixed-size text, a missing font, a
 detached instance, off-grid spacing, a Button set with no pressed/disabled variants). Every seeded flaw
@@ -139,7 +139,7 @@ Lesson baked in: assert values, mutation-test, and adversarially re-review EACH 
 can introduce its own bugs (findings converged 28 → ~6 → 1 → ~0 real across the four rounds).
 
 When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.ts` with the new
-behavior. `design-to-code/map-validate.js` is the single source of truth for that shape — update its KEYS/PROP
+behavior. `design-to-code/map-validate.ts` is the single source of truth for that shape — update its KEYS/PROP
 tables and the prose in `design-to-code/README.md` together. If you add a token field, assert both the DTCG
 output and the CSS output.
 
@@ -273,7 +273,7 @@ style system), `components.local.json` / `components.library.json`, `hygiene.jso
   no node trees were exported for that set). A standalone `COMPONENT` (not a variant inside a set) gets
   the same treatment under `variantVisuals`, but its node tree is attached directly as `entry.node` and
   split out via `nodeFile` instead — there's no `variants[]` to hang it off of. `node
-  design-to-code/get-component.js <components.local.json> <key|id|name>` resolves one entry and follows its
+  design-to-code/get-component.ts <components.local.json> <key|id|name>` resolves one entry and follows its
   `variantsFile`/`nodeFile` to print the full detail.
 - `design-system/hygiene.json` → `hygiene[]` — design-system smells (ALL_SCOPES, semantic-holds-raw, broken alias, variant>30, unnamed/dupe)
 
@@ -306,7 +306,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       and `components.local.json` `components[]`. Every split file repeats the `exportedAt` stamp, so
       the tooling below is pointed at the part it actually consumes.
 
-### Tokens (`node design-to-code/tokens.js design/export/design-system/tokens.json ./out`)
+### Tokens (`node design-to-code/tokens.ts design/export/design-system/tokens.json ./out`)
 - [ ] Command prints `wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+M set files under tokens/) (N variables)` with N matching your variable count.
 - [ ] **References preserved** in `out/tokens.dtcg.json`: a semantic token's `$value` is a `"{group.token}"`
       string, NOT a flattened hex. (A flattened hex here = the themeability bug.)
@@ -319,15 +319,15 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 - [ ] **Never-silent**: any warning the CLI prints (`warn …`) is a REAL issue in your file (a dangling
       alias, a name collision, a token with no value) — investigate each; there should be none on a clean file.
 
-### Bootstrap → validate (`node design-to-code/map-bootstrap.js design/export/design-system/components.local.json --out design/codeconnect.local.json`)
+### Bootstrap → validate (`node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json`)
 - [ ] Every **published** component appears, keyed by its publish key; unpublished ones are keyed by node
       id with `figma.unstable: true`.
 - [ ] Each entry has `status: "needs-review"`, a `code.export` that reads like a component name, and props
       translated by type (VARIANT→`enum` with option values, BOOLEAN→`boolean`, TEXT→`string`/`children`,
       INSTANCE_SWAP→`instance` slot).
-- [ ] `node design-to-code/map-validate.js design/codeconnect.local.json` prints **`map valid`** (exit 0).
+- [ ] `node design-to-code/map-validate.ts design/codeconnect.local.json` prints **`map valid`** (exit 0).
 
-### Drift-lint — clean, then inject each drift class (`node design-to-code/drift-lint.js design/codeconnect.local.json design/export/design-system/components.local.json`)
+### Drift-lint — clean, then inject each drift class (`node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json`)
 - [ ] On the fresh bootstrap it reports **0 errors and 0 warnings** (`N/N components mapped`) — bootstrap
       covers every component and every variant option, so a clean file is clean. (No tool flags the
       `TODO: import path` placeholders — they're markers for you to fill in, then confirm the entry.)
@@ -341,7 +341,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       re-run `map-bootstrap … existing`, confirm your value survived).
 - [ ] **Staleness**: a fresh `components.local.json` (just exported) reports no freshness warning; hand-edit
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
-      `unknown-freshness` warning. Override the threshold with `node design-to-code/drift-lint.js map.json components.local.json --max-age <hours>`
+      `unknown-freshness` warning. Override the threshold with `node design-to-code/drift-lint.ts map.json components.local.json --max-age <hours>`
       (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/figma-pull.js` both surface the
       same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/export/design-system.json`
       manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
@@ -381,9 +381,9 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
 | `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
-| `node --check design-to-code/*.js` | Syntax check the tooling scripts |
+| `node --check design-to-code/*.ts` | Syntax check the tooling scripts |
 | `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
-| `node design-to-code/map-bootstrap.js design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
-| `node design-to-code/drift-lint.js design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
-| `node design-to-code/get-component.js design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
-| `node design-to-code/tokens.js <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → ONLY theme.css; `--native <p>` → ONLY a native token file; pass `--also-generic` to also write the generic set alongside a target) |
+| `node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
+| `node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
+| `node design-to-code/get-component.ts design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |
+| `node design-to-code/tokens.ts <tokens.json\|variables.json> ./out` | Emit tokens.dtcg.json + tokens.css (`--web tailwind` → ONLY theme.css; `--native <p>` → ONLY a native token file; pass `--also-generic` to also write the generic set alongside a target) |

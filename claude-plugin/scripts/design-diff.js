@@ -1,17 +1,45 @@
 #!/usr/bin/env node
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var __commonJS = (cb, mod) => function __require2() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   } catch (e) {
     throw mod = 0, e;
   }
 };
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 
 // bridge/svg-normalize.js
 var require_svg_normalize = __commonJS({
-  "bridge/svg-normalize.js"(exports2, module2) {
+  "bridge/svg-normalize.js"(exports, module) {
     "use strict";
     var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
     function normalizeSvgText(svg) {
@@ -25,13 +53,13 @@ var require_svg_normalize = __commonJS({
     function isSvgName(fileName) {
       return /\.svg$/i.test(String(fileName || ""));
     }
-    module2.exports = { normalizeSvgText, isSvgName };
+    module.exports = { normalizeSvgText, isSvgName };
   }
 });
 
 // bridge/asset-compare.js
 var require_asset_compare = __commonJS({
-  "bridge/asset-compare.js"(exports2, module2) {
+  "bridge/asset-compare.js"(exports, module) {
     "use strict";
     var { normalizeSvgText, isSvgName } = require_svg_normalize();
     function normalizeForCompare2(fileName, content) {
@@ -40,18 +68,18 @@ var require_asset_compare = __commonJS({
       return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
     }
     function sha1Hex2(buf) {
-      return require("crypto").createHash("sha1").update(buf).digest("hex");
+      return __require("crypto").createHash("sha1").update(buf).digest("hex");
     }
     function sameAsset(fileName, a, b) {
       return Buffer.compare(normalizeForCompare2(fileName, a), normalizeForCompare2(fileName, b)) === 0;
     }
-    module2.exports = { normalizeForCompare: normalizeForCompare2, sha1Hex: sha1Hex2, sameAsset };
+    module.exports = { normalizeForCompare: normalizeForCompare2, sha1Hex: sha1Hex2, sameAsset };
   }
 });
 
 // bridge/pages-layout.js
 var require_pages_layout = __commonJS({
-  "bridge/pages-layout.js"(exports2, module2) {
+  "bridge/pages-layout.js"(exports, module) {
     "use strict";
     function safe(id) {
       return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -202,13 +230,13 @@ var require_pages_layout = __commonJS({
       }
       return result;
     }
-    module2.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
+    module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
   }
 });
 
 // bridge/design-system-layout.js
 var require_design_system_layout = __commonJS({
-  "bridge/design-system-layout.js"(exports2, module2) {
+  "bridge/design-system-layout.js"(exports, module) {
     "use strict";
     var { safe } = require_pages_layout();
     var DIR = "design-system";
@@ -320,7 +348,7 @@ var require_design_system_layout = __commonJS({
       files.push({ path: MANIFEST, data: manifest });
       return { files, manifest, counts, dir: DIR };
     }
-    module2.exports = {
+    module.exports = {
       buildDesignSystemLayout,
       isLibraryEntry,
       DESIGN_SYSTEM_DIR: DIR,
@@ -340,49 +368,40 @@ var require_design_system_layout = __commonJS({
   }
 });
 
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest2(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest2(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs2 = require("fs");
-      let raw;
-      try {
-        raw = fs2.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest: isManifest2, readJsonFile, NO_DESIGN_SYSTEM_HINT };
-  }
-});
+// design-to-code/design-diff.ts
+import fs2 from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 
-// design-to-code/design-diff.js
-var fs = require("fs");
-var path = require("path");
-var { execFileSync } = require("child_process");
+// design-to-code/catalog-input.ts
+import fs from "node:fs";
+function readJsonFile(file, what, hint) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+       ${hint}` : ""));
+    process.exit(2);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    process.exit(2);
+  }
+}
+
+// design-to-code/design-diff.ts
+var import_asset_compare = __toESM(require_asset_compare(), 1);
+var import_design_system_layout = __toESM(require_design_system_layout(), 1);
+function bag(o) {
+  const u = o;
+  return u;
+}
 var CATEGORY = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
   typography: ["font", "textTokens", "missingFont"],
@@ -433,8 +452,8 @@ function leaves(before, after, at, out = []) {
     out.push({ at, before, after });
     return out;
   }
-  const keys = Array.isArray(before) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])];
-  for (const k of keys) leaves(before[k], after[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
+  const keys = Array.isArray(before) && Array.isArray(after) ? Array.from({ length: Math.max(before.length, after.length) }, (_, i) => i) : [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])];
+  for (const k of keys) leaves(bag(before)[k], bag(after)[k], typeof k === "number" ? `${at}[${k}]` : `${at}.${k}`, out);
   return out;
 }
 function fieldDiffs(key, before, after, category) {
@@ -464,14 +483,15 @@ var describe = (e) => ({ id: String(e.node.id), name: e.node.name, type: e.node.
 function nodeFields(before, after) {
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (IGNORED.has(key) || same(before[key], after[key])) continue;
-    fields.push(...fieldDiffs(key, before[key], after[key], CATEGORY_OF.get(key) || "other"));
+    if (IGNORED.has(key) || same(bag(before)[key], bag(after)[key])) continue;
+    fields.push(...fieldDiffs(key, bag(before)[key], bag(after)[key], CATEGORY_OF.get(key) || "other"));
   }
   const fixedW = !after.widthMode && !before.widthMode, fixedH = !after.heightMode && !before.heightMode;
   const b = before.box || {}, a = after.box || {};
   if (fixedW && b.w !== a.w || fixedH && b.h !== a.h) fields.push({ field: "size", category: "layout", before: `${b.w}\xD7${b.h}`, after: `${a.w}\xD7${a.h}` });
   return fields;
 }
+var truncatedOf = (m) => m && m.truncated;
 function diffScreens(oldDoc, newDoc, opts = {}) {
   const redrawn = opts.redrawn || /* @__PURE__ */ new Set();
   const A = index(oldDoc), B = index(newDoc);
@@ -483,7 +503,10 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
     if (a && !same(a.node.mainComponent, b.node.mainComponent)) swapped.set(id, { gone: 0, came: 0 });
   }
   const underSwap = (idx, e) => {
-    for (let p = e.parentId; p !== null && p !== void 0; p = (idx.get(p) || {}).parentId) if (swapped.has(p)) return swapped.get(p);
+    for (let p = e.parentId; p !== null && p !== void 0; p = idx.get(p)?.parentId) {
+      const sw = swapped.get(p);
+      if (sw) return sw;
+    }
     return null;
   };
   for (const [id, e] of B) if (!A.has(id)) {
@@ -511,10 +534,10 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   }
   const document = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(oldDoc), ...Object.keys(newDoc)])) {
-    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, oldDoc[key], newDoc[key], "document"));
+    if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, bag(oldDoc)[key], bag(newDoc)[key], "document"));
   }
   const warnings = [];
-  const trunc = newDoc.manifest && newDoc.manifest.truncated;
+  const trunc = truncatedOf(newDoc.manifest);
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) \u2014 anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
   return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
 }
@@ -555,7 +578,8 @@ function diffTokens(oldDoc, newDoc) {
   const removed = [...A].filter(([k]) => !pairedA.has(k)).map(([, v]) => label(v));
   const changed = [];
   for (const [k, b] of B) {
-    const a = pairs.has(k) ? A.get(pairs.get(k)) : null;
+    const pk = pairs.get(k);
+    const a = pk !== void 0 ? A.get(pk) : null;
     if (!a) continue;
     const modes = [.../* @__PURE__ */ new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
     if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
@@ -565,7 +589,7 @@ function diffTokens(oldDoc, newDoc) {
   const colLabel = (c) => collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
   const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
-  for (const id of /* @__PURE__ */ new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, (CA.get(id) || {}).v, (CB.get(id) || {}).v, "collection"));
+  for (const id of /* @__PURE__ */ new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 function diffCatalog(oldDoc, newDoc) {
@@ -577,7 +601,7 @@ function diffCatalog(oldDoc, newDoc) {
     const a = A.get(k);
     if (!a) continue;
     const fields = [];
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "component"));
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!CATALOG_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "component"));
     if (fields.length) changed.push({ ...brief1(b), fields });
   }
   return { kind: "catalog", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -598,7 +622,7 @@ function diffStyles(oldDoc, newDoc) {
     const a = A.get(k);
     if (!a) continue;
     const fields = [];
-    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "style"));
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, bag(a)[key], bag(b)[key], "style"));
     if (fields.length) changed.push({ ...brief2(b), fields });
   }
   return { kind: "styles", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
@@ -614,16 +638,16 @@ function diffManifest(oldDoc, newDoc) {
   const fields = [];
   for (const key of /* @__PURE__ */ new Set([...Object.keys(oldDoc || {}), ...Object.keys(newDoc || {})])) {
     if (MANIFEST_IGNORED.has(key)) continue;
-    fields.push(...fieldDiffs(key, (oldDoc || {})[key], (newDoc || {})[key], "manifest"));
+    fields.push(...fieldDiffs(key, bag(oldDoc || {})[key], bag(newDoc || {})[key], "manifest"));
   }
   return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
 }
-var isTokens = (doc) => Array.isArray(doc && doc.variables);
-var isCatalog = (doc) => Array.isArray(doc && doc.components);
-var isManifest = (doc) => !!doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts) && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
-var isStyles = (doc) => Array.isArray(doc && doc.styles);
-var isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
-var isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || doc.tree && typeof doc.tree === "object");
+var isTokens = (doc) => !!doc && typeof doc === "object" && "variables" in doc && Array.isArray(doc.variables);
+var isCatalog = (doc) => !!doc && typeof doc === "object" && "components" in doc && Array.isArray(doc.components);
+var isManifest = (doc) => !!doc && typeof doc === "object" && "counts" in doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts) && "files" in doc && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
+var isStyles = (doc) => !!doc && typeof doc === "object" && "styles" in doc && Array.isArray(doc.styles);
+var isHygiene = (doc) => !!doc && typeof doc === "object" && "hygiene" in doc && Array.isArray(doc.hygiene);
+var isScreen = (doc) => !!doc && typeof doc === "object" && ("nodes" in doc && Array.isArray(doc.nodes) || "tree" in doc && !!doc.tree && typeof doc.tree === "object");
 function diffDocs(oldDoc, newDoc, opts) {
   if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
   if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
@@ -683,9 +707,8 @@ function snapshotPath(file, cwd = process.cwd()) {
   const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
   return path.join(cwd, "design", ".sync", flat);
 }
-var { normalizeForCompare, sha1Hex } = require_asset_compare();
 function hashAssetBytes(fileName, buf) {
-  return sha1Hex(normalizeForCompare(fileName, buf));
+  return (0, import_asset_compare.sha1Hex)((0, import_asset_compare.normalizeForCompare)(fileName, buf));
 }
 function assetPaths(doc) {
   const out = /* @__PURE__ */ new Set();
@@ -699,14 +722,14 @@ function assetPaths(doc) {
 }
 function assetRoot(file, assets) {
   let dir = path.dirname(path.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs.existsSync(path.join(dir, a)))) return dir;
+  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs2.existsSync(path.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs2.readFileSync(path.join(root, a)));
     } catch {
     }
   }
@@ -729,25 +752,25 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   return out;
 }
 function previous(file, against, cwd = process.cwd(), current = null) {
-  if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
+  if (against) return { doc: JSON.parse(fs2.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs.existsSync(snap)) {
+  if (fs2.existsSync(snap)) {
     let assets = null;
     try {
-      assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8"));
+      assets = JSON.parse(fs2.readFileSync(snap + ".assets.json", "utf8"));
     } catch {
     }
-    found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
+    found.push({ doc: JSON.parse(fs2.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs.existsSync(snap + ".prev")) {
+  if (fs2.existsSync(snap + ".prev")) {
     let assets = null;
     try {
-      assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8"));
+      assets = JSON.parse(fs2.readFileSync(snap + ".assets.json.prev", "utf8"));
     } catch {
     }
     try {
-      found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+      found.push({ doc: JSON.parse(fs2.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
     } catch {
     }
   }
@@ -759,10 +782,10 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   }
   if (!found.length) return null;
   const at = (d) => {
-    if (!d) return null;
-    if (typeof d.exportedAt === "string") return d.exportedAt;
-    if (Array.isArray(d._slices) && d._slices.length) {
-      const times = d._slices.map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+    if (!d || typeof d !== "object") return null;
+    if ("exportedAt" in d && typeof d.exportedAt === "string") return d.exportedAt;
+    if ("_slices" in d && Array.isArray(d._slices) && d._slices.length) {
+      const times = d._slices.map((s) => s && typeof s === "object" && "at" in s && typeof s.at === "string" ? s.at : null).filter((t) => !!t);
       if (times.length) return times.reduce((mx, t) => t > mx ? t : mx);
     }
     return null;
@@ -775,7 +798,7 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} \u2014 used the newer one, so changes already applied are not listed again.`);
   return { ...useful[0], notes };
 }
-var { DESIGN_SYSTEM_FILES } = require_design_system_layout();
+var { DESIGN_SYSTEM_FILES } = import_design_system_layout.default;
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
   const abs = path.resolve(f);
@@ -795,14 +818,14 @@ function siblingFilesOf(f) {
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
       const p = path.join(dir, m + suf);
-      if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
+      if (fs2.existsSync(p)) out.push(path.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
   const pagesDir = path.dirname(pageDir);
   if (path.basename(pagesDir) === "pages") {
     const idx = path.join(pagesDir, "index.json");
-    if (fs.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+    if (fs2.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -829,42 +852,42 @@ ${USAGE}`);
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
     for (const f of files) {
-      if (!fs.existsSync(f)) {
+      if (!fs2.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         continue;
       }
       const dest = snapshotPath(f);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs2.mkdirSync(path.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs.existsSync(dest)) {
+      if (fs2.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs2.readFileSync(dest), fs2.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs.existsSync(dest) && !identical && !force) {
+      if (fs2.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
-      if (fs.existsSync(dest) && !identical && force) {
+      if (fs2.existsSync(dest) && !identical && force) {
         try {
-          fs.copyFileSync(dest, dest + ".prev");
+          fs2.copyFileSync(dest, dest + ".prev");
         } catch {
         }
         try {
-          if (fs.existsSync(dest + ".assets.json")) fs.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (fs2.existsSync(dest + ".assets.json")) fs2.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
         } catch {
         }
       }
-      if (!identical) fs.copyFileSync(f, dest);
+      if (!identical) fs2.copyFileSync(f, dest);
       let n = 0;
       try {
-        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
+        const parsed = JSON.parse(fs2.readFileSync(f, "utf8"));
         if (isScreen(parsed)) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs2.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
@@ -887,7 +910,6 @@ ${USAGE}`);
     console.error(USAGE);
     process.exit(2);
   }
-  const { readJsonFile } = require_catalog_input();
   const current = readJsonFile(file, "export");
   const prev = previous(file, against, process.cwd(), current);
   if (!prev) {
@@ -899,17 +921,31 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   try {
     diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : /* @__PURE__ */ new Set() });
   } catch (e) {
-    console.error(`design-diff: ${file}: ${e.message}`);
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`design-diff: ${file}: ${message}`);
     process.exit(2);
   }
   diff.warnings = [...prev.notes, ...diff.warnings || []];
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-    fs.writeFileSync(out, text);
+    fs2.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs2.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
 }
-if (require.main === module) main(process.argv.slice(2));
-module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+if (import.meta.main) main(process.argv.slice(2));
+export {
+  assetHashes,
+  diffCatalog,
+  diffDocs,
+  diffHygiene,
+  diffManifest,
+  diffScreens,
+  diffStyles,
+  diffTokens,
+  markdown,
+  previous,
+  redrawnAssets,
+  snapshotPath
+};

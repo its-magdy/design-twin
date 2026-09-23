@@ -1,134 +1,95 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+
+// design-to-code/verify-screen.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+import crypto2 from "node:crypto";
+
+// design-to-code/hidden.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+function walkWithHidden(root, fn, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path3, parent, depth) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path3 ? path3 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+  })(root, false, root ? pathOf(root, 0) : "", null, 0);
+}
+
+// design-to-code/content-hash.ts
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
+var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+function stripPullTimes(v, parentKey) {
+  if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+  if (!v || typeof v !== "object") return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (k === "exportedAt") continue;
+    if (k === "at" && parentKey === "_slices") continue;
+    out[k] = stripPullTimes(x, k);
+  }
+  return out;
+}
+function exportContentSha256(docs) {
+  const list = Array.isArray(docs) ? docs : [docs];
+  return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+}
+function fileHashes(files, cwd) {
+  const out = {};
+  for (const rel of Array.isArray(files) ? files.map(String) : []) {
+    try {
+      out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
+    } catch {
+      out[rel] = null;
+    }
+  }
+  return out;
+}
+function gitHead(cwd) {
   try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    const h = r.status === 0 && String(r.stdout || "").trim();
+    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+// design-to-code/catalog-input.ts
+import fs2 from "node:fs";
+function readJsonFile(file, what, hint) {
+  let raw;
+  try {
+    raw = fs2.readFileSync(file, "utf8");
   } catch (e) {
-    throw mod = 0, e;
-  }
-};
-
-// design-to-code/hidden.js
-var require_hidden = __commonJS({
-  "design-to-code/hidden.js"(exports2, module2) {
-    var hiddenSelf = (node) => !!(node && typeof node === "object" && node.hidden);
-    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-    function walkWithHidden2(root, fn, opts) {
-      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-      (function go(node, parentHidden, path2, parent, depth) {
-        if (!node || typeof node !== "object") return;
-        const hidden = isHidden(node, parentHidden);
-        fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
-        const kids = Array.isArray(node.children) ? node.children : [];
-        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
-      })(root, false, root && pathOf(root, 0), null, 0);
-    }
-    function hiddenIds(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
-        if (c.hidden && n.id) out.push(n.id);
-      });
-      return out;
-    }
-    function hiddenRoots(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
-        if (c.hidden && !c.parentHidden) out.push(n);
-      });
-      return out;
-    }
-    module2.exports = { hiddenSelf, isHidden, walkWithHidden: walkWithHidden2, hiddenIds, hiddenRoots };
-  }
-});
-
-// design-to-code/content-hash.js
-var require_content_hash = __commonJS({
-  "design-to-code/content-hash.js"(exports2, module2) {
-    var fs2 = require("fs");
-    var path2 = require("path");
-    var crypto = require("crypto");
-    var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
-    function stripPullTimes(v, parentKey) {
-      if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
-      if (!v || typeof v !== "object") return v;
-      const out = {};
-      for (const [k, x] of Object.entries(v)) {
-        if (k === "exportedAt") continue;
-        if (k === "at" && parentKey === "_slices") continue;
-        out[k] = stripPullTimes(x, k);
-      }
-      return out;
-    }
-    function exportContentSha2562(docs) {
-      const list = Array.isArray(docs) ? docs : [docs];
-      return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
-    }
-    function fileHashes2(files, cwd) {
-      const out = {};
-      for (const rel of Array.isArray(files) ? files.map(String) : []) {
-        try {
-          out[rel] = sha256(fs2.readFileSync(path2.join(cwd, rel))).slice(0, 16);
-        } catch {
-          out[rel] = null;
-        }
-      }
-      return out;
-    }
-    function gitHead2(cwd) {
-      try {
-        const r = require("child_process").spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
-        const h = r.status === 0 && String(r.stdout || "").trim();
-        return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
-      } catch {
-        return null;
-      }
-    }
-    module2.exports = { stripPullTimes, exportContentSha256: exportContentSha2562, fileHashes: fileHashes2, gitHead: gitHead2 };
-  }
-});
-
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
-       Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
-       Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs2 = require("fs");
-      let raw;
-      try {
-        raw = fs2.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    process.exit(2);
   }
-});
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    process.exit(2);
+  }
+}
 
-// design-to-code/verify-screen.js
-var { walkWithHidden } = require_hidden();
-var { exportContentSha256, fileHashes, gitHead } = require_content_hash();
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/verify-screen.ts
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -204,12 +165,12 @@ function lineHeightPx(lh, fontSize) {
     if (s === "normal") return null;
     const n = parseFloat(s);
     if (Number.isNaN(n)) return null;
-    if (s.endsWith("%")) return fontSize ? n / 100 * fontSize : null;
+    if (s.endsWith("%")) return fontSize ? n / 100 * Number(fontSize) : null;
     if (s.endsWith("px")) return n;
-    return fontSize ? n * fontSize : null;
+    return fontSize ? n * Number(fontSize) : null;
   }
   if (typeof lh === "object") {
-    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? lh.value / 100 * fontSize : null;
+    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? Number(lh.value) / 100 * Number(fontSize) : null;
     if (lh.unit === "AUTO") return null;
     return typeof lh.value === "number" ? lh.value : null;
   }
@@ -224,7 +185,7 @@ function rootsOf(doc) {
   if (doc.id || doc.type) return [doc];
   return [];
 }
-var firstSolid = (fills) => (fills || []).find((f) => f && f.type === "solid" && f.visible !== false);
+var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var num = (v) => typeof v === "number" && Number.isFinite(v);
 var r2 = (v) => Math.round(v * 100) / 100;
 var STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
@@ -264,9 +225,13 @@ function framePosition(n, frame) {
   return null;
 }
 var inFlowChildren = (n) => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden && !c.absolute);
-var growsAlong = (c, dir) => c.grow === 1 || c.grow === true || (dir === "column" ? c.heightMode === "fill" : c.widthMode === "fill");
+var growsAlong = (c, dir) => {
+  const lc = c;
+  return lc.grow === 1 || lc.grow === true || (dir === "column" ? lc.heightMode === "fill" : lc.widthMode === "fill");
+};
+var PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
 function expectNode(n, ctxOrPath) {
-  const ctx = typeof ctxOrPath === "string" || ctxOrPath == null ? { path: ctxOrPath } : ctxOrPath;
+  const ctx = typeof ctxOrPath === "string" || ctxOrPath == null ? { path: ctxOrPath == null ? void 0 : ctxOrPath } : ctxOrPath;
   const spec = { nodeId: n.id, name: n.name, type: n.type, path: ctx.path };
   const notComparable = [];
   const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
@@ -279,8 +244,9 @@ function expectNode(n, ctxOrPath) {
     if (w != null) spec.fontWeight = w;
     const lh = lineHeightPx(n.font.lineHeight, n.font.size);
     if (lh != null) spec.lineHeight = lh;
-    if (n.font.letterSpacing && typeof n.font.letterSpacing.value === "number" && n.font.letterSpacing.unit !== "PERCENT") {
-      spec.letterSpacing = n.font.letterSpacing.value;
+    const ls = n.font.letterSpacing;
+    if (ls && typeof ls.value === "number" && ls.unit !== "PERCENT") {
+      spec.letterSpacing = ls.value;
     }
     if (n.font.color) spec.color = normColor(n.font.color);
   }
@@ -305,11 +271,21 @@ function expectNode(n, ctxOrPath) {
   if (st && typeof st === "object" && Array.isArray(st.colors) && st.colors.length) {
     spec.borderColor = normColor(st.colors[0]);
     if (typeof st.weight === "number") spec.borderWidth = st.weight;
-    else if (st.weights && typeof st.weights === "object") spec.borderWidths = ["top", "right", "bottom", "left"].map((k) => typeof st.weights[k] === "number" ? st.weights[k] : 0);
+    else if (st.weights && typeof st.weights === "object") {
+      const ws = st.weights;
+      spec.borderWidths = ["top", "right", "bottom", "left"].map((k) => {
+        const v = ws[k];
+        return typeof v === "number" ? v : 0;
+      });
+    }
   }
   if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
-    const c = ["tl", "tr", "br", "bl"].map((k) => num(n.radius[k]) ? n.radius[k] : 0);
+    const rc = n.radius;
+    const c = ["tl", "tr", "br", "bl"].map((k) => {
+      const v = rc[k];
+      return num(v) ? v : 0;
+    });
     if (c.every((v) => v === c[0])) spec.borderRadius = c[0];
     else spec.radiusCorners = { tl: c[0], tr: c[1], br: c[2], bl: c[3] };
   }
@@ -326,7 +302,7 @@ function expectNode(n, ctxOrPath) {
     }
     let pad = null;
     if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
-    else if (["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].some((k) => typeof L[k] === "number")) pad = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].map((k) => L[k]);
+    else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
     if (pad && pad.some((v) => typeof v === "number" && v !== 0)) spec.padding = pad.map((v) => typeof v === "number" ? v : 0);
   }
   if (n.box) {
@@ -366,7 +342,7 @@ function buildExpectation(docs) {
   const hidden = { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 };
   const frames = [];
   const seen = /* @__PURE__ */ new Set();
-  let screen = null, exportedAt = null, reference = null;
+  let screen = void 0, exportedAt = void 0, reference = null;
   for (const { doc, label } of docs) {
     if (!screen) screen = doc && doc.screen || label;
     if (!exportedAt) exportedAt = doc && doc.exportedAt;
@@ -383,14 +359,15 @@ function buildExpectation(docs) {
           if (n.id) hidden.ids.push(n.id);
           if (checkable(expectNode(n, { path: c.path }))) hidden.specsSkipped++;
           if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
+          const reactions2 = Array.isArray(n.reactions) ? n.reactions : [];
+          for (const r of reactions2) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
           return;
         }
         const inherited = c.parent ? stateOf.get(c.parent) : void 0;
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
         const spec = expectNode(n, { path: c.path, frame, inheritedState: inherited, frameId });
-        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy, from: n.name || n.id });
+        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
         notComparable.push(...spec.__notComparable);
         if (n.type === "INSTANCE" && n.mainComponent) {
@@ -403,9 +380,10 @@ function buildExpectation(docs) {
             props: n.props || void 0
           });
         }
-        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+        const reactions = Array.isArray(n.reactions) ? n.reactions : [];
+        for (const r of reactions) {
           const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-          const trigger = r.trigger && (r.trigger.type || r.trigger) || r.on || "on_click";
+          const trigger = r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger) || r.on || "on_click";
           for (const a of actions) {
             if (!a || !(a.type || a.navigation)) continue;
             interactions.push({
@@ -584,13 +562,14 @@ var CONTAINER_TAGS = /* @__PURE__ */ new Set(["th", "td", "tr", "button", "label
 var LEAF_TAGS = /* @__PURE__ */ new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 var CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
 var LEAF_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
-var isContainer = (got) => got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0);
+var isContainer = (got) => !!(got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0));
 var LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing (finding 198).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared."
 ];
+var SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 function compare(expectation, measured, opts) {
   opts = opts || {};
   measured = measured || {};
@@ -676,7 +655,7 @@ function compare(expectation, measured, opts) {
       measuredIn = state;
     }
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
-    const stateWhy = state && `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}`;
+    const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
     if (state && measuredIn === "rest" && zeroAtRest) {
       for (const f of FIELDS) if (spec[f.key] !== void 0) {
         tally(f.key, false);
@@ -688,10 +667,11 @@ function compare(expectation, measured, opts) {
     const container = isText && isContainer(got);
     const tb = got.textBox && typeof got.textBox === "object" ? got.textBox : null;
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
-    const onLeaf = CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase());
-    const leafWhy = onLeaf && `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container`;
+    const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
+    const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container` : "";
     for (const f of FIELDS) {
-      if (spec[f.key] === void 0) continue;
+      const want0 = spec[f.key];
+      if (want0 === void 0) continue;
       let val = got[f.key];
       let present = val !== void 0;
       if (isText && tb && (f.key === "x" || f.key === "width")) {
@@ -724,14 +704,14 @@ function compare(expectation, measured, opts) {
       }
       if (val === void 0) {
         if (f.optional) {
-          unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: spec[f.key], why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked" });
+          unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked" });
           continue;
         }
         gap(spec, f.label, "the probe did not report this property");
         continue;
       }
       fieldsChecked++;
-      let want = spec[f.key], have = val;
+      let want = want0, have = val;
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
         if (!c) {
@@ -740,8 +720,9 @@ function compare(expectation, measured, opts) {
           continue;
         }
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-        want = clampRadius(want, spec.width, spec.height);
-        const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => Math.abs(r - want) > Math.abs(a - want) ? r : a, clampRadius(c[0], W, H));
+        if (typeof want === "number") want = clampRadius(want, spec.width, spec.height);
+        const target = Number(want);
+        const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => Math.abs(r - target) > Math.abs(a - target) ? r : a, clampRadius(c[0], W, H));
         have = worst;
       }
       const bad = compareField(f, want, have);
@@ -750,13 +731,14 @@ function compare(expectation, measured, opts) {
           unit: f.unit,
           token: tokenFor(spec, f.key),
           measuredIn: measuredIn !== "rest" ? measuredIn : void 0,
-          matchedBy: matchedBy !== "id" ? matchedBy : void 0,
+          matchedBy: matchedBy !== "id" ? matchedBy || void 0 : void 0,
           note: f.key === "borderRadius" && spec.borderRadius !== want ? `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` : void 0
         });
       }
     }
     if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
     else if (spec.radiusCorners) {
+      const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
       if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
@@ -764,7 +746,7 @@ function compare(expectation, measured, opts) {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
         ["tl", "tr", "br", "bl"].forEach((k, i) => {
           fieldsChecked++;
-          const want = clampRadius(spec.radiusCorners[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
+          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
           const d = Math.abs(want - have);
           if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", token: tokenFor(spec, "radius." + k) });
         });
@@ -870,7 +852,7 @@ function compare(expectation, measured, opts) {
   }
   const componentsAbsent = [];
   for (const c of comps.filter((c2) => c2 && c2.present === false)) {
-    const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || v.nodeIds.includes(c.nodeId));
+    const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || c.nodeId !== void 0 && v.nodeIds.includes(c.nodeId));
     if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, detail: c.detail || c.note });
   }
   const allEvidence = [...Array.isArray(measured.interactions) ? measured.interactions : [], ...Array.isArray(opts.interactions) ? opts.interactions : []];
@@ -968,7 +950,7 @@ function compare(expectation, measured, opts) {
     why: reasons,
     coverage,
     summary: { high, medium, low: deltas.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length },
-    deltas: deltas.sort((a, b) => ({ high: 0, medium: 1, low: 2 })[a.severity] - { high: 0, medium: 1, low: 2 }[b.severity]),
+    deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
     untaggedInstanceSets,
     interactions,
@@ -1051,7 +1033,7 @@ function reportToMarkdown(r) {
   }
   if (r.notComparable.length || r.unverifiable.length) {
     L.push(`## Excluded by method (${r.notComparable.length + r.unverifiable.length})`, "", "*Stated so they are not mistaken for passes.*", "");
-    for (const n of [...r.unverifiable, ...r.notComparable].slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} (${n.field}${n.value !== void 0 ? ` ${fmt(n.value)}` : ""}) \u2014 ${n.why}`);
+    for (const n of [...r.unverifiable, ...r.notComparable].slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} (${n.field}${"value" in n && n.value !== void 0 ? ` ${fmt(n.value)}` : ""}) \u2014 ${n.why}`);
     if (r.notComparable.length + r.unverifiable.length > 40) L.push(`- \u2026and ${r.notComparable.length + r.unverifiable.length - 40} more`);
     L.push("");
   }
@@ -1069,30 +1051,35 @@ function reportToMarkdown(r) {
   return L.join("\n") + "\n";
 }
 var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
-var fs = require("fs");
-var path = require("path");
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs.existsSync(dir)) return null;
-  for (const f of fs.readdirSync(dir)) {
+  if (!nodeId || !fs3.existsSync(dir)) return null;
+  for (const f of fs3.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path.join(dir, f);
-    if (path.resolve(full) === path.resolve(ownTarget)) continue;
+    const full = path2.join(dir, f);
+    if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
     let doc;
     try {
-      doc = JSON.parse(fs.readFileSync(full, "utf8"));
+      doc = JSON.parse(fs3.readFileSync(full, "utf8"));
     } catch (e) {
       continue;
     }
-    if (doc && doc.frame && doc.frame.nodeId === nodeId) return full;
+    if (isJsonObject(doc) && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
-module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
-if (require.main === module) {
-  const fs2 = require("fs");
-  const path2 = require("path");
-  const crypto = require("crypto");
-  const { readJsonFile } = require_catalog_input();
+function isScreenDocLike(x) {
+  return isJsonObject(x);
+}
+function isExpectationLike(x) {
+  return isJsonObject(x);
+}
+function isMeasuredLike(x) {
+  return isJsonObject(x);
+}
+function isEvidenceList(x) {
+  return Array.isArray(x);
+}
+if (import.meta.main) {
   const argv = process.argv.slice(2);
   const take = (flag) => {
     const i = argv.indexOf(flag);
@@ -1107,7 +1094,7 @@ if (require.main === module) {
     argv.splice(i, 1);
     return true;
   };
-  const sha = (file) => crypto.createHash("sha256").update(fs2.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto2.createHash("sha256").update(fs3.readFileSync(file)).digest("hex");
   const USAGE = "usage:\n  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen> [--force]\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.\n      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n      directory \u2014 pass --force to write a second one anyway.\n  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
@@ -1137,9 +1124,9 @@ if (require.main === module) {
       process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
       return;
     }
-    fs2.mkdirSync(path2.dirname(base), { recursive: true });
-    fs2.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md2) fs2.writeFileSync(base + ".report.md", md2);
+    fs3.mkdirSync(path2.dirname(base), { recursive: true });
+    fs3.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+    if (md2) fs3.writeFileSync(base + ".report.md", md2);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
@@ -1147,7 +1134,10 @@ if (require.main === module) {
       console.error("--expect needs at least one screen export\n" + USAGE);
       process.exit(2);
     }
-    const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path2.basename(f, ".json") }));
+    const docs = argv.map((f) => {
+      const d = readJsonFile(f, "screen export");
+      return { doc: isScreenDocLike(d) ? d : void 0, label: path2.basename(f, ".json") };
+    });
     const exp = buildExpectation(docs);
     const outBase = out || path2.join("design", "verify", path2.basename(argv[0], ".json"));
     const target = outBase + ".expected.json";
@@ -1159,20 +1149,23 @@ if (require.main === module) {
       process.exit(1);
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs2.existsSync(target) ? fs2.readFileSync(target, "utf8") : null;
+    const prev = fs3.existsSync(target) ? fs3.readFileSync(target, "utf8") : null;
     write(outBase, exp);
-    const h = crypto.createHash("sha256").update(next).digest("hex");
+    const h = crypto2.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
     try {
-      prevContent = prev !== null ? JSON.parse(prev).exportContentSha256 : null;
+      if (prev !== null) {
+        const prevDoc = JSON.parse(prev);
+        prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null;
+      }
     } catch {
     }
     if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}\u2026) \u2014 unchanged`);
     else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs2.existsSync(f));
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto2.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs3.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -1185,25 +1178,28 @@ if (require.main === module) {
     console.error("--compare needs <expected.json> <measured.json>\n" + USAGE);
     process.exit(2);
   }
-  const expectation = readJsonFile(expFile, "expectation");
-  const measured = readJsonFile(
+  const expRaw = readJsonFile(expFile, "expectation");
+  const expectation = isExpectationLike(expRaw) ? expRaw : {};
+  const measuredRaw = readJsonFile(
     measuredFile,
     "probe measurements",
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}."
   );
+  const measured = isMeasuredLike(measuredRaw) ? measuredRaw : {};
   let extra;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    extra = Array.isArray(raw) ? raw : Array.isArray(raw && raw.interactions) ? raw.interactions : null;
-    if (!extra) {
+    const list = isEvidenceList(raw) ? raw : isJsonObject(raw) && isEvidenceList(raw.interactions) ? raw.interactions : null;
+    if (!list) {
       console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[\u2026]}`);
       process.exit(2);
     }
+    extra = list;
   }
   const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists = !!p && fs2.existsSync(p);
+    const exists = !!p && fs3.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : void 0 };
   });
   let code;
@@ -1212,10 +1208,10 @@ if (require.main === module) {
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path2.basename(expFile, ".json").replace(/\.expected$/, "");
     const hits = [];
-    for (const f of fs2.existsSync(planDir) ? fs2.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    for (const f of fs3.existsSync(planDir) ? fs3.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
       let p;
       try {
-        p = JSON.parse(fs2.readFileSync(path2.join(planDir, f), "utf8"));
+        p = JSON.parse(fs3.readFileSync(path2.join(planDir, f), "utf8"));
       } catch {
         continue;
       }
@@ -1236,3 +1232,20 @@ if (require.main === module) {
   console.error(rep.headline);
   process.exit(rep.verdict === "pass" ? 0 : 1);
 }
+export {
+  EXPECTATION_SCHEMA,
+  FIELDS,
+  REPORT_SCHEMA,
+  TOLERANCE,
+  buildExpectation,
+  compare,
+  expectNode,
+  findExistingExpectedFor,
+  lineHeightPx,
+  normColor,
+  normFamily,
+  normWeight,
+  radiusCorners,
+  reportToMarkdown,
+  tokenFor
+};

@@ -1,4 +1,4 @@
-// verify-screen.js — turn "looks right" into a per-node number, and refuse to say "pass" without one.
+// verify-screen.ts — turn "looks right" into a per-node number, and refuse to say "pass" without one.
 //
 // The live run shipped three verification passes totalling ~42 minutes, all of which returned
 // "pass"/"verified", against a build where an independent measurement pass then found ~35% of sampled
@@ -29,8 +29,18 @@
 // interaction-driving are the probe's job (the visual-verifier agent, or any script), and what it did
 // arrives as measured.json (+ an optional --interactions file). Anything the probe did not measure is
 // reported as not measured / not probed — never as passed, and never as failed (findings 127/158).
-const { walkWithHidden } = require("./hidden.js");
-const { exportContentSha256, fileHashes, gitHead } = require("./content-hash.js");
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { walkWithHidden } from "./hidden.ts";
+import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
+import { readJsonFile } from "./catalog-input.ts";
+import { isJsonObject } from "./types.ts";
+import type {
+  Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredNode, MeasuredStyles,
+  NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyExpectation, VerifyFrame, VerifyInstance, VerifyInteraction,
+  VerifyInteractionResult, VerifyMeasured, VerifyReport, VerifySpec, VerifyVerdict,
+} from "./types.ts";
 
 // ---------------------------------------------------------------- tolerances
 //
@@ -58,7 +68,7 @@ const TOLERANCE = {
 // Colours compare exactly after normalisation. There is no "close enough" colour: the live run's
 // chip was #03d5ab where the export said #007d6c, which any perceptual threshold loose enough to
 // call a rendering artifact would also have let through.
-function normColor(v) {
+function normColor(v: unknown): string | null {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
   let m = /^#([0-9a-f]{3})$/.exec(s);
@@ -71,7 +81,7 @@ function normColor(v) {
     if (p.length < 3 || p.some((n) => Number.isNaN(n))) return s;
     const a = p.length > 3 ? p[3] : 1;
     if (a === 0) return "transparent"; // rgba(0,0,0,0) is "no background", whatever the channels say
-    const hex = (n) => Math.round(n).toString(16).padStart(2, "0");
+    const hex = (n: number): string => Math.round(n).toString(16).padStart(2, "0");
     return "#" + hex(p[0]) + hex(p[1]) + hex(p[2]) + hex(Math.round(a * 255));
   }
   if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
@@ -80,11 +90,11 @@ function normColor(v) {
 
 // Figma names weights ("SemiBold"); CSS uses numbers. Compare on the number, because that is what a
 // browser actually applies — and because "Medium" rendering as 600 is precisely the live bug.
-const WEIGHTS = {
+const WEIGHTS: Record<string, number> = {
   thin: 100, extralight: 200, ultralight: 200, light: 300, normal: 400, regular: 400, book: 400,
   medium: 500, semibold: 600, demibold: 600, bold: 700, extrabold: 800, ultrabold: 800, black: 900, heavy: 900,
 };
-function normWeight(v) {
+function normWeight(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return v;
   const s = String(v).trim();
@@ -95,12 +105,17 @@ function normWeight(v) {
 
 // Figma stores a family as one name; CSS reports the whole stack. A match on the FIRST family is the
 // honest comparison — the fallbacks are the builder's business.
-function normFamily(v) {
+function normFamily(v: unknown): string | null {
   if (v == null) return null;
   return String(v).split(",")[0].trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 
-function lineHeightPx(lh, fontSize) {
+// ts-port: legacy/producer-mismatch read kept as-is (item 4). The producer writes a LengthSpec
+// ({value, unit: "px"|"percent"|"auto"}); this also accepts a measured number/string and the older
+// upper-case units, so its input is declared wide here rather than in types.ts.
+type LineHeightInput = number | string | { unit?: string; value?: number } | null | undefined;
+
+function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined): number | null {
   if (lh == null) return null;
   if (typeof lh === "number") return lh;
   if (typeof lh === "string") {
@@ -108,12 +123,12 @@ function lineHeightPx(lh, fontSize) {
     if (s === "normal") return null; // genuinely unknowable without the font metrics — not a mismatch
     const n = parseFloat(s);
     if (Number.isNaN(n)) return null;
-    if (s.endsWith("%")) return fontSize ? (n / 100) * fontSize : null;
+    if (s.endsWith("%")) return fontSize ? (n / 100) * Number(fontSize) : null;
     if (s.endsWith("px")) return n;
-    return fontSize ? n * fontSize : null; // unitless multiplier
+    return fontSize ? n * Number(fontSize) : null; // unitless multiplier
   }
   if (typeof lh === "object") {
-    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? (lh.value / 100) * fontSize : null;
+    if (lh.unit === "PERCENT" || lh.unit === "%") return fontSize ? (Number(lh.value) / 100) * Number(fontSize) : null;
     if (lh.unit === "AUTO") return null;
     return typeof lh.value === "number" ? lh.value : null;
   }
@@ -126,7 +141,7 @@ function lineHeightPx(lh, fontSize) {
 // export does not define is OMITTED, never defaulted — a spec that invents `fontWeight: 400` because
 // the node didn't say produces exactly the confident-and-wrong comparison this file exists to stop.
 //
-// Only layers that RENDER get a row. The rule is hidden.js's one predicate (`hidden: true` on the
+// Only layers that RENDER get a row. The rule is hidden.ts's one predicate (`hidden: true` on the
 // node or any ancestor — never `visible === false`, which the export does not use). Before it,
 // 83 of 272 Job Roles specs, 61 of 112 instances and 22 of 28 designed interactions were for layers
 // the designer switched off (findings 97/126/181), and a build that correctly omitted them was graded
@@ -134,17 +149,18 @@ function lineHeightPx(lh, fontSize) {
 const EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
 const REPORT_SCHEMA = "designtwin/verify-report@2";
 
-function rootsOf(doc) {
+function rootsOf(doc: ScreenDoc | null | undefined): IrNode[] {
   if (!doc) return [];
   if (Array.isArray(doc.nodes)) return doc.nodes;
   if (doc.tree) return [doc.tree];
-  if (doc.id || doc.type) return [doc];
+  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
+  if (doc.id || doc.type) return [doc as IrNode];
   return [];
 }
 
-const firstSolid = (fills) => (fills || []).find((f) => f && f.type === "solid" && f.visible !== false);
-const num = (v) => typeof v === "number" && Number.isFinite(v);
-const r2 = (v) => Math.round(v * 100) / 100;
+const firstSolid = (fills: Paint[] | null | undefined): SolidPaint | undefined => (fills || []).find((f): f is SolidPaint => !!f && f.type === "solid" && f.visible !== false);
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const r2 = (v: number): number => Math.round(v * 100) / 100;
 
 // A layer drawn IN an interaction state. The designer drew one table row hovered (its fill is bound
 // to `Backgrounds/Row Hover`, and only that row carries the hover-only edit button); measuring the
@@ -152,10 +168,11 @@ const r2 = (v) => Math.round(v * 100) / 100;
 // BOTH screens (findings 98/128/161/194). The export says which state it drew, through the fill's
 // token name or a variant property, so the spec carries it and the probe measures that state.
 const STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
-const normState = (w) => (/^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus");
-function drawnStateOf(n) {
+const normState = (w: string): DrawnState => (/^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus");
+interface DrawnStateOf { state: DrawnState; why: string }
+function drawnStateOf(n: IrNode): DrawnStateOf | null {
   const fillTok = (n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills) ||
-    (Array.isArray(n.fills) && n.fills.map((f) => f && f.tokens && f.tokens.color).find((t) => typeof t === "string")) || null;
+    (Array.isArray(n.fills) && n.fills.map((f) => f && f.tokens && f.tokens.color).find((t): t is string => typeof t === "string")) || null;
   let m = fillTok && STATE_WORD.exec(fillTok);
   if (m) return { state: normState(m[1]), why: `its fill is bound to '${fillTok}'` };
   for (const [k, v] of Object.entries(n.props || {})) {
@@ -172,13 +189,13 @@ function drawnStateOf(n) {
 // An inline SVG's colour is its `fill`, not a CSS background. Comparing a vector's fills against
 // `background-color` produced the other recurring false high (the moon glyph, the Union icon —
 // findings 98/128/161/194).
-const PAINT_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
-const isPaintNode = (n) => PAINT_TYPES.has(n.type) || (typeof n.asset === "string" && /\.svg$/i.test(n.asset));
+const PAINT_TYPES = new Set<string>(["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE"]);
+const isPaintNode = (n: IrNode): boolean => PAINT_TYPES.has(n.type) || (typeof n.asset === "string" && /\.svg$/i.test(n.asset));
 
 // A text layer that IS an input's placeholder. Its colour lives on `::placeholder`, which
 // getComputedStyle(el) cannot see, and an empty <input> has no textContent — so comparing it as
 // ordinary text/colour was two guaranteed high deltas per placeholder (findings 128/177/194).
-function isPlaceholder(n) {
+function isPlaceholder(n: IrNode): boolean {
   if (n.type !== "TEXT") return false;
   const toks = [n.tokens && n.tokens.fills, ...(Array.isArray(n.fills) ? n.fills.map((f) => f && f.tokens && f.tokens.color) : [])];
   return toks.some((t) => typeof t === "string" && /placeholder/i.test(t)) || /placeholder/i.test(n.name || "");
@@ -190,9 +207,10 @@ function isPlaceholder(n) {
 // coordinates a probe gets from `el.getBoundingClientRect()` minus the frame element's rect. No
 // position was compared at all before (findings 164/192): a pagination bar 130px below the frame and
 // an 18.94px column drift scored zero deltas.
-function framePosition(n, frame) {
+interface FramePos { x: number; y?: number; source: "box" | "renderBox" }
+function framePosition(n: IrNode, frame: Partial<VerifyFrame> | null | undefined): FramePos | null {
   if (!frame || !num(frame.x) || !num(frame.y)) return null;
-  const b = n.box || {}, rb = n.renderBox;
+  const b: Partial<Box> = n.box || {}, rb = n.renderBox;
   if (n.type === "TEXT") {
     // Ink start (renderBox.x) is what a Range's getBoundingClientRect().x reports, within a
     // side-bearing. Vertical ink depends on font metrics, so a TEXT node carries no `y`.
@@ -209,18 +227,33 @@ function framePosition(n, frame) {
 }
 
 // Children that take part in the parent's flow: visible and not absolutely positioned.
-const inFlowChildren = (n) => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden && !c.absolute);
-const growsAlong = (c, dir) => c.grow === 1 || c.grow === true || (dir === "column" ? c.heightMode === "fill" : c.widthMode === "fill");
+const inFlowChildren = (n: IrNode): IrNode[] => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden && !c.absolute);
+// ts-port: legacy/producer-mismatch read kept as-is (item 1) — `grow` is a number in the producer; `=== true` is an older export's spelling.
+interface LegacyGrow { grow?: number | boolean; heightMode?: IrNode["heightMode"]; widthMode?: IrNode["widthMode"] }
+const growsAlong = (c: IrNode, dir: string): boolean => { const lc: LegacyGrow = c; return lc.grow === 1 || lc.grow === true || (dir === "column" ? lc.heightMode === "fill" : lc.widthMode === "fill"); };
+
+// ts-port: legacy/producer-mismatch read kept as-is (item 2) — the older layout spelling
+// (itemSpacing, paddingTop/Right/Bottom/Left) beside the producer's gap/padding[].
+interface LegacyLayout extends LayoutSpec { itemSpacing?: number; paddingTop?: number; paddingRight?: number; paddingBottom?: number; paddingLeft?: number }
+const PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
+
+/** The drawn state a node inherits from an ancestor that was drawn in one. */
+export interface InheritedState { state: DrawnState; why: string; from: string }
+/** expectNode()'s context: the node's path, its frame (for positions), and any inherited drawn state. */
+export interface ExpectContext { path?: string; frame?: Partial<VerifyFrame> | null; inheritedState?: InheritedState; frameId?: string }
+/** expectNode()'s row: a VerifySpec plus the design values it could not compare, on a NON-enumerable
+ *  `__notComparable` (so it never reaches the JSON). Always defined on a returned row. */
+export interface ExpectedSpec extends VerifySpec { __notComparable?: NotComparable[] }
 
 /**
  * The spec row for one VISIBLE node, plus any design values the method cannot compare
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
  */
-function expectNode(n, ctxOrPath) {
-  const ctx = typeof ctxOrPath === "string" || ctxOrPath == null ? { path: ctxOrPath } : ctxOrPath;
-  const spec = { nodeId: n.id, name: n.name, type: n.type, path: ctx.path };
-  const notComparable = [];
-  const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
+function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): ExpectedSpec {
+  const ctx: ExpectContext = typeof ctxOrPath === "string" || ctxOrPath == null ? { path: ctxOrPath == null ? undefined : ctxOrPath } : ctxOrPath;
+  const spec: ExpectedSpec = { nodeId: n.id, name: n.name, type: n.type, path: ctx.path };
+  const notComparable: NotComparable[] = [];
+  const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
 
   if (n.text != null) spec.text = n.text;
   else if (n.characters != null) spec.text = n.characters;
@@ -232,8 +265,10 @@ function expectNode(n, ctxOrPath) {
     if (w != null) spec.fontWeight = w;
     const lh = lineHeightPx(n.font.lineHeight, n.font.size);
     if (lh != null) spec.lineHeight = lh;
-    if (n.font.letterSpacing && typeof n.font.letterSpacing.value === "number" && n.font.letterSpacing.unit !== "PERCENT") {
-      spec.letterSpacing = n.font.letterSpacing.value;
+    // ts-port: legacy read kept as-is — the producer's unit is "percent"; "PERCENT" is an older export's spelling.
+    const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
+    if (ls && typeof ls.value === "number" && ls.unit !== "PERCENT") {
+      spec.letterSpacing = ls.value;
     }
     if (n.font.color) spec.color = normColor(n.font.color);
   }
@@ -261,19 +296,20 @@ function expectNode(n, ctxOrPath) {
     if (typeof st.weight === "number") spec.borderWidth = st.weight;
     // Per-side weights (a divider with only a bottom border) have no single CSS `border-width` to
     // compare against, so record them as their own field rather than picking one arbitrarily.
-    else if (st.weights && typeof st.weights === "object") spec.borderWidths = ["top", "right", "bottom", "left"].map((k) => (typeof st.weights[k] === "number" ? st.weights[k] : 0));
+    else if (st.weights && typeof st.weights === "object") { const ws = st.weights; spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
   }
   // Radius: one number, or per-corner. A per-corner radius with UNEQUAL corners (a table header
   // rounded only at the top) is compared corner by corner — the old code read `radius.tl` only, so
   // a card rounded at the bottom ({bl,br}) produced no radius spec at all (finding 162).
   if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
-    const c = ["tl", "tr", "br", "bl"].map((k) => (num(n.radius[k]) ? n.radius[k] : 0));
+    const rc = n.radius;
+    const c = (["tl", "tr", "br", "bl"] as const).map((k) => { const v = rc[k]; return num(v) ? v : 0; });
     if (c.every((v) => v === c[0])) spec.borderRadius = c[0];
     else spec.radiusCorners = { tl: c[0], tr: c[1], br: c[2], bl: c[3] };
   }
 
-  const L = n.layout;
+  const L: LegacyLayout | undefined = n.layout;
   if (L && typeof L === "object") {
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
     if (g !== undefined) {
@@ -286,9 +322,9 @@ function expectNode(n, ctxOrPath) {
       else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
       else spec.gap = g;
     }
-    let pad = null;
+    let pad: Array<number | undefined> | null = null;
     if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
-    else if (["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].some((k) => typeof L[k] === "number")) pad = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].map((k) => L[k]);
+    else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
     if (pad && pad.some((v) => typeof v === "number" && v !== 0)) spec.padding = pad.map((v) => (typeof v === "number" ? v : 0));
   }
   if (n.box) {
@@ -320,8 +356,8 @@ function expectNode(n, ctxOrPath) {
 // font, no fill, no radius, no layout and no stated position has nothing to be wrong about, and listing
 // it would bury the rows that matter. A stated position counts: the pagination bar that rendered 130px
 // below the frame carries nothing else (finding 164).
-function checkable(spec) {
-  return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== undefined);
+function checkable(spec: VerifySpec): boolean {
+  return (["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"] as const).some((k) => spec[k] !== undefined);
 }
 
 const COORDINATES =
@@ -331,26 +367,54 @@ const COORDINATES =
   "the text and report it as textBox {x,w}. TEXT nodes carry no y (vertical ink depends on font metrics). " +
   "Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 
-function buildExpectation(docs) {
-  const nodes = [];
-  const instances = [];
-  const interactions = [];
-  const notComparable = [];
-  const hidden = { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 };
-  const frames = [];
-  const seen = new Set();
-  let screen = null, exportedAt = null, reference = null;
+// ts-port: legacy/producer-mismatch read kept as-is (item 3) — the older reaction shape (`action`
+// singular, `trigger.type`, `on`) beside the producer's reactions[].actions[] + plain-string trigger.
+type LegacyReaction = Omit<Reaction, "trigger"> & { trigger?: ReactionTrigger | { type?: string }; action?: Action; on?: string };
+
+type Frame = Omit<VerifyFrame, "x" | "y">;
+/** The hidden-layer counts an expectation carries. */
+type HiddenCounts = NonNullable<VerifyExpectation["counts"]>["hidden"];
+/**
+ * An expectation as READ BACK from disk (or built here): every field may be absent, and `frame` is empty
+ * when the export had no roots. VerifyExpectation (what --expect writes) is assignable to it.
+ */
+export type Expectation = Omit<VerifyExpectation, "schema" | "nodes" | "frame" | "frames"> & { schema?: string; nodes?: VerifySpec[]; frame?: Partial<Frame>; frames?: Array<Partial<Frame>> };
+/** What buildExpectation() returns: every field present (frame's own fields still depend on the export having a root). */
+export interface BuiltExpectation extends Omit<VerifyExpectation, "frame" | "frames"> {
+  frame: Partial<Frame>;
+  frames: Array<Partial<Frame>> | undefined;
+  exportContentSha256: string;
+  counts: NonNullable<VerifyExpectation["counts"]>;
+  nodes: VerifySpec[];
+  instances: VerifyInstance[];
+  interactions: VerifyInteraction[];
+  notComparable: NotComparable[];
+  hidden: NonNullable<VerifyExpectation["hidden"]>;
+}
+/** One screen export handed to buildExpectation(): the parsed document and the label it is known by. */
+export interface ExpectInput { doc: ScreenDoc | undefined; label?: string }
+
+function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
+  const nodes: VerifySpec[] = [];
+  const instances: VerifyInstance[] = [];
+  const interactions: VerifyInteraction[] = [];
+  const notComparable: NotComparable[] = [];
+  const hidden: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[]; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number } =
+    { roots: [], ids: [], specsSkipped: 0, instancesSkipped: 0, interactionsSkipped: 0 };
+  const frames: Array<Partial<VerifyFrame>> = [];
+  const seen = new Set<string>();
+  let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
 
   for (const { doc, label } of docs) {
     if (!screen) screen = (doc && doc.screen) || label;
     if (!exportedAt) exportedAt = doc && doc.exportedAt;
     for (const root of rootsOf(doc)) {
       if (!reference && root.reference) reference = root.reference;
-      const b = root.box || {};
-      const frame = { nodeId: root.id, name: root.name, w: b.w, h: b.h, x: b.x, y: b.y, clip: root.clip === true };
+      const b: Partial<Box> = root.box || {};
+      const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, w: b.w, h: b.h, x: b.x, y: b.y, clip: root.clip === true };
       frames.push(frame);
       const frameId = frames.length > 1 ? root.id : undefined;
-      const stateOf = new WeakMap(); // node -> inherited drawn-state { state, why, from }
+      const stateOf = new WeakMap<IrNode, InheritedState>(); // node -> inherited drawn-state { state, why, from }
       walkWithHidden(root, (n, c) => {
         if (c.hidden) {
           // Counted, never specified. The ids travel with the expectation so --compare can say "you
@@ -359,16 +423,17 @@ function buildExpectation(docs) {
           if (n.id) hidden.ids.push(n.id);
           if (checkable(expectNode(n, { path: c.path }))) hidden.specsSkipped++;
           if (n.type === "INSTANCE" && n.mainComponent) hidden.instancesSkipped++;
-          for (const r of Array.isArray(n.reactions) ? n.reactions : []) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
+          const reactions: LegacyReaction[] = Array.isArray(n.reactions) ? n.reactions : [];
+          for (const r of reactions) hidden.interactionsSkipped += (Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : []).filter((a) => a && (a.type || a.navigation)).length;
           return;
         }
         const inherited = c.parent ? stateOf.get(c.parent) : undefined;
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
         const spec = expectNode(n, { path: c.path, frame, inheritedState: inherited, frameId });
-        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy, from: n.name || n.id });
+        if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
-        notComparable.push(...spec.__notComparable);
+        notComparable.push(...spec.__notComparable!);
 
         if (n.type === "INSTANCE" && n.mainComponent) {
           instances.push({
@@ -385,9 +450,10 @@ function buildExpectation(docs) {
         // `reactions[].actions[]` (plural on both), with `trigger` a plain string — see
         // figma-plugin/src/prototype.ts. A singular `action` is accepted too so an older export still
         // yields interactions rather than silently producing none.
-        for (const r of Array.isArray(n.reactions) ? n.reactions : []) {
+        const reactions: LegacyReaction[] = Array.isArray(n.reactions) ? n.reactions : [];
+        for (const r of reactions) {
           const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-          const trigger = (r.trigger && (r.trigger.type || r.trigger)) || r.on || "on_click";
+          const trigger = (r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger)) || r.on || "on_click";
           for (const a of actions) {
             if (!a || !(a.type || a.navigation)) continue;
             interactions.push({
@@ -404,7 +470,7 @@ function buildExpectation(docs) {
     }
   }
 
-  const f0 = frames[0] || {};
+  const f0: Partial<VerifyFrame> = frames[0] || {};
   return {
     schema: EXPECTATION_SCHEMA,
     screen,
@@ -442,7 +508,7 @@ function buildExpectation(docs) {
 // more: a key in FIELDS that is present in zero measurements is printed in the headline, and keys this
 // file does not read are listed (finding 182 — a probe wrote `radius`, the comparer read
 // `borderRadius`, and a whole category of values passed untested for a phase).
-const MEASURED_KEYS_DOC = {
+const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   "nodes[].styles": "computed values: fontFamily fontSize fontWeight lineHeight letterSpacing color backgroundColor borderColor borderWidth borderRadius (number | [tl,tr,br,bl]) padding ([t,r,b,l]) gap width height x y opacity text",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill — never background-color",
@@ -462,9 +528,14 @@ const KNOWN_MEASURED_KEYS = new Set([
   "placeholderText", "placeholderColor", "tag", "textBox", "display", "transform", "rotate", "visible",
 ]);
 // Suggestions only — the key is NEVER silently accepted (design note: a wrong key must be loud).
-const KEY_HINTS = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap" };
+const KEY_HINTS: Record<string, string> = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap" };
 
-const FIELDS = [
+/** The spec fields compared one-to-one against a measured style of the same name. */
+type FieldKey = "fontFamily" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing" | "color" | "backgroundColor" | "fill" | "placeholderColor"
+  | "borderColor" | "borderWidth" | "borderRadius" | "gap" | "width" | "height" | "x" | "y" | "opacity";
+interface Field { key: FieldKey; tol: number | null; norm?: (v: unknown) => string | number | null; label: string; unit?: string; high?: boolean; colour?: boolean; box?: boolean; optional?: boolean }
+
+const FIELDS: Field[] = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
   { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
   { key: "fontWeight", tol: TOLERANCE.fontWeight, norm: normWeight, label: "font-weight", high: true },
@@ -487,7 +558,7 @@ const FIELDS = [
 
 // Which variable a delta is about. It used to be `Object.values(spec.tokens)[0]` whatever the field,
 // so a background delta read `token: "Space 4"` (findings 98/160).
-const TOKEN_KEYS = {
+const TOKEN_KEYS: Record<string, string[]> = {
   color: ["fills", "color"], backgroundColor: ["fills"], fill: ["fills"], placeholderColor: ["fills"],
   borderColor: ["strokes"], borderWidth: ["strokeWeight", "strokeTopWeight"],
   fontSize: ["fontSize"], fontWeight: ["fontWeight"], fontFamily: ["fontFamily"], lineHeight: ["lineHeight"], letterSpacing: ["letterSpacing"],
@@ -496,14 +567,17 @@ const TOKEN_KEYS = {
   "radius.tl": ["topLeftRadius"], "radius.tr": ["topRightRadius"], "radius.br": ["bottomRightRadius"], "radius.bl": ["bottomLeftRadius"],
   borderRadius: ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius", "cornerRadius"],
 };
-function tokenFor(spec, key) {
+function tokenFor(spec: VerifySpec | null | undefined, key: string): string | undefined {
   const t = spec && spec.tokens;
   if (!t) return undefined;
-  const names = [...new Set((TOKEN_KEYS[key] || []).map((k) => t[k]).filter((v) => typeof v === "string"))];
+  const names = [...new Set((TOKEN_KEYS[key] || []).map((k) => t[k]).filter((v): v is string => typeof v === "string"))];
   return names.length ? names.join(" / ") : undefined;
 }
 
-function compareField(f, want, got) {
+/** A mismatch: the (normalised) expected and actual values, and the numeric distance when there is one. */
+interface Bad { want: JsonValue; got: JsonValue; delta: number | null }
+
+function compareField(f: Field, want: JsonValue | undefined, got: JsonValue | undefined): Bad | null {
   const nw = f.norm ? f.norm(want) : want;
   const ng = f.norm ? f.norm(got) : got;
   if (nw == null || ng == null) return null; // one side cannot be known — not a mismatch, reported as unchecked
@@ -514,19 +588,19 @@ function compareField(f, want, got) {
   return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
 
-function comparePadding(want, got) {
+function comparePadding(want: unknown, got: unknown): Bad | null {
   if (!Array.isArray(want) || !Array.isArray(got)) return null;
-  const w = want.map(Number), g = got.map(Number);
+  const w: number[] = want.map(Number), g: number[] = got.map(Number);
   if (w.some(Number.isNaN) || g.some(Number.isNaN)) return null;
   const worst = Math.max(...w.map((v, i) => Math.abs(v - (g[i] || 0))));
   return worst <= TOLERANCE.padding ? null : { want: w, got: g, delta: Number(worst.toFixed(3)) };
 }
 
 // A measured radius as four corners [tl,tr,br,bl]: a number, an array, or a CSS shorthand string.
-function radiusCorners(v) {
+function radiusCorners(v: unknown): number[] | null {
   if (v == null) return null;
   if (num(v)) return [v, v, v, v];
-  if (Array.isArray(v)) { const a = v.map(Number); return a.length === 4 && a.every(Number.isFinite) ? a : a.length === 1 && Number.isFinite(a[0]) ? [a[0], a[0], a[0], a[0]] : null; }
+  if (Array.isArray(v)) { const a: number[] = v.map(Number); return a.length === 4 && a.every(Number.isFinite) ? a : a.length === 1 && Number.isFinite(a[0]) ? [a[0], a[0], a[0], a[0]] : null; }
   const p = String(v).trim().split(/\s+/).map(parseFloat);
   if (!p.length || p.some(Number.isNaN)) return null;
   return p.length === 1 ? [p[0], p[0], p[0], p[0]] : p.length === 2 ? [p[0], p[1], p[0], p[1]] : p.length === 3 ? [p[0], p[1], p[2], p[1]] : p.slice(0, 4);
@@ -534,7 +608,7 @@ function radiusCorners(v) {
 // CSS clamps a radius at half the shorter side, and so does Figma: `radius: 500` on a 36px box and
 // `rounded-full` (33554400px) are both a circle (finding 194). Compare the radius each side can ACTUALLY
 // draw, not the number either side stored.
-const clampRadius = (r, w, h) => (num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r);
+const clampRadius = (r: number, w: unknown, h: unknown): number => (num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r);
 
 const TABLE_TAGS = new Set(["table", "thead", "tbody", "tfoot", "tr"]);
 // A TEXT node's id on an element that is NOT the text's own box (a <th> with padding, a <button>,
@@ -545,9 +619,9 @@ const CONTAINER_TAGS = new Set(["th", "td", "tr", "button", "label", "li", "a", 
 // inside the one that implements it — an <input> inside the <label> that draws the field. The leaf's
 // box, fill, border and padding are not the container's, so they are not graded as such.
 const LEAF_TAGS = new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
-const CONTAINER_TYPES = new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
-const LEAF_FIELDS = new Set(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
-const isContainer = (got) => (got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase())) || (Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0));
+const CONTAINER_TYPES = new Set<string>(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
+const LEAF_FIELDS = new Set<string>(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
+const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase())) || (Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0)));
 
 const LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
@@ -556,23 +630,58 @@ const LIMITS = [
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
 ];
 
+/** compare()'s options — the evidence the CLI ties the report to. */
+export interface CompareOptions { interactions?: InteractionEvidence[] | null; expectationSha256?: string; measuredSha256?: string; artifactCheck?: ArtifactCheck[] | null; code?: CodeInputs }
+type FieldNeverMeasured = NonNullable<NonNullable<VerifyReport["coverage"]>["fieldsNeverMeasured"]>[number];
+/** report.coverage as compare() writes it (every counter present). */
+export interface Coverage {
+  nodesExpected: number; nodesMeasured: number; nodesNotMeasured: number; nodesMatchedByComponentPath: number; fieldsChecked: number;
+  fieldsNotMeasured: number; fieldsNeverMeasured: FieldNeverMeasured[]; valuesNotComparable: number; valuesUnverifiable: number;
+  hiddenLayersSkipped: HiddenCounts | undefined; instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
+  interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
+}
+/**
+ * The report compare() returns: every @2 field present. `artifacts` is the CLI's on-disk check when it
+ * ran, else the probe's own list passed through as-is (the one field wider than VerifyReport's).
+ */
+export interface Report extends Omit<VerifyReport, "artifacts"> {
+  artifacts: Array<string | ArtifactCheck | { path?: string }>;
+  verdict: VerifyVerdict;
+  headline: string;
+  why: string[];
+  coverage: Coverage;
+  summary: NonNullable<VerifyReport["summary"]>;
+  deltas: VerifyDelta[];
+  componentsAbsent: NonNullable<VerifyReport["componentsAbsent"]>;
+  untaggedInstanceSets: NonNullable<VerifyReport["untaggedInstanceSets"]>;
+  interactions: VerifyInteractionResult[];
+  notMeasured: NonNullable<VerifyReport["notMeasured"]>;
+  fieldsNotMeasured: NonNullable<VerifyReport["fieldsNotMeasured"]>;
+  unverifiable: NonNullable<VerifyReport["unverifiable"]>;
+  notComparable: NotComparable[];
+  probe: NonNullable<VerifyReport["probe"]>;
+  limits: string[];
+}
+
+const SEVERITY_RANK: Record<DeltaSeverity, number> = { high: 0, medium: 1, low: 2 };
+
 /**
  * compare(expectation, measured, opts?) -> report.
  * opts: { interactions: [...] extra interaction evidence (the --interactions file),
  *         expectationSha256, measuredSha256, artifactCheck: [{path, exists, image}] }
  */
-function compare(expectation, measured, opts) {
+function compare(expectation: Expectation, measured: VerifyMeasured | null | undefined, opts?: CompareOptions | null): Report {
   opts = opts || {};
   measured = measured || {};
   const hiddenSet = new Set(((expectation.hidden && expectation.hidden.ids) || []).map(String));
   const legacy = expectation.schema !== EXPECTATION_SCHEMA;
   const specs = (expectation.nodes || []).filter((s) => !hiddenSet.has(String(s.nodeId)));
-  const frameOf = (spec) => (spec.frameId && (expectation.frames || []).find((f) => f.nodeId === spec.frameId)) || expectation.frame || {};
+  const frameOf = (spec: VerifySpec): Partial<Frame> => (spec.frameId && (expectation.frames || []).find((f) => f.nodeId === spec.frameId)) || expectation.frame || {};
 
   // ---- index the measurements (first one wins; duplicates are counted, not silently merged)
-  const byId = new Map();
+  const byId = new Map<string, MeasuredNode>();
   let duplicateNodeIds = 0;
-  const unknownKeys = new Map();
+  const unknownKeys = new Map<string, number>();
   for (const m of measured.nodes || []) {
     if (!m || m.nodeId == null) continue;
     const id = String(m.nodeId);
@@ -586,31 +695,31 @@ function compare(expectation, measured, opts) {
   // same component-internal node under a different outer instance (findings 129/139/185). Match on
   // that internal path when it is unambiguous, and say so.
   const expectedIds = new Set([...specs.map((s) => String(s.nodeId)), ...(expectation.instances || []).map((i) => String(i.nodeId))]);
-  const suffix = (id) => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
-  const foreignBySuffix = new Map();
+  const suffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
+  const foreignBySuffix = new Map<string, string[]>();
   for (const id of byId.keys()) {
     if (expectedIds.has(id) || hiddenSet.has(id)) continue;
     const sfx = suffix(id);
     if (sfx) foreignBySuffix.set(sfx, (foreignBySuffix.get(sfx) || []).concat(id));
   }
-  const viaSharedPath = (id) => { const sfx = suffix(String(id)); const c = sfx && foreignBySuffix.get(sfx); return c && c.length === 1 ? c[0] : null; };
+  const viaSharedPath = (id: string): string | null => { const sfx = suffix(String(id)); const c = sfx && foreignBySuffix.get(sfx); return c && c.length === 1 ? c[0] : null; };
 
-  const deltas = [];
-  const notMeasured = []; // node specs with NO measurement at all — one row per node, never per field
-  const fieldsNotMeasured = []; // a measured node missing a field the spec states
-  const unverifiable = []; // values the method cannot read unless the probe goes out of its way
-  const census = new Map(); // field -> { expected, present } over MEASURED nodes
-  const tally = (key, present) => { const c = census.get(key) || { expected: 0, present: 0 }; c.expected++; if (present) c.present++; census.set(key, c); };
+  const deltas: VerifyDelta[] = [];
+  const notMeasured: Report["notMeasured"] = []; // node specs with NO measurement at all — one row per node, never per field
+  const fieldsNotMeasured: Report["fieldsNotMeasured"] = []; // a measured node missing a field the spec states
+  const unverifiable: Report["unverifiable"] = []; // values the method cannot read unless the probe goes out of its way
+  const census = new Map<string, { expected: number; present: number }>(); // field -> { expected, present } over MEASURED nodes
+  const tally = (key: string, present: boolean): void => { const c = census.get(key) || { expected: 0, present: 0 }; c.expected++; if (present) c.present++; census.set(key, c); };
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0;
-  const gap = (spec, field, why) => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
-  const push = (spec, field, severity, bad, extra) => deltas.push(Object.assign({
+  const gap = (spec: VerifySpec, field: string, why: string): number => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  const push = (spec: VerifySpec, field: string, severity: DeltaSeverity, bad: Bad, extra?: Partial<VerifyDelta>): number => deltas.push(Object.assign({
     severity, nodeId: spec.nodeId, name: spec.name, path: spec.path, field,
     expected: bad.want, actual: bad.got, delta: bad.delta,
   }, extra));
 
   for (const spec of specs) {
     let m = byId.get(String(spec.nodeId));
-    let matchedBy = m ? m.matchedBy || "id" : null;
+    let matchedBy: string | null = m ? m.matchedBy || "id" : null;
     if (!m) {
       const alt = viaSharedPath(spec.nodeId);
       if (alt) { m = byId.get(alt); matchedBy = `shared-component-path (${alt})`; nodesMatchedByComponentPath++; }
@@ -620,13 +729,13 @@ function compare(expectation, measured, opts) {
       continue;
     }
     nodesMeasured++;
-    const base = m.styles || m;
-    let got = base, measuredIn = "rest";
+    const base: MeasuredStyles = m.styles || m;
+    let got: MeasuredStyles = base, measuredIn = "rest";
     const state = spec.drawnState;
     const st = state && m.states && m.states[state];
     if (st) { got = Object.assign({}, base, st.styles || st); measuredIn = state; }
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
-    const stateWhy = state && `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) — measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}`;
+    const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) — measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
 
     // Hover-only content measured at rest is absent by design, not missing (finding 128/194: the
     // edit button that exists only on the hovered row, "36 → 0").
@@ -638,12 +747,13 @@ function compare(expectation, measured, opts) {
     const container = isText && isContainer(got);
     const tb = got.textBox && typeof got.textBox === "object" ? got.textBox : null;
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
-    const onLeaf = CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase());
-    const leafWhy = onLeaf && `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container`;
+    const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
+    const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container` : "";
 
     for (const f of FIELDS) {
-      if (spec[f.key] === undefined) continue;
-      let val = got[f.key];
+      const want0 = spec[f.key];
+      if (want0 === undefined) continue;
+      let val: JsonValue | undefined = got[f.key];
       let present = val !== undefined;
       if (isText && tb && (f.key === "x" || f.key === "width")) { val = f.key === "x" ? tb.x : tb.w; present = val !== undefined; }
       if (f.key === "gap" && got.gapVisual !== undefined) { val = got.gapVisual; present = true; }
@@ -661,26 +771,28 @@ function compare(expectation, measured, opts) {
         continue;
       }
       if (val === undefined) {
-        if (f.optional) { unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: spec[f.key], why: "a ::placeholder colour is not readable from getComputedStyle(el) — report placeholderColor to have it checked" }); continue; }
+        if (f.optional) { unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: "a ::placeholder colour is not readable from getComputedStyle(el) — report placeholderColor to have it checked" }); continue; }
         gap(spec, f.label, "the probe did not report this property");
         continue;
       }
       fieldsChecked++;
-      let want = spec[f.key], have = val;
+      let want: JsonValue = want0, have: JsonValue = val;
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
         if (!c) { gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a radius`); fieldsChecked--; continue; }
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-        want = clampRadius(want, spec.width, spec.height);
+        // (a borderRadius spec is a number — expectNode writes it from the node's radius)
+        if (typeof want === "number") want = clampRadius(want, spec.width, spec.height);
+        const target = Number(want);
         // the four corners must all match a uniform design radius
-        const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => (Math.abs(r - want) > Math.abs(a - want) ? r : a), clampRadius(c[0], W, H));
+        const worst = c.map((r) => clampRadius(r, W, H)).reduce((a, r) => (Math.abs(r - target) > Math.abs(a - target) ? r : a), clampRadius(c[0], W, H));
         have = worst;
       }
       const bad = compareField(f, want, have);
       if (bad) {
         push(spec, f.label, f.high ? "high" : "medium", bad, {
           unit: f.unit, token: tokenFor(spec, f.key), measuredIn: measuredIn !== "rest" ? measuredIn : undefined,
-          matchedBy: matchedBy !== "id" ? matchedBy : undefined,
+          matchedBy: matchedBy !== "id" ? matchedBy || undefined : undefined,
           note: f.key === "borderRadius" && spec.borderRadius !== want ? `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` : undefined,
         });
       }
@@ -689,14 +801,15 @@ function compare(expectation, measured, opts) {
     // ---- per-corner radius (unequal corners)
     if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
     else if (spec.radiusCorners) {
+      const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== undefined);
       if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-        ["tl", "tr", "br", "bl"].forEach((k, i) => {
+        (["tl", "tr", "br", "bl"] as const).forEach((k, i) => {
           fieldsChecked++;
-          const want = clampRadius(spec.radiusCorners[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
+          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
           const d = Math.abs(want - have);
           if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", token: tokenFor(spec, "radius." + k) });
         });
@@ -745,7 +858,7 @@ function compare(expectation, measured, opts) {
         if (/ /.test(String(spec.text))) {
           // Show the escape, not the character. Printed raw, this row reads as two identical strings
           // flagged as a mismatch — the whole point is that the difference is INVISIBLE.
-          const show = (t) => String(t).replace(/ /g, "\\u00a0");
+          const show = (t: unknown): string => String(t).replace(/ /g, "\\u00a0");
           deltas.push({
             severity: "low", nodeId: spec.nodeId, name: spec.name, field: "text (invisible character)",
             expected: show(spec.text), actual: show(got.text),
@@ -762,7 +875,7 @@ function compare(expectation, measured, opts) {
       const w = num(bx.width) ? bx.width : 0, h = num(bx.height) ? bx.height : 0;
       const tol = TOLERANCE.position;
       const inDesign = (!num(spec.x) || (spec.x >= -tol && spec.x + (spec.width || 0) <= fr.w + tol)) && (!num(spec.y) || (spec.y >= -tol && spec.y + (spec.height || 0) <= fr.h + tol));
-      const out = [];
+      const out: string[] = [];
       if (num(bx.y) && bx.y + h > fr.h + tol) out.push(`bottom edge at y=${r2(bx.y + h)} in a ${fr.h}-high frame`);
       if (num(bx.y) && bx.y < -tol) out.push(`top edge at y=${r2(bx.y)}`);
       if (num(bx.x) && bx.x + w > fr.w + tol) out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`);
@@ -774,7 +887,7 @@ function compare(expectation, measured, opts) {
   }
 
   // ---- fields in FIELDS that the probe never reported under the canonical key (finding 182)
-  const fieldsNeverMeasured = [];
+  const fieldsNeverMeasured: FieldNeverMeasured[] = [];
   for (const [key, c] of census) {
     if (FIELDS.some((f) => f.key === key && f.optional)) continue; // listed under `unverifiable` instead
     if (c.expected > 0 && c.present === 0) {
@@ -791,32 +904,32 @@ function compare(expectation, measured, opts) {
   const reported = comps.filter((c) => c && c.present !== false);
   const namesSeen = new Set(reported.map((c) => String(c.setName || c.name || c)));
   const idsSeen = new Set([...reported.map((c) => c.nodeId).filter(Boolean).map(String), ...byId.keys()]);
-  const bySet = new Map();
+  const bySet = new Map<string, { setName: string; setKey?: string; nodeIds: string[]; instances: number }>();
   for (const i of expectation.instances || []) {
     if (hiddenSet.has(String(i.nodeId))) continue;
     const k = i.setName || i.name;
     if (!bySet.has(k)) bySet.set(k, { setName: k, setKey: i.setKey, nodeIds: [], instances: 0 });
-    bySet.get(k).instances++;
-    bySet.get(k).nodeIds.push(i.nodeId);
+    bySet.get(k)!.instances++;
+    bySet.get(k)!.nodeIds.push(i.nodeId);
   }
-  const untaggedInstanceSets = [];
+  const untaggedInstanceSets: Report["untaggedInstanceSets"] = [];
   let setsViaSharedPath = 0;
   for (const [k, v] of bySet) {
     if (namesSeen.has(k) || v.nodeIds.some((id) => idsSeen.has(String(id)))) continue;
     if (v.nodeIds.some((id) => viaSharedPath(id))) { setsViaSharedPath++; continue; }
     untaggedInstanceSets.push(v);
   }
-  const componentsAbsent = [];
+  const componentsAbsent: Report["componentsAbsent"] = [];
   for (const c of comps.filter((c) => c && c.present === false)) {
-    const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || v.nodeIds.includes(c.nodeId));
+    const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || (c.nodeId !== undefined && v.nodeIds.includes(c.nodeId)));
     if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, detail: c.detail || c.note });
   }
 
   // ---- interactions: the export says what each control does; did it? Three states, not two:
   // pass (driven, with the selector that was driven), fail (driven, did not work), not-probed
   // (nobody drove it — which is neither; finding 158 was a "not measured" detail under result "fail").
-  const allEvidence = [...(Array.isArray(measured.interactions) ? measured.interactions : []), ...(Array.isArray(opts.interactions) ? opts.interactions : [])];
-  const exercised = new Map();
+  const allEvidence: InteractionEvidence[] = [...(Array.isArray(measured.interactions) ? measured.interactions : []), ...(Array.isArray(opts.interactions) ? opts.interactions : [])];
+  const exercised = new Map<string, InteractionEvidence>();
   let interactionEvidenceOnHidden = 0;
   const expectedKeys = new Set((expectation.interactions || []).map((i) => String(i.nodeId) + "|" + i.trigger));
   for (const r of allEvidence) {
@@ -824,19 +937,19 @@ function compare(expectation, measured, opts) {
     if (hiddenSet.has(String(r.nodeId))) { interactionEvidenceOnHidden++; continue; }
     exercised.set(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase(), r); // later evidence wins
   }
-  const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
+  const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
-    const row = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, action: i.action, destinationId: i.destinationId };
-    if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
+    const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, action: i.action, destinationId: i.destinationId };
+    if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
-    if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed", detail: hit.detail });
-    if (hit.ok === false) return Object.assign(row, { result: "fail", detail: hit.detail, selector: hit.selector });
+    if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, detail: hit.detail });
+    if (hit.ok === false) return Object.assign(row, { result: "fail" as const, detail: hit.detail, selector: hit.selector });
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
     if (!hit.selector || !(count >= 1)) {
-      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence — ${!hit.selector ? "no selector named" : `selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`}${hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${!hit.selector ? "no selector named" : `selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`}${hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     }
-    return Object.assign(row, { result: "pass", detail: hit.detail, selector: hit.selector, selectorCount: count });
+    return Object.assign(row, { result: "pass" as const, detail: hit.detail, selector: hit.selector, selectorCount: count });
   });
   const unexpectedInteractionEvidence = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase())).length;
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
@@ -847,7 +960,7 @@ function compare(expectation, measured, opts) {
   const medium = deltas.filter((d) => d.severity === "medium").length;
 
   // ---- what the evidence is tied to (findings 153/166/190)
-  const inputs = {
+  const inputs: Report["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
     expectationSha256: opts.expectationSha256,
     measuredSha256: opts.measuredSha256,
@@ -864,7 +977,7 @@ function compare(expectation, measured, opts) {
 
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
   const nodesExpected = specs.length;
-  const reasons = [];
+  const reasons: string[] = [];
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
@@ -879,9 +992,9 @@ function compare(expectation, measured, opts) {
   const fieldGapsOther = fieldsNotMeasured.length;
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe`);
 
-  const verdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
+  const verdict: VerifyVerdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
 
-  const coverage = {
+  const coverage: Coverage = {
     nodesExpected,
     nodesMeasured,
     nodesNotMeasured: notMeasured.length,
@@ -922,7 +1035,7 @@ function compare(expectation, measured, opts) {
     why: reasons,
     coverage,
     summary: { high, medium, low: deltas.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length },
-    deltas: deltas.sort((a, b) => ({ high: 0, medium: 1, low: 2 })[a.severity] - ({ high: 0, medium: 1, low: 2 })[b.severity]),
+    deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
     untaggedInstanceSets,
     interactions,
@@ -941,8 +1054,8 @@ function compare(expectation, measured, opts) {
   };
 }
 
-function reportToMarkdown(r) {
-  const L = [];
+function reportToMarkdown(r: Report): string {
+  const L: string[] = [];
   L.push(`# Verify — ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} · measured ${r.measuredAt}` +
@@ -1003,11 +1116,12 @@ function reportToMarkdown(r) {
   }
   if (r.notComparable.length || r.unverifiable.length) {
     L.push(`## Excluded by method (${r.notComparable.length + r.unverifiable.length})`, "", "*Stated so they are not mistaken for passes.*", "");
-    for (const n of [...r.unverifiable, ...r.notComparable].slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} (${n.field}${n.value !== undefined ? ` ${fmt(n.value)}` : ""}) — ${n.why}`);
+    // (an `unverifiable` row carries `expected`, not `value` — only a notComparable row prints one)
+    for (const n of [...r.unverifiable, ...r.notComparable].slice(0, 40)) L.push(`- \`${n.nodeId}\` ${n.name || ""} (${n.field}${"value" in n && n.value !== undefined ? ` ${fmt(n.value)}` : ""}) — ${n.why}`);
     if (r.notComparable.length + r.unverifiable.length > 40) L.push(`- …and ${r.notComparable.length + r.unverifiable.length - 40} more`);
     L.push("");
   }
-  const p = r.probe || {};
+  const p: Partial<Report["probe"]> = r.probe || {};
   if ((p.unknownKeys && p.unknownKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}×) is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
@@ -1020,10 +1134,7 @@ function reportToMarkdown(r) {
   for (const l of r.limits || []) L.push(`- ${l}`);
   return L.join("\n") + "\n";
 }
-const fmt = (v) => (Array.isArray(v) ? v.join("/") : String(v));
-
-const fs = require("fs");
-const path = require("path");
+const fmt = (v: unknown): string => (Array.isArray(v) ? v.join("/") : String(v));
 
 // P3 round 3, finding 315 ("--expect still writes two artefact sets for one screen" — Prompt 3
 // criterion 6 reopened): defaulting `--out` to the input's own basename (round 1's fix) only helps
@@ -1033,31 +1144,37 @@ const path = require("path");
 // Scans a directory's own `*.expected.json` files (never a subdirectory — one screen, one flat
 // design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
 // about to be written. Returns that file's path, or null.
-function findExistingExpectedFor(dir, nodeId, ownTarget) {
+function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTarget: string): string | null {
   if (!nodeId || !fs.existsSync(dir)) return null;
   for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
     const full = path.join(dir, f);
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
-    let doc;
+    // an expectation this repo wrote — but read as raw JSON, since only frame.nodeId is looked at
+    let doc: unknown;
     try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch (e) { continue; }
-    if (doc && doc.frame && doc.frame.nodeId === nodeId) return full;
+    if (isJsonObject(doc) && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
 
-module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+export { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+
+// The CLI's inputs are files the user named (readJsonFile -> unknown): a screen export, an
+// expectation this tool wrote, a probe's measured.json, an interaction-evidence list. Each is read
+// as the shape it is by convention once it is a JSON object (or array, for the evidence list);
+// anything else is treated as an empty document, which is what the untyped code did with it.
+function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
+function isExpectationLike(x: unknown): x is Expectation { return isJsonObject(x); }
+function isMeasuredLike(x: unknown): x is VerifyMeasured { return isJsonObject(x); }
+function isEvidenceList(x: unknown): x is InteractionEvidence[] { return Array.isArray(x); }
 
 // ---------------------------------------------------------------- CLI
-if (require.main === module) {
-  const fs = require("fs");
-  const path = require("path");
-  const crypto = require("crypto");
-  const { readJsonFile } = require("./catalog-input.js");
+if (import.meta.main) {
   const argv = process.argv.slice(2);
-  const take = (flag) => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
-  const strip = (flag) => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
-  const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
+  const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
+  const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
     "  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen> [--force]\n" +
@@ -1082,7 +1199,7 @@ if (require.main === module) {
   const stray = argv.filter((a) => a.startsWith("-"));
   if (stray.length) { console.error(`verify-screen: unknown flag ${stray.join(", ")}\n` + USAGE); process.exit(2); }
 
-  const write = (base, obj, md) => {
+  const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
     fs.mkdirSync(path.dirname(base), { recursive: true });
     fs.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
@@ -1092,7 +1209,7 @@ if (require.main === module) {
 
   if (doExpect) {
     if (!argv.length) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
-    const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path.basename(f, ".json") }));
+    const docs: ExpectInput[] = argv.map((f) => { const d = readJsonFile(f, "screen export"); return { doc: isScreenDocLike(d) ? d : undefined, label: path.basename(f, ".json") }; });
     const exp = buildExpectation(docs);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
     // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
@@ -1120,8 +1237,8 @@ if (require.main === module) {
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     write(outBase, exp);
     const h = crypto.createHash("sha256").update(next).digest("hex");
-    let prevContent = null;
-    try { prevContent = prev !== null ? JSON.parse(prev).exportContentSha256 : null; } catch { /* unreadable */ }
+    let prevContent: JsonValue | undefined = null;
+    try { if (prev !== null) { const prevDoc: unknown = JSON.parse(prev); prevContent = isJsonObject(prevDoc) ? prevDoc.exportContentSha256 : null; } } catch { /* unreadable */ }
     if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}…) — unchanged`);
     else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
       // Finding 314: a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
@@ -1142,33 +1259,37 @@ if (require.main === module) {
 
   const [expFile, measuredFile] = argv;
   if (!expFile || !measuredFile) { console.error("--compare needs <expected.json> <measured.json>\n" + USAGE); process.exit(2); }
-  const expectation = readJsonFile(expFile, "expectation");
-  const measured = readJsonFile(measuredFile, "probe measurements",
+  const expRaw = readJsonFile(expFile, "expectation");
+  const expectation: Expectation = isExpectationLike(expRaw) ? expRaw : {};
+  const measuredRaw = readJsonFile(measuredFile, "probe measurements",
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}.");
-  let extra;
+  const measured: VerifyMeasured = isMeasuredLike(measuredRaw) ? measuredRaw : {};
+  let extra: InteractionEvidence[] | undefined;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    extra = Array.isArray(raw) ? raw : Array.isArray(raw && raw.interactions) ? raw.interactions : null;
-    if (!extra) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…]}`); process.exit(2); }
+    const list = isEvidenceList(raw) ? raw : isJsonObject(raw) && isEvidenceList(raw.interactions) ? raw.interactions : null;
+    if (!list) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…]}`); process.exit(2); }
+    extra = list;
   }
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
   // can never cite a screenshot that does not exist (findings 166/190).
   const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
-  const artifactCheck = artifacts.map((a) => {
+  const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
     const exists = !!p && fs.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : undefined };
   });
   // Finding 317: tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
-  let code;
+  let code: CodeInputs | undefined;
   {
     const planDir = path.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
-    const hits = [];
+    const hits: Array<{ f: string; p: Plan }> = [];
     for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      let p; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")); } catch { continue; }
+      // a plan under design/plan/ is this repo's own writer's output (plan-skeleton.ts)
+      let p: Plan; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")); } catch { continue; }
       const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
       const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
       if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });

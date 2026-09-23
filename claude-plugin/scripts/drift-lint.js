@@ -1,36 +1,56 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
+import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __commonJS = (cb, mod) => function __require() {
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var __commonJS = (cb, mod) => function __require2() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
   } catch (e) {
     throw mod = 0, e;
   }
 };
-
-// design-to-code/kinds.js
-var require_kinds = __commonJS({
-  "design-to-code/kinds.js"(exports2, module2) {
-    var TYPE_TO_KIND2 = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
-    module2.exports = { TYPE_TO_KIND: TYPE_TO_KIND2 };
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
   }
-});
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 
 // bridge/errmsg.js
 var require_errmsg = __commonJS({
-  "bridge/errmsg.js"(exports2, module2) {
+  "bridge/errmsg.js"(exports, module) {
     "use strict";
     var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
-    module2.exports = { errMsg: errMsg2 };
+    module.exports = { errMsg: errMsg2 };
   }
 });
 
 // bridge/project-layout.js
 var require_project_layout = __commonJS({
-  "bridge/project-layout.js"(exports2, module2) {
+  "bridge/project-layout.js"(exports, module) {
     "use strict";
-    var fs = require("fs");
-    var path = require("path");
+    var fs2 = __require("fs");
+    var path = __require("path");
     var DESIGN_DIR = "design";
     var EXPORT_SUBDIR = "export";
     var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
@@ -42,11 +62,11 @@ var require_project_layout = __commonJS({
     var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
     function looksLikeExportDir(dir) {
       try {
-        if (!fs.statSync(dir).isDirectory()) return false;
+        if (!fs2.statSync(dir).isDirectory()) return false;
       } catch {
         return false;
       }
-      return EXPORT_MARKERS.some((m) => fs.existsSync(path.join(dir, m)));
+      return EXPORT_MARKERS.some((m) => fs2.existsSync(path.join(dir, m)));
     }
     function findExportDir(cwd) {
       const modern = path.join(cwd, EXPORT_DIR);
@@ -59,9 +79,9 @@ var require_project_layout = __commonJS({
     }
     function findMapFile(cwd) {
       const modern = path.join(cwd, MAP_FILE);
-      if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
+      if (fs2.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
       const legacy = path.join(cwd, "codeconnect.local.json");
-      if (fs.existsSync(legacy)) return { file: legacy, rel: "codeconnect.local.json", legacy: true };
+      if (fs2.existsSync(legacy)) return { file: legacy, rel: "codeconnect.local.json", legacy: true };
       return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
     }
     var README = `# design/
@@ -110,7 +130,7 @@ Commit both halves. If your .gitignore ignores \`design/\`, un-ignore this half 
 \`!design/target.json\`, \`!design/codeconnect.local.json\`, \`!design/plan/\` \u2014 or the work is lost
 with the next clone.
 `;
-    module2.exports = {
+    module.exports = {
       DESIGN_DIR,
       EXPORT_SUBDIR,
       EXPORT_DIR,
@@ -129,10 +149,10 @@ with the next clone.
 
 // bridge/snapshot-meta.js
 var require_snapshot_meta = __commonJS({
-  "bridge/snapshot-meta.js"(exports2, module2) {
+  "bridge/snapshot-meta.js"(exports, module) {
     "use strict";
-    var fs = require("fs");
-    var path = require("path");
+    var fs2 = __require("fs");
+    var path = __require("path");
     var { errMsg: errMsg2 } = require_errmsg();
     function snapshotAge2(doc, now) {
       const exportedAt = doc && doc.exportedAt;
@@ -151,7 +171,7 @@ var require_snapshot_meta = __commonJS({
       ];
       let entries = [];
       try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
+        entries = fs2.readdirSync(dir, { withFileTypes: true });
       } catch {
         return out;
       }
@@ -160,7 +180,7 @@ var require_snapshot_meta = __commonJS({
         if (!e.isFile() || !e.name.endsWith(".json") || e.name === "design-system.json") continue;
         const f = path.join(dir, e.name);
         try {
-          rest.push({ f, mtime: fs.statSync(f).mtimeMs });
+          rest.push({ f, mtime: fs2.statSync(f).mtimeMs });
         } catch {
         }
       }
@@ -174,7 +194,7 @@ var require_snapshot_meta = __commonJS({
       for (const { f: cand, named } of cands) {
         let raw;
         try {
-          raw = fs.readFileSync(cand, "utf8");
+          raw = fs2.readFileSync(cand, "utf8");
         } catch {
           continue;
         }
@@ -205,278 +225,261 @@ var require_snapshot_meta = __commonJS({
       const warning = problem === "missing" ? `no exportedAt stamp in ${label} \u2014 freshness unknown (re-export with the current plugin)` : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp` : void 0;
       return { file, exportedAt, ageMs, sourceFile, warning };
     }
-    module2.exports = { readSnapshotInfo, snapshotAge: snapshotAge2 };
+    module.exports = { readSnapshotInfo, snapshotAge: snapshotAge2 };
   }
 });
 
-// design-to-code/hidden.js
-var require_hidden = __commonJS({
-  "design-to-code/hidden.js"(exports2, module2) {
-    var hiddenSelf = (node) => !!(node && typeof node === "object" && node.hidden);
-    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
-    function walkWithHidden2(root, fn, opts) {
-      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-      (function go(node, parentHidden, path, parent, depth) {
-        if (!node || typeof node !== "object") return;
-        const hidden = isHidden(node, parentHidden);
-        fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
-        const kids = Array.isArray(node.children) ? node.children : [];
-        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
-      })(root, false, root && pathOf(root, 0), null, 0);
-    }
-    function hiddenIds(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
-        if (c.hidden && n.id) out.push(n.id);
-      });
-      return out;
-    }
-    function hiddenRoots(roots) {
-      const out = [];
-      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
-        if (c.hidden && !c.parentHidden) out.push(n);
-      });
-      return out;
-    }
-    module2.exports = { hiddenSelf, isHidden, walkWithHidden: walkWithHidden2, hiddenIds, hiddenRoots };
-  }
-});
+// design-to-code/kinds.ts
+var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
 
-// design-to-code/catalog-input.js
-var require_catalog_input = __commonJS({
-  "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
-      return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
-    }
-    function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
-        console.error(
-          `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
+// design-to-code/drift-lint.ts
+var import_snapshot_meta = __toESM(require_snapshot_meta(), 1);
+var import_errmsg = __toESM(require_errmsg(), 1);
+
+// design-to-code/hidden.ts
+var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
+var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+function walkWithHidden(root, fn, opts) {
+  const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+  (function go(node, parentHidden, path, parent, depth) {
+    if (!node || typeof node !== "object") return;
+    const hidden = isHidden(node, parentHidden);
+    fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+  })(root, false, root ? pathOf(root, 0) : "", null, 0);
+}
+
+// design-to-code/catalog-input.ts
+import fs from "node:fs";
+function isManifest(doc, payloadKey) {
+  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+}
+function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
+  if (isManifest(doc, payloadKey)) {
+    console.error(
+      `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
        Pass the split file instead \u2014 e.g. ${doc.files[payloadKey === "variables" ? "tokens" : "componentsLocal"] || wantFile} (relative to the export dir that holds ${givenPath}).`
-        );
-        process.exit(2);
-      }
-    }
-    function readJsonFile(file, what, hint) {
-      const fs = require("fs");
-      let raw;
-      try {
-        raw = fs.readFileSync(file, "utf8");
-      } catch (e) {
-        const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
-        console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+    );
+    process.exit(2);
+  }
+}
+function readJsonFile(file, what, hint) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
-        process.exit(2);
-      }
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${e && e.message || e}`);
-        process.exit(2);
-      }
-    }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    process.exit(2);
   }
-});
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    process.exit(2);
+  }
+}
+var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
-// design-to-code/component-match.js
-var require_component_match = __commonJS({
-  "design-to-code/component-match.js"(exports2, module2) {
-    function visibleInstances(doc, label) {
-      const out = [];
-      const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
-      const walk = (n) => {
-        if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
-        if (n.type === "INSTANCE" && n.mainComponent) {
-          const mc = n.mainComponent;
-          out.push({
-            screen: label,
-            nodeId: n.id,
-            layer: n.name,
-            name: mc.setName || mc.name || n.name,
-            key: mc.key,
-            setKey: mc.setKey,
-            remote: mc.remote === true,
-            variant: parseVariant(n.component) || parseVariant(mc.variant),
-            props: n.props && typeof n.props === "object" ? n.props : {}
-          });
-        }
-        for (const c of n.children || []) walk(c);
-      };
-      for (const r of roots) walk(r);
-      return out;
-    }
-    function parseVariant(s) {
-      if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
-      if (!s || typeof s !== "string" || !s.includes("=")) return null;
-      const out = {};
-      for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
-        const i = part.indexOf("=");
-        if (i < 0) continue;
-        out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
-      }
-      return Object.keys(out).length ? out : null;
-    }
-    var baseProp = (p) => String(p).split("#")[0];
-    var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
-    function signature(inst, cand) {
-      const props = {};
-      for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
-      const reasons = [];
-      let score = 40, verified = true;
-      reasons.push("name matches catalog entry verbatim");
-      const variant = inst.variant;
-      if (variant) {
-        const axes = Object.keys(variant);
-        const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
-        if (known.length === axes.length) {
-          score += 25;
-          reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
-        } else {
-          verified = false;
-          score += known.length ? 10 : -15;
-          reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
-        }
-        const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
-        if (known.length && !bad.length) {
-          score += 25;
-          reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
-        } else if (bad.length) {
-          verified = false;
-          score -= 20;
-          reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
-        }
-      } else if (cand.type === "COMPONENT") {
-        score += 15;
-        reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
-      } else {
-        verified = false;
-        reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
-      }
-      const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
-      if (own.length) {
-        const typed = own.filter((k) => {
-          const d = props[baseProp(k)], v = inst.props[k];
-          if (!d) return false;
-          if (typeof v === "boolean") return d.type === "BOOLEAN";
-          return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
-        });
-        if (typed.length === own.length) {
-          score += 15;
-          reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
-        } else {
-          verified = false;
-          score += typed.length ? 5 : -10;
-          reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
-        }
-      }
-      if (SHARED_PAGE.test(String(cand.page || ""))) {
-        score += 5;
-        reasons.push(`lives on a shared page (${cand.page})`);
-      }
-      return { verified, score, reasons };
-    }
-    var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
-    function matchByNameAndSignature(instances, catalog, library) {
-      const comps = catalog && catalog.components || [];
-      const byName = /* @__PURE__ */ new Map();
-      comps.forEach((c, i) => {
-        if (!byName.has(c.name)) byName.set(c.name, []);
-        byName.get(c.name).push(Object.assign({ _order: i }, c));
+// design-to-code/component-match.ts
+function visibleInstances(doc, label) {
+  const out = [];
+  const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
+  const walk = (n) => {
+    if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
+    if (n.type === "INSTANCE" && n.mainComponent) {
+      const mc = n.mainComponent;
+      out.push({
+        screen: label,
+        nodeId: n.id,
+        layer: n.name,
+        name: mc.setName || mc.name || n.name,
+        key: mc.key,
+        setKey: mc.setKey,
+        remote: mc.remote === true,
+        variant: parseVariant(n.component) || parseVariant(mc.variant),
+        props: n.props && typeof n.props === "object" ? n.props : {}
       });
-      const catKeys = new Set(comps.map((c) => c.key).filter(Boolean));
-      const libKeys = new Set((library && library.components || []).map((c) => c.key).filter(Boolean));
-      const libNames = new Set((library && library.components || []).map((c) => c.name));
-      const groups = /* @__PURE__ */ new Map();
-      for (const inst of instances) {
-        if (!groups.has(inst.name)) groups.set(inst.name, []);
-        groups.get(inst.name).push(inst);
-      }
-      const rows = [];
-      for (const [name, list] of groups) {
-        const byKey = list.some((i) => catKeys.has(i.key) || catKeys.has(i.setKey));
-        const row = {
-          name,
-          instances: list.length,
-          nodeIds: list.map((i) => i.nodeId),
-          screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
-          instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter(Boolean))],
-          remote: list.every((i) => i.remote),
-          byKey,
-          match: null,
-          alternatives: [],
-          reasons: []
-        };
-        const cands = byName.get(name) || [];
-        if (!cands.length) {
-          const inLibrary = list.some((i) => libKeys.has(i.key) || libKeys.has(i.setKey));
-          row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
-          row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
-          rows.push(row);
-          continue;
-        }
-        const scored = cands.map((c) => {
-          const per = list.map((i) => signature(i, c));
-          return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
-        }).sort((a, b) => b.verified - a.verified || b.score - a.score || a.c._order - b.c._order);
-        const best = scored[0];
-        if (!best.verified) {
-          row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
-          rows.push(row);
-          continue;
-        }
-        const verifiedOnes = scored.filter((s) => s.verified);
-        const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-        row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
-        row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
-        row.reasons = best.reasons.slice();
-        if (ties.length) {
-          const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
-          row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
-          row.tie = identical ? "duplicate-definitions" : "different-signatures";
-        } else if (scored.length > 1) {
-          row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
-        }
-        row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
-        row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
-        rows.push(row);
-      }
-      const proposals = rows.filter((r) => r.match && !r.byKey);
-      return {
-        rows,
-        proposals,
-        summary: {
-          instances: instances.length,
-          names: rows.length,
-          byKey: rows.filter((r) => r.byKey).length,
-          proposed: proposals.length,
-          proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
-          withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
-          unmatched: rows.filter((r) => !r.match).length,
-          remote: instances.filter((i) => i.remote).length
-        }
-      };
     }
-    var REKEY_MIN_PROPOSALS = 3;
-    var REKEY_MIN_SHARE = 0.5;
-    function isRekeyed(result) {
-      const s = result.summary;
-      return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
-    }
-    module2.exports = { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
+    for (const c of n.children || []) walk(c);
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+function parseVariant(s) {
+  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
+  if (!s || typeof s !== "string" || !s.includes("=")) return null;
+  const out = {};
+  for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
   }
-});
+  return Object.keys(out).length ? out : null;
+}
+var baseProp = (p) => String(p).split("#")[0];
+var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
+function signature(inst, cand) {
+  const props = {};
+  for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
+  const reasons = [];
+  let score = 40, verified = true;
+  reasons.push("name matches catalog entry verbatim");
+  const variant = inst.variant;
+  if (variant) {
+    const axes = Object.keys(variant);
+    const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
+    if (known.length === axes.length) {
+      score += 25;
+      reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
+    } else {
+      verified = false;
+      score += known.length ? 10 : -15;
+      reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
+    }
+    const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
+    if (known.length && !bad.length) {
+      score += 25;
+      reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
+    } else if (bad.length) {
+      verified = false;
+      score -= 20;
+      reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
+    }
+  } else if (cand.type === "COMPONENT") {
+    score += 15;
+    reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
+  } else {
+    verified = false;
+    reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
+  }
+  const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
+  if (own.length) {
+    const typed = own.filter((k) => {
+      const d = props[baseProp(k)], v = inst.props[k];
+      if (!d) return false;
+      if (typeof v === "boolean") return d.type === "BOOLEAN";
+      return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
+    });
+    if (typed.length === own.length) {
+      score += 15;
+      reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
+    } else {
+      verified = false;
+      score += typed.length ? 5 : -10;
+      reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
+    }
+  }
+  if (SHARED_PAGE.test(String(cand.page || ""))) {
+    score += 5;
+    reasons.push(`lives on a shared page (${cand.page})`);
+  }
+  return { verified, score, reasons };
+}
+var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
+function matchByNameAndSignature(instances, catalog, library) {
+  const comps = catalog && catalog.components || [];
+  const byName = /* @__PURE__ */ new Map();
+  comps.forEach((c, i) => {
+    if (!byName.has(c.name)) byName.set(c.name, []);
+    byName.get(c.name).push(Object.assign({ _order: i }, c));
+  });
+  const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
+  const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
+  const libNames = new Set((library && library.components || []).map((c) => c.name));
+  const groups = /* @__PURE__ */ new Map();
+  for (const inst of instances) {
+    if (!groups.has(inst.name)) groups.set(inst.name, []);
+    groups.get(inst.name).push(inst);
+  }
+  const rows = [];
+  for (const [name, list] of groups) {
+    const byKey = list.some((i) => catKeys.has(i.key ?? "") || catKeys.has(i.setKey ?? ""));
+    const row = {
+      name,
+      instances: list.length,
+      nodeIds: list.map((i) => i.nodeId),
+      screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
+      instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k) => !!k))],
+      remote: list.every((i) => i.remote),
+      byKey,
+      match: null,
+      alternatives: [],
+      reasons: []
+    };
+    const cands = byName.get(name) || [];
+    if (!cands.length) {
+      const inLibrary = list.some((i) => libKeys.has(i.key ?? "") || libKeys.has(i.setKey ?? ""));
+      row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
+      row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
+      rows.push(row);
+      continue;
+    }
+    const scored = cands.map((c) => {
+      const per = list.map((i) => signature(i, c));
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+    }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
+    const best = scored[0];
+    if (!best.verified) {
+      row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
+      rows.push(row);
+      continue;
+    }
+    const verifiedOnes = scored.filter((s) => s.verified);
+    const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
+    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
+    row.reasons = best.reasons.slice();
+    if (ties.length) {
+      const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
+      row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
+      row.tie = identical ? "duplicate-definitions" : "different-signatures";
+    } else if (scored.length > 1) {
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+    }
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
+    rows.push(row);
+  }
+  const proposals = rows.filter((r) => r.match && !r.byKey);
+  return {
+    rows,
+    proposals,
+    summary: {
+      instances: instances.length,
+      names: rows.length,
+      byKey: rows.filter((r) => r.byKey).length,
+      proposed: proposals.length,
+      proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
+      withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
+      unmatched: rows.filter((r) => !r.match).length,
+      remote: instances.filter((i) => i.remote).length
+    }
+  };
+}
+var REKEY_MIN_PROPOSALS = 3;
+var REKEY_MIN_SHARE = 0.5;
+function isRekeyed(result) {
+  const s = result.summary;
+  return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
+}
 
-// design-to-code/drift-lint.js
-var { TYPE_TO_KIND } = require_kinds();
-var { snapshotAge } = require_snapshot_meta();
-var { errMsg } = require_errmsg();
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0];
+var snapshotAge = import_snapshot_meta.snapshotAge;
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
-  const maxAgeMs = opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
+  const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
   const { exportedAt, ageMs, problem } = snapshotAge(catalog, opts.now || Date.now());
   if (problem === "missing") {
     const w = { code: "unknown-freshness", message: "design-system.json has no `exportedAt` timestamp \u2014 freshness cannot be verified. Findings are checked against whatever snapshot is on disk, which may be stale; re-export with the current plugin to get a timestamp." };
@@ -488,12 +491,12 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
     push(warnings, w.code, w.message, { exportedAt });
     return w;
   }
-  if (ageMs > maxAgeMs) {
+  if (typeof ageMs === "number" && ageMs > maxAgeMs) {
     const ageH = (ageMs / 36e5).toFixed(1);
     const maxH = (maxAgeMs / 36e5).toFixed(1);
     const w = {
       code: "stale-snapshot",
-      message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file \u2014 re-run dtwin / the export tool before trusting them.`
+      message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog && catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file \u2014 re-run dtwin / the export tool before trusting them.`
     };
     push(warnings, w.code, w.message, { exportedAt, ageMs, maxAgeMs });
     return w;
@@ -508,7 +511,7 @@ function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
       push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${out[b].orig}', '${k}') \u2014 comparison skipped`, { mapKey, prop: b });
       ambiguous.add(b);
     }
-    out[b] = { orig: k, [valKey]: rawProps[k] };
+    out[b] = { orig: k, [valKey]: (rawProps || {})[k] };
   }
   return { props: out, ambiguous };
 }
@@ -560,13 +563,14 @@ function driftLint(map, catalog, opts) {
     for (const pn of Object.keys(mapProps)) {
       const cp = catProps[pn];
       if (!cp || catAmbiguous.has(pn) || mapAmbiguous.has(pn)) continue;
-      const kind = mapProps[pn].prop.kind, expected = TYPE_TO_KIND[cp.def.type];
+      const prop = mapProps[pn].prop;
+      const kind = prop.kind, expected = TYPE_TO_KIND[cp.def.type];
       if (expected && kind && kind !== expected) {
         push(errors, "kind-mismatch", `'${mapKey}'.props.${mapProps[pn].orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn });
         continue;
       }
-      if (kind === "enum") {
-        const values = mapProps[pn].prop.values || {};
+      if (prop.kind === "enum") {
+        const values = prop.values || {};
         if (!Array.isArray(cp.def.options)) {
           push(warnings, "no-variant-options", `'${mapKey}'.props.${mapProps[pn].orig}: component exposes no variant options \u2014 enum values can't be verified`, { mapKey, prop: pn });
           continue;
@@ -591,12 +595,11 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
   const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token } });
   if (!res.ok) throw new Error(`GET /v1/files/${fileKey}/meta -> ${res.status} ${res.statusText}`);
   const body = await res.json();
-  const lastModified = body && body.file && body.file.last_modified;
+  const lastModified = isJsonObject(body) && isJsonObject(body.file) && typeof body.file.last_modified === "string" ? body.file.last_modified : void 0;
   if (!lastModified) return { lastModified: void 0, aheadOfSnapshot: void 0 };
   const aheadOfSnapshot = exportedAt ? Date.parse(lastModified) > Date.parse(exportedAt) : void 0;
   return { lastModified, aheadOfSnapshot };
 }
-var { walkWithHidden } = require_hidden();
 function screenCoverage(map, catalog, screenDocs) {
   const entries = map && map.components || {};
   const mapKeys = /* @__PURE__ */ new Set();
@@ -606,10 +609,10 @@ function screenCoverage(map, catalog, screenDocs) {
     if (f.id) mapKeys.add(f.id);
     mapKeys.add(k);
   }
-  const catKeys = new Set((catalog && catalog.components || []).map((c) => c.key).filter(Boolean));
+  const catKeys = new Set((catalog && catalog.components || []).map((c) => c.key).filter((k) => !!k));
   const used = /* @__PURE__ */ new Map();
   for (const doc of screenDocs || []) {
-    const roots = Array.isArray(doc && doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
+    const roots = doc && Array.isArray(doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
     for (const r of roots) walkWithHidden(r, (n, c) => {
       if (n.type !== "INSTANCE" || !n.mainComponent) return;
       const mc = n.mainComponent;
@@ -622,8 +625,8 @@ function screenCoverage(map, catalog, screenDocs) {
   }
   const rows = [...used.values()].map((u) => ({
     ...u,
-    inCatalog: catKeys.has(u.key) || catKeys.has(u.variantKey),
-    inMap: mapKeys.has(u.key) || mapKeys.has(u.variantKey)
+    inCatalog: catKeys.has(u.key) || !!u.variantKey && catKeys.has(u.variantKey),
+    inMap: mapKeys.has(u.key) || !!u.variantKey && mapKeys.has(u.variantKey)
   }));
   const instances = rows.reduce((n, r) => n + r.instances, 0);
   const hiddenInstances = rows.reduce((n, r) => n + r.hiddenInstances, 0);
@@ -642,9 +645,16 @@ function screenCoverage(map, catalog, screenDocs) {
     unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances }))
   };
 }
-module.exports = { driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
-if (require.main === module) {
-  const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
+function isMapLike(x) {
+  return isJsonObject(x) && (x.components === void 0 || isJsonObject(x.components));
+}
+function isCatalogLike(x) {
+  return isJsonObject(x) && (x.components === void 0 || Array.isArray(x.components));
+}
+function isScreenDocLike(x) {
+  return isJsonObject(x);
+}
+if (import.meta.main) {
   const argv = process.argv.slice(2);
   const maxAgeIdx = argv.indexOf("--max-age");
   let maxAgeHours;
@@ -680,9 +690,11 @@ if (require.main === module) {
     console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]");
     process.exit(2);
   }
-  const catalog = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
-  const map = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const catalogRaw = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
+  assertNotManifest(catalogRaw, catalogFile, "components", "design-system/components.local.json");
+  const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
+  const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const map = isMapLike(mapRaw) ? mapRaw : null;
   const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
@@ -692,7 +704,10 @@ ${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
   let screenFail = false;
   if (screenFiles.length) {
-    const docs = screenFiles.map((f) => readJsonFile(f, "screen export"));
+    const docs = screenFiles.map((f) => {
+      const d = readJsonFile(f, "screen export");
+      return isScreenDocLike(d) ? d : null;
+    });
     const cov = screenCoverage(map, catalog, docs);
     if (!cov.distinct) {
       console.error(`
@@ -703,8 +718,8 @@ SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 not
 SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component sets placed on this screen are in your map (by component key) \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total, ${cov.hiddenInstances} of them on hidden layers` + (cov.hiddenOnly ? ` (${cov.hiddenOnly} set(s) appear ONLY on hidden layers and will not be built)` : "")
       );
       console.error(`       (this says which components you can REUSE by key \u2014 not which ones the build contains; that is verify's job.)`);
-      const { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature([].concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
+      const none = [];
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
         screenFail = true;
         console.error(
@@ -735,13 +750,20 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
   const run = async () => {
     if (fileKey && token) {
       try {
-        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
-        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
+        const live = await checkLiveFreshness(fileKey, token, catalog && catalog.exportedAt);
+        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog && catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
       } catch (e) {
-        console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
+        console.error(`warn   [live-meta] could not verify against the live file: ${(0, import_errmsg.errMsg)(e)}`);
       }
     }
     process.exit(res.errors.length || screenFail ? 1 : 0);
   };
   run();
 }
+export {
+  DEFAULT_MAX_AGE_MS,
+  checkFreshness,
+  checkLiveFreshness,
+  driftLint,
+  screenCoverage
+};

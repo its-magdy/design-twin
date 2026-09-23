@@ -629,12 +629,12 @@ function loadLayer<T>(mod: string, tool: string): T {
   }
 }
 const getComponent = (catalogFile: string, handle: string) =>
-  loadLayer<{ getComponent: (c: string, h: string) => any }>("get-component.js", "design_get_component").getComponent(
+  loadLayer<{ getComponent: (c: string, h: string) => any }>("get-component.ts", "design_get_component").getComponent(
     catalogFile,
     handle
   );
 const driftLint = (map: any, catalog: any, opts?: { maxAgeMs?: number }) =>
-  loadLayer<{ driftLint: (m: any, c: any, o?: any) => any }>("drift-lint.js", "design_drift_lint").driftLint(
+  loadLayer<{ driftLint: (m: any, c: any, o?: any) => any }>("drift-lint.ts", "design_drift_lint").driftLint(
     map,
     catalog,
     opts
