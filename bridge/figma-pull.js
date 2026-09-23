@@ -861,6 +861,23 @@ async function main() {
   // nonexistent` with two clients connected exited 1 on "say which one to use" and left `./nonexistent/`
   // on disk. `--list`/`--children` never write outDir at all, so they need no mkdir either way.
 
+  // An export-class command is the one shape findings 202/213 hit: exportNode/exportSelection/
+  // exportLibrary/exportDesignSystem/exportFull, below — never the index commands (--list/--children/
+  // --whoami/--list-clients/--list-libraries), which are cheap and already excluded from the mkdir
+  // guard above for the same reason. Only these get the upfront no-daemon warning and the stall check.
+  const isExportCmd = !listOnly && !childrenId && !listLibraries && !whoami && !listClients;
+  // Findings 202/213/220: without `dtwin serve`, every pull opens a throwaway bridge and the plugin's
+  // reconnect is what actually costs the time (measured 300s/908s vs 7.5-8.8s with a daemon warm).
+  // Said up front, before anything is sent, not just diagnosed after the fact by `dtwin doctor`.
+  if (!d && isExportCmd) {
+    console.error("[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection.");
+  }
+  // The stall-check window (server-core.js's request() `stallMs`): if NOTHING at all is heard back
+  // from the plugin (not even a progress frame) within this long, abort rather than sit until the full
+  // export timeout. Only applied to the one-shot bridge below, and only for export commands — see the
+  // comment on `request()`'s stallMs parameter for why the daemon path opts out.
+  const STALL_MS = Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;
+
   let bridge = null;
   let send;
   if (d) {
@@ -892,7 +909,7 @@ async function main() {
     // A name/fileKey target (not a bare c<N> connId, which never depends on identification) can lose
     // the race against the plugin's `hello` — see waitForIdentified's comment (finding 216).
     if (client && !/^c\d+$/.test(client)) await bridge.waitForIdentified();
-    send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs, client);
+    send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to
   // close, and closing the DAEMON's would be wrong — one helper so no call site has to know which.

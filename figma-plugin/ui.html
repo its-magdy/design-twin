@@ -246,6 +246,16 @@
         return;
       }
       if (m.type === "progress") {
+        // Relay a bridge-triggered run's progress over the socket too (not just onto this DOM) — the
+        // ONLY sign of life the bridge/CLI side has during a long export otherwise, since exportAsync
+        // itself is one long await with no intermediate reply. bridge/server-core.js's request()
+        // reads this to tell a genuinely slow-but-working export apart from a truly stalled connection
+        // (findings 202/213 measured 300s/908s of silence for work finding 220 proved takes 7.5-8.8s
+        // once a daemon keeps the plugin warm). Throttled the same as the DOM update (progress() on
+        // the sandbox side already throttles to one frame per ~250ms), so this costs nothing extra.
+        if (m.source === "bridge" && ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "progress", phase: m.phase, page: m.page, nodes: m.nodes, assets: m.assets }));
+        }
         if (!running) runBegin(m); // a frame that outran its run-begin — never show progress with no chrome
         if (cancelSent) return;    // "Cancelling…" must not be overwritten by in-flight frames
         var pg = m.page;

@@ -258,7 +258,7 @@ function createBridge(port = PORT) {
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
     const connId = "c" + ++connSeq;
-    const entry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null };
+    const entry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, lastActivity: Date.now() };
     ws._connId = connId;
     clients.set(connId, entry);
     console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
@@ -273,6 +273,18 @@ function createBridge(port = PORT) {
       // JSON.parse can return a non-object (null, number, string) — guard before reading .id so a
       // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
       if (!msg || typeof msg !== "object") return;
+      // ANY message from this client is a sign of life — recorded unconditionally, before the
+      // type-specific handling below, so request()'s stall detector (see below) can tell "the plugin
+      // is genuinely walking a big file and periodically reporting progress" from "nothing has been
+      // heard from this socket since the command was sent", which a plain reply-or-timeout wait
+      // cannot: findings 202/213 measured a 300s/908s silent wait, on a bridge that WAS connected, for
+      // work that took 7.5-8.8s once a daemon kept the connection warm (finding 220).
+      entry.lastActivity = Date.now();
+      // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
+      // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
+      // socket too). Carries no request id — same rule as `hello` — and needs no reply; it exists
+      // purely to keep `lastActivity` current during a long walk.
+      if (msg.type === "progress") return;
       // Unsolicited identity announcement, sent by the plugin UI on connect AND on every reconnect.
       // Re-announcing is the whole point: identity is DERIVED from the environment each time rather
       // than issued by us and replayed, so a plugin that Figma tore down and re-ran comes back
@@ -430,7 +442,20 @@ function createBridge(port = PORT) {
 
   // `target` is optional and LAST so every existing three-argument call site keeps working unchanged:
   // with one file connected it resolves to that file, which is exactly what it did before.
-  function request(cmd, args, timeoutMs = TIMEOUTS.command, target) {
+  // `stallMs` (opt-in — undefined leaves today's behaviour untouched for every existing caller,
+  // including the daemon and MCP paths) is a SEPARATE, SHORTER wait for any sign of life from this
+  // specific client, checked independently of the real per-command timeout: findings 202/213 measured
+  // a 300s/908s silent wait — on a connected, identified bridge — for work finding 220 proved takes
+  // 7.5-8.8s once a daemon keeps the plugin warm. A stalled one-shot connection (the shape those two
+  // findings share: no `dtwin serve` running) shows NO activity at all on the socket — not even a
+  // progress frame — for the whole wait, where a genuinely large/slow export keeps resetting
+  // `lastActivity` via the periodic progress relay (see the `ws.on("message")` handler above). Only
+  // figma-pull.js's own one-shot bridge (no daemon) opts into this, and only for export-class
+  // commands — a cheap `whoami`/`list` finishing in under a second never needs it, and the daemon path
+  // deliberately does NOT pass it: a persistent connection is exactly the case finding 220 shows is
+  // already fast, so there is nothing here worth protecting against on that path.
+  const STALL_POLL_MS = 500;
+  function request(cmd, args, timeoutMs = TIMEOUTS.command, target, stallMs) {
     return new Promise((resolve, reject) => {
       let client;
       try {
@@ -453,14 +478,33 @@ function createBridge(port = PORT) {
           ));
         }
       }, timeoutMs);
+      let stallTimer = null;
+      if (typeof stallMs === "number" && stallMs > 0) {
+        const sentAt = Date.now();
+        stallTimer = setInterval(() => {
+          if (!pending.has(id)) return; // settled already — the interval's own clear below is racing it
+          const quiet = Date.now() - Math.max(client.lastActivity, sentAt);
+          if (quiet < stallMs) return;
+          pending.delete(id);
+          clearInterval(stallTimer);
+          clearTimeout(timer);
+          const node = args && (args.nodeId || args.node) ? ` (node ${args.nodeId || args.node})` : "";
+          reject(new Error(
+            `no response from the Figma plugin${node} for '${cmd}' in ${Math.round(stallMs / 1000)}s, and no progress was reported either — ` +
+            `this is the shape a missing \`dtwin serve\` daemon produces (every command opens a fresh bridge and the plugin's reconnect is what actually takes ` +
+            `the time, not the export itself). Run \`dtwin serve\` in a background terminal and retry, or \`dtwin doctor\` to confirm. ` +
+            `Still stuck with a daemon running? check the plugin window in Figma for a red error — this stall check does not apply there.`
+          ));
+        }, STALL_POLL_MS);
+      }
       // Clear the timer once the request settles, so a resolved/rejected request doesn't
       // leave a live 2-minute timer (and its closure) armed until it harmlessly fires.
       // connId is recorded so the close handler can fail exactly this client's in-flight work and
       // leave every other file's alone.
       pending.set(id, {
         connId: client.connId,
-        resolve: (v) => { clearTimeout(timer); resolve(v); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); reject(e); },
       });
       client.ws.send(JSON.stringify({ id, cmd, args }));
     });
