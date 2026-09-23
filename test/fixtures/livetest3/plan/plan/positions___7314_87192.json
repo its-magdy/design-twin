@@ -1,0 +1,587 @@
+{
+  "screen": "positions___7314_87192",
+  "screenName": "positions  (7314:87192) \u2014 the frame whose visible title is 'Job Roles'",
+  "status": "verified",
+  "target": {
+    "profile": "web-tailwind",
+    "stack": "React 18 + Vite 5 + TypeScript + Tailwind CSS v4",
+    "runtime": "Docker (app/Dockerfile + docker-compose.yml), dev server on :5173"
+  },
+  "architecture": {
+    "convention": "proposed",
+    "source": null,
+    "shared": "app/src/components",
+    "features": "app/src/features/job-roles",
+    "notes": "Empty directory: `ls src app lib` and a find for features/modules/pages returned nothing, there is no package.json and no tsconfig.json, so there was nothing to follow (references/architecture.md \u00a71). Proposed \u00a72's default layout, adapted to the user's requirement that the app live under app/. No component catalog resolves for this screen (0/61 by key), so shared-vs-feature is a judgement call, not a derived fact: the shell (Sidebar/Header/Footer/AppShell) and the generic list primitives (Button, SquareButton, SearchInput, DataTable, Pagination, Modal, PageTitle, Icon) are shared because the Figma frame builds them from components the other Org-management screens reuse; only jobRoles data and the screen itself are feature-local."
+  },
+  "files": [
+    "app/Dockerfile",
+    "app/README.md",
+    "app/index.html",
+    "app/package.json",
+    "app/src/components/Button.tsx",
+    "app/src/components/DataTable.tsx",
+    "app/src/components/Icon.tsx",
+    "app/src/components/Modal.tsx",
+    "app/src/components/PageTitle.tsx",
+    "app/src/components/Pagination.tsx",
+    "app/src/components/SearchInput.tsx",
+    "app/src/components/SquareButton.tsx",
+    "app/src/features/job-roles/data/jobRoles.ts",
+    "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+    "app/src/index.css",
+    "app/src/layout/AppShell.tsx",
+    "app/src/layout/Footer.tsx",
+    "app/src/layout/Header.tsx",
+    "app/src/layout/NotBuiltYet.tsx",
+    "app/src/layout/Sidebar.tsx",
+    "app/src/layout/navigation.ts",
+    "app/src/main.tsx",
+    "app/src/router.tsx",
+    "app/src/theme/theme.css",
+    "app/src/theme/theme.screen-tokens.css",
+    "app/tsconfig.json",
+    "app/vite.config.ts",
+    "docker-compose.yml"
+  ],
+  "tokens": [
+    {
+      "value": "#121319",
+      "kind": "color",
+      "figmaName": "Backgrounds/Side menu",
+      "codeToken": "bg-backgrounds-side-menu",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#1d1d1f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Page Color",
+      "codeToken": "bg-backgrounds-page-color",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#121319",
+      "kind": "color",
+      "figmaName": "Neutrals/Neutral 0",
+      "codeToken": "bg-neutrals-neutral-0",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#292931",
+      "kind": "color",
+      "figmaName": "Backgrounds/Tags",
+      "codeToken": "bg-backgrounds-tags",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#292931",
+      "kind": "color",
+      "figmaName": "Neutrals/Neutral 100",
+      "codeToken": "bg-neutrals-neutral-100",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#46464f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Table header",
+      "codeToken": "bg-backgrounds-table-header",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#46464f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Row Hover",
+      "codeToken": "bg-backgrounds-row-hover",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#46464f",
+      "kind": "color",
+      "figmaName": "Borders/Border",
+      "codeToken": "border-borders-border",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#1d1d1f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Input fields BG",
+      "codeToken": "bg-backgrounds-input-fields-bg",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#dec9ff",
+      "kind": "color",
+      "figmaName": "Primary/Primary",
+      "codeToken": "bg-primary-primary / text-primary-primary",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#ffffff",
+      "kind": "color",
+      "figmaName": "Text/Main Titles",
+      "codeToken": "text-text-main-titles",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#d4d4d4",
+      "kind": "color",
+      "figmaName": "Text/Sub titles",
+      "codeToken": "text-text-sub-titles",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#d4d4d4",
+      "kind": "color",
+      "figmaName": "Neutrals/Neutral 500",
+      "codeToken": "text-neutrals-neutral-500",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#767680",
+      "kind": "color",
+      "figmaName": "Text/Placeholder text",
+      "codeToken": "text-text-placeholder-text",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#f6f6f6",
+      "kind": "color",
+      "figmaName": "Neutrals/Neutral 800",
+      "codeToken": "text-neutrals-neutral-800",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#000000",
+      "kind": "color",
+      "figmaName": "Static/Static Black",
+      "codeToken": "text-static-static-black",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#b28800",
+      "kind": "color",
+      "figmaName": "Warning/Warning Dark",
+      "codeToken": "text-warning-warning-dark",
+      "verdict": "resolved",
+      "decision": "cross-check flags 'Warning/Warning Medium' as a name collision; 'Warning Dark' itself is not in conflict and resolves in the generated theme."
+    },
+    {
+      "value": "24",
+      "kind": "spacing",
+      "figmaName": "Space 4",
+      "codeToken": "ps-space-4 / pe-space-4 (--spacing-space-4: 24px)",
+      "verdict": "resolved",
+      "decision": "TWO Figma variables are named 'Space 4' (key e26d50\u2026={Mode 1:24}, key 64928e3a\u2026={Desktop:16}). THIS screen binds the 24 one (button + table-row horizontal padding measures 24 in the export). tokens.js run on design/export/variables.json merges them and emits 16 \u2014 wrong here \u2014 so the theme was generated from design/export/design-system/tokens.json instead, which emits 24."
+    },
+    {
+      "value": "16",
+      "kind": "spacing",
+      "figmaName": "Space 3",
+      "codeToken": "py-space-3 / gap-space-3 (--spacing-space-3: 16px)",
+      "verdict": "resolved",
+      "decision": "Same collision class: tokens.js on EITHER variables.json or the screen's own vars.json emits --spacing-space-3: 12px because '(Space 3)'=12 sanitises onto the same custom property and wins silently. Generated from the design system instead, where Space 3 = 16 \u2014 which is what the export's own row padding (16) shows."
+    },
+    {
+      "value": "12",
+      "kind": "spacing",
+      "figmaName": "(Space 3)",
+      "codeToken": "gap-space-3-paren / ps-space-3-paren (--spacing-space-3-paren: 12px)",
+      "verdict": "resolved",
+      "decision": "INVENTED SUFFIX '-paren'. Figma's name is literally '(Space 3)'; parentheses are illegal in a CSS custom property and the generator's own sanitised name collides with the design system's 'Space 3'. Renamed in app/src/theme/theme.screen-tokens.css with the reason inline."
+    },
+    {
+      "value": "8",
+      "kind": "spacing",
+      "figmaName": "Space 2",
+      "codeToken": "gap-space-2 / py-space-2",
+      "verdict": "resolved"
+    },
+    {
+      "value": "4",
+      "kind": "spacing",
+      "figmaName": "Space 1",
+      "codeToken": "gap-space-1",
+      "verdict": "resolved"
+    },
+    {
+      "value": "8",
+      "kind": "spacing",
+      "figmaName": "Rows Spacing",
+      "codeToken": "gap-space-2 (alias of Space 2)",
+      "verdict": "resolved"
+    },
+    {
+      "value": "8",
+      "kind": "radius",
+      "figmaName": "Rounds Variables/roundes-lg",
+      "codeToken": "rounded-rounds-variables-roundes-lg",
+      "verdict": "resolved",
+      "decision": "absent from the design-system export; emitted into theme.screen-tokens.css from the screen's own vars.json."
+    },
+    {
+      "value": "8",
+      "kind": "radius",
+      "figmaName": "Semantic rounds/forms-rounded",
+      "codeToken": "rounded-semantic-rounds-forms-rounded",
+      "verdict": "resolved",
+      "decision": "absent from the design-system export; same treatment."
+    },
+    {
+      "value": "14",
+      "kind": "fontSize",
+      "figmaName": "Font-Size/Text-sm",
+      "codeToken": "text-font-size-text-sm",
+      "verdict": "resolved",
+      "decision": "absent from the design system; from the screen's vars.json."
+    },
+    {
+      "value": "16",
+      "kind": "fontSize",
+      "figmaName": "Font-Size/Text-base",
+      "codeToken": "text-font-size-text-base",
+      "verdict": "resolved",
+      "decision": "absent from the design system; from the screen's vars.json."
+    },
+    {
+      "value": "12",
+      "kind": "fontSize",
+      "figmaName": "Font-Size/Text-xs",
+      "codeToken": "text-font-size-text-xs",
+      "verdict": "resolved",
+      "decision": "absent from the design system; from the screen's vars.json."
+    },
+    {
+      "value": "500",
+      "kind": "fontWeight",
+      "figmaName": "Font-Weight/medium",
+      "codeToken": "font-medium",
+      "verdict": "resolved",
+      "decision": "--font-weight-medium is emitted but generates no Tailwind utility (unitless FLOAT); Tailwind's own font-medium is the same 500."
+    },
+    {
+      "value": "400",
+      "kind": "fontWeight",
+      "figmaName": "Font-Weight/normal",
+      "codeToken": "(browser default 400)",
+      "verdict": "resolved",
+      "decision": "same: unitless FLOAT, no utility generated."
+    },
+    {
+      "value": "14",
+      "kind": "fontSize",
+      "figmaName": "Body 4",
+      "codeToken": "text-body-4",
+      "verdict": "resolved"
+    },
+    {
+      "value": "12",
+      "kind": "fontSize",
+      "figmaName": "Body 5",
+      "codeToken": "text-body-5",
+      "verdict": "resolved"
+    },
+    {
+      "value": "20",
+      "kind": "fontSize",
+      "figmaName": "Body 1",
+      "codeToken": "text-body-1",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#121318",
+      "kind": "color",
+      "codeToken": "bg-[#121318]",
+      "verdict": "none",
+      "decision": "The footer bar's fill binds NO variable in the export (node 20173:137673). Kept as a one-off literal rather than snapping it to Neutrals/Neutral 0 (#121319), which is a different colour."
+    },
+    {
+      "value": "#dec9ff -> #a596be",
+      "kind": "gradient",
+      "codeToken": "bg-[linear-gradient(180deg,#dec9ff_0%,#a596be_100%)]",
+      "verdict": "none",
+      "decision": "The active sidebar sub-item's gradient stops bind no variables (node I10970:111588;10215:94386;10968:81957). Kept literal, exactly as exported."
+    },
+    {
+      "value": "1000000000",
+      "kind": "radius",
+      "figmaName": "Rounds/Full",
+      "codeToken": "rounded-full",
+      "verdict": "none",
+      "decision": "'Full' exports as the sentinel 1e9 and the generated theme.css contains '--radius-full: 1000000000px' verbatim. Not used; Tailwind's rounded-full (9999px) is used instead. The generated file is left untouched."
+    }
+  ],
+  "components": [
+    {
+      "name": "Sidebar",
+      "key": null,
+      "figmaName": "Component 1",
+      "mapModule": "src/layout/Sidebar.tsx",
+      "verdict": "new",
+      "matchedByName": null,
+      "note": "'Component 1' is one of the 26 AMBIGUOUS catalog names cross-check deliberately left unmatched (4 candidates)."
+    },
+    {
+      "name": "Header",
+      "key": null,
+      "figmaName": "Header",
+      "mapModule": "src/layout/Header.tsx",
+      "verdict": "new",
+      "matchedByName": "Header",
+      "note": "ambiguous name in the catalog \u2014 not bound."
+    },
+    {
+      "name": "PageTitle",
+      "key": null,
+      "figmaName": "Page Title",
+      "mapModule": "src/components/PageTitle.tsx",
+      "verdict": "new",
+      "matchedByName": "Page Title"
+    },
+    {
+      "name": "Button",
+      "key": null,
+      "figmaName": "Button",
+      "mapModule": "src/components/Button.tsx",
+      "verdict": "new",
+      "matchedByName": "Button"
+    },
+    {
+      "name": "SquareButton",
+      "key": null,
+      "figmaName": "Square Button",
+      "mapModule": "src/components/SquareButton.tsx",
+      "verdict": "new"
+    },
+    {
+      "name": "SearchInput",
+      "key": null,
+      "figmaName": "search bar",
+      "mapModule": "src/components/SearchInput.tsx",
+      "verdict": "new"
+    },
+    {
+      "name": "DataTable",
+      "key": null,
+      "figmaName": "Dark / table header / Table row",
+      "mapModule": "src/components/DataTable.tsx",
+      "verdict": "new"
+    },
+    {
+      "name": "Pagination",
+      "key": null,
+      "figmaName": "Pagination",
+      "mapModule": "src/components/Pagination.tsx",
+      "verdict": "new",
+      "matchedByName": "Pagination"
+    },
+    {
+      "name": "Icon",
+      "key": null,
+      "figmaName": null,
+      "mapModule": "src/components/Icon.tsx",
+      "verdict": "new",
+      "note": "INVENTED NAME. One wrapper around the exported SVGs; recolours the 32 `monochrome` assets to currentColor at render time."
+    },
+    {
+      "name": "Modal",
+      "key": null,
+      "figmaName": null,
+      "mapModule": "src/components/Modal.tsx",
+      "verdict": "new",
+      "note": "INVENTED NAME. Nothing is drawn for the two `overlay` reactions (Popup 20170:132666 / 20173:132861) or the row actions; native <dialog>, audit default."
+    },
+    {
+      "name": "Footer",
+      "key": null,
+      "figmaName": "Frame 6356238",
+      "mapModule": "src/layout/Footer.tsx",
+      "verdict": "new"
+    },
+    {
+      "name": "AppShell",
+      "key": null,
+      "figmaName": "positions  / Frame 1000005062",
+      "mapModule": "src/layout/AppShell.tsx",
+      "verdict": "new"
+    }
+  ],
+  "anchors": {
+    "7314:87192": {
+      "file": "app/src/layout/AppShell.tsx",
+      "symbol": "AppShell"
+    },
+    "10970:111588": {
+      "file": "app/src/layout/Sidebar.tsx",
+      "symbol": "Sidebar"
+    },
+    "20173:137668": {
+      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+      "symbol": "JobRolesScreen"
+    },
+    "20173:137669": {
+      "file": "app/src/layout/Header.tsx",
+      "symbol": "Header"
+    },
+    "20173:137670": {
+      "file": "app/src/components/PageTitle.tsx",
+      "symbol": "PageTitle"
+    },
+    "I20173:137670;72:3440": {
+      "file": "app/src/components/Button.tsx",
+      "symbol": "Button"
+    },
+    "I20173:137670;2006:22479": {
+      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+      "symbol": "JobRolesScreen (export button)"
+    },
+    "20173:137671": {
+      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+      "symbol": "JobRolesScreen"
+    },
+    "20173:142047": {
+      "file": "app/src/features/job-roles/screens/JobRolesScreen.tsx",
+      "symbol": "JobRolesScreen (search and filter)"
+    },
+    "I20173:142047;885:2724": {
+      "file": "app/src/components/SearchInput.tsx",
+      "symbol": "SearchInput"
+    },
+    "I20173:142047;885:2723": {
+      "file": "app/src/components/Button.tsx",
+      "symbol": "Button (variant=outline)"
+    },
+    "20173:142076": {
+      "file": "app/src/components/DataTable.tsx",
+      "symbol": "DataTable"
+    },
+    "20173:142077": {
+      "file": "app/src/components/DataTable.tsx",
+      "symbol": "DataTable thead"
+    },
+    "20173:142101": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton x2 (row actions)"
+    },
+    "20173:142142": {
+      "file": "app/src/components/Pagination.tsx",
+      "symbol": "Pagination"
+    },
+    "20173:137673": {
+      "file": "app/src/layout/Footer.tsx",
+      "symbol": "Footer"
+    }
+  },
+  "allowedLiterals": [
+    {
+      "file": "app/src/theme/theme.css",
+      "reason": "generated token source (tokens.js --web tailwind on design/export/design-system/tokens.json)"
+    },
+    {
+      "file": "app/src/theme/theme.screen-tokens.css",
+      "reason": "generated token source for the 14 screen-bound variables absent from the design-system export"
+    },
+    {
+      "value": "#121318",
+      "reason": "footer fill binds no variable (20173:137673); kept as the one-off literal it is in the export"
+    },
+    {
+      "value": "#dec9ff",
+      "reason": "active sidebar sub-item gradient stop, unbound in the export"
+    },
+    {
+      "value": "#a596be",
+      "reason": "active sidebar sub-item gradient stop, unbound in the export"
+    }
+  ],
+  "states": {
+    "designed": [
+      "table row hover (20173:142096 fill Backgrounds/Row Hover + the `actions` overlay)",
+      "pagination current page (Primary/Primary)",
+      "active sidebar item (gradient)",
+      "Add Job Role button hover (reaction to 'Type=Primary, Status=Hover')"
+    ],
+    "defaulted": [
+      "focus-visible ring on every control (undrawn, WCAG 2.4.7)",
+      "empty state for a search that matches nothing",
+      "modal dialogs for add/edit/delete (undrawn; the two `overlay` reactions point at un-exported 'Popup' nodes)",
+      "sort affordance on table headers (undrawn; the design shows no sort control)",
+      "loading and error states \u2014 NOT built, see openQuestions"
+    ]
+  },
+  "openQuestions": [
+    "No loading state is drawn \u2014 what shows while data loads?",
+    "No empty state is drawn \u2014 what shows for no data vs no results?",
+    "No error state is drawn \u2014 what shows when a request fails?",
+    "The two 'Popup' overlay targets (20170:132666, 20173:132861) were not exported \u2014 what is in them?",
+    "115 text nodes use 2 font families (Poppins 110, Roboto 5). Is Roboto intentional on the TeamSmart wordmark, the 'By' label and the footer?",
+    "Text style 'Medium/14 Medium' vs the design system's 'Medium/14 medium' \u2014 same style?"
+  ],
+  "verification": {
+    "mode": "rendered",
+    "renderer": "Playwright 1.47 / Chromium, Vite dev server in Docker at http://localhost:5173/job-roles, viewport 1440x1236",
+    "artifacts": [
+      "scripts-test/out/phase5/job-roles.png",
+      "scripts-test/out/phase5/job-roles-row-hover.png",
+      "scripts-test/out/phase5/job-roles-edit-modal.png",
+      "scripts-test/out/phase5/job-roles-light.png",
+      "design/verify/JobRoles.expected.json",
+      "design/verify/JobRoles.measured.json",
+      "design/verify/JobRoles.report.json",
+      "design/verify/JobRoles.report.md",
+      "scripts-test/axe.mjs"
+    ],
+    "deltas": [
+      "verify-screen.js --compare: 2 high, 77 medium. Both 'high' rows are the verifier being wrong, not the build: (a) node I20173:137669;45:1743 (' Vector', the moon glyph) \u2014 the export's FILL is compared against CSS background-color, and an inline SVG's colour is not a background; (b) node 20173:142096 ('Table row') \u2014 expected #46464f because the designer drew that row in its HOVER state; the build renders the resting state and shows #46464f on hover (verified in scripts-test/interact.mjs).",
+      "Most 'medium' rows are width/height on containers that are fluid by design (the frame is one viewport, not a canvas): e.g. Frame 1000004145 expected 247 wide, actual 280 (the sidebar's inner column is measured with its padding).",
+      "Table header text case: the export sets font.case='title' on 'NO. of Employees' / 'NO. of Units' / 'Manage DOO'; CSS `capitalize` is applied but Chromium leaves 'of' lowercase. Cosmetic.",
+      "The screen shows 20 rows per page because the design's own pagination text says 'Showing 1 to 20 of 95', while the frame draws only 12 rows. The label was treated as authoritative and the content column scrolls.",
+      "'57 components never built' and '0/28 interactions confirmed' in the report are artifacts of the measurement file: the probe in scripts-test/measure.mjs records computed styles only. The 11 designed/derived interactions were driven separately and all pass (scripts-test/interact.mjs)."
+    ],
+    "coverage": {
+      "rendered": [
+        "Job Roles at 1440x1236 (Dark, the frame's resolved mode)",
+        "row hover + row actions",
+        "edit dialog",
+        "Light theme",
+        "/global-policies route"
+      ],
+      "notChecked": [
+        {
+          "what": "200% zoom / large font scale",
+          "why": "not run in this pass"
+        },
+        {
+          "what": "RTL",
+          "why": "logical properties (ps-/pe-) are used throughout but no RTL render was taken"
+        },
+        {
+          "what": "axe/a11y automated scan",
+          "why": "no a11y tooling installed in this project"
+        }
+      ]
+    },
+    "dataDtNodeCoverage": {
+      "elementsInDom": 147,
+      "distinctNodeIds": 89,
+      "visibleDesignNodes": 254,
+      "hiddenNodesRendered": 0,
+      "percentOfVisibleNodes": 35
+    },
+    "interactions": [
+      "row hover reveals edit+delete (designed: 20173:142096 + actions 20173:142101) \u2014 PASS",
+      "search filters rows and the pagination label follows \u2014 PASS",
+      "column sort (not designed; added as the screen default) \u2014 PASS",
+      "pagination next/prev/page numbers \u2014 PASS",
+      "edit dialog opens, saves, Esc closes \u2014 PASS",
+      "Add Job Role dialog adds a row (Figma overlay reaction to un-exported 'Popup' 20170:132666) \u2014 PASS",
+      "delete dialog removes a row \u2014 PASS",
+      "theme toggle flips data-theme Dark/Light \u2014 PASS",
+      "sidebar link routes to /global-policies \u2014 PASS",
+      "Table row on_click -> 'Job Role Details' (7410:12299): NOT wired \u2014 that screen is not part of this build"
+    ],
+    "a11y": {
+      "tool": "@axe-core/playwright (wcag2a, wcag2aa, wcag21a, wcag21aa) against the rendered /job-roles page",
+      "violations": 0
+    }
+  }
+}

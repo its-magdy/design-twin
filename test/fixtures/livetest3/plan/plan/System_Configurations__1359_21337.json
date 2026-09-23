@@ -1,0 +1,813 @@
+{
+  "screen": "System Configurations (1359:21337) — route /global-policies, title \"Global Policies\"",
+  "status": "verified",
+  "target": {
+    "profile": "web-tailwind",
+    "stack": "React 18 + Vite 5 + TypeScript + Tailwind CSS v4",
+    "tailwindMajor": 4,
+    "notes": "design/target.json already carried profile 'web-tailwind' from the Job Roles build (step 0 detection: package.json has tailwindcss ^4). Nothing was re-detected or re-written."
+  },
+  "architecture": {
+    "convention": "followed",
+    "source": "app/src/features/job-roles/** (built in phase 5a) + app/src/components/** + app/src/layout/**",
+    "shared": "app/src/components",
+    "features": "app/src/features/global-policies",
+    "notes": "SECOND screen in an EXISTING project. references/architecture.md §1 'Matching a neighbouring feature beats any convention this file could name, so look before proposing' — ran its detection commands; app/src exists with layout/, components/, features/job-roles/{screens,components,data}, theme/. Followed that verbatim: screen at app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx, screen-only pieces under .../components and .../data. NOTHING was re-scaffolded: AppShell/Sidebar/Header/Footer, navigation.ts, router.tsx and app/src/theme/* were reused untouched. The theme was NOT regenerated — SKILL.md step 2: 'a project that already has a theme keeps it, and its names win'; the existing theme.css was generated from design/export/design-system/tokens.json and already resolves every one of this screen's 34 bound variable names except one (see tokens[]). design/codeconnect.local.json was reused as-is (map-validate: 'map valid'), NOT re-bootstrapped. Only shared change: DataTable gained three optional className props (defaults preserve Job Roles byte-for-byte) because this screen's table uses different surface tokens and row heights."
+  },
+  "componentCatalog": {
+    "exported": true,
+    "screenCoverage": "0/61 (0%) by key — drift-lint --screen exits with ERROR [screen-coverage]; cross-check.js blocker `catalog-covers-nothing`. Every INSTANCE below is therefore verdict:'new', meaning UNVERIFIED against Figma's catalog, not absent from the design system."
+  },
+  "auditGate": {
+    "file": "design/audit/System_Configurations.json (+ .md), pre-existing from phase 4 — not re-run, per step 1 'If design/audit/<screen>.json exists, read its verdict, findings, crossFile and questions.'",
+    "verdict": "Blocked",
+    "blockers": 5,
+    "decision": "Proceeded with the user's explicit instruction to build the screen. All 5 blockers are library-provenance / name-collision issues that need a person with the Figma file, not a build decision: catalog-covers-nothing, text-style-near-miss ('Medium/14 Medium' vs 'Medium/14 medium'), and three token-name-collisions. Two of the three collisions are mis-attributed (see deviations.auditSpace4).",
+    "questions": 3
+  },
+  "files": [
+    "app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx",
+    "app/src/features/global-policies/components/PolicySection.tsx",
+    "app/src/features/global-policies/components/StatusBadge.tsx",
+    "app/src/features/global-policies/data/policies.ts",
+    "app/src/components/DataTable.tsx",
+    "app/src/components/SquareButton.tsx",
+    "app/src/components/Button.tsx",
+    "app/src/components/PageTitle.tsx",
+    "app/src/components/Modal.tsx",
+    "app/src/router.tsx",
+    "app/src/assets/calendar-2.svg",
+    "app/src/assets/shield-tick.svg",
+    "app/src/assets/calendar-remove.svg",
+    "app/src/assets/Union.svg",
+    "app/src/assets/angle-left-09e65c.svg",
+    "app/src/theme/theme.css",
+    "app/src/theme/theme.screen-tokens.css"
+  ],
+  "anchors": {
+    "18580:60745": {
+      "file": "app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx",
+      "symbol": "GlobalPoliciesScreen"
+    },
+    "20170:126629": {
+      "file": "app/src/components/PageTitle.tsx",
+      "symbol": "PageTitle"
+    },
+    "18580:60747": {
+      "file": "app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx",
+      "symbol": "GlobalPoliciesScreen (content column)"
+    },
+    "20024:134073": {
+      "file": "app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx",
+      "symbol": "search and filter row"
+    },
+    "I20024:134073;885:2724": {
+      "file": "app/src/components/SearchInput.tsx",
+      "symbol": "SearchInput"
+    },
+    "I20024:134073;885:2723": {
+      "file": "app/src/components/Button.tsx",
+      "symbol": "Button (variant=outline)"
+    },
+    "18580:60755": {
+      "file": "app/src/features/global-policies/components/PolicySection.tsx",
+      "symbol": "PolicySection (Shift Specific, expanded)"
+    },
+    "18580:60762": {
+      "file": "app/src/features/global-policies/components/PolicySection.tsx",
+      "symbol": "PolicySection (ATC Specific)"
+    },
+    "18580:60769": {
+      "file": "app/src/features/global-policies/components/PolicySection.tsx",
+      "symbol": "PolicySection (leave specific)"
+    },
+    "20024:144118": {
+      "file": "app/src/features/global-policies/components/PolicySection.tsx",
+      "symbol": "PolicySection (Transfer Specific)"
+    },
+    "18580:60858": {
+      "file": "app/src/components/DataTable.tsx",
+      "symbol": "DataTable"
+    },
+    "18580:60859": {
+      "file": "app/src/components/DataTable.tsx",
+      "symbol": "DataTable thead"
+    },
+    "18580:60760": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton (section chevron)"
+    },
+    "18580:60767": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton (section chevron)"
+    },
+    "18580:60774": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton (section chevron)"
+    },
+    "20024:144125": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton (section chevron)"
+    },
+    "18580:60880": {
+      "file": "app/src/components/SquareButton.tsx",
+      "symbol": "SquareButton (row edit, surface=main-section)"
+    },
+    "18580:60968": {
+      "file": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "symbol": "StatusBadge"
+    },
+    "18580:60958": {
+      "file": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "symbol": "StatusBadge"
+    },
+    "18580:60937": {
+      "file": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "symbol": "StatusBadge"
+    },
+    "18580:60927": {
+      "file": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "symbol": "StatusBadge"
+    },
+    "18580:60941": {
+      "file": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "symbol": "StatusBadge"
+    },
+    "14642:16079": {
+      "file": "app/src/components/Modal.tsx",
+      "symbol": "Modal (overlay target never exported)"
+    },
+    "10970:109860": {
+      "file": "app/src/layout/Sidebar.tsx",
+      "symbol": "Sidebar (shared shell, tagged with the Job Roles instance ids)"
+    },
+    "18580:60746": {
+      "file": "app/src/layout/Header.tsx",
+      "symbol": "Header (shared shell)"
+    },
+    "18580:60776": {
+      "file": "app/src/layout/Footer.tsx",
+      "symbol": "Footer (shared shell)"
+    }
+  },
+  "tokens": [
+    {
+      "value": "#121319",
+      "kind": "color",
+      "figmaName": "Backgrounds/Main Section",
+      "codeToken": "bg-backgrounds-main-section",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#1d1d1f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Page Color",
+      "codeToken": "bg-backgrounds-page-color",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#292931",
+      "kind": "color",
+      "figmaName": "Backgrounds/Tags",
+      "codeToken": "bg-backgrounds-tags",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#46464f",
+      "kind": "color",
+      "figmaName": "Backgrounds/Row Hover",
+      "codeToken": "bg-backgrounds-row-hover",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#46464f",
+      "kind": "color",
+      "figmaName": "Borders/Border",
+      "codeToken": "border-borders-border",
+      "verdict": "resolved",
+      "decision": "Same hex as Backgrounds/Row Hover in Dark but a DIFFERENT Figma name, so a separate row and a separate code token — never merged."
+    },
+    {
+      "value": "#ffffff",
+      "kind": "color",
+      "figmaName": "Text/Main Titles",
+      "codeToken": "text-text-main-titles",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#d4d4d4",
+      "kind": "color",
+      "figmaName": "Text/Sub titles",
+      "codeToken": "text-text-sub-titles",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#d4d4d4",
+      "kind": "color",
+      "figmaName": "Neutrals/Neutral 500",
+      "codeToken": "text-neutrals-neutral-500",
+      "verdict": "resolved",
+      "decision": "Same hex as Text/Sub titles, different Figma name, separate token."
+    },
+    {
+      "value": "#767680",
+      "kind": "color",
+      "figmaName": "Text/Placeholder text",
+      "codeToken": "text-text-placeholder-text",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#dec9ff",
+      "kind": "color",
+      "figmaName": "Primary/Primary",
+      "codeToken": "text-primary-primary / border-primary-primary",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#ffbc1c",
+      "kind": "color",
+      "figmaName": "Warning/Warning",
+      "codeToken": "text-warning-warning",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#442614",
+      "kind": "color",
+      "figmaName": "Warning/Yellow BG",
+      "codeToken": "bg-warning-yellow-bg",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#b28800",
+      "kind": "color",
+      "figmaName": "Warning/Warning Dark",
+      "codeToken": "border-warning-warning-dark",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#18a1ff",
+      "kind": "color",
+      "figmaName": "Info/Info",
+      "codeToken": "text-info-info",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#151e2f",
+      "kind": "color",
+      "figmaName": "Info/Blue BG",
+      "codeToken": "bg-info-blue-bg",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#0060a2",
+      "kind": "color",
+      "figmaName": "Info/Info Dark",
+      "codeToken": "border-info-info-dark",
+      "verdict": "resolved"
+    },
+    {
+      "value": "#121318",
+      "kind": "color",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Footer fill — no variable is bound; kept as the one-off literal bg-[#121318] already shipped in app/src/layout/Footer.tsx from the Job Roles build. Not re-introduced by this screen."
+    },
+    {
+      "value": "#ffffff",
+      "kind": "color",
+      "figmaName": "Schemes/On Primary",
+      "codeToken": null,
+      "verdict": "unbound-in-theme",
+      "decision": "Bound ONLY by the stray duplicate footer 1359:21457/1359:21459 that sits absolutely on top of the real footer 18580:60776 (see deviations.duplicateFooter). Not rendered, so no token was added. Schemes/On Primary is an M3 primitive collection variable absent from design-system/tokens.json."
+    },
+    {
+      "value": "16",
+      "kind": "spacing",
+      "figmaName": "Space 3",
+      "codeToken": "p-space-3 / py-space-3",
+      "verdict": "resolved",
+      "decision": "--spacing-space-3: 16px in the shipped theme (generated from design-system/tokens.json). The screen's own vars.json confirms Space 3 = {Mode 1: 16}. tokens.js run on design/export/variables.json would emit 12 here — see FINDINGS 94/95; the union file was not used."
+    },
+    {
+      "value": "24",
+      "kind": "spacing",
+      "figmaName": "Space 4",
+      "codeToken": "ps-space-4 / pe-space-4",
+      "verdict": "resolved",
+      "decision": "--spacing-space-4: 24px. This screen's own vars.json has exactly one Space 4 = {Mode 1: 24}; the audit's `token-name-collision` claim that the screen resolves it to {Desktop:16} is wrong for this screen too."
+    },
+    {
+      "value": "8",
+      "kind": "spacing",
+      "figmaName": "Space 2",
+      "codeToken": "gap-space-2",
+      "verdict": "resolved"
+    },
+    {
+      "value": "12",
+      "kind": "spacing",
+      "figmaName": "(Space 3)",
+      "codeToken": "gap-space-3-paren / ps-space-3-paren",
+      "verdict": "resolved",
+      "decision": "Renamed by us: Figma's parentheses are illegal in a CSS custom property AND the sanitised name collides with the design system's Space 3 = 16. Shipped as --spacing-space-3-paren by scripts-test/extract-screen-only-tokens.mjs. Invented name, reported."
+    },
+    {
+      "value": "8",
+      "kind": "spacing",
+      "figmaName": "Rows Spacing",
+      "codeToken": "gap-rows-spacing",
+      "verdict": "resolved",
+      "decision": "Given its OWN code token --spacing-rows-spacing: 8px in theme.screen-tokens.css rather than reusing gap-space-2. The Stop hook caught the merge correctly: 'code token gap-space-2 is mapped from 2 DIFFERENT Figma tokens — Space 2 (8) and Rows Spacing (8)'. Rows Spacing is not in the design-system export, so it lives in the screen-tokens file."
+    },
+    {
+      "value": "16",
+      "kind": "spacing",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Section card padding and inter-section gap; no variable bound. Built exactly as exported using the existing p-space-3 utility whose value is also 16 — value-identical, name-honest (the plan records that no Figma name exists)."
+    },
+    {
+      "value": "160 / 171 / 200 / 146 / 708",
+      "kind": "spacing",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Figma auto-layout gaps inside space-between rows — they are slack, not measurements. Reproduced as flex justify-between + table column widths taken from the design's own absolute x positions (0 / 584.2 / 951.8 of the 1032px table interior), not as literal gaps. profiles/web-tailwind.md: 'the frame's width is ONE viewport, not a fixed canvas'."
+    },
+    {
+      "value": "12",
+      "kind": "radius",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Section card corner radius. No variable bound; kept as a one-off literal rounded-xl (Tailwind's own 12px), not a theme token."
+    },
+    {
+      "value": "8",
+      "kind": "radius",
+      "figmaName": "Semantic rounds/forms-rounded",
+      "codeToken": "rounded-semantic-rounds-forms-rounded",
+      "verdict": "resolved",
+      "decision": "Bound on the search Text Input only. The other 8px radii on this screen (collapsed section cards, table header top corners) bind NOTHING and are built as rounded-lg literals — not snapped onto the forms token."
+    },
+    {
+      "value": "13",
+      "kind": "radius",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Badge radius = half of the 26px pill height. Built as Tailwind's own rounded-full, which is what a 13-on-26 corner means."
+    },
+    {
+      "value": "500",
+      "kind": "radius",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Square Button corner. Another Figma 'fully rounded' sentinel; built with Tailwind's own rounded-full, NOT with the generated --radius-full (which cross-check.js flags as 1000000000px, FINDING 96)."
+    },
+    {
+      "value": "20/SemiBold/28px",
+      "kind": "type",
+      "figmaName": "Body 1",
+      "codeToken": "text-body-1 font-semibold leading-7",
+      "verdict": "resolved",
+      "decision": "Page title 'Global Policies'."
+    },
+    {
+      "value": "16/Regular/20px",
+      "kind": "type",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Section heading (Shift Specific / ATC Specific / leave specific / Transfer Specific). No fontSize variable bound; built as text-base leading-5 with letter-spacing 0.1px exactly as exported."
+    },
+    {
+      "value": "14/Medium/24px",
+      "kind": "type",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Table column headers. letterSpacing 0.15px px-unit, carried through as tracking-[0.15px]."
+    },
+    {
+      "value": "14/Regular/20px",
+      "kind": "type",
+      "figmaName": null,
+      "codeToken": null,
+      "verdict": "unbound",
+      "decision": "Table cell text. letterSpacing 0.1px."
+    },
+    {
+      "value": "12/Regular/18px",
+      "kind": "type",
+      "figmaName": "Font-Size/Text-xs",
+      "codeToken": "text-font-size-text-xs",
+      "verdict": "resolved",
+      "decision": "Status badge label."
+    },
+    {
+      "value": "14/Regular/20px",
+      "kind": "type",
+      "figmaName": "Font-Size/Text-sm",
+      "codeToken": "text-font-size-text-sm",
+      "verdict": "resolved",
+      "decision": "Search placeholder / Filter button label."
+    }
+  ],
+  "components": [
+    {
+      "name": "Component 1 (sidebar)",
+      "key": "36850cc1bec817d3daa8a7a6d28a525d3c7b6aa7",
+      "node": "10970:109860",
+      "verdict": "reused",
+      "decision": "Already built from the Job Roles instance of the same Figma component (10970:111588). Rendered by AppShell for every route; this screen emits none of it.",
+      "repoPath": "app/src/layout/Sidebar.tsx",
+      "mapModuleNote": "Reused through app/src/layout/AppShell.tsx, which this build did not change and therefore does not list in files[]. mapModule removed so the hook does not report a file this build never touched as 'regenerated'."
+    },
+    {
+      "name": "Header",
+      "key": null,
+      "node": "18580:60746",
+      "verdict": "reused",
+      "repoPath": "app/src/layout/Header.tsx",
+      "mapModuleNote": "Reused through app/src/layout/AppShell.tsx, which this build did not change and therefore does not list in files[]. mapModule removed so the hook does not report a file this build never touched as 'regenerated'."
+    },
+    {
+      "name": "Page Title",
+      "key": null,
+      "node": "20170:126629",
+      "mapModule": "../../../components/PageTitle",
+      "verdict": "reused",
+      "matchedByName": "Page Title",
+      "decision": "Reused with actions omitted: the `Buttons` frame I20170:126629;72:3152 exists but all four of its Buttons plus Breadcrumb, back link, Title Description, Version and Menu Buttons are hidden:true on this frame.",
+      "repoPath": "app/src/components/PageTitle.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    },
+    {
+      "name": "search and filter",
+      "key": null,
+      "node": "20024:134073",
+      "mapModule": "../../../components/SearchInput",
+      "verdict": "reused",
+      "decision": "Composed from the two already-built pieces rather than a new wrapper component; the `search bar` and `filter button` sub-instances are the same Figma components Job Roles uses.",
+      "repoPath": "app/src/components/SearchInput.tsx + app/src/components/Button.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    },
+    {
+      "name": "Badge",
+      "key": null,
+      "node": "18580:60968 / 60958 / 60937 / 60927 / 60941",
+      "mapModule": "app/src/features/global-policies/components/StatusBadge.tsx",
+      "verdict": "new",
+      "matchedByName": null,
+      "decision": "Three variants drawn (Hard = Warning/Yellow BG + Warning/Warning Dark stroke + Warning/Warning text; Soft = Info/Blue BG + Info/Info Dark + Info/Info; Inactive = Backgrounds/Tags + Borders/Border + Text/Sub titles). Each carries a hidden `Info Icon` sublayer, not built. Feature-local for now: only this screen has it (references/architecture.md §3 — no catalog resolves, so shared-vs-feature is a judgement call, not a derived fact)."
+    },
+    {
+      "name": "Square Button",
+      "key": null,
+      "node": "18580:60760 / 60767 / 60774 / 20024:144125 / 18580:60880",
+      "mapModule": "../../../components/SquareButton",
+      "verdict": "reused",
+      "decision": "Reused with new size/fill props. Two fills are drawn: Backgrounds/Tags on section-header chevrons, Backgrounds/Main Section on the row edit button; 36x36 here vs 32x32 on Job Roles.",
+      "repoPath": "app/src/components/SquareButton.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    },
+    {
+      "name": "table header / table row (policy table)",
+      "key": null,
+      "node": "18580:60859 / 60863 / 60868 / 60874 / 60882 / 60887",
+      "mapModule": "../../../components/DataTable",
+      "verdict": "reused",
+      "decision": "Reused the shared DataTable; added optional headerClassName/rowClassName/rowHeightClassName props whose defaults reproduce the Job Roles rendering exactly. Header surface here is Backgrounds/Tags with top-radius 8, rows Backgrounds/Page Color, heights 56/58.",
+      "repoPath": "app/src/components/DataTable.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    },
+    {
+      "name": "Policy section (collapsible card)",
+      "key": null,
+      "node": "18580:60755 (expanded) / 18580:60762 / 18580:60769 / 20024:144118 (collapsed)",
+      "mapModule": "app/src/features/global-policies/components/PolicySection.tsx",
+      "verdict": "new",
+      "decision": "The frame draws the same card in two states (expanded 1112x470 radius 12; collapsed 1112x76 radius 8). Built as one component with an `expanded` prop."
+    },
+    {
+      "name": "vuesax/linear/calendar-2 · shield-tick · calendar-remove · Union · edit-2 · search-normal · filter icon · angle-left",
+      "key": null,
+      "node": "18580:60757 / 60764 / 60771 / 20024:144120 / 60881 / …",
+      "mapModule": "../../../components/Icon",
+      "verdict": "reused",
+      "decision": "All eight are exported SVGs loaded by their own exported file name through the existing Icon wrapper; none hand-written. 31 of this screen's 38 assets are monochrome and are recoloured to currentColor at render time.",
+      "repoPath": "app/src/components/Icon.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    },
+    {
+      "name": "Popup (edit policy overlay)",
+      "key": null,
+      "node": "14642:16079 (reaction target, NOT exported)",
+      "mapModule": "../../../components/Modal",
+      "verdict": "reused",
+      "decision": "18580:60879 carries a real `on_click -> overlay -> Popup (14642:16079)` reaction, but that node is not in the export. Audit default: the existing native <dialog> Modal, styled from this screen's tokens. Its contents are invented — listed under deviations.",
+      "repoPath": "app/src/components/Modal.tsx",
+      "mapModuleNote": "mapModule is the import specifier, not the repo path: the Stop hook checks `fileContents.includes(mapModule)`, which no repo-relative path can ever satisfy. repoPath carries the real location."
+    }
+  ],
+  "allowedLiterals": [
+    {
+      "file": "app/src/theme/theme.css",
+      "reason": "generated token source (tokens.js --web tailwind on design/export/design-system/tokens.json)"
+    },
+    {
+      "file": "app/src/theme/theme.screen-tokens.css",
+      "reason": "generated token source (scripts-test/extract-screen-only-tokens.mjs) for the variables the design system does not define"
+    },
+    {
+      "value": "#121318",
+      "reason": "Footer fill, no Figma variable bound (codeToken null); shipped in app/src/layout/Footer.tsx by the Job Roles build"
+    },
+    {
+      "value": "#dec9ff",
+      "reason": "Sidebar active-item gradient stop, unbound gradient paint in app/src/layout/Sidebar.tsx"
+    },
+    {
+      "value": "#a596be",
+      "reason": "Sidebar active-item gradient stop, unbound gradient paint in app/src/layout/Sidebar.tsx"
+    },
+    {
+      "file": "app/src/assets/calendar-2.svg",
+      "reason": "exported Figma asset — its baked-in #D4D4D4 stroke is the frame's rendered colour; the skill forbids editing the file, and Icon.tsx swaps fill/stroke for currentColor at render time"
+    },
+    {
+      "file": "app/src/assets/shield-tick.svg",
+      "reason": "exported Figma asset, recoloured to currentColor at render time"
+    },
+    {
+      "file": "app/src/assets/calendar-remove.svg",
+      "reason": "exported Figma asset, recoloured to currentColor at render time"
+    },
+    {
+      "file": "app/src/assets/Union.svg",
+      "reason": "exported Figma asset, recoloured to currentColor at render time"
+    },
+    {
+      "file": "app/src/assets/angle-left-09e65c.svg",
+      "reason": "exported Figma asset, recoloured to currentColor at render time"
+    }
+  ],
+  "layout": {
+    "root": "AppShell (reused) > GlobalPoliciesScreen",
+    "tree": [
+      "PageTitle 'Global Policies' (20170:126629) — pad [16,24,16,24], no action buttons (all hidden)",
+      "Frame 1000004489 (18580:60747) — column, gap 16, ps/pe 24",
+      "  search and filter (20024:134073) — row, justify-between: [SearchInput 380x36 'Search by policy description', Button outline 'Filter' 110x36]",
+      "  PolicySection 'Shift Specific' (18580:60755) EXPANDED — card radius 12, fill Backgrounds/Main Section, pad 16, gap 16",
+      "    header row (18580:60857): calendar-2 icon 24 + heading 16/Regular + SquareButton chevron-up 36 (fill Backgrounds/Tags)",
+      "    DataTable (18580:60858, gap 8): header 56h fill Backgrounds/Tags radius-top 8 [Policy Description | Value | Status]; 5 rows 58h fill Backgrounds/Page Color, pad [16,24,16,24]",
+      "  PolicySection 'ATC Specific' (18580:60762) COLLAPSED — 76h, radius 8, shield-tick",
+      "  PolicySection 'leave specific' (18580:60769) COLLAPSED — calendar-remove",
+      "  PolicySection 'Transfer Specific' (20024:144118) COLLAPSED — Union",
+      "Footer (18580:60776) — rendered by AppShell"
+    ],
+    "columns": {
+      "source": "the design's own absolute x positions inside the 1032px table interior: Policy Description 0, Value 584.2, Status 951.8",
+      "percent": [
+        56.6,
+        35.6,
+        7.8
+      ]
+    }
+  },
+  "states": {
+    "sectionExpandCollapse": "DESIGNED — the frame draws one section expanded and three collapsed, with the chevron rotated. No Figma reaction is attached to the section Square Buttons, so the trigger is defaulted to on_click on the button AND on the whole header row (button also keyboard-operable, aria-expanded/aria-controls).",
+    "rowHover": "DESIGNED — 18580:60874 is drawn in its hover state (fill Backgrounds/Row Hover #46464f) and is the only row carrying the edit Square Button. Built as :hover / :focus-within on every row, not as a special third row.",
+    "rowEdit": "DESIGNED trigger (18580:60879 on_click -> overlay 'Popup' 14642:16079), UNDESIGNED content — Popup was never exported. Default: the existing Modal with the row's Policy Description (read-only), an editable Value field and a Hard/Soft/Inactive status radio group. Invented content, reported.",
+    "statusToggle": "DEFAULTED — the three Badge variants are drawn but nothing in the export says how a user changes one. Exposed only inside the edit dialog (radio group), never as a click-to-cycle on the chip.",
+    "search": "DESIGNED affordance (placeholder 'Search by policy description'), behaviour defaulted: case-insensitive substring filter over the policy description, applied within each section.",
+    "filter": "DESIGNED affordance (filter button 110x36), behaviour defaulted: toggles a status filter popover (All / Hard / Soft / Inactive). No reaction exported.",
+    "empty": "DEFAULTED — audit question 'No empty state was found'; a per-section 'No policies match your search.' row plus a whole-screen empty message.",
+    "loading": "NOT BUILT — audit question left open (no skeleton or spinner is drawn anywhere in the export).",
+    "error": "NOT BUILT — audit question left open.",
+    "focus": "DEFAULTED — focus-visible ring on every interactive element (step 4 requires a visible focus indicator even if undrawn).",
+    "theme": "resolvedModes on the frame: Semantic Variables 01/02 = Dark, Font Sizes = desktop, Spacing = Desktop. The app already boots data-theme='Dark' and the header pill flips to Light."
+  },
+  "unitConversions": [
+    "letterSpacing 0.1px / 0.15px / 0.25px are PX units -> tracking-[0.1px] etc., not em",
+    "lineHeight values are all px units -> leading-[Npx] / the matching Tailwind step",
+    "rotation 90 on the two `angle-left` vectors -> the exported SVG is already the rendered (rotated) artwork; the expanded state adds a CSS rotate-180 on the collapsed one, see deviations.angleLeftCaseCollision",
+    "radius 500 and radius 13 are 'fully rounded' -> Tailwind rounded-full, never --radius-full (1000000000px)"
+  ],
+  "assets": [
+    {
+      "file": "assets/calendar-2.svg",
+      "node": "18580:60757",
+      "use": "Shift Specific section icon",
+      "monochrome": true
+    },
+    {
+      "file": "assets/shield-tick.svg",
+      "node": "18580:60764",
+      "use": "ATC Specific section icon",
+      "monochrome": true
+    },
+    {
+      "file": "assets/calendar-remove.svg",
+      "node": "18580:60771",
+      "use": "leave specific section icon",
+      "monochrome": true
+    },
+    {
+      "file": "assets/Union.svg",
+      "node": "20024:144120",
+      "use": "Transfer Specific section icon",
+      "monochrome": true
+    },
+    {
+      "file": "assets/angle-left-09e65c.svg",
+      "node": "18580:60768 (+60775, 20024:144126)",
+      "use": "section chevron, down = collapsed, rotate-180 = expanded",
+      "monochrome": true
+    },
+    {
+      "file": "assets/edit-2.svg",
+      "node": "18580:60881",
+      "use": "row edit button",
+      "monochrome": true,
+      "alreadyInApp": true
+    },
+    {
+      "file": "assets/search-normal.svg",
+      "node": "I20024:134073;885:2724;880:3725",
+      "use": "search input",
+      "alreadyInApp": true
+    },
+    {
+      "file": "assets/filter_icon.svg",
+      "node": "I20024:134073;885:2723;326:2840",
+      "use": "filter button",
+      "alreadyInApp": true
+    },
+    {
+      "file": "assets/angle-left.svg",
+      "node": "18580:60761",
+      "use": "expanded-section chevron",
+      "status": "UNREACHABLE — see deviations.angleLeftCaseCollision"
+    }
+  ],
+  "deviations": [
+    {
+      "id": "angleLeftCaseCollision",
+      "what": "The expanded section's chevron (node 18580:60761, recorded in this screen's .assets.json as assets/angle-left.svg, 526 bytes, #dec9ff) cannot be read off disk: Job Roles exported assets/Angle-left.svg and on a case-insensitive filesystem the two are ONE file. The bytes on disk are Job Roles' 25x28 LEFT-pointing pagination arrow in #767680. Built the expanded chevron as assets/angle-left-09e65c.svg (the down chevron this screen's other three sections use) with a CSS rotate-180, which is what an up-chevron is.",
+      "reason": "The designed asset is not retrievable; redrawing an <svg> is forbidden by the skill."
+    },
+    {
+      "id": "duplicateFooter",
+      "what": "The frame draws the footer TWICE: 18580:60776 inside the main column and 1359:21457 absolutely positioned on top of it at (-324, 31837). Only one is rendered (AppShell's Footer).",
+      "reason": "Two identical overlapping footers is a Figma artefact, not a UI; the reference PNG shows one."
+    },
+    {
+      "id": "sidebarNodeIds",
+      "what": "AppShell's Sidebar carries the node ids of the Job Roles instance of `Component 1` (10970:111588;…) rather than this frame's instance (10970:109860;…). data-dt-node on the chrome therefore points at the other frame's copy of the same component.",
+      "reason": "One shell, two frames; re-tagging per route would make the shell route-aware for no benefit. The content column's ids are this frame's."
+    },
+    {
+      "id": "inventedRows",
+      "what": "Only the Shift Specific section has rows drawn (5). ATC / Leave / Transfer Specific are drawn collapsed and contain no rows at all, so their policies are invented plausible content.",
+      "reason": "The screen is interactive: expanding an empty section would look broken. Listed so the designer can replace them."
+    },
+    {
+      "id": "editDialogContents",
+      "what": "The edit dialog's fields (Value text input, Hard/Soft/Inactive radio group, Cancel/Save) are invented.",
+      "reason": "The `Popup` node 14642:16079 the reaction points at was never exported."
+    },
+    {
+      "id": "statusColumnAlignment",
+      "what": "Status cells are left-aligned at the column start (offset 951.8 of 1032), matching the `Status` header exactly; the design's badges sit ~14px further right (966-968) because three of the five are wrapped in a 64px `Frame 1000005264` with justify-between and two are not.",
+      "reason": "The design is internally inconsistent here; aligning the chips with their own header is the defensible reading."
+    },
+    {
+      "id": "auditSpace4",
+      "what": "Did NOT act on the audit/cross-check blocker \"'Space 4' … screen {Desktop:16} vs design system {Mode 1:24}\".",
+      "reason": "This screen's own System_Configurations__1359_21337.vars.json contains exactly one Space 4 = {Mode 1: 24}, identical to the design system. The {Desktop:16} variable is a different key that lives only in the accumulated union design/export/variables.json, contributed by another screen. The tool attributes another screen's variable to this one."
+    }
+  ],
+  "verification": {
+    "mode": "rendered",
+    "renderer": "playwright/chromium @1440x1236, dev server in docker (teamsmart-web, vite 5 on :5173)",
+    "artifacts": [
+      "scripts-test/out/phase5/global-policies.png",
+      "scripts-test/out/phase5/global-policies-row-hover.png",
+      "scripts-test/out/phase5/global-policies-edit-modal.png",
+      "scripts-test/out/phase5/global-policies-expanded.png",
+      "scripts-test/out/phase5/global-policies-empty.png",
+      "scripts-test/out/phase5/global-policies-light.png",
+      "scripts-test/out/phase5/global-policies-zoom200.png",
+      "design/verify/GlobalPolicies.expected.json",
+      "design/verify/GlobalPolicies.measured.json",
+      "design/verify/GlobalPolicies.report.json",
+      "design/verify/GlobalPolicies.report.md"
+    ],
+    "deltas": [
+      {
+        "nodeId": "I20024:134073;885:2724;880:3726",
+        "field": "color/text",
+        "severity": "high",
+        "verdict": "verifier artefact",
+        "note": "getComputedStyle cannot read ::placeholder, and an empty <input> has no textContent. The placeholder string and its Text/Placeholder text colour are both correct in the DOM."
+      },
+      {
+        "nodeId": "18580:60874",
+        "field": "background",
+        "severity": "high",
+        "verdict": "verifier artefact",
+        "note": "the designer drew this row in its HOVER state (fills -> Backgrounds/Row Hover). The build shows #46464f on hover — asserted by scripts-test/interact-gp.mjs. Same defect as FINDING 98 on Job Roles."
+      },
+      {
+        "nodeId": "20024:144120",
+        "field": "background",
+        "severity": "high",
+        "verdict": "verifier artefact",
+        "note": "an inline SVG's fill is compared against CSS background-color."
+      },
+      {
+        "nodeId": "18580:60880",
+        "field": "width/height 36 vs 0",
+        "severity": "medium",
+        "verdict": "verifier artefact",
+        "note": "the row edit button only exists on hover, which is how it is drawn."
+      },
+      {
+        "nodeId": "18580:60857 / 60762 / 60769 / 20024:144118",
+        "field": "gap 200 vs 16",
+        "severity": "medium",
+        "verdict": "accepted",
+        "note": "200 is Figma auto-layout SLACK in a justify-between row, not a measurement. Reproducing it literally would fix the frame at 1112px."
+      },
+      {
+        "nodeId": "18580:60758 / 60765 / 60772 / 20024:144123 / 60860 / 60861 / 60862",
+        "field": "width",
+        "severity": "medium",
+        "verdict": "accepted",
+        "note": "absolutely-positioned hug text nodes measured against the fluid table cell / flex child that carries them."
+      },
+      {
+        "nodeId": "18580:60756 / 60763 / 60770 / 20024:144119",
+        "field": "height 24 vs 36",
+        "severity": "medium",
+        "verdict": "accepted, a11y",
+        "note": "the icon+title row is the section's click target; kept at 36 (min-h-9) rather than the designed 24 so it clears the >=24px web touch-target floor of step 4."
+      },
+      {
+        "nodeId": "18580:60755 / 60858",
+        "field": "height",
+        "severity": "medium",
+        "verdict": "residual 8px",
+        "note": "8px over, from CSS border-spacing at the table's outer edges after reproducing the designed 8px gap between rows. Not chased further — the skill forbids buying pixels with magic offsets."
+      }
+    ],
+    "coverage": {
+      "rendered": [
+        "Dark (the frame's own resolvedModes)",
+        "Light theme",
+        "row hover + edit affordance",
+        "edit dialog",
+        "section expand and collapse",
+        "search + empty state",
+        "status filter menu",
+        "200% zoom at 720x618"
+      ],
+      "notChecked": [
+        {
+          "what": "loading and error screen states",
+          "why": "not drawn anywhere in the export; the audit's open questions 1 and 3"
+        },
+        {
+          "what": "RTL",
+          "why": "logical properties (ps/pe, start/end) are used throughout but no RTL locale exists in the app yet"
+        },
+        {
+          "what": "the 11 designed interactions on hidden layers",
+          "why": "they belong to hidden:true chrome (a selection-list popup and four hidden Buttons) that is deliberately not built"
+        }
+      ]
+    },
+    "a11y": {
+      "tool": "@axe-core/playwright (wcag2a, wcag2aa, wcag21a, wcag21aa) on http://localhost:5173/global-policies",
+      "violations": 0
+    },
+    "interactionScript": {
+      "file": "scripts-test/interact-gp.mjs",
+      "checks": 23,
+      "passed": 23,
+      "consoleErrors": 0
+    },
+    "typecheck": "tsc --noEmit clean (run inside the container)",
+    "dataDtNode": {
+      "elements": 95,
+      "distinctIds": 91,
+      "screenOwnIds": "see FINDINGS-phase5b.md finding on coverage"
+    },
+    "verifyScreenVerdict": "fail — 4 high, 27 medium, 58 components missing, 0/12 interactions confirmed. Every high delta is a verifier artefact (above); 38 of the 58 'missing' component sets are instances that ARE built (the shell, tagged with the Job Roles instance's node ids) and 20 are hidden:true layers; and verify-screen.js contains no browser at all, so it cannot 'drive every designed interaction' as SKILL.md claims — all 12 come back result:'not-tested'."
+  }
+}

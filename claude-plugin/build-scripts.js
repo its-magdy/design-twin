@@ -18,7 +18,7 @@ const esbuild = require(require.resolve("esbuild", { paths: [path.join(__dirname
 
 const SRC = path.join(__dirname, "..", "design-to-code");
 // The CLI entry points. kinds.js / catalog-input.js are libraries — they get inlined, not shipped.
-const ENTRIES = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "resolve-screen", "tokens", "verify-build", "verify-screen"];
+const ENTRIES = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
 
 function build(outDir) {
   fs.mkdirSync(outDir, { recursive: true });
