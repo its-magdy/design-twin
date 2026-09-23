@@ -1,8 +1,8 @@
-// The assertion runner shared by all three suites (harness.js, bridge.test.js, design-to-code.test.js).
+// The assertion runner shared by all three suites (harness.ts, bridge.test.ts, design-to-code.test.ts).
 // Each used to carry its own collector + report loop, which differed only cosmetically — three exit
 // conventions and three output formats for counts the project's docs quote as if they were one thing.
 //
-//   const { ok, report } = require("./assert");
+//   import { ok, report } from "./assert.ts";
 //   ok("name", cond);
 //   report();          // prints the summary, then exits 0 (all passed) or 1 (any failed)
 //
@@ -14,18 +14,18 @@
 let pass = 0;
 let total = 0;
 
-function ok(name, cond) {
+export function ok(name: string, cond: unknown): boolean {
   total++;
   if (cond) { pass++; console.log("  ✓ " + name); }
   else console.log("  ✗ FAIL " + name);
   return !!cond;
 }
 
+export const check = ok;
+
 // Exit non-zero if anything failed. Returns the counts so a caller can use them instead of exiting.
-function report({ exit = true } = {}) {
+export function report({ exit = true }: { exit?: boolean } = {}): { pass: number; total: number } {
   console.log(`\n${pass}/${total} checks passed`);
   if (exit) process.exit(pass === total ? 0 : 1);
   return { pass, total };
 }
-
-module.exports = { ok, check: ok, report };

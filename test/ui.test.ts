@@ -1,43 +1,43 @@
 // Offline tests for figma-plugin/ui.html — the plugin window's script, run against a fake DOM and a
 // fake WebSocket. Covers the bridge connection states (the part a designer reads) and the markup the
 // script depends on.
-//   node test/ui.test.js
-const fs = require("fs");
-const path = require("path");
-const vm = require("vm");
-const { check, report } = require("./assert");
+//   node test/ui.test.ts
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
+import { check, report } from "./assert.ts";
 
-const html = fs.readFileSync(path.join(__dirname, "..", "figma-plugin", "ui.html"), "utf8");
-const script = /<script>([\s\S]*)<\/script>/.exec(html)[1];
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "figma-plugin", "manifest.json"), "utf8"));
+const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
+const script = /<script>([\s\S]*)<\/script>/.exec(html)![1];
+const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8"));
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
-  const els = {};
-  const el = (id) => (els[id] ||= { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, appendChild() {}, innerHTML: "" });
-  const sockets = [];
-  const posted = [];
-  const timers = [];
-  function FakeWS(url) { this.url = url; this.readyState = 0; sockets.push(this); }
-  FakeWS.prototype.close = function () { this.readyState = 3; };
+  const els: any = {};
+  const el = (id: any) => (els[id] ||= { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, appendChild() {}, innerHTML: "" });
+  const sockets: any[] = [];
+  const posted: any[] = [];
+  const timers: any[] = [];
+  function FakeWS(this: any, url: any) { this.url = url; this.readyState = 0; sockets.push(this); }
+  FakeWS.prototype.close = function (this: any) { this.readyState = 3; };
   FakeWS.prototype.send = function () {};
-  const ctx = {
+  const ctx: any = {
     document: { getElementById: el, readyState: "complete", createElement: () => el("_tmp"), addEventListener() {} },
     window: {},
-    parent: { postMessage: (m) => posted.push(m.pluginMessage) },
+    parent: { postMessage: (m: any) => posted.push(m.pluginMessage) },
     WebSocket: FakeWS,
-    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
-    clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].fn = null; },
+    setTimeout: (fn: any, ms: any) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: (id: any) => { if (timers[id - 1]) timers[id - 1].fn = null; },
     encodeURIComponent, JSON, String, Math, Uint8Array, console,
   };
   ctx.window = ctx; // the script assigns window.onmessage / window.onerror
   vm.runInNewContext(script, ctx);
-  const msg = (m) => ctx.onmessage({ data: { pluginMessage: m } });
+  const msg = (m: any) => ctx.onmessage({ data: { pluginMessage: m } });
   const runTimers = () => { const due = timers.splice(0); for (const t of due) if (t.fn) t.fn(); };
   return { el, sockets, posted, timers, msg, runTimers, last: () => sockets[sockets.length - 1] };
 }
-const openIt = (s) => { s.readyState = 1; s.onopen(); };
-const closeIt = (s, code) => { s.readyState = 3; s.onclose({ code }); };
+const openIt = (s: any) => { s.readyState = 1; s.onopen(); };
+const closeIt = (s: any, code: any) => { s.readyState = 3; s.onclose({ code }); };
 
 console.log("markup the script depends on:");
 const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge"];
@@ -46,19 +46,19 @@ check("the token input has a real <label for>, not just a placeholder", /<label[
 check("status and banner are live regions (a finished export is announced)", /id="status"[^>]*aria-live/.test(html) && /id="banner"[^>]*role="alert"/.test(html));
 check("the connection section is a <details> that is NOT open by default", /<details id="connect">/.test(html));
 check("the ports the UI dials are exactly the ports the manifest allows", (() => {
-  const dialled = JSON.parse(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script)[1]);
-  const allowed = manifest.networkAccess.allowedDomains.map((d) => Number(d.split(":").pop()));
+  const dialled = JSON.parse(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script)![1]);
+  const allowed = manifest.networkAccess.allowedDomains.map((d: any) => Number(d.split(":").pop()));
   return JSON.stringify(dialled) === JSON.stringify(allowed);
 })());
 
 console.log("theming:");
-const css = /<style>([\s\S]*)<\/style>/.exec(html)[1].replace(/\/\*[\s\S]*?\*\//g, "");
+const css = /<style>([\s\S]*)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
 check("no color is hardcoded without going through a Figma theme variable", (() => {
   const bare = css.split("\n").filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l.replace(/var\(--figma-color-[a-z-]+,\s*#[0-9a-fA-F]{3,8}\)/g, "")));
   if (bare.length) console.log("    bare literals:", bare.map((l) => l.trim()));
   return bare.length === 0;
 })());
-check("main.ts asks Figma for the theme variables", /showUI\(__html__,\s*\{[^}]*themeColors:\s*true/.test(fs.readFileSync(path.join(__dirname, "..", "figma-plugin", "src", "main.ts"), "utf8")));
+check("main.ts asks Figma for the theme variables", /showUI\(__html__,\s*\{[^}]*themeColors:\s*true/.test(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "src", "main.ts"), "utf8")));
 
 console.log("connection states:");
 check("no token saved → 'not set up', neutral, section stays closed, nothing is dialled", (() => {
@@ -81,7 +81,7 @@ check("nothing listening → walks every allowed port, THEN says 'not running' (
   closeIt(w.last(), 1006); const afterOne = w.el("pill").textContent; w.runTimers();
   closeIt(w.last(), 1006); w.runTimers();
   closeIt(w.last(), 1006);
-  const ports = w.sockets.map((s) => /:(\d+)\//.exec(s.url)[1]).join(",");
+  const ports = w.sockets.map((s: any) => /:(\d+)\//.exec(s.url)![1]).join(",");
   return afterOne === "connecting…" && ports === "8787,8788,8789" && w.el("pill").textContent === "not running" && w.el("bridge").className === ""
     && /dtwin --serve/.test(w.el("bridge").textContent) && w.el("connect").open === false;
 })());

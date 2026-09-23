@@ -4,25 +4,29 @@
 // a duplicated file that re-keys every collection, a catalog that covers 0% of the screen, two
 // libraries whose token names collide on different values, a text style that differs by one capital
 // letter, a radius of a billion, a Dark-only export of a two-mode system.
-// Run with:  node test/cross-check.test.js
-const { crossCheck, toMarkdown } = require("../design-to-code/cross-check.js");
-const { screenCoverage } = require("../design-to-code/drift-lint.js");
-const { ok, report } = require("./assert");
+// Run with:  node test/cross-check.test.ts
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
+import { crossCheck, toMarkdown } from "../design-to-code/cross-check.js";
+import { screenCoverage } from "../design-to-code/drift-lint.js";
+import { ok, report } from "./assert.ts";
 
-const has = (res, code) => res.findings.some((f) => f.code === code);
-const get = (res, code) => res.findings.find((f) => f.code === code);
-const sev = (res, code) => (get(res, code) || {}).severity;
+const has = (res: any, code: any) => res.findings.some((f: any) => f.code === code);
+const get = (res: any, code: any) => res.findings.find((f: any) => f.code === code);
+const sev = (res: any, code: any) => (get(res, code) || {}).severity;
 
 // ---------------------------------------------------------------- fixtures
-const instance = (id, setKey, setName, props) => ({
+const instance = (id: any, setKey: any, setName: any, props?: any) => ({
   type: "INSTANCE", id, name: setName, props: props || {},
   mainComponent: { name: setName, key: setKey + "-v", setKey, setName },
 });
-const text = (id, family, style, token) => ({
+const text = (id: any, family: any, style?: any, token?: any) => ({
   type: "TEXT", id, font: { family, size: 14 }, styles: style ? { text: style } : undefined,
   tokens: token ? { fills: token } : undefined,
 });
-const screen = (label, children) => ({
+const screen = (label: any, children?: any) => ({
   doc: { exportedAt: "2026-09-22T00:00:00Z", screen: label, nodes: [{ type: "FRAME", id: "1:1", resolvedModes: { Sem: "Dark" }, children }] },
   label,
 });
@@ -147,7 +151,7 @@ console.log("cross-check — does the catalog cover the screen:");
   ok("[coverage] a unique name + prop overlap is offered as an unverified lead", res.coverage.matchedByName === 1);
   ok("[coverage] the lead is reported ONCE for the whole set, not once per component",
     res.findings.filter((f) => f.code === "name-matched-components").length === 1);
-  ok("[coverage] and every lead carries verified:false", get(res, "name-matched-components").components.every((c) => c.verified === false));
+  ok("[coverage] and every lead carries verified:false", get(res, "name-matched-components").components.every((c: any) => c.verified === false));
   ok("[coverage] an AMBIGUOUS name is left unmatched, not guessed",
     res.coverage.ambiguousName === 1 && has(res, "ambiguous-component-name"));
   ok("[coverage] the ambiguous warning says how many candidates there were",
@@ -280,19 +284,15 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // coverage line keeps its numbers (it is map/catalog coverage by key) but must say how many of those
 // instances — and which whole sets — will never be built, and that it is NOT a build-coverage number.
 {
-  const fs = require("fs");
-  const path = require("path");
-  const gp = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), "utf8"));
+  const gp = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), "utf8"));
   const cov = screenCoverage({ components: {} }, { components: [] }, [gp]);
   ok("[drift-lint wording] instances are still counted in full (87), with the 45 on hidden layers named", cov.instances === 87 && cov.hiddenInstances === 45);
   ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
-  const os = require("os");
-  const { spawnSync } = require("child_process");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-drift-"));
   fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ components: {} }));
-  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "drift-lint.js"), path.join(tmp, "map.json"),
-    path.join(__dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
-    "--screen", path.join(__dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json")], { encoding: "utf8" });
+  const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.js"), path.join(tmp, "map.json"),
+    path.join(import.meta.dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
+    "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json")], { encoding: "utf8" });
   ok("[drift-lint wording] the printed line names the hidden instances and says it measures reuse by key, not what the build contains",
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
@@ -303,14 +303,12 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // `token-name-collision` cited the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
 // derived-mode contrast check graded hidden text.
 {
-  const fs = require("fs");
-  const path = require("path");
-  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const jr = JSON.parse(fs.readFileSync(path.join(FXL, "verify", "positions___7314_87192.json"), "utf8"));
   const hidden = new Set();
-  (function w(n, h) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
-  const citesHidden = (f) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
-  const rd = (p) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8"));
+  (function w(n: any, h: any) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
+  const citesHidden = (f: any) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
+  const rd = (p: any) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8"));
   const tokRes = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }],
     variables: rd("pages/__Organization_management_/positions___7314_87192.vars.json"), tokens: rd("design-system/tokens.json"),
     components: rd("design-system/components.local.json"), componentsLibrary: rd("design-system/components.library.json") });
@@ -329,8 +327,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   };
   const c = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }], variables: vars });
   const dm = c.findings.find((f) => f.code === "derived-mode-contrast");
-  ok("[hidden] derived-mode contrast still fires on VISIBLE text (the check is not dead)", !!dm && dm.pairs.some((p) => p.fg === "Text/Main Titles"));
-  ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !dm.pairs.some((p) => p.fg === "Text/Description") && !citesHidden(dm));
+  ok("[hidden] derived-mode contrast still fires on VISIBLE text (the check is not dead)", !!dm && dm.pairs.some((p: any) => p.fg === "Text/Main Titles"));
+  ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !dm.pairs.some((p: any) => p.fg === "Text/Description") && !citesHidden(dm));
 }
 
 // ---------------------------------------------------------------- CLI: auto-discovery of variables.json (P4 #38/#39/#138) ----------
@@ -340,14 +338,12 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // found the export-root file, so every invocation without an explicit --variables reported "not
 // checked". After the fix it is found automatically and the path used is printed on stderr.
 {
-  const path = require("path");
-  const { spawnSync } = require("child_process");
-  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
   const dsDir = path.join(FXL, "design-system");
-  const withoutFlag = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"),
+  const withoutFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.js"),
     screen, "--design-system", dsDir, "--json"], { encoding: "utf8" });
-  const withFlag = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"),
+  const withFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.js"),
     screen, "--design-system", dsDir, "--variables", path.join(FXL, "variables.json"), "--json"], { encoding: "utf8" });
   ok("[cli-autodiscover] no --variables prints which path it auto-discovered", withoutFlag.stderr.includes(path.join(FXL, "variables.json")));
   const resNoFlag = JSON.parse(withoutFlag.stdout);
@@ -361,20 +357,17 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 
 // ---------- livetest-3 #318 / #326 on the REAL export (test/fixtures/livetest3/) ----------
 {
-  const fs = require("fs");
-  const path = require("path");
-  const { spawnSync } = require("child_process");
-  const FX = path.join(__dirname, "fixtures", "livetest3");
-  const run = (rel) => {
-    const r = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"), path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+  const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
+  const run = (rel: any) => {
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.js"), path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
     try { return JSON.parse(r.stdout); } catch (e) { return { coverage: {}, findings: [] }; }
   };
   // What the build sees: the distinct component sets of VISIBLE instances, and the sets used only on
   // hidden layers — computed here from the fixture itself, not from the tool's own counters.
-  const sets = (rel) => {
+  const sets = (rel: any) => {
     const doc = JSON.parse(fs.readFileSync(path.join(FX, rel), "utf8"));
     const vis = new Set(), all = new Set();
-    const w = (n, hid) => {
+    const w = (n: any, hid: any) => {
       const h = hid || n.hidden === true || n.visible === false;
       if (n.type === "INSTANCE" && n.mainComponent) { const k = n.mainComponent.setKey || n.mainComponent.key; all.add(k); if (!h) vis.add(k); }
       for (const c of n.children || []) w(c, h);
@@ -385,17 +378,17 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   for (const [label, rel] of [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]]) {
     const res = run(rel), truth = sets(rel);
     const b = res.coverage.buckets || {};
-    const sum = Object.values(b).reduce((n, x) => n + x, 0);
+    const sum = Object.values(b).reduce((n: any, x: any) => n + x, 0);
     ok(`[318] ${label}: every visible component set lands in exactly ONE bucket — the rows sum to the ${truth.visible} sets the screen really has`,
       truth.visible > 0 && res.coverage.distinct === truth.visible && sum === truth.visible
-        && (res.coverage.entries || []).every((e) => typeof e.bucket === "string") && (res.coverage.entries || []).length === truth.visible);
+        && (res.coverage.entries || []).every((e: any) => typeof e.bucket === "string") && (res.coverage.entries || []).length === truth.visible);
     ok(`[318] ${label}: sets used only on hidden layers are reported apart (${truth.hiddenOnly}), not mixed into the buckets`,
       res.coverage.hiddenOnly === truth.hiddenOnly);
     ok(`[318] ${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
-      (res.componentProposals || []).every((p) => !(res.coverage.entries || []).some((e) => e.setName === p.name && e.bucket !== "proposed")));
+      (res.componentProposals || []).every((p: any) => !(res.coverage.entries || []).some((e: any) => e.setName === p.name && e.bucket !== "proposed")));
   }
   const cat = run("pages/In_progress/Create_Activity_Type__18411_84111.json");
-  const s4 = cat.findings.find((f) => f.code === "token-name-collision" && f.token === "Space 4");
+  const s4 = cat.findings.find((f: any) => f.code === "token-name-collision" && f.token === "Space 4");
   ok("[326] an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
     !!s4 && /^The screen's 'Space 4' \(key 64928e3a…\) and the design system's 'Space 4' share a name but resolve DIFFERENTLY/.test(s4.message));
 }

@@ -24,7 +24,7 @@ import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
-// under one namespaced global so the VM test harness (test/harness.js) can drive them. Harmless in
+// under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in
 // the isolated plugin realm; not referenced by the UI or bridge.
 // serializeRun/requestCancel ride along because progress + cancellation only exist INSIDE a bracketed
 // run (see progress.ts): a harness that called a collector directly would see neither, so the test

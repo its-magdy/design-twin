@@ -9,14 +9,14 @@ it catches logic bugs cheaply — then B to confirm the real `figma.*` calls.
 ## Layer A — offline logic test (agent-runnable, no Figma)
 
 The plugin's extraction transforms are TypeScript (`figma-plugin/src/*.ts`), bundled to
-`figma-plugin/code.js`. `test/harness.js` loads the built `code.js` in a VM with a mock `figma` object
+`figma-plugin/code.js`. `test/harness.ts` loads the built `code.js` in a VM with a mock `figma` object
 and a representative node tree (mixed text, gradient, reaction, effects, bound token, scroll frame,
 multi-mode variables), then asserts the emitted JSON. The bundle exposes its read API on a namespaced
 global (`__designExport`) which the harness lifts onto the sandbox.
 
 ```
 cd figma-plugin && npm install && npm run typecheck && npm run build && cd ..   # after editing src/
-node test/harness.js
+node test/harness.ts
 ```
 
 Expected: **`414/414 checks passed`** (exit 0). Any `✗ FAIL` prints which transform regressed.
@@ -31,7 +31,7 @@ node --check bridge/seed-components.js
 ```
 
 When you add a new extracted field, edit the relevant `figma-plugin/src/*.ts` module, rebuild, then add
-a matching assertion to `test/harness.js` (extend the mock node with the source property, assert the
+a matching assertion to `test/harness.ts` (extend the mock node with the source property, assert the
 output key). Keep both `typecheck` and the harness green.
 
 ### `design-to-code/` — design-to-code layer (agent-runnable, no Figma)
@@ -40,41 +40,41 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 `design-to-code/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/design-to-code.test.js       # expect: 292/292 checks passed, exit 0
-node test/audit.test.js                # expect: 101/101 checks passed, exit 0
-node test/verify-build.test.js         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
+node test/design-to-code.test.ts       # expect: 292/292 checks passed, exit 0
+node test/audit.test.ts                # expect: 101/101 checks passed, exit 0
+node test/verify-build.test.ts         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
                                        # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.js)
-node test/plan-skeleton.test.js        # expect: 31/31 checks passed, exit 0 — the shared plan shape/visibility
+node test/plan-skeleton.test.ts        # expect: 31/31 checks passed, exit 0 — the shared plan shape/visibility
                                        # helpers (visibility, rootsOf) every skill and verify-build.js walk with
-node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
+node test/ui.test.ts                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.js          # expect: 63/63 checks passed, exit 0 — the JOIN between a screen and the
+node test/cross-check.test.ts          # expect: 63/63 checks passed, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
                                        # that was derived rather than drawn, and auto-discovery of
                                        # design/export/variables.json (never a stale design/variables.json sibling)
-node test/verify-screen.test.js        # expect: 120/120 checks passed, exit 0 — the per-node comparison behind a
+node test/verify-screen.test.ts        # expect: 120/120 checks passed, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
                                        # coverage, reactions/--interactions-driven checks, and the rule that an
                                        # unmeasured expectation is not a passed one
-node test/design-diff.test.js          # expect: 31/31 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
+node test/design-diff.test.ts          # expect: 31/31 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
                                        # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI)
-node test/identity.test.js             # expect: 48/48 checks passed, exit 0 — token and component IDENTITY on livetest-3's
+node test/identity.test.ts             # expect: 48/48 checks passed, exit 0 — token and component IDENTITY on livetest-3's
                                        # real export (test/fixtures/livetest3/): two variables sharing a name are both
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
-node test/resolve-screen.test.js       # expect: 27/27 checks passed, exit 0 — the shared node-id/layer-name/indexed-title
+node test/resolve-screen.test.ts       # expect: 27/27 checks passed, exit 0 — the shared node-id/layer-name/indexed-title
                                        # resolver every skill uses to turn "the Job Roles screen" into one exact file
-node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
-node test/mcp-smoke.test.js            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
+node test/mcp-share.test.ts            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
+node test/mcp-smoke.test.ts            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
 node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js design-to-code/cross-check.js design-to-code/verify-screen.js design-to-code/component-match.js design-to-code/slice-sources.js design-to-code/plan-skeleton.js design-to-code/resolve-screen.js
 ```
 
-`test/audit.test.js` drives `design-to-code/audit.js` (the pre-build design audit behind the
+`test/audit.test.ts` drives `design-to-code/audit.js` (the pre-build design audit behind the
 `audit-design` skill) over `test/fixtures/audit/flawed-login.json` — a login screen seeded with one of
 each flaw (drawn status bar, 32pt close button, #bbb text on white, fixed-size text, a missing font, a
 detached instance, off-grid spacing, a Button set with no pressed/disabled variants). Every seeded flaw
@@ -83,7 +83,7 @@ platform (web 24px / iOS 44pt / Android 48dp targets differ).
 
 ### `bridge/` — handshake auth + seed CLI
 
-`test/bridge.test.js` covers the bridge files the plugin harness can't reach: `server-core.js`'s
+`test/bridge.test.ts` covers the bridge files the plugin harness can't reach: `server-core.js`'s
 `verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host),
 `token-store.js` (where that token lives between runs — precedence, `0600` permissions, the
 lifecycle commands), the
@@ -107,7 +107,7 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 584/584 checks passed, exit 0 — deterministic whether or not
+node test/bridge.test.ts        # expect: 584/584 checks passed, exit 0 — deterministic whether or not
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
@@ -138,7 +138,7 @@ was confirmed to compose end-to-end. Assertions pin actual VALUES (RGB channels,
 Lesson baked in: assert values, mutation-test, and adversarially re-review EACH fix pass — every fix pass
 can introduce its own bugs (findings converged 28 → ~6 → 1 → ~0 real across the four rounds).
 
-When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.js` with the new
+When you change a `design-to-code/` script or the map shape, extend `test/design-to-code.test.ts` with the new
 behavior. `design-to-code/map-validate.js` is the single source of truth for that shape — update its KEYS/PROP
 tables and the prose in `design-to-code/README.md` together. If you add a token field, assert both the DTCG
 output and the CSS output.
@@ -288,7 +288,7 @@ clobbering hand-authored fields.
 
 ## Layer C — design-to-code tooling on a REAL export (checklist)
 
-The `design-to-code/` suite (`test/design-to-code.test.js`, 288 checks) runs on **mock** data, so validate it against a
+The `design-to-code/` suite (`test/design-to-code.test.ts`, 288 checks) runs on **mock** data, so validate it against a
 genuine `design-system.json` once (a full export from Layer B) to catch what the mocks can't. Work
 top-to-bottom; each box is a concrete pass/fail.
 
@@ -298,7 +298,7 @@ to `FONT_WEIGHT` *and* length scopes at once (e.g. a "Body 2" type-scale token a
 `FONT_SIZE`/`LINE_HEIGHT`/`LETTER_SPACING`) was emitted unitless (`--Body-2: 18;`, invalid as a
 font-size) because `numberUnit()` used `.some()` — one unitless scope silenced the length scopes sitting
 next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); regression tests
-`[RD2-mixed]`/`[RD2-pure]` added to `test/design-to-code.test.js`.
+`[RD2-mixed]`/`[RD2-pure]` added to `test/design-to-code.test.ts`.
 
 ### Prereq
 - [ ] You have a real export from **"Export design system + all page frames"** (Layer B): a
@@ -352,7 +352,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
       note how little the map/tokens can do, which is the signal to improve the Figma file or build that layer.
 
 > Anything that fails here is a **real-data** gap the mock suite couldn't see — capture the input and add a
-> regression test to `test/design-to-code.test.js` (assert the VALUE, not just presence — see the lesson above).
+> regression test to `test/design-to-code.test.ts` (assert the VALUE, not just presence — see the lesson above).
 
 ---
 
@@ -360,14 +360,14 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 
 | Command | What |
 |---|---|
-| `node test/harness.js` | Offline exporter logic test (read + write planes) — expect `414/414` |
+| `node test/harness.ts` | Offline exporter logic test (read + write planes) — expect `414/414` |
 | `cd figma-plugin && npm run typecheck` | Type-check the extractor (`tsc --noEmit`) after editing `src/` |
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
-| `node test/design-to-code.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `288/288` |
-| `node test/identity.test.js` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect `48/48` |
-| `node test/cross-check.test.js` | Screen-vs-design-system join — expect `63/63` |
-| `node test/verify-screen.test.js` | Per-node verification and its verdict — expect `44/44` |
-| `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
+| `node test/design-to-code.test.ts` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `288/288` |
+| `node test/identity.test.ts` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect `48/48` |
+| `node test/cross-check.test.ts` | Screen-vs-design-system join — expect `63/63` |
+| `node test/verify-screen.test.ts` | Per-node verification and its verdict — expect `44/44` |
+| `node test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |
 | `node bridge/figma-pull.js --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
 | `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |

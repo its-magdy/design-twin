@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "target": "es2024",
+    "lib": ["es2024"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    // Transitional: the tests import the still-CJS bridge/*.js and design-to-code/*.js, and TS 7
+    // strict rejects untyped JS imports (TS7016) without allowJs. Drop this after step 4.
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true
+  },
+  "include": ["./**/*.ts", "../design-to-code/**/*.ts"]
+}

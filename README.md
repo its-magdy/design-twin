@@ -286,12 +286,12 @@ Everything runs offline, without Figma:
 
 ```bash
 npm ci --prefix bridge && npm ci --prefix figma-plugin
-node test/harness.js              # Figma plugin extractor, against a mock `figma`
-node test/bridge.test.js          # CLI + bridge
-node test/design-to-code.test.js  # tokens, maps, drift-lint
+node test/harness.ts              # Figma plugin extractor, against a mock `figma`
+node test/bridge.test.ts          # CLI + bridge
+node test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
-Every other `test/*.test.js` suite runs the same way. `TESTING.md` lists each suite, its expected
+Every other `test/*.test.ts` suite runs the same way. `TESTING.md` lists each suite, its expected
 count, and the live-Figma checks. The plugin's `code.js`, `bridge/figma-mcp.mjs` and
 `claude-plugin/scripts/` are committed build output. After editing their sources, rebuild them:
 

@@ -10,8 +10,8 @@
     "figma-plugin"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces",
+    "typecheck": "npm run typecheck --workspaces && tsc -p test/tsconfig.json",
     "build": "npm run build --workspaces && node claude-plugin/build-scripts.js",
-    "test": "node test/harness.js && node test/bridge.test.js && node test/design-to-code.test.js && node test/audit.test.js && node test/verify-build.test.js && node test/verify-screen.test.js && node test/cross-check.test.js && node test/design-diff.test.js && node test/identity.test.js && node test/plan-skeleton.test.js && node test/resolve-screen.test.js && node test/ui.test.js && node test/mcp-share.test.js && node test/mcp-smoke.test.js"
+    "test": "node test/harness.ts && node test/bridge.test.ts && node test/design-to-code.test.ts && node test/audit.test.ts && node test/verify-build.test.ts && node test/verify-screen.test.ts && node test/cross-check.test.ts && node test/design-diff.test.ts && node test/identity.test.ts && node test/plan-skeleton.test.ts && node test/resolve-screen.test.ts && node test/ui.test.ts && node test/mcp-share.test.ts && node test/mcp-smoke.test.ts"
   }
 }
