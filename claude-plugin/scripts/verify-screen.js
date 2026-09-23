@@ -41,6 +41,52 @@ var require_hidden = __commonJS({
   }
 });
 
+// design-to-code/content-hash.js
+var require_content_hash = __commonJS({
+  "design-to-code/content-hash.js"(exports2, module2) {
+    var fs = require("fs");
+    var path = require("path");
+    var crypto = require("crypto");
+    var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+    function stripPullTimes(v, parentKey) {
+      if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+      if (!v || typeof v !== "object") return v;
+      const out = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "exportedAt") continue;
+        if (k === "at" && parentKey === "_slices") continue;
+        out[k] = stripPullTimes(x, k);
+      }
+      return out;
+    }
+    function exportContentSha2562(docs) {
+      const list = Array.isArray(docs) ? docs : [docs];
+      return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+    }
+    function fileHashes2(files, cwd) {
+      const out = {};
+      for (const rel of Array.isArray(files) ? files.map(String) : []) {
+        try {
+          out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
+        } catch {
+          out[rel] = null;
+        }
+      }
+      return out;
+    }
+    function gitHead2(cwd) {
+      try {
+        const r = require("child_process").spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+        const h = r.status === 0 && String(r.stdout || "").trim();
+        return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+      } catch {
+        return null;
+      }
+    }
+    module2.exports = { stripPullTimes, exportContentSha256: exportContentSha2562, fileHashes: fileHashes2, gitHead: gitHead2 };
+  }
+});
+
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
@@ -82,6 +128,7 @@ var require_catalog_input = __commonJS({
 
 // design-to-code/verify-screen.js
 var { walkWithHidden } = require_hidden();
+var { exportContentSha256, fileHashes, gitHead } = require_content_hash();
 var TOLERANCE = {
   fontSize: 0.5,
   // a browser rounds; a different token does not
@@ -379,6 +426,9 @@ function buildExpectation(docs) {
     schema: EXPECTATION_SCHEMA,
     screen,
     exportedAt,
+    // P2b round 2 (finding 314): the design's identity without the pull's timestamps, so a no-change
+    // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
+    exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
     reference,
     frame: { nodeId: f0.nodeId, name: f0.name, w: f0.w, h: f0.h, clip: f0.clip },
     frames: frames.length > 1 ? frames.map((f) => ({ nodeId: f.nodeId, name: f.name, w: f.w, h: f.h, clip: f.clip })) : void 0,
@@ -857,7 +907,11 @@ function compare(expectation, measured, opts) {
     expectationSchema: expectation.schema || "(none)",
     expectationSha256: opts.expectationSha256,
     measuredSha256: opts.measuredSha256,
-    measuredAgainst: measured.expectationSha256 || void 0
+    measuredAgainst: measured.expectationSha256 || void 0,
+    // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
+    // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
+    exportContentSha256: expectation.exportContentSha256 || void 0,
+    code: opts.code || void 0
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1082,8 +1136,15 @@ if (require.main === module) {
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     write(outBase, exp);
     const h = crypto.createHash("sha256").update(next).digest("hex");
+    let prevContent = null;
+    try {
+      prevContent = prev !== null ? JSON.parse(prev).exportContentSha256 : null;
+    } catch {
+    }
     if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}\u2026) \u2014 unchanged`);
-    else if (prev !== null) {
+    else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
+      console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
+    } else if (prev !== null) {
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
@@ -1119,7 +1180,30 @@ if (require.main === module) {
     const exists = !!p && fs.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : void 0 };
   });
-  const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck });
+  let code;
+  {
+    const planDir = path.join("design", "plan");
+    const frameId = expectation.frame && expectation.frame.nodeId;
+    const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
+    const hits = [];
+    for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+      let p;
+      try {
+        p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8"));
+      } catch {
+        continue;
+      }
+      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
+      const byName = path.basename(f, ".json") === stem || p.file && path.basename(String(p.file), ".json") === stem;
+      if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });
+    }
+    if (hits.length === 1) {
+      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    } else {
+      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
+    }
+  }
+  const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, code });
   const md = reportToMarkdown(rep);
   const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
   write(compareBase, rep, md);

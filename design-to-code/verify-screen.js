@@ -30,6 +30,7 @@
 // arrives as measured.json (+ an optional --interactions file). Anything the probe did not measure is
 // reported as not measured / not probed — never as passed, and never as failed (findings 127/158).
 const { walkWithHidden } = require("./hidden.js");
+const { exportContentSha256, fileHashes, gitHead } = require("./content-hash.js");
 
 // ---------------------------------------------------------------- tolerances
 //
@@ -408,6 +409,9 @@ function buildExpectation(docs) {
     schema: EXPECTATION_SCHEMA,
     screen,
     exportedAt,
+    // P2b round 2 (finding 314): the design's identity without the pull's timestamps, so a no-change
+    // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
+    exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
     reference,
     frame: { nodeId: f0.nodeId, name: f0.name, w: f0.w, h: f0.h, clip: f0.clip },
     frames: frames.length > 1 ? frames.map((f) => ({ nodeId: f.nodeId, name: f.name, w: f.w, h: f.h, clip: f.clip })) : undefined,
@@ -848,6 +852,10 @@ function compare(expectation, measured, opts) {
     expectationSha256: opts.expectationSha256,
     measuredSha256: opts.measuredSha256,
     measuredAgainst: measured.expectationSha256 || undefined,
+    // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
+    // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
+    exportContentSha256: expectation.exportContentSha256 || undefined,
+    code: opts.code || undefined,
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1074,8 +1082,14 @@ if (require.main === module) {
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     write(outBase, exp);
     const h = crypto.createHash("sha256").update(next).digest("hex");
+    let prevContent = null;
+    try { prevContent = prev !== null ? JSON.parse(prev).exportContentSha256 : null; } catch { /* unreadable */ }
     if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}…) — unchanged`);
-    else if (prev !== null) {
+    else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
+      // Finding 314: a re-pull with nothing changed rewrites only exportedAt. Same design, same specs —
+      // the measurements and report beside it still describe it.
+      console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}… unchanged) — existing measurements and report still apply`);
+    } else if (prev !== null) {
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}… → ${h.slice(0, 12)}…)`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation — re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
@@ -1107,7 +1121,28 @@ if (require.main === module) {
     const exists = !!p && fs.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : undefined };
   });
-  const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck });
+  // Finding 317: tie the report to the code it measured — the plan (design/plan/*.json) for this
+  // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
+  let code;
+  {
+    const planDir = path.join("design", "plan");
+    const frameId = expectation.frame && expectation.frame.nodeId;
+    const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
+    const hits = [];
+    for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+      let p; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")); } catch { continue; }
+      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
+      const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
+      if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });
+    }
+    if (hits.length === 1) {
+      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    } else {
+      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
+        : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
+    }
+  }
+  const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, code });
   const md = reportToMarkdown(rep);
   // Same rule as --expect (P3 #152): default to the EXPECTATION file's own basename (stripping the
   // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`

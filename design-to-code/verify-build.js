@@ -36,7 +36,9 @@
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold:
 //   hook result "pass"  AND  every file in files[] still hashes the same  AND  the verify report
-//   (design/verify/<…>.report.json) says "pass" and is newer than the code.
+//   (design/verify/<…>.report.json, schema @2) says "pass" and measured THIS design and THIS code —
+//   by content: its inputs.exportContentSha256 equals the export's (timestamps stripped) and its
+//   inputs.code.files equal the files' hashes now. No clock is consulted (livetest-4 314/317).
 // A stored "verified"/"static-only" (written by an older hook) is ignored by computeStatus and
 // deleted the next time the hook checks that plan. `status` keeps only the states a PERSON sets:
 // "pending" (default) · "awaiting-user" (paused on a question — skipped, never closed) ·
@@ -45,8 +47,8 @@
 //
 // Computed statuses: pending (hook has not checked this version of the plan) · blocked · stale (a
 // file changed since the hook passed) · failed (a verify report exists and does not say pass) ·
-// unverified (no report, a report that is "incomplete", or one that predates the code / export /
-// expectation) · static-only · verified.
+// unverified (no report; a report that is "incomplete", older than schema @2, or that measured a
+// different design or different code) · static-only · verified.
 //
 // ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
@@ -66,6 +68,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { visibility, rootsOf } = require("./plan-skeleton");
+const contentHash = require("./content-hash");
 
 // ================================================================ input / timeouts
 
@@ -143,6 +146,7 @@ function rootOfPlan(file, fallback) {
 
 // Lifecycle states a PERSON sets. Anything else stored in `status` ("verified", "static-only", from an
 // older hook) is a computed value that must not be trusted, and counts as pending.
+const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 const LIFECYCLE = new Set(["pending", "awaiting-user", "abandoned"]);
 const COMPUTED_STORED = new Set(["verified", "static-only"]);
 const lifecycleOf = (plan) => {
@@ -155,11 +159,7 @@ const lifecycleOf = (plan) => {
 const sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 
 function fileHashes(plan, cwd) {
-  const out = {};
-  for (const rel of Array.isArray(plan.files) ? plan.files.map(String) : []) {
-    try { out[rel] = sha(fs.readFileSync(path.join(cwd, rel))); } catch { out[rel] = null; }
-  }
-  return out;
+  return contentHash.fileHashes(plan && plan.files, cwd); // the same hashes verify-screen --compare records
 }
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance.
@@ -670,7 +670,10 @@ function checkPlan({ plan, file }, cwd, opts) {
     }
   }
   for (const [lit, e] of colourHits) {
-    const where = code.filter((f) => f.text.includes(lit)).map((f) => f.rel);
+    // Finding 325: name only files that USE the literal — not an allow-listed token file, not a file
+    // where every occurrence is the token's own definition line.
+    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel)
+      && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${e.value} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
   }
 
@@ -787,6 +790,7 @@ function locateReports(plan, planFile, cwd, exp) {
     if (want && fs.existsSync(expFile)) { try { expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want; } catch { /* ignore */ } }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
       why: Array.isArray(r.why) ? r.why : [], deltas: Array.isArray(r.deltas) ? r.deltas : null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
+      exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
       expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null });
   }
   return out;
@@ -810,6 +814,15 @@ function computeStatus(plan, opts) {
   if (ch.length) return { status: "stale", reasons: reasons.concat(`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`), reports: [] };
   const exp = o.export === undefined ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
+  const mode = plan.verification && plan.verification.mode;
+  if (!reports.length) {
+    if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically — not rendered (${plan.verification.reason || "no reason recorded"})`), reports };
+    return { status: "unverified", reasons: reasons.concat("no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"), reports };
+  }
+  // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"
+  // (0-for-83 wrong on the live run). Its verdict and `why` are not repeated as fact — it is re-run.
+  const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
+  if (legacy.length) return { status: "unverified", reasons: reasons.concat(legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers; its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`)), reports };
   const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
   const failing = reports.filter((r) => r.verdict === "fail");
   if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
@@ -817,21 +830,24 @@ function computeStatus(plan, opts) {
   // not a pass — and not a failure the build caused either.
   const notPass = reports.filter((r) => r.verdict !== "pass");
   if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
-  const moved = reports.filter((r) => r.expectationChanged);
-  if (moved.length) return { status: "unverified", reasons: reasons.concat(moved.map((r) => `${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`)), reports };
-  const mode = plan.verification && plan.verification.mode;
-  if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically — not rendered (${plan.verification.reason || "no reason recorded"})`), reports };
-    return { status: "unverified", reasons: reasons.concat("no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"), reports };
+  // Freshness is decided by CONTENT, never by a clock (findings 314/317): not exportedAt (a no-change
+  // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
+  const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
+  for (const r of reports) {
+    if (!r.exportContentSha256) {
+      if (r.expectationChanged) return { status: "unverified", reasons: reasons.concat(`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`), reports };
+      return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run verify-screen.js --expect and --compare`), reports };
+    }
+    if (!expSha) return { status: "unverified", reasons: reasons.concat(`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`), reports };
+    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: reasons.concat(`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`), reports };
+    const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
+    if (!measured) return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record which code it measured (inputs.code) — re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`), reports };
+    const now = fileHashes(plan, cwd);
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    if (differ.length) return { status: "unverified", reasons: reasons.concat(`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`), reports };
   }
-  let newest = 0;
-  for (const rel of Array.isArray(plan.files) ? plan.files : []) { try { newest = Math.max(newest, fs.statSync(path.join(cwd, String(rel))).mtimeMs); } catch { /* ignore */ } }
-  const older = reports.filter((r) => r.mtimeMs && newest && r.mtimeMs < newest);
-  if (older.length) return { status: "unverified", reasons: reasons.concat(`${older.map((r) => r.rel).join(", ")} is older than the newest file in files[] — it describes an earlier build; re-run --compare`), reports };
-  const expAt = exp && exp.doc && exp.doc.exportedAt;
-  const onOld = expAt ? reports.filter((r) => r.exportedAt && r.exportedAt !== expAt) : [];
-  if (onOld.length) return { status: "unverified", reasons: reasons.concat(`${onOld.map((r) => r.rel).join(", ")} was computed against an export from ${onOld[0].exportedAt}; the export on disk is from ${expAt} — re-run --expect and --compare`), reports };
-  return { status: "verified", reasons: reasons.concat(`hook passed, files unchanged, ${reports.map((r) => r.rel).join(", ")} says pass`), reports };
+  const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
+  return { status: "verified", reasons: reasons.concat(`hook passed; ${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`), reports };
 }
 
 // ================================================================ fan-out scoping

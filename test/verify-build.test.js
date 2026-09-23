@@ -260,18 +260,19 @@ check("[155] a rendered plan with NO verify report is never `verified` — the p
   const root = project({ "a.tsx": "", "design/verify/login.png": "png" }, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
   return runHook(root).status === 0 && planOf(root).status === "pending" && statusOf(root) === "unverified";
 })());
-check("[155] …it is `verified` only when the verify report beside it says pass, and is newer than the code", (() => {
+check("[316] …nor with a 'pass' report that predates verify-report@2 — it says so instead of trusting it", (() => {
   const root = project({ "a.tsx": "", "design/verify/login.png": "png" }, { status: "pending", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } });
   const past = new Date(Date.now() - 60000);
   fs.utimesSync(path.join(root, "a.tsx"), past, past);
   fs.writeFileSync(path.join(root, "design", "verify", "login.report.json"), JSON.stringify({ verdict: "pass", why: [] }));
   runHook(root);
-  return statusOf(root) === "verified";
+  const st = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  return st.status === "unverified" && /predates designtwin\/verify-report@2/.test(st.reasons.join(" "));
 })());
 check("[189] a failing verify report turns the same plan into `failed`, whatever the plan says", (() => {
   const root = project({ "a.tsx": "" }, { status: "verified", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["a.tsx"], deltas: [] } });
   fs.mkdirSync(path.join(root, "design", "verify"), { recursive: true });
-  fs.writeFileSync(path.join(root, "design", "verify", "login.report.json"), JSON.stringify({ verdict: "fail", why: ["4 high-severity value mismatch(es)"] }));
+  fs.writeFileSync(path.join(root, "design", "verify", "login.report.json"), JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "fail", why: ["4 high-severity value mismatch(es)"] }));
   const before = statusOf(root);
   const r = runHook(root);
   return before === "pending" && r.status === 0 && planOf(root).status === undefined && /removed the stored "status": "verified"/.test(r.stderr)
@@ -490,7 +491,9 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   const after = { jr: JSON.parse(fs.readFileSync(planFile(JR), "utf8")), gp: JSON.parse(fs.readFileSync(planFile(GP), "utf8")) };
   check("[155] the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
   const jr = st(JR), gp = st(GP);
-  check(`[155] Job Roles: computed status is "failed", citing design/verify/JobRoles.report.json (got ${jr.status})`, jr.status === "failed" && /JobRoles\.report\.json says verdict "fail"/.test(jr.reasons.join(" ")) && jr.reports[0].matchedBy === "layer name");
+  check(`[155/316] Job Roles: not verified — its report (JobRoles.report.json, schema @1) is flagged as predating @2, and its false "31 component(s) … never built" is NOT repeated (got ${jr.status})`,
+    jr.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1 — it predates designtwin\/verify-report@2/.test(jr.reasons.join(" "))
+    && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0].matchedBy === "layer name");
   check(`[189] Global Policies: not verified either (got ${gp.status} — its hook run blocked on the unanchored footer)`, gp.status !== "verified" && gp.status === "blocked");
   const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
   const rows = JSON.parse(cli.stdout);
@@ -502,11 +505,11 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   fs.writeFileSync(planFile(GP), JSON.stringify(gpFixed, null, 2));
   spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const gp2 = st(GP);
-  check(`[189] with its hook passing, Global Policies is "failed" — GlobalPolicies.report.json says fail (got ${gp2.status})`, gp2.status === "failed" && /GlobalPolicies\.report\.json/.test(gp2.reasons.join(" ")));
+  check(`[189/316] with its hook passing, Global Policies is still not verified — its @1 report must be regenerated (got ${gp2.status})`, gp2.status === "unverified" && /GlobalPolicies\.report\.json is designtwin\/verify-report@1/.test(gp2.reasons.join(" ")));
   // the P3 `<Layer>__<id>` report naming is found by name too
   fs.renameSync(path.join(root, "design/verify/JobRoles.report.json"), path.join(root, "design/verify", JR + ".report.json"));
   const jr2 = st(JR);
-  check("[155] the new <Layer>__<id>.report.json naming is found as well", jr2.status === "failed" && jr2.reports[0].matchedBy === "name");
+  check("[155] the new <Layer>__<id>.report.json naming is found as well", jr2.status === "unverified" && jr2.reports[0].matchedBy === "name");
 }
 
 console.log("P2b [156] the verification block is checked against itself; [196] deviations are calibrated:");
@@ -544,8 +547,8 @@ console.log("P2b end to end — plan-skeleton.js writes the plan, the hook check
   fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
   const r2 = hook();
   const st = computeStatus(JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8")), { cwd: root, planFile: path.join(root, planRel) });
-  check(`one anchor on the frame + files[] → the hook passes (exit ${r2.status}); status is computed from the live JobRoles report: ${st.status}`,
-    r2.status === 0 && st.status === "failed" && /JobRoles\.report\.json/.test(st.reasons.join(" ")));
+  check(`one anchor on the frame + files[] → the hook passes (exit ${r2.status}); status is computed from the live JobRoles report — @1, so unverified: ${st.status}`,
+    r2.status === 0 && st.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1/.test(st.reasons.join(" ")));
 }
 
 console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a changed expectation invalidates the report:");
@@ -570,13 +573,101 @@ console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a cha
   check(`an @2 report found through its expectation's frame.nodeId; verdict "incomplete" → unverified, quoting the headline (got ${inc.status})`,
     inc.status === "unverified" && inc.reports[0].matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
   const pass = setup(v2("pass"), EXP);
-  check(`an @2 "pass" against the expectation still on disk → verified (got ${pass.status})`, pass.status === "verified");
+  check(`an @2 "pass" that does not record the export content hash it measured → unverified, saying so (got ${pass.status})`, pass.status === "unverified" && /inputs\.exportContentSha256/.test(pass.reasons.join(" ")));
   const moved = setup(v2("pass"), EXP.replace("positions ", "positions"));
   check(`an @2 "pass" whose inputs.expectationSha256 no longer matches the .expected.json on disk → unverified (got ${moved.status})`,
     moved.status === "unverified" && /inputs\.expectationSha256 no longer matches/.test(moved.reasons.join(" ")));
   const fail = setup(v2("fail"), EXP);
   check(`an @2 "fail" → failed (got ${fail.status})`, fail.status === "failed");
 }
+
+console.log("P2b round 2 — freshness by content, never by clock (livetest-4 findings 314, 316, 317, 325):");
+{
+  const { exportContentSha256, fileHashes: hashFiles } = require("../design-to-code/content-hash");
+  const VS = require.resolve("../design-to-code/verify-screen.js");
+  const before = path.join(FX, "repull", "before.json"), after = path.join(FX, "repull", "after.json");
+  const rawB = fs.readFileSync(before, "utf8"), rawA = fs.readFileSync(after, "utf8");
+  check("[314] the real no-change re-pull pair: the files differ (exportedAt), the export content hash does not",
+    rawB !== rawA && exportContentSha256(JSON.parse(rawB)) === exportContentSha256(JSON.parse(rawA)));
+  check("[314] …while a real design edit (one layer renamed) does change it", (() => {
+    const d = JSON.parse(rawA); d.nodes[0].children[0].name += " (edited)";
+    return exportContentSha256(d) !== exportContentSha256(JSON.parse(rawA));
+  })());
+  check("[314] `_slices[].at` (variables-merge provenance) is stripped too, the rest of a slice is not", (() => {
+    const v = (at, n) => ({ _slices: [{ file: "a", at, n }], exportedAt: at });
+    return exportContentSha256(v("t1", 1)) === exportContentSha256(v("t2", 1)) && exportContentSha256(v("t1", 1)) !== exportContentSha256(v("t1", 2));
+  })());
+
+  // The real flow in a project laid out like the live one: the repull pair's "before" is the export on
+  // disk, the plan anchors the frame and lists Header.tsx, verify-screen --expect/--compare run for real.
+  const root = liveProject({});
+  const E = "design/export/pages/__Organization_management_";
+  const exportFile = path.join(root, E, JR + ".json");
+  for (const f of fs.readdirSync(path.join(root, "design/verify"))) fs.unlinkSync(path.join(root, "design/verify", f)); // only this flow's report
+  fs.copyFileSync(before, exportFile);
+  const planFile = path.join(root, "design", "plan", JR + ".json");
+  fs.writeFileSync(planFile, JSON.stringify({ status: "pending", screenName: "Job Roles", nodeId: "7314:87192", route: "/job-roles", file: `${E}/${JR}.json`,
+    files: ["app/src/layout/Header.tsx"], anchors: { "7314:87192": { mapModule: "app/src/layout/Header.tsx" } },
+    verification: { mode: "rendered", artifacts: ["app/src/layout/Header.tsx"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }, null, 2));
+  const vs = (args) => spawnSync(process.execPath, [VS, ...args], { cwd: root, encoding: "utf8" });
+  const hook = () => spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const st = () => computeStatus(JSON.parse(fs.readFileSync(planFile, "utf8")), { cwd: root, planFile });
+  const x = vs(["--expect", `${E}/${JR}.json`]);
+  fs.writeFileSync(path.join(root, "design/verify/m.json"), JSON.stringify({ measuredAt: "2026-09-23T00:00:00Z", renderer: "test", nodes: [] }));
+  const c = vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
+  const repFile = path.join(root, "design/verify", JR + ".report.json");
+  const rep = JSON.parse(fs.readFileSync(repFile, "utf8"));
+  const expectation = JSON.parse(fs.readFileSync(path.join(root, "design/verify", JR + ".expected.json"), "utf8"));
+  check("[314] --expect records the export's content hash in the expectation (exportContentSha256)",
+    x.status === 0 && expectation.exportContentSha256 === exportContentSha256(JSON.parse(rawB)));
+  check("[317] --compare records WHAT it measured: the export content hash, and the plan's files[] hashed exactly as the Stop hook hashes them",
+    rep.inputs.exportContentSha256 === expectation.exportContentSha256 && rep.inputs.code.plan === `design/plan/${JR}.json`
+    && JSON.stringify(rep.inputs.code.files) === JSON.stringify(hashFiles(["app/src/layout/Header.tsx"], root)) && "gitHead" in rep.inputs.code);
+  // The report above is real; its verdict is set to "pass" to stand for a passing render (the probe
+  // here measured nothing). Every other field is what --compare wrote.
+  rep.verdict = "pass";
+  fs.writeFileSync(repFile, JSON.stringify(rep, null, 2));
+  hook();
+  const s0 = st();
+  check(`a passing @2 report that measured this design and this code → verified (got ${s0.status})`, s0.status === "verified");
+  const future = new Date(Date.now() + 3600e3);
+  fs.utimesSync(path.join(root, "app/src/layout/Header.tsx"), future, future);
+  fs.utimesSync(exportFile, future, future);
+  const s1 = st();
+  check(`[317] \`touch\` on the code and the export changes nothing — no mtime is consulted (got ${s1.status}; before: unverified, "older than the newest file")`, s1.status === "verified");
+  // a no-change re-pull: the export is replaced by the real "after" pull, then --expect is re-run
+  fs.copyFileSync(after, exportFile);
+  const x2 = vs(["--expect", `${E}/${JR}.json`]);
+  const s2 = st();
+  check(`[314] a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}; before: unverified)`,
+    /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
+  // a real design change
+  const edited = JSON.parse(rawA); edited.nodes[0].children[0].name += " (edited)";
+  fs.writeFileSync(exportFile, JSON.stringify(edited));
+  const s3 = st();
+  check(`[314] a real design change → unverified, naming the content hash change (got ${s3.status})`, s3.status === "unverified" && /the design changed since/.test(s3.reasons.join(" ")));
+  fs.copyFileSync(after, exportFile);
+  // a real code change: the hook re-opens the plan, passes, and the report no longer describes the code
+  fs.appendFileSync(path.join(root, "app/src/layout/Header.tsx"), "\n// edited\n");
+  const s4a = st().status;
+  hook();
+  const s4 = st();
+  check(`[317] a real code change → stale until the hook re-checks, then unverified: the report measured different code (got ${s4a} → ${s4.status})`,
+    s4a === "stale" && s4.status === "unverified" && /measured different code — changed since: app\/src\/layout\/Header\.tsx/.test(s4.reasons.join(" ")));
+  const noCode = Object.assign({}, rep, { inputs: Object.assign({}, rep.inputs, { code: undefined }) });
+  fs.writeFileSync(repFile, JSON.stringify(noCode));
+  check("[317] a report with no inputs.code is never verified — it cannot say which code it measured", /does not record which code it measured/.test(st().reasons.join(" ")));
+}
+check("[325] the block message names the file that USES the literal, not the allow-listed token file", (() => {
+  const b = blocks({ "app/src/theme/theme.css": ".x { background: #5B5FC7 }", "app/src/Screen.tsx": "<div style={{ color: '#5B5FC7' }} />" },
+    { files: ["app/src/theme/theme.css", "app/src/Screen.tsx"], tokens: [brand], allowedLiterals: [{ file: "app/src/theme/theme.css", reason: "generated token source" }], verification: STATIC });
+  return b.length === 1 && /in app\/src\/Screen\.tsx, but/.test(b[0]) && !/theme\.css/.test(b[0].split(", but")[0]);
+})());
+check("[325] …nor a file whose only occurrence is the token's own definition line", (() => {
+  const b = blocks({ "theme.css": ":root { --brand-600: #5B5FC7; }", "Card.tsx": "<div style={{ color: '#5B5FC7' }} />" },
+    { files: ["theme.css", "Card.tsx"], tokens: [brand], verification: STATIC });
+  return b.length === 1 && /in Card\.tsx, but/.test(b[0]);
+})());
 
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
 const BOOT = require.resolve("../design-to-code/map-bootstrap.js");

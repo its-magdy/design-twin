@@ -2164,11 +2164,58 @@ var require_plan_skeleton = __commonJS({
   }
 });
 
+// design-to-code/content-hash.js
+var require_content_hash = __commonJS({
+  "design-to-code/content-hash.js"(exports2, module2) {
+    var fs2 = require("fs");
+    var path2 = require("path");
+    var crypto2 = require("crypto");
+    var sha256 = (s) => crypto2.createHash("sha256").update(s).digest("hex");
+    function stripPullTimes(v, parentKey) {
+      if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+      if (!v || typeof v !== "object") return v;
+      const out = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "exportedAt") continue;
+        if (k === "at" && parentKey === "_slices") continue;
+        out[k] = stripPullTimes(x, k);
+      }
+      return out;
+    }
+    function exportContentSha256(docs) {
+      const list = Array.isArray(docs) ? docs : [docs];
+      return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
+    }
+    function fileHashes2(files, cwd) {
+      const out = {};
+      for (const rel of Array.isArray(files) ? files.map(String) : []) {
+        try {
+          out[rel] = sha256(fs2.readFileSync(path2.join(cwd, rel))).slice(0, 16);
+        } catch {
+          out[rel] = null;
+        }
+      }
+      return out;
+    }
+    function gitHead(cwd) {
+      try {
+        const r = require("child_process").spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+        const h = r.status === 0 && String(r.stdout || "").trim();
+        return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+      } catch {
+        return null;
+      }
+    }
+    module2.exports = { stripPullTimes, exportContentSha256, fileHashes: fileHashes2, gitHead };
+  }
+});
+
 // design-to-code/verify-build.js
 var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
 var { visibility, rootsOf } = require_plan_skeleton();
+var contentHash = require_content_hash();
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;
 var STDIN_WAIT_MS = () => {
   const n = Number(process.env.DTWIN_HOOK_STDIN_WAIT_MS);
@@ -2263,6 +2310,7 @@ function rootOfPlan(file, fallback) {
   if (path.basename(dir) === "plan" && path.basename(path.dirname(dir)) === "design") return path.dirname(path.dirname(dir));
   return fallback || process.cwd();
 }
+var REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 var LIFECYCLE = /* @__PURE__ */ new Set(["pending", "awaiting-user", "abandoned"]);
 var COMPUTED_STORED = /* @__PURE__ */ new Set(["verified", "static-only"]);
 var lifecycleOf = (plan) => {
@@ -2271,15 +2319,7 @@ var lifecycleOf = (plan) => {
 };
 var sha = (buf) => crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 function fileHashes(plan, cwd) {
-  const out = {};
-  for (const rel of Array.isArray(plan.files) ? plan.files.map(String) : []) {
-    try {
-      out[rel] = sha(fs.readFileSync(path.join(cwd, rel)));
-    } catch {
-      out[rel] = null;
-    }
-  }
-  return out;
+  return contentHash.fileHashes(plan && plan.files, cwd);
 }
 function planHash(plan) {
   const copy = JSON.parse(JSON.stringify(plan || {}));
@@ -2762,7 +2802,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     }
   }
   for (const [lit, e] of colourHits) {
-    const where = code.filter((f) => f.text.includes(lit)).map((f) => f.rel);
+    const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
     blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${e.value} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
   }
   const dims = arbitraryPx(source);
@@ -2886,6 +2926,8 @@ function locateReports(plan, planFile, cwd, exp) {
       exportedAt: r.exportedAt || null,
       measuredAt: r.measuredAt || null,
       mtimeMs,
+      exportContentSha256: r.inputs && r.inputs.exportContentSha256 || null,
+      code: r.inputs && r.inputs.code || null,
       expectationChanged,
       expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null
     });
@@ -2908,31 +2950,34 @@ function computeStatus(plan, opts) {
   if (ch.length) return { status: "stale", reasons: reasons.concat(`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`), reports: [] };
   const exp = o.export === void 0 ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
-  const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
-  const notPass = reports.filter((r) => r.verdict !== "pass");
-  if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
-  const moved = reports.filter((r) => r.expectationChanged);
-  if (moved.length) return { status: "unverified", reasons: reasons.concat(moved.map((r) => `${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`)), reports };
   const mode = plan.verification && plan.verification.mode;
   if (!reports.length) {
     if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`), reports };
     return { status: "unverified", reasons: reasons.concat(`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`), reports };
   }
-  let newest = 0;
-  for (const rel of Array.isArray(plan.files) ? plan.files : []) {
-    try {
-      newest = Math.max(newest, fs.statSync(path.join(cwd, String(rel))).mtimeMs);
-    } catch {
+  const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
+  if (legacy.length) return { status: "unverified", reasons: reasons.concat(legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers; its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`)), reports };
+  const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const failing = reports.filter((r) => r.verdict === "fail");
+  if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
+  const notPass = reports.filter((r) => r.verdict !== "pass");
+  if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
+  const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
+  for (const r of reports) {
+    if (!r.exportContentSha256) {
+      if (r.expectationChanged) return { status: "unverified", reasons: reasons.concat(`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`), reports };
+      return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run verify-screen.js --expect and --compare`), reports };
     }
+    if (!expSha) return { status: "unverified", reasons: reasons.concat(`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`), reports };
+    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: reasons.concat(`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`), reports };
+    const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
+    if (!measured) return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`), reports };
+    const now = fileHashes(plan, cwd);
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    if (differ.length) return { status: "unverified", reasons: reasons.concat(`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`), reports };
   }
-  const older = reports.filter((r) => r.mtimeMs && newest && r.mtimeMs < newest);
-  if (older.length) return { status: "unverified", reasons: reasons.concat(`${older.map((r) => r.rel).join(", ")} is older than the newest file in files[] \u2014 it describes an earlier build; re-run --compare`), reports };
-  const expAt = exp && exp.doc && exp.doc.exportedAt;
-  const onOld = expAt ? reports.filter((r) => r.exportedAt && r.exportedAt !== expAt) : [];
-  if (onOld.length) return { status: "unverified", reasons: reasons.concat(`${onOld.map((r) => r.rel).join(", ")} was computed against an export from ${onOld[0].exportedAt}; the export on disk is from ${expAt} \u2014 re-run --expect and --compare`), reports };
-  return { status: "verified", reasons: reasons.concat(`hook passed, files unchanged, ${reports.map((r) => r.rel).join(", ")} says pass`), reports };
+  const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
+  return { status: "verified", reasons: reasons.concat(`hook passed; ${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`), reports };
 }
 function ownPlans(open, input, all) {
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);

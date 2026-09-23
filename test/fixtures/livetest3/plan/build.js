@@ -1,7 +1,7 @@
 // Build test/fixtures/livetest3/plan/ from livetest-3's REAL artefacts, pruned to what the P2b tests
 // (verify-build.js + plan-skeleton.js) read. Nothing is hand-written: every node, key, value, plan row,
 // report verdict and source line is copied from the test directory.
-//   node test/fixtures/livetest3/plan/build.js [livetest dir]
+//   node test/fixtures/livetest3/plan/build.js [livetest-3 dir] [livetest-4 dir]
 // Pruning keeps: every node's id/name/type/hidden flag, instance identity (mainComponent, component,
 // props), every `tokens` binding (node-level and inside fills/strokes/effects/textRangeFills) and the
 // root's resolvedModes — so visibility, token and instance counts are exactly the real export's.
@@ -87,6 +87,13 @@ for (const r of ["JobRoles", "GlobalPolicies"]) {
   const slim = {};
   for (const [k, v] of Object.entries(rep)) slim[k] = Array.isArray(v) && k !== "why" && k !== "artifacts" ? v.slice(0, 3) : v;
   dump(`verify/${r}.report.json`, slim);
+}
+// livetest-4 finding 314: a no-change re-pull of 7314:87192 — the snapshot taken before the re-pull
+// (design/.sync/…) and the export after it, which differ ONLY in `exportedAt`. Pruned identically.
+const L4 = process.argv[3] || "/Users/mohamedomarwork/design-twin-livetest-4";
+for (const [from, name] of [[".sync/export__pages____Organization_management___positions___7314_87192.json", "before"], ["export/pages/__Organization_management_/positions___7314_87192.json", "after"]]) {
+  const doc = read(path.join(L4, "design", from));
+  dump(`repull/${name}.json`, { screen: doc.screen, nodeId: doc.nodeId, exportedAt: doc.exportedAt, page: doc.page, pageId: doc.pageId, manifest: doc.manifest, nodes: doc.nodes.map(prune) });
 }
 // the source files the findings are about
 for (const f of ["src/layout/Header.tsx", "src/features/global-policies/screens/GlobalPoliciesScreen.tsx", "src/assets/calendar-2.svg", "src/assets/Vector.svg"]) copy(path.join(L, "app", f), `app/${f}`);
