@@ -1,245 +1,320 @@
 # Design Twin
 
-**Figma → code, on the free plan.**
+> Figma → code with Claude Code, on the **free** Figma plan, with nothing leaving your machine.
 
-A repeatable, genuinely-free way to feed a Figma design to an AI coding agent (Claude Code).
-No Figma REST API (throttled to ~6 requests/month on free files), no paid Dev Mode MCP.
-Everything runs through the **Figma Plugin API** inside your open file, with **no network egress**.
+Design Twin exports a Figma design through the **Figma Plugin API** (not the REST API or a paid Dev
+Mode seat). The design, its variables and its assets are written to your project's `design/export/`
+as stack-neutral JSON. Claude Code skills then review the design, build it in your stack reusing your
+components and tokens, check the result against the design, and re-sync the code when the design
+changes. The Figma plugin can only reach `ws://localhost`, so it cannot phone home.
 
-## Stack-agnostic by design
-The **extraction half is identical for every target** — the plugin and its JSON are a neutral
-intermediate representation (Auto Layout expressed as flex intent, which maps equally to flexbox,
-SwiftUI stacks, and Compose Row/Column). Only the **translation half** is stack-specific, and it lives
-in three small places: `design/target.json` (which stack), `profiles/<profile>.md` (how to translate,
-in `claude-plugin/skills/build-screen/profiles/` — a project can override with its own root-level `profiles/`),
-and the right-hand values in `tokens.json`/`components.json`. One plugin, any framework.
+[![test](https://github.com/its-magdy/design-twin/actions/workflows/test.yml/badge.svg)](https://github.com/its-magdy/design-twin/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Pieces
-- `figma-plugin/` — a self-authored Figma plugin (`allowedDomains` lists only `ws://localhost` → cannot phone home).
-  Exports the current selection as compacted JSON (IR), a variables snapshot, and real SVG/PNG assets.
-- `claude-plugin/skills/audit-design/SKILL.md` — the pre-build design review a senior frontend/iOS/Android
-  engineer does: token binding, spacing grid, component + screen states (loading/empty/error), touch
-  targets, contrast, font scaling, theming, RTL, platform chrome, effects that won't translate — ending
-  in `design/audit/<screen>.md` with a verdict and designer questions (each with a default). Backed by
-  `design-to-code/audit.js`. Invoke with `/designtwin:audit-design <screen>`.
-- `claude-plugin/skills/build-screen/SKILL.md` — the agent workflow (resolve target → gate + audit → map plan →
-  build leaf-first → states/scaling/theme/RTL → render-and-compare verification).
-  Invoke with `/designtwin:build-screen <screen>`.
-- `claude-plugin/skills/extract/SKILL.md` — get the design out of Figma onto disk (path selection,
-  discover-then-scope, manifest check). Invoke with `/designtwin:extract`.
-- `claude-plugin/skills/help/SKILL.md` — orientation: the three ways to connect, one-time setup, and
-  (in `references/troubleshooting.md`) the symptom→fix list. Claude loads it on "how does this work"
-  questions and on bridge errors; `/designtwin:help` invokes it by hand.
-- `design-to-code/` — the **design-to-code layer** (free-plan Code Connect equivalent + token pipeline): a
-  DTCG token emitter, a schema'd/validated component map, a drift-lint, a map bootstrapper, the
-  pre-build design audit (`audit.js`), and
-  `get-component.js` (resolve one catalog entry by key/id/name and follow its `variantsFile`/`nodeFile`
-  to the real node trees). This is
-  the formalized superset of the simple `design/components.json`/`design/tokens.json` maps below. See
-  `design-to-code/README.md` (who/what/how/why) and `docs/design-to-code-spec.md` (the sourced ADR).
-- `claude-plugin/skills/build-screen/profiles/<profile>.md` — IR→stack translation rules, shipped with the
-  skill. Covers `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`, `android-compose`,
-  `flutter` — including exact text-metric, stroke, shadow/blur, safe-area, accessibility/RTL and motion
-  conversions (e.g. Figma letter-spacing % → em on Compose/CSS, points on iOS); add
-  your own by copying `_template.md` to a root-level `profiles/<name>.md` in *your* project (it
-  overrides the skill's bundled set).
-- `design/` — the project's design directory, laid out in two halves so the line between
-  "regenerable" and "irreplaceable" is visible rather than remembered:
+---
 
-  **`design/export/` — `dtwin` writes here and nowhere else.** Delete it and re-pull and you lose
-  nothing.
-  - `pages/index.json` → `pages/<Page>/index.json` → `pages/<Page>/<Name>__<node-id>.json` — **one
-    file per layer, and per screen**. A `--node` pull and a `--page` pull file into the same tree, so
-    nothing downstream needs to know which produced a file. The node id is in the name because a
-    frame NAME does not identify a frame (two `Popup`s on one page are two screens). Split per-page,
-    per-file rather than one combined JSON — a real export is tens of MB. ("Layer" is Figma's own term
-    for any object in a file; "screen" stays reserved for a node you deliberately selected.)
-  - Beside each screen: `…__<id>.vars.json` (exactly the variables it binds) and `…__<id>.assets.json`
-    (its assets with content hashes, plus `duplicates`, `monochrome` and `heavy`).
-  - `variables.json` — the **union** of every screen pulled here. It merges, keyed on each variable's
-    Figma key, so pulling a second screen does not delete the first's tokens.
-  - `assets/` — icons/images named after their Figma layer and deduped by content, **plus** a
-    full-frame reference PNG per frame (referenced from the JSON's `reference` field), and any
-    single-node reference shot by `dtwin screenshot <id>` / `figma_screenshot`.
-  - `design-system.json` (full or `--design-system` pulls) — a slim manifest
-    (`exportedAt`/`file`/`colorProfile` + pointers + counts) over the catalog split under
-    `design-system/`, following Figma's own taxonomy: `tokens.json` (variable **collections → modes →
-    variables**), `styles.paint.json`/`styles.text.json`/`styles.effect.json`/`styles.grid.json` (the
-    separate, older style system, one file per type), `components.local.json` (component
-    sets/variants that are real nodes in this file — each COMPONENT_SET's heavy per-variant node
-    tree, or a standalone COMPONENT's own tree, lives in a sibling `components/<name>__<id>.json`
-    pointed at by that entry's `variantsFile`/`nodeFile`; `design-to-code/get-component.js` resolves
-    one and follows it), `components.library.json` (`remote: true` — consumed from a published
-    library, recovered from instances, **not** nodes here) and `hygiene.json` (the lint report).
-  - `libraries/index.json` + one `libraries/<slug>-<fileKey8>/` per library pulled with
-    `--as-library` (same taxonomy as `design-system/`, plus a `source` block naming the library). A
-    library catalog is the COMPLETE contents of that library file, whereas `design-system/` is the
-    design file's own — the two join on `key`, never on names.
+- [How it works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Set up your project](#set-up-your-project)
+- [Usage](#usage)
+- [Command reference](#command-reference)
+- [Where files land](#where-files-land)
+- [Running tests](#running-tests)
+- [Further reading](#further-reading)
+- [License](#license)
 
-  **Everything else under `design/` is yours** — hand-authored or written by a skill, and **not
-  regenerable**: `README.md` (says exactly this, where someone about to delete files will see it),
-  `target.json` (which stack), `tokens.json` (Figma variable → your code token),
-  `codeconnect.local.json` (Figma component → your code component + import), and `plan/`, `audit/`,
-  `verify/`, `sync/` — the decisions and evidence each skill produces. Commit them.
+---
 
-  Projects created before this split keep their export directly in `design/`; everything still finds
-  it, and `dtwin doctor` reports which layout it found.
-    of truth).
+## How it works
 
-## One-time setup
-> Needs the Figma **desktop app** — a browser tab cannot import a development plugin. Nothing here is
-> published yet (npm, Figma Community), so everything runs from a clone of this repo.
+The repo ships **three products**, installed separately:
 
-1. **Get the tools.** `git clone` this repo, then `cd bridge && npm install`. For a `dtwin` command
-   on your PATH run `npm link` there as well; otherwise spell it `node /path/to/design-twin/bridge/figma-pull.js`.
-2. **Import the Figma plugin.** Figma desktop app → **Plugins → Development → Import plugin from
-   manifest…** → pick `figma-plugin/manifest.json`. (`code.js` is committed pre-built, so there is
-   nothing to build. To edit the extractor see `figma-plugin/README.md`.)
-3. **Install the Claude Code plugin** — this is what provides `/designtwin:extract`,
-   `/designtwin:audit-design` and `/designtwin:build-screen`:
-   `claude plugin marketplace add /path/to/design-twin` then
-   `claude plugin install designtwin@designtwin-marketplace`
-   (or, for one session only, `claude --plugin-dir /path/to/design-twin/claude-plugin`).
-4. **Set up the project you are building.** In its root run **`dtwin init`** (add `--mcp` to register
-   the MCP server, `--dry-run` to preview). It creates `design/` and `design/export/`, writes
-   `design/README.md` and `design/target.json` (the detected stack, or `profile: null` for
-   build-screen to fill in on its first run), makes sure a bridge token exists, and prints the steps
-   left. Paste the token into
-   the plugin's **Bridge token** field once (`dtwin token show` prints it). It never overwrites a file.
-5. **Check it.** Open the Figma file, run the plugin, then `dtwin doctor` — it says exactly which of
-   token / port / plugin / project is not right yet.
-
-No terminal at all? Skip 1, 4 and 5: the plugin's export buttons produce download links, and you save
-those into `design/` by hand (step 2 of the loop below).
-
-**Tell it about your code (recommended).** Without these the skill regenerates components instead of
-reusing yours, and the token drift check has nothing to compare against:
-- **`design/codeconnect.local.json`** — Figma component → your code component, keyed by the
-  component's stable publish `key`. `/designtwin:build-screen` scaffolds it on the first build
-  (`map-bootstrap.js`) and asks you to confirm the stubs; `drift-lint` then flags entries the design
-  has moved away from. *(Older projects keep it at the repo root; `dtwin doctor` finds either. An
-  older name-keyed `design/components.json` is still read, but it cannot detect drift.)*
-- **`design/tokens.json`** (optional overrides) — `{ "color": { "color/primary": "<your token>" }, … }`:
-  left is the Figma variable path, right is your stack's token. Variables that carry a `codeSyntax`
-  in Figma need no entry.
-- **`design/target.json`** — which stack profile to emit (written by `dtwin init`, or auto-detected).
-  If your stack isn't in `claude-plugin/skills/build-screen/profiles/`, copy its `_template.md` to a
-  root-level `profiles/<name>.md` in your project and fill it in — it overrides the bundled profiles.
-
-## Per-screen loop
-1. In Figma, select the frame → run **Plugins → Development → Design Twin** →
-   click **Export current selection** (or **Export design system + all page frames** for a full pull).
-2. Save the resulting **Download …** links into `design/export/` (the CLI writes there directly):
-   - "Download <screen>.json" → the screen tree
-   - "Download variables.json" → `design/export/variables.json`
-   - "Download assets (N)" → `design/export/assets/` — this includes a **full-frame reference PNG**
-     per top-level frame (asset `kind:"reference"`, longest side capped ~2048px). The screen JSON
-     points at it via a `reference` field, and `/designtwin:build-screen` self-corrects against it. No
-     manual screenshot step needed.
-3. In Claude Code, review it first: `/designtwin:audit-design <screen>` (or: "is this design ready to
-   build?") → `design/audit/<screen>.md` with blockers, missing states, questions for the designer,
-   and — the part no single file can answer — whether this screen actually comes from the design
-   system sitting beside it. Standalone:
-   `node design-to-code/audit.js design/export/pages/<Page>/<Screen>__<id>.json --platform ios
-   --design-system design/export/design-system --out design/audit/<screen>`.
-4. Build: `/designtwin:build-screen <screen>`. It reads the audit (or runs the script itself) and
-   records every default it had to assume.
-5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?"). The
-   `visual-verifier` agent renders the screen, measures every VISIBLE node (hidden layers are skipped)
-   and drives each designed interaction, recording the selector it drove. `verify-screen.js --compare`
-   has no browser: it compares those measurements with the design's own numbers — type, colour,
-   radius, spacing, size and frame-relative position — and takes interaction results from
-   `measured.json` or an `--interactions <file>`. Anything nobody drove is `not-probed`, never passed.
-   The instance-set count it reports is `data-dt-node` tag coverage, not proof a component is present;
-   only a component the probe reports absent fails the screen. It writes
-   `design/verify/<Screen>.report.json`, whose headline states how much was actually measured. The
-   verdict is computed from that file, so a "pass" is never something anyone asserts. It changes no
-   code.
-6. When the design changes later: `/designtwin:sync-design <screen>`. It keeps the previous export,
-   re-pulls, diffs the two by node id (`design-to-code/design-diff.js`) and patches only what moved —
-   a rebuild would throw away every hand edit since step 4. Commit `design/` so a previous export
-   always exists.
-
-## Why this shape (evidence)
-- Structured metadata beats a screenshot alone for fidelity, but **raw** metadata makes models hardcode
-  absolute coordinates — so the plugin maps Auto Layout → flex intent and resolves variable bindings to
-  semantic token names. A full-frame reference screenshot is auto-included for visual ground truth (multimodal).
-- Figma's Variables **REST** API is Enterprise-only, but the **Plugin** API reads variables + per-node
-  bindings for free — which is why this is a plugin, not a REST tool.
-
-## Upgrade path (later, optional)
-If manual export gets tedious, swap the file handoff for a **localhost-only** WebSocket bridge
-(`allowedDomains: ["ws://localhost:8787", …]` — reaches your machine, never the internet). Loopback isn't
-authentication, so the bridge is gated by a **shared token**. Nothing to configure: the first bridge
-start generates one, saves it per-user (`~/.config/design-twin/bridge-token`, mode `0600`) and prints
-it once — paste that into the plugin and neither side asks again (`dtwin --token-status` /
-`--show-token` / `--rotate-token`; see `bridge/README.md`). The Skill and the token/component maps
-carry over unchanged.
-
-Two front-ends sit on that bridge, and they speak the same commands:
-- **`dtwin` CLI** — bulk reads streamed to disk. Add `--serve` to hold the connection open so
-  later pulls skip the plugin reconnect; `--stop` ends it.
-  Start with the cheap discovery steps: `--list-libraries` (which design libraries this file draws on)
-  then `--list` (pages + frame ids), and only then `--page <id>` to pull what you actually need.
-  Only want the tokens/styles/components/hygiene catalog, no screens? `--design-system` skips the
-  page/frame walk entirely (and the assets that walk would export); each catalogued component still
-  carries its own fills/strokes/effects/radius/opacity/blendMode (see `bridge/README.md`).
-- **`figma-mcp`** — live tools for "check this, now pull that", plus the small write surface. Pass
-  `writeToDisk: true` on the export tools to write files and get back a compact index instead of the
-  payload — the only way to get asset bytes, and the right choice for anything large.
-
-Only one of them can hold port 8787 at a time; run the one that matches what you're doing. If something
-else already owns it, `FIGMA_BRIDGE_PORT` accepts `8788` or `8789` — and only those, because the plugin
-manifest names exactly those three ports and the plugin walks all three when connecting.
-
-**Several Figma FILES at once, though.** The bridge accepts one connection per open Figma file, so a
-design file and the library it draws on can both be connected and driven in the same session. Each
-plugin announces which file it is on connect; commands are then addressed:
-
-```
-node bridge/figma-pull.js --list-clients            # which files are connected (connId, name, fileKey)
-node bridge/figma-pull.js design/base --client "App"      # pull one
-node bridge/figma-pull.js design/lib --client "Acme UI" --as-library "Acme UI"
-```
-MCP twins: `figma_list_clients`, and a `client` argument on every tool.
-
-## Sharing this as a plugin
-This repo holds **three separate products**, deliberately kept apart:
-
-| | What it is | How it ships |
+| Piece | What it is | How you install it |
 |---|---|---|
-| `claude-plugin/` | The Claude Code plugin — skills + profiles + self-contained `scripts/` (bundled from `design-to-code/`), **zero dependencies** | `claude plugin install` |
-| `bridge/` | The `dtwin` CLI + MCP server (needs `ws`, `zod`, MCP SDK) | npm package `designtwin` — **not published yet**; until it is, clone and run `node bridge/figma-pull.js` |
-| `figma-plugin/` | The Figma-side plugin | imported into Figma from its manifest |
+| `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `npm install` + `npm link` from a clone (not on npm yet) |
+| `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies. | `claude plugin install` |
 
-The Claude Code plugin has no dependencies because the CLI is **not** inside it — installing the
-plugin never needs an `npm install`, and users get only `claude-plugin/` in their cache. Its `scripts/`
-are committed bundles: after editing `design-to-code/*.js` run `node claude-plugin/build-scripts.js`
-(`test/verify-build.test.js` fails if they are stale). It also ships no
-`.mcp.json`: the MCP server is registered in the project you point it at, not here.
+There are three ways to get a design out of Figma:
 
-To try it locally: `claude --plugin-dir /path/to/this/repo/claude-plugin`. To hand it to a teammate: they run
-`claude plugin marketplace add <your-git-host>/<you>/design-twin` then `claude plugin install designtwin@designtwin-marketplace`
-(or add both to their project's `.claude/settings.json` under `extraKnownMarketplaces`/`enabledPlugins`
-for auto-load). Skills load under the `designtwin:` namespace. `claude plugin validate ./claude-plugin`
-checks the plugin manifest before you publish (`validate .` checks the *marketplace* manifest instead). The Figma-side plugin import (`figma-plugin/manifest.json`)
-and `bridge/`'s `npm install` stay manual — installing the Claude plugin doesn't set those up.
+| Path | Setup | Best for |
+|---|---|---|
+| **Manual**: click **Export** in the Figma plugin, save the downloads into `design/export/` | Figma plugin only | A first try, or a single screen |
+| **`dtwin` CLI**: pulls straight to disk | + bridge | Repeated or bulk pulls |
+| **MCP server**: Claude calls Figma as live tools, and it is the only path that can write to Figma | + bridge + `.mcp.json` | Working back and forth ("check this, now pull that") |
 
-With **one** file connected you can omit `--client` entirely — nothing changes from before. With
-**several**, omitting it is an error that lists your choices rather than a guess: an export from the
-wrong file looks exactly like a correct one, so the bridge refuses instead of picking. Give each file
-its own output directory (as above) and their exports never collide.
+Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swiftui`,
+`android-compose`, `flutter`. To add another, copy
+`claude-plugin/skills/build-screen/profiles/_template.md` to `profiles/<name>.md` in your project.
 
-**Discover before you pull.** Both front-ends expose a library-discovery step —
-`node bridge/figma-pull.js --list-libraries` and the `figma_list_libraries` MCP tool — that reports
-which design libraries the open file draws on, their variable collections, and how many of their
-components this file uses. Consult it first, then scope the export (`--list` → `--page <id>`), the
-same way Figma's own agent guidance says to discover first and scope by library. Two limits to keep in
-mind: Figma has **no API to enumerate a library's contents**, so component counts are *usage-derived*
-(what this file uses, not what the library holds); and libraries can only be **enabled from the Figma
-UI**, never via API, so any export is silently scoped to whatever was enabled when it ran.
+---
 
-> **Re-import the plugin after updating.** Library reads require `"permissions": ["teamlibrary"]` in
-> `figma-plugin/manifest.json`. A plugin imported before that was added keeps working but returns **no
-> libraries at all**, silently. If library discovery comes back empty, re-import the manifest in Figma
-> (Plugins → Development → Import plugin from manifest…) before assuming your file has none.
+## Prerequisites
+
+- The **Figma desktop app**. A browser tab can't import a development plugin. Any plan works, including free.
+- **Node.js 18+** (CI runs on 20).
+- **Claude Code**, for the skills.
+- **git**, to clone this repo.
+
+---
+
+## Installation
+
+### 1. Clone and install the CLI
+
+```bash
+git clone https://github.com/its-magdy/design-twin.git
+cd design-twin/bridge
+npm install
+npm link          # puts `dtwin` on your PATH
+dtwin --version
+```
+
+If you skip `npm link`, use `node /path/to/design-twin/bridge/figma-pull.js` wherever this README says `dtwin`.
+
+### 2. Import the Figma plugin
+
+In Figma desktop, go to **Plugins → Development → Import plugin from manifest…** and pick
+`design-twin/figma-plugin/manifest.json`.
+
+`code.js` is committed pre-built, so there is nothing to build. After pulling a new version of this
+repo, import the manifest again, or new permissions (such as library reads) quietly return nothing.
+
+### 3. Install the Claude Code plugin
+
+```bash
+claude plugin marketplace add its-magdy/design-twin
+claude plugin install designtwin@designtwin-marketplace
+```
+
+From a local clone, use `claude plugin marketplace add /path/to/design-twin` instead. To try it for
+one session without installing, run `claude --plugin-dir /path/to/design-twin/claude-plugin`.
+
+Skills load under the `designtwin:` namespace. Run `/designtwin:help` to confirm the plugin is installed.
+
+---
+
+## Set up your project
+
+Run these in the root of the app you are **building**, not in this repo.
+
+### 1. Initialise
+
+```bash
+dtwin init            # add --mcp to also register the MCP server; --dry-run to preview
+```
+
+It creates:
+
+```
+design/
+├── README.md        # explains which half of design/ is safe to delete
+├── target.json      # detected stack profile (or null — build-screen asks on first run)
+└── export/          # every pull lands here, and nowhere else
+```
+
+It also creates the bridge token if one doesn't exist, and it never overwrites an existing file.
+With `--mcp`, it merges a `designtwin` server entry into `./.mcp.json`. Enable it with `/mcp`, then
+restart Claude Code.
+
+### 2. Connect the Figma plugin
+
+```bash
+dtwin token show      # prints the per-user bridge token (~/.config/design-twin/bridge-token)
+```
+
+Open your Figma file and run **Plugins → Development → Design Twin**. Paste the token into the
+plugin's **Bridge token** field. You only have to do this once.
+
+### 3. Check everything
+
+```bash
+dtwin doctor
+```
+
+`dtwin doctor` checks the token, the port, the daemon, the plugin connection and the project layout.
+It changes nothing, and for each problem it prints the next step to take.
+
+### 4. Map your code (recommended)
+
+Without these files, Claude writes new components instead of reusing yours, and the drift check has
+nothing to compare against:
+
+| File | Maps | Written by |
+|---|---|---|
+| `design/codeconnect.local.json` | Figma component `key` → your component + import | Scaffolded by `/designtwin:build-screen` on first build; you confirm the stubs |
+| `design/tokens.json` | Figma variable path → your token, e.g. `{ "color": { "color/primary": "colors.primary" } }` | You. Optional: variables with a `codeSyntax` in Figma need no entry |
+
+---
+
+## Usage
+
+Keep the Figma file open with the Design Twin plugin running.
+
+### 1. Find the screen
+
+```bash
+dtwin list                    # pages + top-level layers, with node ids
+dtwin list children 12:34     # peek inside one frame or section
+dtwin screenshot 12:34        # reference PNG of one node — look before you pull
+```
+
+### 2. Pull it
+
+```bash
+dtwin pull --node 12:34                                   # one screen (tree, variables, assets)
+dtwin pull --node "https://www.figma.com/design/…?node-id=12-34"   # or paste a Figma link
+dtwin pull --page 0:1                                     # one page
+dtwin pull --design-system                                # tokens/styles/components only, no screens
+```
+
+Each pull writes to `design/export/` by default. To write somewhere else, pass a directory as the
+first argument, for example `dtwin pull design/lib --node 12:34`.
+
+### 3. Audit, build, verify, sync
+
+In Claude Code:
+
+```
+/designtwin:audit-design <screen>   # pre-build review → design/audit/<screen>.md
+/designtwin:build-screen <screen>   # build it in your stack, leaf components first
+/designtwin:verify <screen>         # measure the rendered screen against the design → design/verify/
+/designtwin:sync-design <screen>    # design changed? re-pull, diff by node id, patch only what moved
+```
+
+Plain-language requests work too, for example "is this design ready to build?" or "does this match the design?".
+
+- **audit-design** checks token binding, the spacing grid, missing loading/empty/error states, touch
+  targets, contrast, font scaling, theming, RTL, and effects that won't translate to your stack. It
+  ends with a verdict and a list of questions for the designer, each with a default answer.
+- **verify** renders the screen and compares every visible node's type, colour, radius, spacing, size
+  and position with the design. The verdict is computed from `design/verify/<Screen>.report.json`, so
+  a pass is never just asserted. Anything nobody probed is reported as `not-probed`, never as passed.
+- **sync-design** keeps the hand edits you made after the build. Commit `design/` so a previous export exists to diff against.
+
+### No terminal?
+
+Skip the bridge entirely. In the Figma plugin, click **Export current selection** and save the
+**Download …** links into `design/export/`, putting assets under `design/export/assets/`. The skills
+work the same way on those files.
+
+---
+
+## Command reference
+
+### `dtwin` CLI
+
+| Command | Description |
+|---|---|
+| `dtwin init [--mcp] [--dry-run]` | Set up `design/` in the project you are building |
+| `dtwin doctor [--wait N] [--json]` | Diagnose token, port, daemon, plugin, project |
+| `dtwin list [pages\|libraries\|clients]` | Discover pages and layers, libraries in use, or connected files |
+| `dtwin list children <id\|url>` | Direct children of one node |
+| `dtwin screenshot <id\|url> [--scale N]` | PNG of one node → `design/export/assets/` |
+| `dtwin pull [outDir] [flags]` | Export (see flags below) |
+| `dtwin whoami` | Which Figma file/plugin is connected |
+| `dtwin serve \| stop \| status` | Keep a background daemon connected so pulls skip the reconnect |
+| `dtwin token [status\|show\|rotate\|forget]` | Manage the bridge token |
+| `dtwin mcp` | Run the MCP server (what `.mcp.json` points at) |
+
+Every command accepts `--help`. Unknown flags are rejected, not ignored.
+
+### `dtwin pull` flags
+
+| Flag | Exports |
+|---|---|
+| *(none)* | Design system + current page's frames + assets |
+| `--node <id\|url>` | One node, fully (tree + assets) |
+| `--page <id\|name>` | One page (repeatable) |
+| `--selection` | The current Figma selection |
+| `--all-pages` | Frames from every page |
+| `--design-system` | Tokens, styles, components, hygiene report. No page walk |
+| `--as-library <name>` | The full catalog of a **library** file (run it with the library file open) |
+| `--client <fileKey\|name>` | Which file, when several are connected |
+| `--timeout N` | Seconds to wait (default 300; 900 with `--all-pages`) |
+| `--css` `--measurements` `--motion` `--variant-visuals` `--plugin-data` `--shared-data` | Opt-in extra reads |
+
+### Claude Code skills
+
+| Skill | Description |
+|---|---|
+| `/designtwin:help` | Orientation, setup, troubleshooting (port 8787, token/401, empty libraries…) |
+| `/designtwin:extract` | Get a design onto disk: discover first, then scope the pull |
+| `/designtwin:audit-design <screen>` | Pre-build implementation review |
+| `/designtwin:build-screen <screen>` | Build the screen in your stack |
+| `/designtwin:verify <screen>` | Rendered screen vs. design, per node |
+| `/designtwin:sync-design <screen>` | Patch built code after a design change |
+
+### MCP tools
+
+Registered as `designtwin`, so tools appear as `mcp__designtwin__<tool>`:
+`figma_status`, `figma_whoami`, `figma_list_clients`, `figma_list_pages`, `figma_list_children`,
+`figma_list_libraries`, `figma_get_selection`, `figma_screenshot`, `figma_export_full`,
+`figma_export_selection`, `figma_export_url`, `figma_export_design_system`, `figma_write`.
+
+Pass `writeToDisk: true` to the export tools for anything large. It's also the only way to get asset
+files through MCP. A running MCP server or `dtwin serve` daemon owns port `8787` and shares it with
+later `dtwin` commands. If another program is using the port, set `FIGMA_BRIDGE_PORT` to `8788` or
+`8789`.
+
+---
+
+## Where files land
+
+`design/` has two halves:
+
+- **`design/export/`** is written only by `dtwin` and the Figma plugin. You can delete it and pull again without losing anything.
+  - `pages/<Page>/<Name>__<node-id>.json`: one file per screen. Beside each one sit a `.vars.json`
+    with the variables it uses and a `.assets.json` with its assets.
+  - `variables.json`: all variables from every screen pulled, merged by variable key.
+  - `assets/`: icons and images, deduplicated by content, plus one reference PNG per frame.
+  - `design-system/`: tokens, styles, local and library components, and the hygiene report.
+  - `libraries/<slug>-<fileKey8>/`: output of `--as-library` pulls.
+- **Everything else is yours.** This includes `target.json`, `tokens.json`,
+  `codeconnect.local.json`, and the `plan/`, `audit/`, `verify/` and `sync/` directories. Skills
+  write these, and they can't be regenerated. Commit them.
+
+Projects set up before this split keep their export directly in `design/`. Everything still finds
+it there, and `dtwin doctor` reports which layout it found.
+
+---
+
+## Running tests
+
+Everything runs offline, without Figma:
+
+```bash
+npm ci --prefix bridge && npm ci --prefix figma-plugin
+node test/harness.js              # Figma plugin extractor, against a mock `figma`
+node test/bridge.test.js          # CLI + bridge
+node test/design-to-code.test.js  # tokens, maps, drift-lint
+```
+
+Every other `test/*.test.js` suite runs the same way. `TESTING.md` lists each suite, its expected
+count, and the live-Figma checks. The plugin's `code.js`, `bridge/figma-mcp.mjs` and
+`claude-plugin/scripts/` are committed build output. After editing their sources, rebuild them:
+
+```bash
+npm run build --prefix figma-plugin
+npm run build --prefix bridge
+node claude-plugin/build-scripts.js
+```
+
+CI fails if the committed build output doesn't match what the sources produce.
+
+---
+
+## Further reading
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): the plugin's two-context model, CLI vs MCP, and the security model
+- [`bridge/README.md`](bridge/README.md): every CLI flag, the daemon, MCP tools, and limits
+- [`figma-plugin/README.md`](figma-plugin/README.md): editing the extractor
+- [`design-to-code/README.md`](design-to-code/README.md) and [`docs/design-to-code-spec.md`](docs/design-to-code-spec.md): the token pipeline, component map and drift-lint
+- [`TESTING.md`](TESTING.md): test layers and expected counts
+
+---
+
+## License
+
+[MIT](LICENSE) © Mohamed Magdy Omar
