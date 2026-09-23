@@ -167,7 +167,11 @@ check("[H3] no-value-in-any-mode reported + skipped", (() => { const w = []; con
 check("[H3] toCSS never emits `undefined`", !toCSS({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light" }], variables: [{ name: "bg", type: "COLOR", collection: "C", values: { Dark: "#000000" } }] }).includes("undefined"));
 check("[H7] dangling alias reported", lintTokens({ variables: [{ name: "a", type: "COLOR", values: { v: { aliasOf: "does/not/exist" } } }] }).some((w) => /undefined token/.test(w)));
 check("[H8] empty-name skipped in CSS (no `--:`)", !toCSS({ variables: [{ name: "", type: "COLOR", values: { v: "#abcdef" } }] }).includes("--:"));
-check("[H6b] var-name collision from distinct names reported", lintTokens({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] }).some((w) => /multiple tokens/.test(w)));
+check("[H6b] var-name collision from distinct names reported", lintTokens({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] }).some((w) => /fold onto one identifier and resolve DIFFERENTLY/.test(w)));
+check("[H6b] and BOTH are emitted — nothing overwritten", (() => {
+  const css = toCSS({ variables: [{ name: "spacing/4", type: "FLOAT", values: { v: 16 } }, { name: "spacing-4", type: "FLOAT", values: { v: 99 } }] });
+  return /: 16px;/.test(css) && /: 99px;/.test(css);
+})());
 
 // ---------- map validation (B2: additionalProperties + per-kind oneOf) ----------
 console.log("map — validation:");
@@ -541,31 +545,48 @@ check("[sec-mode-quote] rewrite is reported by lintTokens", lintTokens(modeDs(qu
 check("[css-legit-mode] an ordinary mode name is NOT escaped", toCSS(modeDs("Dark")).includes('[data-theme="Dark"]'));
 check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("Dark")).some((w) => /escaped in its tokens\.css selector/.test(w)));
 
-// ---------- duplicate names collapse to ONE declaration (live run #16) --------------------------
-// A real file had THREE variables called "Schemes/On Primary" with distinct keys — one in collection
-// "M3", two in "material-theme". Each pushed its own line, so :root carried the identical
-// declaration three times and every mode block repeated the pattern: 22 copies of one property.
-// lintTokens already warned "later definition wins" and toDTCG already collapsed them (an object key
-// holds one value); only the CSS disagreed.
+// ---------- duplicate names: identical twins collapse, different variables are ALL kept -------
+// Live run #16: THREE variables called "Schemes/On Primary" with distinct keys put the identical
+// declaration in :root three times and once more per mode block — 22 copies. Those resolve the same in
+// every mode, so they are ONE declaration. But livetest-3 #44 showed the other half: two `Space 4` with
+// distinct keys and DIFFERENT values (24 vs 16), where "last definition wins" shipped the wrong one.
+// Those must BOTH be emitted, each under its own name, and never by input order.
 (() => {
-  const dupDs = {
-    collections: [{ name: "A", modes: ["Light", "Dark"], default: "Light" }, { name: "B", modes: ["Light", "Dark"], default: "Light" }],
+  const twins = {
+    collections: [{ name: "M3", modes: ["Light", "Dark"], default: "Light" }, { name: "material-theme", modes: ["Light", "Dark"], default: "Light" }],
     variables: [
-      { name: "on/primary", type: "COLOR", collection: "A", values: { Light: "#ffffff", Dark: "#111111" } },
-      { name: "on/primary", type: "COLOR", collection: "B", values: { Light: "#ffffff", Dark: "#222222" } },
-      { name: "on/primary", type: "COLOR", collection: "B", values: { Light: "#ffffff", Dark: "#333333" } },
+      { name: "Schemes/On Primary", key: "aaa1", type: "COLOR", collection: "M3", values: { Light: "#ffffff", Dark: "#111111" } },
+      { name: "Schemes/On Primary", key: "bbb2", type: "COLOR", collection: "material-theme", values: { Light: "#ffffff", Dark: "#111111" } },
+      { name: "Schemes/On Primary", key: "ccc3", type: "COLOR", collection: "material-theme", values: { Light: "#ffffff", Dark: "#111111" } },
     ],
   };
-  const css = toCSS(dupDs);
+  const css = toCSS(twins);
   const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1];
-  check("[dup-css] three variables sharing a name emit ONE :root declaration, not three",
-    (root.match(/--on-primary:/g) || []).length === 1);
+  check("[dup-css] three IDENTICAL variables sharing a name emit ONE :root declaration, not three",
+    (root.match(/--Schemes-On-Primary/g) || []).length === 1);
   const dark = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
-  check("[dup-css] and one per mode block too", (dark.match(/--on-primary:/g) || []).length === 1);
-  check("[dup-css] the surviving value is the LAST definition — what the warning promises and what a browser would do",
-    /--on-primary: #333333;/.test(dark));
-  check("[dup-css] the collision is still WARNED about, not silently swallowed",
-    lintTokens(dupDs).filter((w) => /duplicate token name 'on\/primary'/.test(w)).length === 2);
+  check("[dup-css] and one per mode block too", (dark.match(/--Schemes-On-Primary/g) || []).length === 1);
+  check("[dup-css] the identical twins are reported as such (naming the keys), not silently swallowed",
+    lintTokens(twins).some((w) => /share the name 'Schemes\/On Primary'.*resolve identically in every mode — emitted ONCE/.test(w) && /aaa1/.test(w) && /ccc3/.test(w)));
+
+  // The two real `Space 4` rows of livetest-3's design/export/variables.json (keys, values, scopes verbatim).
+  const space4 = (order) => {
+    const a = { name: "Space 4", key: "e26d506ea43ae0582896add59d9e04156fb3f6d5", type: "FLOAT", collection: "Spacing", scopes: ["WIDTH_HEIGHT", "GAP"], values: { "Mode 1": 24 } };
+    const b = { name: "Space 4", key: "64928e3a5f094c0d9a2c916f50b98ff37c789882", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { Desktop: 16, Tablet: 8, Mobile: 8 } };
+    return { collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1" }, { name: "Spacing", modes: ["Desktop", "Tablet", "Mobile"], default: "Desktop" }], variables: order ? [a, b] : [b, a] };
+  };
+  const c1 = toCSS(space4(true)), c2 = toCSS(space4(false));
+  check("[dup-css] two DIFFERENT variables sharing a name are both emitted, each carrying its key (livetest-3 #44)",
+    /--Space-4-e26d506e: 24px;/.test(c1) && /--Space-4-64928e3a: 16px;/.test(c1) && !/--Space-4:/.test(c1));
+  check("[dup-css] and input ORDER changes nothing about which name each value gets",
+    /--Space-4-e26d506e: 24px;/.test(c2) && /--Space-4-64928e3a: 16px;/.test(c2));
+  const w = lintTokens(space4(true));
+  check("[dup-css] the warning names BOTH keys and BOTH values, and no longer claims a 'later definition wins'",
+    w.some((m) => /e26d506e/.test(m) && /64928e3a/.test(m) && /"Mode 1":24/.test(m) && /"Desktop":16/.test(m) && /resolve DIFFERENTLY/.test(m)) && !w.some((m) => /later definition wins/.test(m)));
+  const d = toDTCG(space4(false));
+  check("[dup-dtcg] tokens.dtcg.json keeps both too, with the Figma key under $extensions",
+    !!d["Space-4-e26d506e"] && d["Space-4-e26d506e"].$value.value === 24 && d["Space-4-64928e3a"].$value.value === 16
+    && d["Space-4-e26d506e"].$extensions["figma.com"].key === "e26d506ea43ae0582896add59d9e04156fb3f6d5");
   check("[dup-css] distinct names are untouched — the dedup keys on the emitted property, not on being a dup",
     (toCSS({ collections: [{ name: "A", modes: ["M"], default: "M" }], variables: [
       { name: "a/one", type: "COLOR", collection: "A", values: { M: "#111" } },
@@ -589,26 +610,49 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   const tw = toTailwind(twDs);
   // Tailwind v4 generates a utility from the NAMESPACE, so filing a token under the wrong one gives
   // a custom property no class can reach. Each kind must land under the namespace that earns it.
-  check("[tw] colors -> --color-*, spacing -> --spacing-*, radius -> --radius-*, font size -> --text-*",
-    /--color-color-primary: #dec9ff;/.test(tw.text) && /--spacing-space-md: 16px;/.test(tw.text)
-    && /--radius-radius-card: 12px;/.test(tw.text) && /--text-text-body: 14px;/.test(tw.text));
-  check("[tw] a unitless FLOAT matches no namespace — emitted unprefixed rather than filed wrongly or dropped",
-    /\n {2}--opacity-disabled: 0\.5;/.test(tw.text) && !/--spacing-opacity-disabled/.test(tw.text));
+  check("[tw] colors -> --color-figma-*, spacing -> --spacing-figma-*, radius -> --radius-figma-*, font size -> --text-figma-*",
+    /--color-figma-color-primary: #dec9ff;/.test(tw.text) && /--spacing-figma-space-md: 16px;/.test(tw.text)
+    && /--radius-figma-radius-card: 12px;/.test(tw.text) && /--text-figma-text-body: 14px;/.test(tw.text));
+  check("[tw] a unitless FLOAT matches no namespace — emitted as a plain --figma-* property rather than filed wrongly or dropped",
+    /\n {2}--figma-opacity-disabled: 0\.5;/.test(tw.text) && !/--spacing-figma-opacity-disabled/.test(tw.text));
   check("[tw] an alias points at its TARGET's namespaced name, not the referrer's and not tokens.css's",
-    /--color-bg-side-menu: var\(--color-gray-900\);/.test(tw.text));
+    /--color-figma-bg-side-menu: var\(--color-figma-gray-900\);/.test(tw.text));
   check("[tw] the file imports tailwind and opens a @theme block", /^@import "tailwindcss";/.test(tw.text) && /@theme \{/.test(tw.text));
   // @theme cannot be nested in a selector, so non-default modes reassign the same properties outside it.
   const modeBlock = (tw.text.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
   check("[tw] a non-default mode reassigns the same custom properties OUTSIDE @theme",
-    /--color-color-primary: #381e72;/.test(modeBlock) && tw.text.indexOf("@theme") < tw.text.indexOf('[data-theme="Dark"]'));
-  check("[tw] a value identical across modes is not repeated in the mode block", !/--spacing-space-md/.test(modeBlock));
+    /--color-figma-color-primary: #381e72;/.test(modeBlock) && tw.text.indexOf("@theme") < tw.text.indexOf('[data-theme="Dark"]'));
+  check("[tw] a value identical across modes is not repeated in the mode block", !/--spacing-figma-space-md/.test(modeBlock));
   check("[tw] counts distinguish tokens emitted from tokens that actually generate a utility",
     tw.tokens === 7 && tw.utilities === 6);
-  check("[tw] duplicate names collapse here too", (() => {
+  check("[tw] the SAME variable listed twice is one declaration (its last record)", (() => {
     const d = toTailwind({ collections: [{ name: "A", modes: ["M"], default: "M" }], variables: [
-      { name: "on/primary", type: "COLOR", collection: "A", values: { M: "#fff" } },
-      { name: "on/primary", type: "COLOR", collection: "A", values: { M: "#000" } }] });
-    return (d.text.match(/--color-on-primary:/g) || []).length === 1 && /#000000/.test(d.text);
+      { name: "on/primary", key: "k1", type: "COLOR", collection: "A", values: { M: "#fff" } },
+      { name: "on/primary", key: "k1", type: "COLOR", collection: "A", values: { M: "#000" } }] });
+    return (d.text.match(/--color-figma-on-primary:/g) || []).length === 1 && /#000000/.test(d.text) && !d.warnings.length;
+  })());
+  // livetest-3 #94: `Space 3` (16) and `(Space 3)` (12) are different NAMES that only collide after
+  // slugging, so they got no "duplicate" warning and the theme silently kept 12. Collisions are now
+  // detected on the EMITTED name, and the name spelled exactly as the identifier keeps it.
+  check("[tw] two names that fold onto one Tailwind name are both emitted, and the run SAYS so (livetest-3 #94)", (() => {
+    const d = toTailwind({ collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1" }], variables: [
+      { name: "(Space 3)", key: "a96c665bae7a1989c41dd71440cfd9b0a0c0ba4f", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { "Mode 1": 12 } },
+      { name: "Space 3", key: "a9aa73e78e34066545c67621b5f7aef9ab89a4f1", type: "FLOAT", collection: "Spacing", scopes: ["GAP"], values: { "Mode 1": 16 } }] });
+    return /--spacing-figma-space-3: 16px;/.test(d.text) && /--spacing-figma-space-3-a96c665b: 12px;/.test(d.text)
+      && d.warnings.some((w) => /'Space 3'/.test(w) && /'\(Space 3\)'/.test(w) && /a96c665b/.test(w) && /a9aa73e7/.test(w));
+  })());
+  // livetest-3 #183: `--radius-xl: 16px` in @theme REPLACED Tailwind's own rounded-xl (12px).
+  check("[tw] no generated variable can shadow Tailwind's own scale — radius XL/L/S/Full land under figma- (livetest-3 #183)", (() => {
+    const d = toTailwind({ collections: [{ name: "Border Radius", modes: ["Mode 1"], default: "Mode 1" }], variables: ["S", "L", "XL", "Full"].map((n, i) => (
+      { name: n, key: "r" + i, type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS", "FONT_VARIATIONS"], values: { "Mode 1": [4, 12, 16, 1000000000][i] } })) });
+    return !/^ {2}--radius-(xl|l|s|full):/m.test(d.text) && /--radius-figma-xl: 16px;/.test(d.text) && /--radius-figma-l: 12px;/.test(d.text);
+  })());
+  check("[tw] Figma's 1e9 'fully rounded' sentinel is emitted as 9999px, never as 1000000000px (livetest-3 #96)", (() => {
+    const ds = { collections: [{ name: "Border Radius", modes: ["Mode 1"], default: "Mode 1" }], variables: [
+      { name: "Full", key: "ba82", type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS"], values: { "Mode 1": 1000000000 } }] };
+    const t = toTailwind(ds).text, c = toCSS(ds), j = toDTCG(ds);
+    return /--radius-figma-full: 9999px;/.test(t) && /--Full: 9999px;/.test(c) && !/1000000000/.test(t + c)
+      && j.Full.$value.value === 9999 && j.Full.$extensions["figma.com"].sentinel.figmaValue === 1000000000;
   })());
   check("[tw] a mode name cannot break out of its attribute selector (same escaping toCSS uses)",
     !/dark"\]/.test(toTailwind({ collections: [{ name: "A", modes: ["Light", 'dark"] * { display: none } [x="'], default: "Light" }],

@@ -53,6 +53,179 @@ const cssVarName = (tokenName) => {
   return v;
 };
 
+// --- identity: a Figma variable IS its key, never its name -------------------------------------
+// Names are not unique. The livetest-3 export held 96 variables with 96 distinct keys and only 94
+// distinct names: two variables called `Spacing/Space 4` (24 in the design system's library, 16 in a
+// screen-local one) and two called `Spacing/Space 2`. Every emitter here used to key its output on
+// the NAME, so the second definition silently overwrote the first — theme.css shipped
+// `--spacing-space-4: 16px` for two screens whose own Figma says 24, under a "later definition wins"
+// warning that described nothing useful. Worse, `Space 3` (16) and `(Space 3)` (12) are two
+// different names that only collide AFTER slugging, so that pair was overwritten with no warning at
+// all (livetest-3 findings 44, 94, 95).
+//
+// So every emitter plans its identifiers here, on the EMITTED identifier (the DTCG path, the CSS
+// custom property, the Tailwind variable), and never picks a winner:
+//   * the same key listed twice is one variable (the last record is used);
+//   * different keys that fold onto one identifier but resolve to the same value in every mode
+//     (`Space 2` = 8 under Desktop/Tablet/Mobile vs 8 under Mode 1) are emitted ONCE, and reported;
+//   * different keys that fold onto one identifier and DIFFER are ALL emitted, each under the
+//     identifier plus `-<first 8 chars of its key>`, and the warning names every key, its values,
+//     the screens whose slice carries it, and the identifier it landed on.
+const KEY_SUFFIX_LEN = 8;
+function identityOf(v) {
+  if (v && typeof v.key === "string" && v.key) return "k:" + v.key;
+  return "n:" + String((v && v.collection) || "") + "\u0000" + String((v && v.name) || "");
+}
+const shortKey = (v) => (v && typeof v.key === "string" && v.key ? v.key.slice(0, KEY_SUFFIX_LEN).toLowerCase() : null);
+const suffixSlug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+// Equivalent = every mode either variable declares resolves to the same value (a mode one side lacks
+// falls back to that side's own default, which is exactly what every emitter below does with it).
+function equivalentVars(a, b, collections) {
+  if (a.type !== b.type) return false;
+  const ba = JSON.stringify(baseValue(a, collections)), bb = JSON.stringify(baseValue(b, collections));
+  if (ba !== bb) return false;
+  const at = (v, base, m) => { const x = (v.values || {})[m]; return x === undefined ? base : JSON.stringify(x); };
+  for (const m of new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])) if (at(a, ba, m) !== at(b, bb, m)) return false;
+  return true;
+}
+
+// idOf(v) -> the identifier an emitter would give v on its own (null = the emitter skips v).
+// suffix(id, s) -> that identifier disambiguated with `s`.
+// exact(v) -> true when v's NAME reaches the identifier without any character being folded away.
+//   When two DIFFERENT names collide (`Space 3` vs `(Space 3)`), exactly one of them usually spells
+//   the identifier as written; that one keeps it and only the folded one is suffixed — order-free,
+//   so re-ordering the input cannot move the plain name. Same-name pairs are always all suffixed.
+// Returns { id(v), canonical: Set(v) — the ONE record emitted per identifier, notes[], byName }.
+function planIds(vars, idOf, suffix, collections, output, exact) {
+  const groups = new Map();
+  for (const v of vars) {
+    const id = idOf(v);
+    if (id == null) continue;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(v);
+  }
+  const ids = new Map(), canonical = new Set(), notes = [];
+  const taken = new Set(groups.keys());
+  for (const [id, list] of groups) {
+    const byIdent = new Map();
+    for (const v of list) byIdent.set(identityOf(v), v); // the same variable read twice: last record
+    const members = [...byIdent.values()];
+    const clusters = [];
+    for (const v of members) {
+      const c = clusters.find((cl) => equivalentVars(cl[0], v, collections));
+      if (c) c.push(v); else clusters.push([v]);
+    }
+    if (clusters.length === 1) {
+      for (const v of list) ids.set(v, id);
+      canonical.add(members[0]);
+      if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
+      continue;
+    }
+    const assigned = new Map();
+    const exactOnes = exact ? members.filter((v) => exact(v)) : [];
+    const keeper = exactOnes.length === 1 && members.filter((v) => v.name === exactOnes[0].name).length === 1 ? exactOnes[0] : null;
+    for (const v of members) {
+      if (v === keeper) { assigned.set(identityOf(v), id); canonical.add(v); continue; }
+      const s = shortKey(v) || suffixSlug(v.collection) || "alt";
+      let nid = suffix(id, s);
+      for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
+      taken.add(nid);
+      assigned.set(identityOf(v), nid);
+      canonical.add(v);
+    }
+    for (const v of list) ids.set(v, assigned.get(identityOf(v)));
+    notes.push({ output, id, differ: true, members: members.map((v) => ({ v, id: assigned.get(identityOf(v)) })) });
+  }
+  const byName = new Map();
+  for (const v of vars) {
+    if (!byName.has(v.name)) byName.set(v.name, []);
+    byName.get(v.name).push(v);
+  }
+  return { id: (v) => ids.get(v), canonical, notes, byName };
+}
+
+// An alias carries its target's NAME only (that is all the export writes), so a name shared by two
+// variables makes the target ambiguous. Equivalent candidates share one identifier and it does not
+// matter; otherwise prefer the referrer's own collection, then the lowest key — deterministic, so a
+// re-ordered input cannot change the output — and SAY so.
+function aliasTarget(plan, name, referrer, warn) {
+  const cands = (plan.byName.get(name) || []).filter((c) => plan.id(c) != null);
+  if (!cands.length) return null;
+  if (new Set(cands.map((c) => plan.id(c))).size === 1) return cands[0];
+  const sameColl = cands.filter((c) => referrer && c.collection === referrer.collection);
+  const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands)
+    .slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
+  const pick = pool[0];
+  if (warn) {
+    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' ` +
+      `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + c.collection + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+  }
+  return pick;
+}
+
+// One message per SET of colliding variables, however many outputs it showed up in — the same
+// `Space 4` pair collides in tokens.dtcg.json, tokens.css and theme.css, and three near-identical
+// paragraphs is how a warning stops being read.
+function collisionMessages(notes, opts) {
+  const sources = (opts && opts.sources) || null;
+  const bySet = new Map();
+  for (const n of notes) {
+    const k = (n.differ ? "D" : "S") + n.members.map((m) => identityOf(m.v)).sort().join("|");
+    if (!bySet.has(k)) bySet.set(k, []);
+    bySet.get(k).push(n);
+  }
+  const out = [];
+  for (const group of bySet.values()) {
+    const first = group[0];
+    const members = first.members.map((m) => m.v);
+    const names = [...new Set(members.map((v) => v.name))];
+    const who = (v) => {
+      const k = shortKey(v);
+      const where = k && sources && sources.get(v.key);
+      return (k ? `key ${k}…` : `'${v.collection || ""}'`) + ` = ${JSON.stringify(v.values || {})}` +
+        (where && where.length ? ` (from ${where.join(", ")})` : "");
+    };
+    const oneColl = members.every((v) => v.collection === members[0].collection) && members[0].collection;
+    const subject = names.length === 1
+      ? `${members.length} different Figma variables share the name '${names[0]}'${oneColl ? ` (collection '${members[0].collection}')` : ""}`
+      : `${members.length} different Figma variables (${names.map((n) => `'${n}'`).join(", ")}) fold onto one identifier`;
+    const where = group.map((n) => `${n.output} ${n.members.map((m) => m.id).join(" / ")}`).join("; ");
+    if (first.differ) {
+      out.push(`${subject} and resolve DIFFERENTLY — none is dropped, each keeps its own name: ${members.map(who).join(" vs ")}. ` +
+        `Emitted as: ${where}. ` +
+        (names.length === 1
+          ? `Pick by key, never by name. A screen's own .vars.json usually carries only one of them under the plain name — ` +
+            `generate that screen's theme from it (or from design-system/tokens.json), not from the merged variables.json.`
+          : `The name spelled exactly as the identifier keeps it; a name that only reached it by folding punctuation carries its key.`));
+    } else {
+      out.push(`${subject} but resolve identically in every mode — emitted ONCE: ${members.map(who).join(" and ")} → ${where}.`);
+    }
+  }
+  return out;
+}
+
+// --- Figma's "fully rounded" sentinel ------------------------------------------------------------
+// A pill corner exports as a literal 1e9 (cross-check.js reports it as `sentinel-token-value`). It is
+// an idiom, not a measurement, and `1000000000px` must never reach a stylesheet (livetest-3 #96).
+// Every emitter writes the platform's own idiom instead: 9999px on the web (and in DTCG, with the
+// original kept under $extensions), `.infinity` in SwiftUI, `double.infinity` in Flutter, 9999 in
+// React Native, and 9999.dp with a CircleShape note in Compose.
+const SENTINEL_MIN = 10000; // the same threshold as cross-check.js ABSURD_NUMBER
+const WEB_FULL_ROUND = 9999;
+function isRadiusVar(v) {
+  const scopes = v.scopes || [];
+  const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (narrowed) return scopes.includes("CORNER_RADIUS");
+  return /radius|corner|round/i.test(String(v.collection || "") + "/" + v.name);
+}
+function isSentinel(v, raw) {
+  if (!v || v.type !== "FLOAT" || isAlias(raw)) return false;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
+}
+const webNumber = (v, raw) => (isSentinel(v, raw) ? WEB_FULL_ROUND : raw);
+
 // --- color: accept #rgb / #rgba / #rrggbb / #rrggbbaa; normalize to 6- or 8-digit lowercase. ---
 function normHex(v) {
   if (typeof v !== "string") return null;
@@ -151,8 +324,8 @@ function baseValue(variable, collections, def) {
 
 // `dimension`: the FLOAT is a length (see unitDecision) — DTCG 2025.10 requires the object form
 // {value, unit:"px"|"rem"} for $type "dimension"; a bare number there is non-conformant.
-function dtcgValue(raw, colorProfile, dimension) {
-  if (isAlias(raw)) return dtcgRef(raw.aliasOf);
+function dtcgValue(raw, colorProfile, dimension, ref) {
+  if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
     return Number.isFinite(n) ? { value: n, unit: "px" } : raw;
@@ -176,12 +349,27 @@ function dtcgValue(raw, colorProfile, dimension) {
 // by the ONE unitDecision() every emitter shares, so tokens.dtcg.json, tokens.css and the resolver set
 // files cannot disagree about which numbers are lengths.
 const SKIP = Symbol("resolver-set omits this token");
-function buildTree(designSystem, warn, opts, pick, withExtensions) {
+// The DTCG plan: a token's path is its name's segments; two variables that fold onto one path are
+// disambiguated on the LAST segment (see planIds). Planned over the WHOLE variable list even when a
+// resolver set file only holds one collection, because every set is merged into one namespace.
+const DTCG_SEP = "\u0000";
+function dtcgPlan(designSystem) {
+  const ds = designSystem || {};
+  return planIds(ds.variables || [], (v) => { const p = segs(v.name); return p.length ? p.join(DTCG_SEP) : null; },
+    (id, s) => id + "-" + s, ds.collections, "tokens.dtcg.json", (v) => !/[.{}$]/.test(String(v.name)));
+}
+function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
   const root = {};
   const { collections, colorProfile } = designSystem || {};
+  plan = plan || dtcgPlan(designSystem);
+  const ref = (referrer) => (name) => {
+    const t = aliasTarget(plan, name, referrer, warn);
+    return t ? "{" + plan.id(t).split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
+  };
   for (const v of (designSystem && designSystem.variables) || []) {
-    const path = segs(v.name);
-    if (!path.length) { warn(`variable with empty/degenerate name skipped: '${v.name}'`); continue; }
+    if (!segs(v.name).length) { warn(`variable with empty/degenerate name skipped: '${v.name}'`); continue; }
+    if (!plan.canonical.has(v)) continue; // the same variable twice, or an identical twin — emitted once, reported by planIds
+    const path = plan.id(v).split(DTCG_SEP);
     // Reserved keys would let a token name walk into / write onto Object.prototype (prototype pollution)
     // — token maps are semi-trusted third-party dumps, so refuse them explicitly.
     if (path.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
@@ -206,7 +394,9 @@ function buildTree(designSystem, warn, opts, pick, withExtensions) {
     if (node[leafKey] !== undefined && node[leafKey].$value === undefined) {
       warn(`token '${v.name}' collides with a group of the same name — skipped`); continue;
     }
-    if (node[leafKey] !== undefined) warn(`duplicate token name '${v.name}' — later definition wins`);
+    // planIds gave every distinct variable its own path, so an occupied leaf here can only be a
+    // path that some OTHER name also reaches after sanitising (reported by planIds). Never overwrite.
+    if (node[leafKey] !== undefined) { warn(`token '${v.name}' lands on '${path.join("/")}', which another token already holds — skipped, nothing overwritten`); continue; }
 
     const leaf = {};
     let type = DTCG_TYPE[v.type];
@@ -215,7 +405,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions) {
     // font-weight) stays a `number`.
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
-    let value = dtcgValue(bv, colorProfile, dimension);
+    const aliasRef = ref(v);
+    let value = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
     if (v.type === "BOOLEAN") {
       // DTCG 2025.10 has no boolean type, and a token with no resolvable $type is INVALID. Coerce to a
       // string token ("true"/"false"); the origin is recorded under $extensions so it round-trips.
@@ -238,7 +429,11 @@ function buildTree(designSystem, warn, opts, pick, withExtensions) {
     // — which, unlike an object literal, creates a REAL own "__proto__" key. On a plain object
     // `modes["__proto__"] = {...}` sets the prototype instead of an own key, so the mode vanished from
     // the emitted JSON with no warning. Same hardening as toDTCG's reserved-key guard on token NAMES.
-    if (modeKeys.length > 1) { ext.modes = Object.create(null); for (const m of modeKeys) if (values[m] !== undefined) ext.modes[m] = dtcgValue(values[m], colorProfile, dimension); }
+    if (modeKeys.length > 1) { ext.modes = Object.create(null); for (const m of modeKeys) if (values[m] !== undefined) ext.modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); }
+    // The key is the variable's identity (the name is not unique — see planIds), so it travels with
+    // the token: a consumer can always get back from an emitted name to the one Figma variable.
+    if (typeof v.key === "string" && v.key) ext.key = v.key;
+    if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded — emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean"; // marks a boolean coerced to a string token
@@ -253,10 +448,16 @@ function buildTree(designSystem, warn, opts, pick, withExtensions) {
   return root;
 }
 
-function toDTCG(designSystem, warnings, opts) {
+// `notes` (internal): when given, name collisions are collected there as objects so emitTokens can
+// report each colliding SET once across every output; otherwise they are formatted into `warnings`.
+function toDTCG(designSystem, warnings, opts, notes) {
   const warn = (m) => { if (warnings) warnings.push(m); };
   const collections = (designSystem || {}).collections;
-  return buildTree(designSystem, warn, opts, (v) => baseValue(v, collections), true);
+  const plan = dtcgPlan(designSystem);
+  const tree = buildTree(designSystem, warn, opts, (v) => baseValue(v, collections), true, plan);
+  if (notes) notes.push(...plan.notes);
+  else for (const m of collisionMessages(plan.notes, opts)) warn(m);
+  return tree;
 }
 
 // FLOAT unit: Figma FLOAT variables are overwhelmingly dimensions -> `px`; OPACITY/FONT_WEIGHT scopes
@@ -315,8 +516,8 @@ function numberUnit(variable, opts) {
 }
 
 // A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (0 stays unitless).
-function cssValue(raw, unit) {
-  if (isAlias(raw)) return "var(" + cssVarName(raw.aliasOf) + ")";
+function cssValue(raw, unit, ref) {
+  if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
   const e = isHexish(raw) ? normHex(raw) : null;
   if (e) return "#" + e;
   const fmtNum = (s) => (s === "0" ? "0" : unit ? s + unit : s); // 0 stays unitless; String(0) === "0"
@@ -327,20 +528,27 @@ function cssValue(raw, unit) {
   return String(raw);
 }
 
-function toCSS(designSystem, opts) {
+// The tokens.css plan: one custom property per distinct variable (see planIds).
+function cssPlan(designSystem) {
+  const ds = designSystem || {};
+  return planIds(ds.variables || [], (v) => (segs(v.name).length ? cssVarName(v.name) : null), (id, s) => id + "-" + s, ds.collections, "tokens.css",
+    (v) => cssVarName(v.name) === "--" + segs(v.name).join("-"));
+}
+
+// `notes` (internal): see toDTCG.
+function toCSS(designSystem, opts, notes) {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
   const selectorFor = (mode) => (opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`);
 
-  // Keyed by custom-property NAME, not pushed as lines, because two different Figma variables can
-  // normalise to the same property: a name repeated in two collections, or (seen live) three
-  // variables all called "Schemes/On Primary" with distinct keys — one in "M3", two in
-  // "material-theme". Emitting a line each put the identical declaration in :root three times over
-  // and once more per mode block, 22 copies in one real file. lintTokens already warns "duplicate
-  // token name … later definition wins" and toDTCG already collapses them (an object key can only
-  // hold one value); a Map makes the CSS agree with both — first occurrence's POSITION, last
-  // definition's VALUE, which is exactly what the warning promises and what a browser would do with
-  // the duplicates anyway.
+  // Keyed by custom-property NAME, not pushed as lines. Two records of the SAME variable, or two
+  // variables that resolve identically in every mode (seen live: three "Schemes/On Primary" with
+  // distinct keys, 22 copies of one declaration), emit ONE declaration. Two variables that fold onto
+  // one property and DIFFER each get their own property (planIds) — the browser's "last one wins"
+  // is exactly the silent overwrite that shipped `--spacing-space-4: 16px` (livetest-3 #44).
+  const plan = cssPlan(designSystem);
+  if (notes) notes.push(...plan.notes);
+  const ref = (referrer) => (name) => { const t = aliasTarget(plan, name, referrer); return t ? plan.id(t) : cssVarName(name); };
   const rootLines = new Map();
   // Null-prototype: keyed by MODE NAMES (free-form designer strings, reaching us through JSON.parse,
   // which creates a real own "__proto__" key). On a plain object `perMode["__proto__"]` resolves to
@@ -349,18 +557,20 @@ function toCSS(designSystem, opts) {
   const perMode = Object.create(null);
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
+    if (!plan.canonical.has(v)) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === undefined) continue; // never emit `--x: undefined;`
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
-    const varName = cssVarName(v.name); // hoisted for the same reason: split/replace/join per mode otherwise
-    rootLines.set(varName, `  ${varName}: ${cssValue(base, unit)};`);
+    const varName = plan.id(v);
+    const r = ref(v);
+    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
-      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(values[m], unit)};`);
+      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r)};`);
     }
   }
   let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
@@ -381,19 +591,33 @@ function toCSS(designSystem, opts) {
 // `--color-*` -> bg-/text-/border-, `--spacing-*` -> p-/m-/gap-, `--radius-*` -> rounded-,
 // `--text-*` -> text-<size>, `--font-*` -> font-. So a Figma variable has to be filed under the right
 // namespace or it produces a custom property nobody can reach from a class. A FLOAT that carries no
-// unit (opacity, font-weight) matches no Tailwind namespace at all; it is still emitted, unprefixed,
-// so `var(--x)` works, but it generates no utility — which is the honest outcome, not a silent drop.
+// unit (opacity, font-weight) matches no Tailwind namespace at all; it is still emitted, so `var(--x)`
+// works, but it generates no utility — which is the honest outcome, not a silent drop.
+//
+// Every generated variable sits under a `figma-` sub-namespace (`--radius-figma-xl`, `--spacing-
+// figma-space-4`, `--color-figma-primary-primary`), because Tailwind v4's own scale lives in the SAME
+// namespaces and an `@theme` variable of the same name REPLACES it. Figma's `XL` radius emitted as
+// `--radius-xl: 16px` silently redefined the framework's `rounded-xl` (12px) in every project pulled
+// through this tool, and `--radius-l`/`--radius-s` minted `rounded-l`/`rounded-s`, which Tailwind
+// already defines as the LEFT/START-corner shorthands (livetest-3 #183). Figma names are free-form, so
+// no finite list of Tailwind's defaults (`xl`, `4`, `full`, `red-500`, `sans`, a bare `--spacing`)
+// can be relied on; one prefix makes a collision impossible and every design-system utility greppable.
 //
 // Modes: `@theme` cannot be nested in a selector, so the default mode's values live there and every
 // other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block. Tailwind's
 // generated utilities read `var(--color-…)`, so they follow the override with no extra work.
 const TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
+const TW_PREFIX = "figma-";
 
 // The Tailwind key for a token name: kebab-case, lowercased, from the SAME segs() every other
-// emitter uses, so `--color-schemes-on-primary` and the DTCG `schemes.on.primary` describe one token.
+// emitter uses, so `--color-figma-schemes-on-primary` and the DTCG `schemes.on.primary` describe one token.
 function twSlug(name) {
   const slug = segs(name).join("-").replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
   return slug || "token";
+}
+function twName(v, opts) {
+  const kind = twKind(v, opts);
+  return (kind ? TW_NAMESPACE[kind] : "--") + TW_PREFIX + twSlug(v.name);
 }
 
 const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
@@ -411,23 +635,33 @@ function twKind(v, opts) {
   return "dimension";
 }
 
-function toTailwind(designSystem, opts) {
+// → { text, utilities, tokens, warnings[] }. `warnings` carries the name collisions (the slug folds
+// case and punctuation, so `Space 3` and `(Space 3)` land on one Tailwind name even though tokens.css
+// kept them apart) unless the internal `notes` array is passed, as emitTokens does.
+function toTailwind(designSystem, opts, notes) {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
-  const theme = new Map(); // same first-position/last-value dedup rule as toCSS
+  const plan = planIds(vars, (v) => (segs(v.name).length ? twName(v, opts) : null), (id, s) => id + "-" + s, collections, "theme.css",
+    (v) => /^[A-Za-z0-9-]+$/.test(segs(v.name).join("-")));
+  const warnings = [];
+  if (notes) notes.push(...plan.notes);
+  else warnings.push(...collisionMessages(plan.notes, opts));
+  const theme = new Map();
   const perMode = Object.create(null);
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
+    if (!plan.canonical.has(v)) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === undefined) continue;
-    const kind = twKind(v, opts);
-    const name = (kind ? TW_NAMESPACE[kind] : "--") + twSlug(v.name);
-    if (kind) utilities++;
+    const name = plan.id(v);
+    if (twKind(v, opts)) utilities++;
     const unit = numberUnit(v, opts);
-    // An alias must point at the TAILWIND name of its target, not the tokens.css one.
-    const val = (raw) => (isAlias(raw) ? aliasVar(raw, vars, opts) : cssValue(raw, unit));
+    // An alias must point at the TAILWIND name of its target (its own namespace, its own
+    // disambiguated name), not the tokens.css one.
+    const ref = (n) => { const t = aliasTarget(plan, n, v); return t ? plan.id(t) : "--" + TW_PREFIX + twSlug(n); };
+    const val = (raw) => cssValue(webNumber(v, raw), unit, ref);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
@@ -437,18 +671,13 @@ function toTailwind(designSystem, opts) {
       (perMode[m] || (perMode[m] = new Map())).set(name, `  ${name}: ${val(values[m])};`);
     }
   }
-  let out = '@import "tailwindcss";\n';
+  let out = '@import "tailwindcss";\n' +
+    "/* GENERATED by Design Twin (tokens.js --web tailwind) — do not edit by hand; re-run after a token pull.\n" +
+    "   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-…),\n" +
+    "   so Tailwind's own scale (rounded-xl, p-4, …) keeps its framework meaning. */\n";
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
   for (const m of Object.keys(perMode)) out += `\n[data-theme="${cssAttrEscape(m)}"] {\n` + [...perMode[m].values()].join("\n") + "\n}\n";
-  return { text: out, utilities, tokens: theme.size };
-}
-
-// An alias's target gets the namespace ITS OWN kind earns, which is not necessarily the referrer's —
-// so resolve the target variable rather than reusing the current name's prefix.
-function aliasVar(raw, vars, opts) {
-  const target = vars.find((x) => x.name === raw.aliasOf);
-  const kind = target ? twKind(target, opts) : null;
-  return "var(" + (kind ? TW_NAMESPACE[kind] : "--") + twSlug(raw.aliasOf) + ")";
+  return { text: out, utilities, tokens: theme.size, warnings };
 }
 
 // --- DTCG Resolver Module (2025.10) -------------------------------------------------------------
@@ -526,6 +755,9 @@ function toResolver(designSystem, warnings, opts) {
   }
   const declared = new Map();
   for (const c of collections) if (c && c.name != null && !declared.has(String(c.name))) declared.set(String(c.name), c);
+  // ONE plan over every variable: resolver sets are merged into one token namespace, so a set file
+  // must use exactly the (disambiguated) paths tokens.dtcg.json uses. Its notes are toDTCG's to report.
+  const plan = dtcgPlan(ds);
 
   // Reserve every emitted path case-insensitively; a sanitized name that lands on a taken path is
   // disambiguated with -2/-3 and REPORTED, never silently overwritten.
@@ -569,7 +801,7 @@ function toResolver(designSystem, warnings, opts) {
 
     // Base set: the SAME values toDTCG puts in $value (baseValue), so the two outputs agree by
     // construction rather than by two parallel implementations.
-    const base = buildTree(sub, warn, opts, (v) => baseValue(v, collections), false);
+    const base = buildTree(sub, warn, opts, (v) => baseValue(v, collections), false, plan);
     if (!Object.keys(base).length) continue; // every token in the collection was skipped + reported
 
     const setName = reserveKey(label, "set");
@@ -597,7 +829,7 @@ function toResolver(designSystem, warnings, opts) {
         if (m === def || values[m] === undefined) return SKIP;
         const bv = baseValue(v, collections, def);
         return JSON.stringify(values[m]) === JSON.stringify(bv) ? SKIP : values[m];
-      }, false);
+      }, false, plan);
       if (!Object.keys(tree).length) { contexts[m] = []; continue; } // spec allows an empty context array
       const file = reserveFile(`${fileSlug(label, "tokens")}.${fileSlug(m, "mode")}`, ".json", `collection '${label}' mode '${m}'`);
       files[file] = tree;
@@ -634,10 +866,14 @@ function toResolver(designSystem, warnings, opts) {
 // lint-only caller must not pay for building and discarding the whole stylesheet.
 function lintTokens(designSystem, opts) {
   const warnings = [];
-  toDTCG(designSystem, warnings, opts);
+  const notes = [];
+  toDTCG(designSystem, warnings, opts, notes);
+  notes.push(...cssPlan(designSystem).notes);
+  warnings.push(...collisionMessages(notes, opts));
   lintNames(designSystem, opts, warnings);
-  return warnings;
+  return dedupe(warnings);
 }
+const dedupe = (list) => [...new Set(list)];
 
 // The half of the lint that does NOT come from toDTCG. Split out so emitTokens can lint off the
 // warnings toDTCG already collected instead of building the whole DTCG tree a second time.
@@ -679,8 +915,8 @@ function lintNames(designSystem, opts, warnings) {
   //    is still this file rewriting output off a pattern match, and every other such rewrite announces
   //    itself. Say which tokens it touched so a wrong guess is visible; the fix is to narrow the
   //    variable's scopes in Figma (or pass opts.unitless).
-  //  - CSS var-name collisions from distinct source names (e.g. "spacing/4" vs "spacing-4").
-  const byVar = new Map();
+  //  - CSS var-name collisions are NOT here any more: they are planned (and reported, naming every
+  //    key) by planIds, the same function that decides the emitted names — see cssPlan.
   for (const v of vars) {
     if (v.type === "FLOAT" && unitDecision(v, opts) === "name") {
       warnings.push(`token '${v.name}' has no narrowed scopes (Figma's ALL_SCOPES default); emitted UNITLESS because its name reads as an opacity/font-weight — scope it in Figma to make this explicit`);
@@ -691,31 +927,35 @@ function lintNames(designSystem, opts, warnings) {
     if (folded !== "--" + s.join("-")) {
       warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
     }
-    (byVar.get(folded) || byVar.set(folded, new Set()).get(folded)).add(v.name);
   }
-  for (const [k, set] of byVar) if (set.size > 1) warnings.push(`CSS variable ${k} produced by multiple tokens: ${[...set].join(", ")}`);
   return warnings;
 }
 
 // Both emitters + the lint under ONE opts object and ONE pass over the design system. lintTokens has
 // to be called with the same opts as toCSS (it reports guesses the emitter actually made); making
 // that one call removes the coupling from the caller instead of documenting it.
+// opts.tailwind: also build theme.css in the same pass, so its name collisions are reported in the
+// SAME message as tokens.dtcg.json's and tokens.css's. opts.sources: Map(key -> [screen]) so a
+// collision warning can say which screen each colliding variable came from.
 function emitTokens(designSystem, opts) {
   const warnings = [];
-  const dtcg = toDTCG(designSystem, warnings, opts);
-  const css = toCSS(designSystem, opts);
+  const notes = [];
+  const dtcg = toDTCG(designSystem, warnings, opts, notes);
+  const css = toCSS(designSystem, opts, notes);
+  const tailwind = opts && opts.tailwind ? toTailwind(designSystem, opts, notes) : undefined;
   // Additive: the resolver is a SECOND view of the same variables (per-mode files instead of
   // $extensions), not a replacement — toDTCG's output is unchanged. It runs after toDTCG so its
   // warning dedupe sees the messages toDTCG already recorded.
   const { resolver, files } = toResolver(designSystem, warnings, opts);
+  const collisions = collisionMessages(notes, opts);
   lintNames(designSystem, opts, warnings);
-  return { dtcg, css, resolver, resolverFiles: files, warnings };
+  return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 
-module.exports = { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName };
+module.exports = { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, TW_PREFIX, WEB_FULL_ROUND };
 // tokens-native.js must agree with this file on names, default modes, aliases and units, so it is
 // built FROM these helpers (see the note at its top on why it does not require this file back).
-Object.assign(module.exports, require("./tokens-native.js")({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision }));
+Object.assign(module.exports, require("./tokens-native.js")({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel }));
 
 // CLI: node design-to-code/tokens.js <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
 // --native swiftui | compose | flutter | react-native (a build-screen profile name works too) also
@@ -747,7 +987,9 @@ if (require.main === module) {
   const ds = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
-  const { dtcg, css, resolver, resolverFiles, warnings } = emitTokens(ds); // one pass: emit + lint share the same opts and traversal
+  // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
+  // across every output it touches, naming the screen(s) each colliding variable came from.
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: require("./slice-sources.js").sourcesOf(ds, input, fs, path) });
   fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
   fs.writeFileSync(path.join(outDir, "tokens.css"), css);
   // Resolver document + the set files it $refs. The refs are relative to the resolver document, and
@@ -762,13 +1004,12 @@ if (require.main === module) {
   }
   let nativeNote = "";
   if (web !== undefined) {
-    const { toTailwind } = module.exports;
-    const tw = toTailwind(ds);
+    const tw = tailwind;
     const file = WEB_TARGETS[web];
     fs.writeFileSync(path.join(outDir, file), tw.text);
     nativeNote += ` + ${file}`;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);
-    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight) — emitted unprefixed, usable via var() but generating no utility`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== undefined) {
     const n = toNative(ds, native, { package: kotlinPackage || undefined });
