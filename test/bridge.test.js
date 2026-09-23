@@ -2168,13 +2168,13 @@ async function disconnectErr(code, reason) {
   ok("[doctor] plugin: a refused token reads as 'running, wrong token' with both fingerprints and the fix",
     wrongTok.status === "fail" && wrongTok.detail.includes("11111111") && wrongTok.detail.includes("22222222") && /--show-token/.test(wrongTok.next));
   ok("[doctor] plugin: connected / nobody came / skipped",
-    doctor.checkPlugin({ clients: [{ file: "F" }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
+    doctor.checkPlugin({ clients: [{ file: "F", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok" && doctor.checkPlugin({ clients: [] }, 10).status === "fail"
     && doctor.checkPlugin({ skipped: "why" }, 10).status === "warn");
   // Live run #2: two files were connected, doctor reported a plain ✓, and the very next command
   // refused with "say which one to use". Healthy AND ambiguous is one state, not two.
   (() => {
-    const one = doctor.checkPlugin({ clients: [{ file: "TeamSmart" }] }, 10);
-    const two = doctor.checkPlugin({ clients: [{ file: "TeamSmart" }, { file: "NERA" }] }, 10);
+    const one = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
+    const two = doctor.checkPlugin({ clients: [{ file: "TeamSmart", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "NERA", pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10);
     ok("[doctor] plugin: one connected file is a plain ✓ with no flag to add", one.status === "ok" && one.next === undefined);
     ok("[doctor] plugin: several connected files stay ✓ but warn that commands must disambiguate",
       two.status === "ok" && /2 files, so commands must say which/.test(two.detail) && /--client/.test(two.next));
@@ -2397,8 +2397,13 @@ async function disconnectErr(code, reason) {
 
   // ---------------------------------------------------------------- P5 round 4: plugin version reporting (finding 327)
   console.log("\nserver-core — plugin version reporting and staleness (finding 327):");
-  ok("[version] pluginStalenessNote is null with no plugin version reported (an old, pre-327 bundle) — 'unknown' is named separately by the caller, not blamed as stale",
-    core.pluginStalenessNote(null) === null && core.pluginStalenessNote(undefined) === null);
+  // P5 addendum, live-verified on this machine: a real daemon + a real Figma plugin, both still
+  // running pre-327 code, produced `pluginVersion: null, pluginStale: null` from `list clients --json`
+  // and a plain ✓ from doctor — a MISSING version is exactly the one case guaranteed to predate this
+  // feature, so it must warn, not pass silently as "nothing to compare".
+  ok("[version] pluginStalenessNote WARNS on no plugin version reported (a pre-327 bundle) — 'no version at all' is itself the stale signal, not a free pass",
+    (() => { const n1 = core.pluginStalenessNote(null), n2 = core.pluginStalenessNote(undefined);
+      return typeof n1 === "string" && /predates version reporting/.test(n1) && /restart `dtwin serve`/.test(n1) && n1 === n2; })());
   ok("[version] pluginStalenessNote is null for a plugin version equal to or newer than the bridge",
     core.pluginStalenessNote(core.BRIDGE_VERSION) === null);
   ok("[version] pluginStalenessNote fires for a plugin version strictly older than the bridge, and names both",
@@ -2422,8 +2427,8 @@ async function disconnectErr(code, reason) {
     ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
     await b.waitForIdentified(1000);
     const row = b.listClients()[0];
-    ok("[version] a hello with no pluginVersion at all records null, not a crash or a false staleness note",
-      row && row.pluginVersion === null && row.pluginStale === null);
+    ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (this is the live bug this round fixes, not a crash)",
+      row && row.pluginVersion === null && typeof row.pluginStale === "string" && /predates version reporting/.test(row.pluginStale));
     ws1.close();
     b.close();
   }
@@ -2437,7 +2442,25 @@ async function disconnectErr(code, reason) {
       return c.status === "warn" && /reload the plugin/.test(c.next || "");
     })());
   ok("[doctor-version] several CURRENT clients still stay ok (multi-client alone is not staleness)",
-    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginStale: null }, { file: "B", identified: true, pluginStale: null }] }, 10).status === "ok");
+    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }, { file: "B", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
+  // daemonRowStalenessNote: a row with NO `pluginVersion` key at all (not merely `null`) — the shape a
+  // NEWER `dtwin` CLI sees when reading client rows back from an OLDER `dtwin serve` daemon whose own
+  // `describe()` predates this feature entirely. Distinct from `pluginStale` (which fires from a
+  // CURRENT daemon relaying an old/version-less PLUGIN) — this one means the DAEMON PROCESS itself
+  // needs restarting, which reloading the Figma plugin alone would not fix.
+  ok("[version] daemonRowStalenessNote is null for a row that HAS the key (even if null)",
+    core.daemonRowStalenessNote({ pluginVersion: null }) === null && core.daemonRowStalenessNote({ pluginVersion: "1.2.3" }) === null);
+  ok("[version] daemonRowStalenessNote fires for a row with the key entirely ABSENT, naming a daemon restart",
+    (() => { const n = core.daemonRowStalenessNote({ file: "A" }); return typeof n === "string" && /dtwin serve/.test(n) && /restart/.test(n); })());
+  ok("[doctor-version] a daemon-sourced client row missing pluginVersion entirely still demotes doctor's daemon-plugin check to warn",
+    (() => {
+      // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
+      // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
+      // describe() output — no pluginVersion/pluginStale keys at all.
+      const oldDaemonClients = [{ connId: "c1", file: "TeamSmart (Copy)", identified: true }];
+      const stale = oldDaemonClients.some((cl) => cl.pluginStale || core.daemonRowStalenessNote(cl));
+      return stale === true;
+    })());
 
   // ---------------------------------------------------------------- P5 round 2: request() stall detector (findings 202/213)
   console.log("\nserver-core — request() stall detector (findings 202/213, a client that never answers):");
