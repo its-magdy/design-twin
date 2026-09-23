@@ -55,13 +55,31 @@ function checkNode(version, range) {
   return fail("node", "Node.js", `${version} is too old — this package needs ${range}`, "install a newer Node.js (nodejs.org, or your version manager)");
 }
 
-// `s` is tokenStore.status().
-function checkToken(s) {
+// `s` is tokenStore.status(). `pluginCheck` (P4 livetest-4 #328) is the ALREADY-COMPUTED plugin check
+// from later in run() — passed in only when `s.shadowed` is true, so the shadowed-token note can say
+// what actually happened instead of a blanket "make sure the plugin has it": a connection succeeding
+// under the overriding token IS the evidence it was accepted; a connection that never happened means
+// this could not be checked at all, which is a different, more honest thing to say than "make sure".
+// `viaDaemon` matters because a connection routed THROUGH an already-running daemon proves nothing
+// about THIS process's token: the daemon authenticated the plugin once, at its own start, and every
+// later command's socket auth is skipped — a bogus FIGMA_BRIDGE_TOKEN still shows "connected" there
+// (livetest-4 #328's exact repro: `list clients` works and `doctor` says ok:true with a bogus token).
+// Only a connection THIS process itself negotiated (no daemon in front) is real evidence either way.
+function checkToken(s, pluginCheck, viaDaemon) {
   if (s.activeSource === "ephemeral") {
     return warn("token", "Bridge token", `none saved yet (${s.path} does not exist)`, "run `dtwin init` — or any pull: the first bridge start creates it and prints it once to paste into the plugin");
   }
   if (s.shadowed) {
-    return warn("token", "Bridge token", `FIGMA_BRIDGE_TOKEN (${s.fingerprint}) is OVERRIDING the saved token in ${s.path}`, "make sure the plugin has the env var's token — or unset FIGMA_BRIDGE_TOKEN to go back to the saved one");
+    if (pluginCheck && pluginCheck.status === "ok" && !viaDaemon) {
+      return ok("token", "Bridge token", `FIGMA_BRIDGE_TOKEN (${s.fingerprint}) OVERRIDES the saved token in ${s.path} — the plugin connected using it, so the override is working as intended`);
+    }
+    if (pluginCheck && pluginCheck.status === "fail" && /different token/.test(pluginCheck.detail || "")) {
+      return fail("token", "Bridge token", `FIGMA_BRIDGE_TOKEN (${s.fingerprint}) OVERRIDES the saved token in ${s.path}, and the connected plugin rejected it`, "paste `dtwin --show-token`'s value into the plugin, or unset FIGMA_BRIDGE_TOKEN to go back to the saved token");
+    }
+    const why = viaDaemon
+      ? "a running daemon already holds an authenticated connection, so this override was not exercised by this check"
+      : pluginCheck && pluginCheck.detail ? `plugin: ${pluginCheck.detail}` : "no daemon/plugin reachable";
+    return warn("token", "Bridge token", `FIGMA_BRIDGE_TOKEN (${s.fingerprint}) OVERRIDES the saved token in ${s.path} — whether the plugin accepts it could not be checked (${why})`, "make sure the plugin has the env var's token — or unset FIGMA_BRIDGE_TOKEN to go back to the saved one");
   }
   if (s.activeSource === "env") return ok("token", "Bridge token", `from FIGMA_BRIDGE_TOKEN (fingerprint ${s.fingerprint})`);
   if (s.loosePerms) return warn("token", "Bridge token", `saved in ${s.path} (fingerprint ${s.fingerprint}), but the file is readable by other users`, `chmod 600 ${s.path}`);
@@ -323,11 +341,18 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
   add(checkNode(process.version, engines));
 
   const tok = tokenStore.status();
-  add(checkToken(tok));
+  // A shadowed token's real answer depends on the plugin check below (P4 livetest-4 #328) — emit it
+  // once that is known, rather than a static "make sure" note before anything has actually been
+  // checked. Every other case is unaffected and keeps its original position, right after Node.js.
+  if (!tok.shadowed) add(checkToken(tok));
 
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
+  let pluginCheck;
+  let viaDaemon = false;
   if (problem) {
-    add(problem, checkPlugin({ skipped: "the port setting has to be fixed first" }));
+    add(problem);
+    pluginCheck = checkPlugin({ skipped: "the port setting has to be fixed first" });
+    add(pluginCheck);
   } else {
     const st = await daemon.status(port).catch(() => null);
     add(checkDaemon(st, port));
@@ -335,20 +360,26 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
     add(checkPort(port, probe, st));
 
     if (st) {
+      viaDaemon = true;
       // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
-      add(st.pluginConnected
+      pluginCheck = st.pluginConnected
         ? (() => { const c = connectedDetail(st.clients, "connected (through the daemon)");
             return { id: "plugin", title: "Figma plugin", status: "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) }; })()
-        : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`"));
+        : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");
+      add(pluginCheck);
     } else if (!probe.free) {
-      add(checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined }));
+      pluginCheck = checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined });
+      add(pluginCheck);
     } else if (tok.activeSource === "ephemeral") {
-      add(checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" }));
+      pluginCheck = checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" });
+      add(pluginCheck);
     } else {
       if (onWait) onWait(waitSec);
-      add(checkPlugin(await probePlugin(port, waitSec * 1000), waitSec));
+      pluginCheck = checkPlugin(await probePlugin(port, waitSec * 1000), waitSec);
+      add(pluginCheck);
     }
   }
+  if (tok.shadowed) add(checkToken(tok, pluginCheck, viaDaemon));
 
   add(...checkProject(cwd));
   // P4 #203: a "not checked" warn (the plugin probe skipped, a port held by something else, etc.) is

@@ -531,6 +531,13 @@ async function disconnectErr(code, reason) {
     const r = require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "--help"], { encoding: "utf8", timeout: 5000 });
     return r.status === 0 && /Usage:/.test(r.stdout) && /--list-libraries/.test(r.stdout) && !/listening/.test(r.stderr);
   })());
+  // P4 livetest-4 #329: `dtwin --help` never mentioned `--client` at all, even though it is the flag
+  // every plugin-reaching command needs once two Figma files are connected — it was documented only in
+  // bridge/README.md (a clone-only file) and in `list clients`' own table.
+  ok("[args] --help mentions --client, pointing at `dtwin list clients`", (() => {
+    const r = require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "--help"], { encoding: "utf8", timeout: 5000 });
+    return r.status === 0 && /--client/.test(r.stdout) && /list clients/.test(r.stdout);
+  })());
   ok("[args] default timeout scales with the work (selection < page < all-pages)", (() => {
     const s = parse(["--selection"]).exportTimeoutMs, p = parse([]).exportTimeoutMs, a = parse(["--all-pages"]).exportTimeoutMs;
     return s === 120000 && p === 300000 && a === 900000 && s < p && p < a;
@@ -1910,6 +1917,16 @@ async function disconnectErr(code, reason) {
       store.write("stored-tok", path.join(d, "bridge-token"));
       return store.status().shadowed === false;
     }));
+  // P4 livetest-4 #328: a project that always exports FIGMA_BRIDGE_TOKEN set to the SAME value as the
+  // saved file (a common CI/team setup) used to be reported as "shadowed" on every single run, with
+  // nothing actually wrong — training the user to ignore the note. `shadowed` now means the values
+  // genuinely DIFFER, not merely that both a file and the env var exist.
+  ok("[token] does NOT claim shadowing when the env var carries the SAME value as the saved file",
+    withStore((d) => {
+      store.write("same-tok", path.join(d, "bridge-token"));
+      process.env.FIGMA_BRIDGE_TOKEN = "same-tok";
+      return store.status().shadowed === false && store.status().activeSource === "env";
+    }));
 
   console.log("\nserver-core — hashed compare:");
   // safeEqual previously short-circuited on length before timingSafeEqual, leaking the token's
@@ -2115,8 +2132,24 @@ async function disconnectErr(code, reason) {
   const tokS = { path: "/x/bridge-token", stored: true, envSet: false, activeSource: "file", fingerprint: "abcd1234", loosePerms: false, shadowed: false };
   ok("[doctor] token: saved is ok and shows the fingerprint, never a token", doctor.checkToken(tokS).status === "ok" && doctor.checkToken(tokS).detail.includes("abcd1234"));
   ok("[doctor] token: none saved is a note pointing at init", doctor.checkToken({ ...tokS, stored: false, activeSource: "ephemeral", fingerprint: null }).status === "warn");
-  ok("[doctor] token: env shadowing a saved token is named", /OVERRIDING/.test(doctor.checkToken({ ...tokS, envSet: true, activeSource: "env", shadowed: true }).detail));
+  ok("[doctor] token: env shadowing a saved token is named", /OVERRIDES/.test(doctor.checkToken({ ...tokS, envSet: true, activeSource: "env", shadowed: true }).detail));
   ok("[doctor] token: loose permissions get the chmod", /chmod 600/.test(doctor.checkToken({ ...tokS, loosePerms: true }).next));
+  // P4 livetest-4 #328: the shadowed-token note used to fire on EVERY run the env var happened to be
+  // set on (even one carrying the SAME value as the saved file) and said only "make sure", never
+  // whether anything was actually wrong. token-store.js now only reports `shadowed` when the values
+  // genuinely differ (asserted in the token-cli suite below); doctor's job is to say what a plugin
+  // connection actually proved about that mismatch, once one is known.
+  {
+    const shadowedS = { ...tokS, envSet: true, activeSource: "env", shadowed: true };
+    ok("[doctor] token: shadowed + a real (non-daemon) connection succeeding is reported as OK, not a warn",
+      doctor.checkToken(shadowedS, { id: "plugin", status: "ok", detail: "connected: X" }, false).status === "ok");
+    ok("[doctor] token: shadowed + the SAME connection routed THROUGH A DAEMON proves nothing (daemon authenticated once, at its own start) — still 'could not be checked'",
+      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", status: "ok", detail: "connected: X" }, true); return c.status === "warn" && /could not be checked/.test(c.detail) && /daemon/.test(c.detail); })());
+    ok("[doctor] token: shadowed + the plugin explicitly rejecting a different token is a real failure",
+      doctor.checkToken(shadowedS, { id: "plugin", status: "fail", detail: "a plugin IS running, but with a different token (...)" }, false).status === "fail");
+    ok("[doctor] token: shadowed + no plugin reachable at all is 'could not be checked', not a false 'make sure'",
+      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", status: "warn", detail: "not checked — no token yet" }, false); return c.status === "warn" && /could not be checked/.test(c.detail); })());
+  }
   // Finding 204: a missing daemon used to report `ok` for "none running", which undersold the real
   // cost — every pull without one starts its own bridge and waits out the plugin's full reconnect
   // window (findings 202/213/220). Never a `fail` (no daemon really is the normal, unconfigured
