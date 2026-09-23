@@ -44,8 +44,8 @@ var require_hidden = __commonJS({
 // design-to-code/content-hash.js
 var require_content_hash = __commonJS({
   "design-to-code/content-hash.js"(exports2, module2) {
-    var fs = require("fs");
-    var path = require("path");
+    var fs2 = require("fs");
+    var path2 = require("path");
     var crypto = require("crypto");
     var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
     function stripPullTimes(v, parentKey) {
@@ -67,7 +67,7 @@ var require_content_hash = __commonJS({
       const out = {};
       for (const rel of Array.isArray(files) ? files.map(String) : []) {
         try {
-          out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
+          out[rel] = sha256(fs2.readFileSync(path2.join(cwd, rel))).slice(0, 16);
         } catch {
           out[rel] = null;
         }
@@ -1208,23 +1208,23 @@ if (require.main === module) {
   });
   let code;
   {
-    const planDir = path.join("design", "plan");
+    const planDir = path2.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path2.basename(expFile, ".json").replace(/\.expected$/, "");
     const hits = [];
-    for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    for (const f of fs2.existsSync(planDir) ? fs2.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
       let p;
       try {
-        p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8"));
+        p = JSON.parse(fs2.readFileSync(path2.join(planDir, f), "utf8"));
       } catch {
         continue;
       }
-      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
-      const byName = path.basename(f, ".json") === stem || p.file && path.basename(String(p.file), ".json") === stem;
+      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path2.basename(f, ".json")));
+      const byName = path2.basename(f, ".json") === stem || p.file && path2.basename(String(p.file), ".json") === stem;
       if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });
     }
     if (hits.length === 1) {
-      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+      code = { plan: path2.join(planDir, hits[0].f).split(path2.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
