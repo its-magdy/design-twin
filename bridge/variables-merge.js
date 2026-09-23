@@ -17,9 +17,18 @@
 // runs that produced this module there were zero conflicts across five slices, which is the expected
 // case: the slices are views of one variable set.
 //
-// Provenance is kept, not inferred: `_slices` records one entry per contributing pull, and the raw
-// slice is also written verbatim to variables/<Screen>.json by write-out.js. So "which tokens did
-// screen A actually use" survives the merge, and deleting design/variables.json resets everything.
+// Provenance is kept, not inferred: `_slices` records one entry per contributing pull — including the
+// KEYS that pull carried — and the raw slice is also written verbatim beside its screen as
+// <Screen>.vars.json by write-out.js. So "which screen did this variable come from" survives the
+// merge, and deleting design/export/variables.json resets everything.
+//
+// Two DIFFERENT variables (distinct keys) with the SAME collection and name are both kept — the key
+// is the identity — but they are a conflict for every consumer that looks a token up by name, which
+// is most of them (a theme generator, a slugged CSS variable, a designer reading a list). livetest-3
+// (finding 21) had two `Spacing / Space 4` (24 and 16) and two `Spacing / Space 2` in the union and
+// an EMPTY `_conflicts`, because only same-key value changes were ever recorded. Each such pair is
+// now a `_conflicts` entry of kind "same-name", naming every key, its values and the screens whose
+// slice carries it, and a CONFLICT line in `hygiene` — the two places the skills tell a reader to look.
 
 const MERGE_NOTE =
   "Merged across single-screen pulls: this file is the UNION of every --node/--selection export " +
@@ -63,10 +72,12 @@ function mergeVariablesDoc(prev, next, slice) {
       hygiene: Array.isArray(nextDoc.hygiene) ? nextDoc.hygiene.slice() : [],
     };
     doc._slices = slice ? [sliceEntry(slice, doc)] : [];
+    const nameConflicts = sameNameConflicts(doc.variables, doc._slices);
+    applyNameConflicts(doc, nameConflicts, []);
     doc._note = MERGE_NOTE;
     return {
       doc,
-      stats: { added: doc.variables.length, updated: 0, kept: 0, conflicts: [], collections: doc.collections.length, first: true },
+      stats: { added: doc.variables.length, updated: 0, kept: 0, conflicts: [], nameConflicts, collections: doc.collections.length, first: true },
     };
   }
 
@@ -151,19 +162,99 @@ function mergeVariablesDoc(prev, next, slice) {
   const slices = Array.isArray(prev._slices) ? prev._slices.filter((s) => !slice || s.screen !== slice.screen) : [];
   if (slice) slices.push(sliceEntry(slice, nextDoc));
   doc._slices = slices;
-  if (stats.conflicts.length) doc._conflicts = stats.conflicts;
+  // Value conflicts are events (a pull changed a known variable), so earlier ones are carried forward
+  // rather than wiped by the next pull; same-name conflicts are a property of the union, so they are
+  // recomputed from it every time.
+  const seenValue = new Set();
+  const valueConflicts = [];
+  for (const c of (Array.isArray(prev._conflicts) ? prev._conflicts : []).concat(stats.conflicts)) {
+    if (!c || c.kind === "same-name") continue;
+    const id = JSON.stringify([c.key, c.name, c.collection, c.now, c.from]);
+    if (seenValue.has(id)) continue;
+    seenValue.add(id);
+    valueConflicts.push(Object.assign({ kind: "value" }, c));
+  }
+  stats.nameConflicts = sameNameConflicts(variables, slices);
+  applyNameConflicts(doc, stats.nameConflicts, valueConflicts);
   doc._note = MERGE_NOTE;
   return { doc, stats };
 }
 
+const SAME_NAME_PREFIX = "CONFLICT (same name): ";
+const short = (k) => (typeof k === "string" && k ? k.slice(0, 8) + "…" : "(no key)");
+
+// Every [collection, name] held by more than one distinct variable in the union.
+function sameNameConflicts(variables, slices) {
+  const groups = new Map();
+  for (const v of variables) {
+    if (!v || !v.name) continue;
+    const id = String(v.collection || "") + "\u0000" + v.name;
+    if (!groups.has(id)) groups.set(id, new Map());
+    groups.get(id).set(varId(v), v);
+  }
+  const out = [];
+  for (const members of groups.values()) {
+    if (members.size < 2) continue;
+    const list = [...members.values()];
+    out.push({
+      kind: "same-name",
+      name: list[0].name,
+      collection: list[0].collection,
+      sameValue: list.every((v) => resolvesAlike(v, list[0])),
+      variants: list.map((v) => ({
+        key: v.key,
+        values: v.values,
+        screens: (slices || []).filter((s) => Array.isArray(s.keys) && s.keys.includes(v.key)).map((s) => s.screen),
+      })),
+    });
+  }
+  return out;
+}
+
+// Same resolution under different MODE NAMES: `Space 2` = 8 under Desktop/Tablet/Mobile and 8 under
+// Mode 1 is one value, and tokens.js emits such a pair once. Shared modes must agree; with no shared
+// mode, both must be one constant, and the same one.
+function resolvesAlike(a, b) {
+  if (sameValue(a, b)) return true;
+  if ((a && a.type) !== (b && b.type)) return false;
+  const va = (a && a.values) || {}, vb = (b && b.values) || {};
+  const shared = Object.keys(va).filter((m) => m in vb);
+  if (shared.length) return shared.every((m) => JSON.stringify(va[m]) === JSON.stringify(vb[m]));
+  const all = [...Object.values(va), ...Object.values(vb)].map((x) => JSON.stringify(x));
+  return all.length > 0 && all.every((x) => x === all[0]);
+}
+
+function applyNameConflicts(doc, nameConflicts, valueConflicts) {
+  // Stale same-name lines (an earlier union's screen lists) are replaced, not accumulated.
+  doc.hygiene = doc.hygiene.filter((h) => !String(h).startsWith(SAME_NAME_PREFIX));
+  for (const c of nameConflicts) {
+    const parts = c.variants.map((v) => `key ${short(v.key)} = ${JSON.stringify(v.values || {})}` + (v.screens.length ? ` (from ${v.screens.join(", ")})` : ""));
+    doc.hygiene.push(
+      SAME_NAME_PREFIX +
+        `${c.variants.length} different variables are all called '${c.name}'${c.collection ? ` in collection '${c.collection}'` : ""} — ` +
+        parts.join(c.sameValue ? " and " : " vs ") + ". " +
+        (c.sameValue
+          ? "They resolve identically, so a theme emits them once, but they are still two variables."
+          : "They resolve DIFFERENTLY. Both are kept here (keyed by Figma key), but anything that looks a token up by NAME gets one of them — " +
+            "generate a screen's theme from that screen's own .vars.json (or design-system/tokens.json), not from this union.")
+    );
+  }
+  const all = valueConflicts.concat(nameConflicts);
+  if (all.length) doc._conflicts = all;
+}
+
 function sliceEntry(slice, doc) {
+  const vars = Array.isArray(doc && doc.variables) ? doc.variables : [];
   return {
     screen: slice.screen,
     file: slice.file,
     at: slice.at || new Date().toISOString(),
-    variables: Array.isArray(doc && doc.variables) ? doc.variables.length : 0,
+    variables: vars.length,
     collections: Array.isArray(doc && doc.collections) ? doc.collections.length : 0,
+    // Which variables THIS pull carried, by key — the provenance a same-name conflict needs to say
+    // which screen each of the two variables came from.
+    keys: [...new Set(vars.map((v) => v && v.key).filter((k) => typeof k === "string" && k))].sort(),
   };
 }
 
-module.exports = { mergeVariablesDoc, varId, collId, MERGE_NOTE };
+module.exports = { mergeVariablesDoc, sameNameConflicts, varId, collId, MERGE_NOTE };
