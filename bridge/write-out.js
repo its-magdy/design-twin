@@ -342,6 +342,10 @@ function writeScreen(outDir, r, log) {
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
   const assets = writeAssets(dir, r.assets, log);
   const assetIndex = writeScreenAssets(dir, paths, r.assets);
+  // Finding 30 / acceptance criterion 10: a screen whose icons largely fell back to raw geometry
+  // (figma-plugin/src/assets.ts geometryOf) instead of a real SVG export gets a warning AT PULL TIME,
+  // not only if someone happens to go looking in manifest.assetsGeometry later.
+  if (log) { const gw = assetsGeometryWarning(r.screen && r.screen.manifest); if (gw) log(gw); }
 
   // The entry a consumer reads instead of guessing filenames. Every sibling this pull produced is a
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that

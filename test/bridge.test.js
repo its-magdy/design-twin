@@ -2290,6 +2290,24 @@ async function disconnectErr(code, reason) {
     ok("[geometry-warn] a low ratio produces nothing",
       writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) === null);
   }
+  {
+    // Criterion 10, end to end: writeScreen() itself must surface the warning through `log` — not just
+    // the standalone helper — since that is what a real `dtwin pull` actually calls.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-geo-e2e-"));
+    const r = {
+      screenName: "Icons",
+      screen: {
+        exportedAt: "2026-01-01T00:00:00Z",
+        screen: "Icons",
+        nodes: [{ id: "1:1", type: "FRAME", name: "Icons" }],
+        manifest: { nodes: 100, assetsGeometry: 40 },
+      },
+    };
+    const lines = [];
+    writeOut.writeScreen(dir, r, (m) => lines.push(m));
+    ok("[geometry-warn] writeScreen() logs the geometry-fallback warning at pull time",
+      lines.some((l) => /assetsGeometry|fell back to raw geometry/.test(l)));
+  }
 
   // ---------------------------------------------------------------- P5: design-diff.js asset-hash tolerance (findings 25/222)
   console.log("\ndesign-diff.js — SVG re-export noise tolerance (findings 25/222), on the REAL arrow-down*.svg fixtures:");

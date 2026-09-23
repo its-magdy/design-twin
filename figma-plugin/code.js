@@ -38,6 +38,70 @@
       function safe2(id) {
         return String(id).replace(/[^a-zA-Z0-9]/g, "_");
       }
+      function firstByName(node, name) {
+        if (!node || typeof node !== "object") return null;
+        if (node.name === name) return node;
+        for (const c of node.children || []) {
+          const found = firstByName(c, name);
+          if (found) return found;
+        }
+        return null;
+      }
+      var PLACEHOLDER_TEXT = /* @__PURE__ */ new Set(["text", "label"]);
+      function firstText(node) {
+        if (!node || typeof node !== "object") return null;
+        if (node.type === "TEXT" && typeof node.text === "string") {
+          const t = node.text.trim();
+          if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
+        }
+        for (const c of node.children || []) {
+          const found = firstText(c);
+          if (found) return found;
+        }
+        return null;
+      }
+      function firstNamedText(node, name) {
+        if (!node || typeof node !== "object") return null;
+        if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
+          return node.text;
+        }
+        for (const c of node.children || []) {
+          const found = firstNamedText(c, name);
+          if (found) return found;
+        }
+        return null;
+      }
+      function deriveTitle(root) {
+        const slot = firstByName(root, "Page Title");
+        if (slot) {
+          const named = firstNamedText(slot, "Title");
+          if (named) return named;
+          const anyText = firstText(slot);
+          if (anyText) return anyText;
+        }
+        const fallback = firstText(root);
+        return fallback || void 0;
+      }
+      function collectTexts(root, limit) {
+        const n = limit || 8;
+        const seen = /* @__PURE__ */ new Set();
+        const out = [];
+        (function walk(node) {
+          if (!node || typeof node !== "object" || out.length >= n) return;
+          if (node.type === "TEXT" && typeof node.text === "string") {
+            const t = node.text.trim();
+            if (t && !seen.has(t)) {
+              seen.add(t);
+              out.push(t);
+            }
+          }
+          for (const c of node.children || []) {
+            if (out.length >= n) break;
+            walk(c);
+          }
+        })(root);
+        return out;
+      }
       function buildPageLayout2(layersDoc, sep) {
         const { layers, index, ...meta } = layersDoc || {};
         const join = (...parts) => ["pages"].concat(parts).join(sep);
@@ -71,9 +135,12 @@
             path: join(bucket.dir, base),
             data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources }
           });
-          bucket.entries.push({ ...(index || [])[i], file: join(bucket.dir, base) });
+          const title = l.tree ? deriveTitle(l.tree) : void 0;
+          const texts = l.tree ? collectTexts(l.tree) : void 0;
+          bucket.entries.push({ ...(index || [])[i], title, texts, file: join(bucket.dir, base) });
         });
         meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+        meta.layers = pages.flatMap((b) => b.entries);
         const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
         return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
       }
@@ -104,13 +171,19 @@
         layers.push(entry);
         return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
       }
-      function mergeRootIndex(prev, paths, layerCount) {
+      function mergeRootIndex(prev, paths, layerCount, entry) {
         const base = prev && typeof prev === "object" ? prev : {};
         const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
         pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-        return Object.assign({}, base, { pageDirs });
+        const result = Object.assign({}, base, { pageDirs });
+        if (entry) {
+          const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+          layers.push(entry);
+          result.layers = layers;
+        }
+        return result;
       }
-      module.exports = { buildPageLayout: buildPageLayout2, screenPaths, mergeScreenIndex, mergeRootIndex, safe: safe2, NO_PAGE_DIR };
+      module.exports = { buildPageLayout: buildPageLayout2, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe: safe2, NO_PAGE_DIR };
     }
   });
 
