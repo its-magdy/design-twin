@@ -196,12 +196,46 @@ var require_component_match = __commonJS({
   }
 });
 
+// design-to-code/hidden.js
+var require_hidden = __commonJS({
+  "design-to-code/hidden.js"(exports2, module2) {
+    var hiddenSelf = (node) => !!(node && typeof node === "object" && node.hidden);
+    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+    function walkWithHidden(root, fn, opts) {
+      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+      (function go(node, parentHidden, path2, parent, depth) {
+        if (!node || typeof node !== "object") return;
+        const hidden = isHidden(node, parentHidden);
+        fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
+        const kids = Array.isArray(node.children) ? node.children : [];
+        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+      })(root, false, root && pathOf(root, 0), null, 0);
+    }
+    function hiddenIds(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && n.id) out.push(n.id);
+      });
+      return out;
+    }
+    function hiddenRoots(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && !c.parentHidden) out.push(n);
+      });
+      return out;
+    }
+    module2.exports = { hiddenSelf, isHidden, walkWithHidden, hiddenIds, hiddenRoots };
+  }
+});
+
 // design-to-code/plan-skeleton.js
 var require_plan_skeleton = __commonJS({
   "design-to-code/plan-skeleton.js"(exports2, module2) {
     var fs2 = require("fs");
     var path2 = require("path");
     var { matchByNameAndSignature, parseVariant } = require_component_match();
+    var { walkWithHidden } = require_hidden();
     var USAGE2 = [
       "usage: node plan-skeleton.js <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]",
       "",
@@ -240,14 +274,14 @@ var require_plan_skeleton = __commonJS({
       return [];
     }
     function walkNodes(doc, visit) {
-      const go = (n, parent, hiddenAbove, insideInstance) => {
-        if (!n || typeof n !== "object") return;
-        const hidden = hiddenAbove || n.hidden === true;
-        visit(n, { parent, hidden, hiddenRoot: n.hidden === true && !hiddenAbove, insideInstance });
-        const inInst = n.type === "INSTANCE" ? n.id : insideInstance;
-        for (const c of n.children || []) go(c, n, hidden, inInst);
-      };
-      for (const r of rootsOf2(doc)) go(r, null, false, null);
+      const instAbove = /* @__PURE__ */ new Map();
+      for (const r of rootsOf2(doc)) {
+        walkWithHidden(r, (n, c) => {
+          const above = c.parent ? c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null : null;
+          instAbove.set(n, above);
+          visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
+        });
+      }
     }
     function visibility2(doc) {
       const visible = /* @__PURE__ */ new Map(), hidden = /* @__PURE__ */ new Set(), hiddenRoots = [];

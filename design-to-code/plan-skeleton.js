@@ -24,8 +24,9 @@
 //                 mapped ancestor, so a 12-row `.map()` or a reused shell needs one entry, not twelve.
 //   hidden[]      the roots of every hidden subtree (`hidden: true`), with how many nodes each hides.
 //
-// Hidden predicate — the ONE rule, shared with verify-build.js: a node is hidden when it or any
-// ancestor carries `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
+// Hidden predicate — the ONE rule (design-to-code/hidden.js, shared with verify-screen/audit/drift-lint
+// and, through visibility() below, verify-build.js): a node is hidden when it or any ancestor carries
+// `"hidden": true`. Never `visible === false`: `"visible"` is also a component PROPERTY
 // name in this export (`"visible": "Show Breadcrumb"`), finding 34.
 //
 // Output is deterministic (no timestamps of its own), so a re-run diffs cleanly. With --out on an
@@ -36,6 +37,7 @@
 const fs = require("fs");
 const path = require("path");
 const { matchByNameAndSignature, parseVariant } = require("./component-match");
+const { walkWithHidden } = require("./hidden");
 
 const USAGE = [
   "usage: node plan-skeleton.js <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]",
@@ -73,16 +75,18 @@ function rootsOf(doc) {
   return [];
 }
 
-// Walk every node with its ancestry and hidden state. `hidden` = own `hidden: true` OR a hidden ancestor.
+// Walk every node with its ancestry and hidden state, through the ONE shared predicate (hidden.js:
+// the node or an ancestor carries `hidden`; never `visible`). `insideInstance` is the nearest INSTANCE
+// above the node — its internals belong to that component.
 function walkNodes(doc, visit) {
-  const go = (n, parent, hiddenAbove, insideInstance) => {
-    if (!n || typeof n !== "object") return;
-    const hidden = hiddenAbove || n.hidden === true;
-    visit(n, { parent, hidden, hiddenRoot: n.hidden === true && !hiddenAbove, insideInstance });
-    const inInst = n.type === "INSTANCE" ? n.id : insideInstance;
-    for (const c of n.children || []) go(c, n, hidden, inInst);
-  };
-  for (const r of rootsOf(doc)) go(r, null, false, null);
+  const instAbove = new Map();
+  for (const r of rootsOf(doc)) {
+    walkWithHidden(r, (n, c) => {
+      const above = c.parent ? (c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null) : null;
+      instAbove.set(n, above);
+      visit(n, { parent: c.parent, hidden: c.hidden, hiddenRoot: c.hidden && !c.parentHidden, insideInstance: above });
+    });
+  }
 }
 
 // { visible: Map(id -> {node, parentId}), hidden: Set(id), hiddenRoots: [...] }
