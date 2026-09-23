@@ -239,8 +239,8 @@ those. Turn them into the stack's own theme file once, instead of re-mapping val
 3. `design/export/variables.json` (the union of every pull) only when you need every screen's tokens
    in one file, and then read its `_conflicts` first.
 
-Why not the union by default: names repeat across screens' libraries. livetest-3's union held two
-`Space 4` — 24 (the design system's) and 16 (one screen's local copy); a theme generated from the
+Why not the union by default: names repeat across screens' libraries. A union can hold two
+`Space 4` — say 24 (the design system's) and 16 (one screen's local copy); a theme generated from the
 union cannot give both screens the plain `space-4`, so each is emitted under its key
 (`space-4-e26d506e`, `space-4-64928e3a`) and the screen that binds 24 must pick that one. Generated from
 that screen's own `.vars.json`, it is simply `space-4: 24px`.

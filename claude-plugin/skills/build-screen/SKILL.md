@@ -76,16 +76,11 @@ its export directly in `design/` — every path below works either way, just dro
   means, because the choice changes values: `design/export/design-system/tokens.json` when it exists
   (the library's own definitions); else the screen's own `…__<id>.vars.json`; the merged
   `design/export/variables.json` only when you need every screen at once. The union can hold two
-  variables with one name (livetest-3: `Space 4` = 24 and = 16); tokens.js then emits both, each
-  suffixed with its key, and warns — the screen's own `.vars.json` gives the plain name its real
-  value. On a native stack add `--native <profile>`
-  (swiftui / android-compose / flutter / react-native): it also writes ONE token source file
-  (`DesignTokens.swift` / `.kt`, `design_tokens.dart`, `designTokens.ts`) with every mode resolved, in
-  the platform's own theming shape. On **Tailwind v4** add `--web tailwind` for the same deal on the
-  web: `theme.css` with an `@theme` block whose variables sit under the namespaces Tailwind turns into
-  utilities — inside a `figma-` sub-namespace (`--radius-figma-xl` → `rounded-figma-xl`,
-  `--spacing-figma-space-4` → `p-figma-space-4`, `--color-figma-…` → `bg-figma-…`), so Tailwind's own
-  `rounded-xl`/`p-4` keep their framework values — plus a `[data-theme="…"]` block per non-default mode.
+  different variables with one name and different values (say `Space 4` = 24 and = 16); tokens.js
+  then emits both, each suffixed with its key, and warns — the screen's own `.vars.json` gives the
+  plain name its real value. Add the flag your profile names to also get ONE theme source file in the
+  stack's own shape (`--native <profile>` on a native stack; the web profiles say which `--web`
+  target and what the generated names look like).
 - **`design/audit/<screen>.json|md`** — the pre-build audit, if run. Read its `crossFile` section
   first: it answers whether this screen even comes from the design system sitting beside it.
 - **`design/target.json`** — which stack to emit. `dtwin init` always writes it; `profile: null` means
@@ -276,9 +271,9 @@ Copy this checklist into your notes and keep it updated:
      (same hex/value or token name actually found by grep — not "closest existing token") or
      **MISSING**. On a project that has **no** token source of its own yet, don't hand-write one
      per screen — two screens built in separate sessions then disagree about what `color/primary` is
-     called. Generate it once: `tokens.js … --native <profile>` on a native stack, `tokens.js …
-     --web tailwind` on Tailwind v4 (`theme.css`, an `@theme` block — do not hand-write one from the
-     bound token names), or plain `tokens.css` for CSS Modules/vanilla CSS. Feed it the design
+     called. Generate it once with `tokens.js …` — `--native <profile>` on a native
+     stack, the `--web` target your web profile names, no flag for plain `tokens.css` — rather than
+     hand-writing a theme from the bound token names. Feed it the design
      system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
      whose repeated names come out key-suffixed (see *Where everything is*). Move the file into the
      app's source tree (ask where), list it in `files[]`, and have every screen import it; a project
@@ -313,7 +308,7 @@ Copy this checklist into your notes and keep it updated:
    **Names come from Figma, not from you.** A token's `value` is what it resolves to in the one mode
    this screen was exported in. Its **name is what it actually is**, and that name is the designer's,
    carried in the export — use it. Derive the code identifier from it mechanically (`Schemes/On
-   Primary` → `on-primary` / `onPrimary` / `--color-figma-schemes-on-primary`, per the profile) so anyone
+   Primary` → `on-primary` / `onPrimary`, in whatever form the profile gives) so anyone
    can read the name in either direction and land on the same token. The same goes for component names
    (the Figma component / `figma.name` in `design/codeconnect.local.json`). Assets follow the same rule and
    now make it easy: an exported file is named after its own Figma layer (`icons/linear/arrow-down` →
