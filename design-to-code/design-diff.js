@@ -256,8 +256,33 @@ function diffHygiene(oldDoc, newDoc) {
   return { kind: "hygiene", summary: { added: added.length, removed: removed.length, changed: 0 }, warnings: [], added, removed, changed: [] };
 }
 
+// The design-system MANIFEST (design-system.json — bridge/design-system-layout.js's MANIFEST file):
+// `{ exportedAt, file, colorProfile, files: {<key>: <path>}, counts: {<key>: <number>} }`. Not an
+// array of records like every other design-system file, so it gets a flat field diff rather than a
+// keyed one — the addendum to finding 312: sync-design step 4 lists this file among the nine, so
+// `--snapshot design/export/design-system.json` followed by a diff must not be the one command left
+// exiting 2 with "nothing here can be diffed". `exportedAt` is ignored (a timestamp, not a design
+// fact); everything else — `file` (which Figma file this design system came from), `colorProfile`,
+// every `files.*` pointer and every `counts.*` number — is a real, if coarse, signal: `counts.hygiene`
+// climbing is "more lint warnings appeared" without opening hygiene.json, `counts.components` dropping
+// is components removed, etc.
+const MANIFEST_IGNORED = new Set(["exportedAt"]);
+function diffManifest(oldDoc, newDoc) {
+  const fields = [];
+  for (const key of new Set([...Object.keys(oldDoc || {}), ...Object.keys(newDoc || {})])) {
+    if (MANIFEST_IGNORED.has(key)) continue;
+    fields.push(...fieldDiffs(key, (oldDoc || {})[key], (newDoc || {})[key], "manifest"));
+  }
+  return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
+}
+
 const isTokens = (doc) => Array.isArray(doc && doc.variables);
 const isCatalog = (doc) => Array.isArray(doc && doc.components);
+// Checked AFTER tokens/catalog/styles/hygiene (none of which this can also match — none of THEM carry
+// both `counts` and `files` as plain objects) so ordering is safe either way, but kept last among the
+// design-system kinds since it is the least specific shape (an object with two nested objects).
+const isManifest = (doc) => !!doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts)
+  && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
 const isStyles = (doc) => Array.isArray(doc && doc.styles);
 const isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
 const isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || (doc.tree && typeof doc.tree === "object"));
@@ -267,7 +292,8 @@ function diffDocs(oldDoc, newDoc, opts) {
   if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
   if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
   if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  throw new Error("not a screen export, a token file, a component catalog, a style sheet or hygiene.json (no `tree`/`nodes`, `variables`, `components`, `styles` or `hygiene` at the top level) — nothing here can be diffed");
+  if (isManifest(newDoc)) return diffManifest(oldDoc, newDoc);
+  throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) — nothing here can be diffed");
 }
 function markdown(d, label) {
   const s = d.summary, L = [`# What changed — ${label}`, ""];
@@ -300,6 +326,10 @@ function markdown(d, label) {
   if (d.kind === "hygiene") {
     if (d.added.length) L.push("## New warning(s)", ...d.added.map((h) => `- ${h}`), "");
     if (d.removed.length) L.push("## Resolved warning(s)", ...d.removed.map((h) => `- ${h}`), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "manifest") {
+    L.push("## Design system summary changed", ...d.fields.map(line), "");
     return L.join("\n") + "\n";
   }
   if (d.changed.length) L.push("## Changed", ...d.changed.flatMap((c) => [`- **${c.path}** (\`${c.id}\`, ${c.categories.join(" + ")})`, ...c.fields.map(line)]), "");
@@ -569,4 +599,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

@@ -280,30 +280,52 @@ check("markdown renders styles/hygiene kinds without throwing, and names the rig
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
-check("CLI end to end: every one of sync-design step 4's design-system diff commands succeeds on the real fixtures", (() => {
+check("CLI end to end: ALL NINE of sync-design step 4's design-system diff commands succeed on the real fixtures (finding 312, incl. the manifest addendum)", (() => {
   const root = project();
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
-  const files = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"];
-  // tokens.json isn't in the trimmed fixture set (already covered by the tokens tests above) — a
-  // minimal stand-in is enough here, since this check is about the OTHER five exiting cleanly.
+  // The 8 files that live INSIDE design-system/ (bridge/design-system-layout.js's DESIGN_SYSTEM_FILES,
+  // minus the manifest, which lives one level up — finding 320). tokens.json/components.*.json aren't
+  // in the trimmed real-fixture set (tokens.json is already covered by the tokens tests above,
+  // components.*.json by the catalog tests) — minimal stand-ins are enough here, since this check is
+  // about ALL NINE names resolving and diffing, not re-proving each format's own logic again.
+  const inDsDir = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "components.local.json", "components.library.json", "hygiene.json"];
   fs.writeFileSync(path.join(dsDir, "tokens.json"), JSON.stringify({ variables: [] }));
-  for (const f of files.slice(1)) fs.writeFileSync(path.join(dsDir, f), fs.readFileSync(path.join(FIX_DS, f)));
+  fs.writeFileSync(path.join(dsDir, "components.local.json"), JSON.stringify({ components: [] }));
+  fs.writeFileSync(path.join(dsDir, "components.library.json"), JSON.stringify({ components: [] }));
+  for (const f of ["styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"]) {
+    fs.writeFileSync(path.join(dsDir, f), fs.readFileSync(path.join(FIX_DS, f)));
+  }
+  // The manifest (design-system.json) at the export ROOT — real fixture, from the same livetest-4 export.
+  fs.writeFileSync(path.join(root, "design", "export", "design-system.json"), fs.readFileSync(path.join(__dirname, "fixtures", "livetest4", "design-system.json")));
+  const allNine = [...inDsDir.map((f) => path.join("design", "export", "design-system", f)), path.join("design", "export", "design-system.json")];
+
   let allOk = true;
-  for (const f of files) {
-    const rel = path.join("design", "export", "design-system", f);
+  for (const rel of allNine) {
     const r = cli(root, rel);
     if (r.status !== 0 && !(r.status === 2 && /no snapshot/.test(r.stderr))) allOk = false; // first run has no baseline yet — that's a separate, already-tested exit 2
   }
-  // Now snapshot + re-run: this is the real step-4 shape (snapshot in step 2, diff after step 3's re-pull).
-  cli(root, "--snapshot", ...files.map((f) => path.join("design", "export", "design-system", f)));
+  // Snapshot ONLY the manifest (mirrors the addendum's own repro: "on a copy of the livetest-4 export,
+  // after --snapshot of all nine files") — siblingFilesOf() must pull in the other 8 on its own, and
+  // (finding 320) must never print a spurious "not found" for any of them, since every one of them is
+  // right there on disk.
+  const snap = cli(root, "--snapshot", path.join("design", "export", "design-system.json"));
+  const spuriousNotFound = /not found — nothing to snapshot/.test(snap.stderr);
+
   let allDiffOk = true;
-  for (const f of files) {
-    const rel = path.join("design", "export", "design-system", f);
+  for (const rel of allNine) {
     const r = cli(root, rel);
     if (r.status !== 0) allDiffOk = false;
   }
-  return allOk && allDiffOk;
+  return allOk && snap.status === 0 && !spuriousNotFound && allDiffOk;
+})());
+check("diffManifest: a counts/files change is a keyed field diff, exportedAt is ignored", (() => {
+  const a = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "livetest4", "design-system.json"), "utf8"));
+  const b = clone(a);
+  b.exportedAt = "2099-01-01T00:00:00Z"; // must NOT show up as a change on its own
+  b.counts.hygiene = a.counts.hygiene + 3;
+  const d = diffDocs(a, b);
+  return d.kind === "manifest" && d.summary.changed === 1 && d.fields.length === 1 && d.fields[0].field === "counts.hygiene";
 })());
 
 report();

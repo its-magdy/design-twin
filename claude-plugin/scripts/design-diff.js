@@ -343,11 +343,11 @@ var require_design_system_layout = __commonJS({
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
-    function isManifest(doc, payloadKey) {
+    function isManifest2(doc, payloadKey) {
       return !!(doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
     }
     function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
-      if (isManifest(doc, payloadKey)) {
+      if (isManifest2(doc, payloadKey)) {
         console.error(
           `error  '${givenPath}' is the design-system MANIFEST (a pointer map), not the '${payloadKey}' catalog.
        Since the design-system split it carries only a stamp, a \`files\` map and \`counts\`.
@@ -375,7 +375,7 @@ var require_catalog_input = __commonJS({
       }
     }
     var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
-    module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+    module2.exports = { assertNotManifest, isManifest: isManifest2, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
 
@@ -609,8 +609,18 @@ function diffHygiene(oldDoc, newDoc) {
   const removed = [...A].filter((h) => !B.has(h));
   return { kind: "hygiene", summary: { added: added.length, removed: removed.length, changed: 0 }, warnings: [], added, removed, changed: [] };
 }
+var MANIFEST_IGNORED = /* @__PURE__ */ new Set(["exportedAt"]);
+function diffManifest(oldDoc, newDoc) {
+  const fields = [];
+  for (const key of /* @__PURE__ */ new Set([...Object.keys(oldDoc || {}), ...Object.keys(newDoc || {})])) {
+    if (MANIFEST_IGNORED.has(key)) continue;
+    fields.push(...fieldDiffs(key, (oldDoc || {})[key], (newDoc || {})[key], "manifest"));
+  }
+  return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
+}
 var isTokens = (doc) => Array.isArray(doc && doc.variables);
 var isCatalog = (doc) => Array.isArray(doc && doc.components);
+var isManifest = (doc) => !!doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts) && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
 var isStyles = (doc) => Array.isArray(doc && doc.styles);
 var isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
 var isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || doc.tree && typeof doc.tree === "object");
@@ -620,7 +630,8 @@ function diffDocs(oldDoc, newDoc, opts) {
   if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
   if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
   if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  throw new Error("not a screen export, a token file, a component catalog, a style sheet or hygiene.json (no `tree`/`nodes`, `variables`, `components`, `styles` or `hygiene` at the top level) \u2014 nothing here can be diffed");
+  if (isManifest(newDoc)) return diffManifest(oldDoc, newDoc);
+  throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) \u2014 nothing here can be diffed");
 }
 function markdown(d, label) {
   const s = d.summary, L = [`# What changed \u2014 ${label}`, ""];
@@ -653,6 +664,10 @@ function markdown(d, label) {
   if (d.kind === "hygiene") {
     if (d.added.length) L.push("## New warning(s)", ...d.added.map((h) => `- ${h}`), "");
     if (d.removed.length) L.push("## Resolved warning(s)", ...d.removed.map((h) => `- ${h}`), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "manifest") {
+    L.push("## Design system summary changed", ...d.fields.map(line), "");
     return L.join("\n") + "\n";
   }
   if (d.changed.length) L.push("## Changed", ...d.changed.flatMap((c) => [`- **${c.path}** (\`${c.id}\`, ${c.categories.join(" + ")})`, ...c.fields.map(line)]), "");
@@ -897,4 +912,4 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   } else process.stdout.write(text);
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
