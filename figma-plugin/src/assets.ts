@@ -1,6 +1,6 @@
 // Rendering nodes to assets: vector/icon -> SVG, image-fill -> PNG, whole-frame reference PNG,
 // and Dev-Mode resource links.
-import { Obj, safe, toBase64, errMsg, round } from "./util";
+import { Obj, safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
 import { Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
 import { checkCancelled, progress } from "./progress";
 
@@ -29,39 +29,20 @@ const ASSET_DIR = "assets/";
 
 // Figma's own SVG export is not bit-reproducible: re-exporting the SAME icon, with NOTHING changed in
 // the design, comes back with different floating-point path coordinates (measured ≤0.002px drift —
-// findings 25/222, e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
-// d="…8.7793 …4.97596…", the same icon exported twice). Hashing the raw SVG text made every re-pull
-// with zero design changes report a fresh batch of "changed" assets, and made two genuinely identical
-// icons dedupe-fail (finding 24).
-//
-// Rounding every numeric token in the `d`/coordinate attributes absorbs that noise before hashing —
-// but the round-trip target matters more than the label "2 vs 1 decimal place" suggests. Tried
-// rounding to 2 decimals (~0.01px) FIRST: it does NOT reliably collapse the drift, because two
-// legitimately identical re-exports can straddle a rounding boundary — 4.97401 rounds to 4.97 but
-// 4.97596 (0.00195 away — well inside the ≤0.002px drift budget) rounds to 4.98, so the "same" icon
-// split into two hashes anyway. Verified against the real eight `arrow-down*.svg` variants
-// (test/fixtures/livetest3/arrow-down/, from a real Figma export) with a small script before changing
-// this: 1 decimal place (~0.1px — still an order of magnitude below anything a human would call
-// "moved", and two orders below a real repositioning) is the coarsest rounding that does NOT itself
-// introduce a boundary split on this data, and it correctly separates the THREE genuinely different
-// icons among those eight files (two icon designs sharing the "arrow-down" name, one with real
-// per-pull re-export noise each, plus one visually distinct `arrow-down.svg`).
+// findings 25/222). Hashing the raw SVG text made every re-pull with zero design changes report a
+// fresh batch of "changed" assets, and made two genuinely identical icons dedupe-fail (finding 24).
+// `normalizeSvgText` (bridge/svg-normalize.js, re-exported via ./util — see its header for why 1
+// decimal place, not 2) is the ONE shared definition of "same SVG, modulo export noise", used here AND
+// by bridge/write-out.js AND design-to-code/design-diff.js so the three cannot silently disagree.
 // PNG/base64 assets are untouched: they have no textual coordinate space to normalise, and their
 // pixels really do change when Figma recompresses them, which is legitimate signal, not noise.
-const NUM_RE = /-?\d+\.\d+/g;
-function normalizeSvgForHash(svg: string): string {
-  return svg.replace(NUM_RE, (m) => {
-    const n = Number(m);
-    return Number.isFinite(n) ? n.toFixed(1) : m;
-  });
-}
 
 // FNV-1a, 32-bit. Not a cryptographic hash and does not need to be — it decides whether two byte
 // strings in ONE export are the same, and a collision would at worst reuse one icon for another
 // (which the length check below makes vanishingly unlikely). The Figma plugin sandbox has no
 // crypto.subtle, so this is also the only option that does not cost a round trip.
 function contentHash(a: { base64?: string; text?: string }): string {
-  const src = a.text != null ? normalizeSvgForHash(a.text) : a.base64 != null ? a.base64 : "";
+  const src = a.text != null ? normalizeSvgText(a.text) : a.base64 != null ? a.base64 : "";
   let h = 0x811c9dc5;
   for (let i = 0; i < src.length; i++) {
     h ^= src.charCodeAt(i);

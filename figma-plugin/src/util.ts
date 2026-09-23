@@ -20,6 +20,11 @@ export const propName = (k: string): string => k.split("#")[0]; // strip Figma's
 // CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
 export { errMsg } from "../../bridge/errmsg.js";
 
+// "Same SVG, modulo Figma's own export noise" — the ONE definition shared with bridge/write-out.js
+// (clobber-avoidance) and design-to-code/design-diff.js (the change diff), so all three agree on what
+// counts as a redraw. See bridge/svg-normalize.js for why 1 decimal place, not 2.
+export { normalizeSvgText } from "../../bridge/svg-normalize.js";
+
 // The extractor's compaction rule: emit nothing rather than an empty object. One place to change it.
 export const nonEmpty = (o: Obj): Obj | undefined => (Object.keys(o).length ? o : undefined);
 

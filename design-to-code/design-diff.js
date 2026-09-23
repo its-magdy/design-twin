@@ -35,7 +35,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 
 const CATEGORY = {
@@ -271,26 +270,19 @@ function snapshotPath(file, cwd = process.cwd()) {
 //
 // Figma's SVG export is not bit-reproducible (findings 25/222): re-exporting the SAME icon with
 // NOTHING changed in the design comes back with different floating-point path coordinates, ≤0.002px
-// apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull. This is the
-// SAME normalisation figma-plugin/src/assets.ts applies before its own content-hash — round every
-// numeric token to 1 decimal place (~0.1px). See that file's comment for why 1 decimal, not 2: two
-// legitimately identical re-exports can straddle a 2-decimal rounding boundary (4.97401 -> 4.97 vs
+// apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull.
+// `normalizeForCompare`/`sha1Hex` (bridge/asset-compare.js, built on bridge/svg-normalize.js) are the
+// SAME shared implementation figma-plugin/src/assets.ts's content-hash and bridge/write-out.js's
+// clobber-avoidance both use — one definition of "same SVG, modulo export noise", not three that could
+// silently disagree. See svg-normalize.js for why the tolerance is 1 decimal place (~0.1px), not 2:
+// two legitimately identical re-exports can straddle a 2-decimal rounding boundary (4.97401 -> 4.97 vs
 // 4.97596 -> 4.98, only 0.00195 apart) and split into different hashes anyway — verified against the
 // real eight arrow-down*.svg variants in test/fixtures/livetest3/arrow-down/, which are the fixture
-// for this exact tolerance choice. 1 decimal is still two orders of magnitude below a real
-// repositioning and correctly keeps the three genuinely different icons among those eight apart.
-// Non-SVG bytes (PNG) are hashed as-is: they have no textual coordinate space to normalise, and a
-// changed pixel there is real signal.
-const SVG_NUM_RE = /-?\d+\.\d+/g;
-function normalizeSvgBytes(buf) {
-  const text = buf.toString("utf8");
-  const normalized = text.replace(SVG_NUM_RE, (m) => { const n = Number(m); return Number.isFinite(n) ? n.toFixed(1) : m; });
-  return Buffer.from(normalized, "utf8");
-}
+// for this exact tolerance choice.
+const { normalizeForCompare, sha1Hex } = require("../bridge/asset-compare.js");
 function hashAssetBytes(fileName, buf) {
-  return sha(/\.svg$/i.test(fileName) ? normalizeSvgBytes(buf) : buf);
+  return sha1Hex(normalizeForCompare(fileName, buf));
 }
-const sha = (buf) => crypto.createHash("sha1").update(buf).digest("hex");
 function assetPaths(doc) {
   const out = new Set();
   const walk = (n) => { if (!n || typeof n !== "object") return; if (typeof n.asset === "string") out.add(n.asset); for (const k of Array.isArray(n.children) ? n.children : []) walk(k); };
@@ -365,6 +357,44 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   return { ...useful[0], notes };
 }
 
+// Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file
+// this returns that doesn't exist is simply skipped by the --snapshot loop (`fs.existsSync` check
+// already there), the same as a caller-requested file that isn't there yet.
+const { DESIGN_SYSTEM_FILES } = require("../bridge/design-system-layout.js");
+const DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+function siblingFilesOf(f) {
+  const abs = path.resolve(f);
+  const dir = path.dirname(abs);
+  const base = path.basename(abs);
+  const out = [];
+  if (DS_FILE_NAMES.includes(base)) {
+    // design-system/{tokens,styles.*,components.*,hygiene,design-system}.json — all 9 live flat in
+    // the same design-system/ directory (bridge/design-system-layout.js), so every sibling is just
+    // "the other names in this same dir".
+    for (const name of DS_FILE_NAMES) if (name !== base) out.push(path.relative(process.cwd(), path.join(dir, name)));
+    return out;
+  }
+  // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
+  // exact same stem (bridge/pages-layout.js's naming — see design/README.md's template).
+  const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
+  if (m) {
+    for (const suf of [".vars.json", ".assets.json"]) {
+      const p = path.join(dir, m + suf);
+      if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
+    }
+  }
+  // pages/index.json — the root index one level above the <Page> directory a screen file lives in.
+  // Read-only evidence for the diff to consult, never a diff TARGET on its own, but worth having a
+  // baseline for so a future consumer can tell "this screen used to be indexed differently".
+  const pageDir = dir;
+  const pagesDir = path.dirname(pageDir);
+  if (path.basename(pagesDir) === "pages") {
+    const idx = path.join(pagesDir, "index.json");
+    if (fs.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+  }
+  return out;
+}
+
 function main(argv) {
   const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); process.exit(argv.length ? 0 : 2); }
@@ -373,8 +403,22 @@ function main(argv) {
   if (unknown.length) { console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})\n${USAGE}`); process.exit(2); }
   if (argv[0] === "--snapshot") {
     const force = argv.includes("--force");
-    const files = argv.slice(1).filter((a) => a !== "--force");
-    if (!files.length) { console.error(USAGE); process.exit(2); }
+    const requested = argv.slice(1).filter((a) => a !== "--force");
+    if (!requested.length) { console.error(USAGE); process.exit(2); }
+    // Finding 206: a snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
+    // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
+    // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 8
+    // sibling files, so a diff run later against it can't see a change that landed in a sibling (a
+    // token that moved collection, an asset that changed) and the asset sidecar covered "36 of 39
+    // entries" on a real run because assetPaths() only walks the tree, missing anything a sibling
+    // file alone would have recorded. Snapshotting a file now also snapshots its whole sibling set:
+    //   - a screen export -> its .vars.json, its OWN .assets.json (the real per-screen manifest,
+    //     not the synthetic asset-hash sidecar this function writes below), and the pages/index.json
+    //     it is indexed under (read-only evidence, never a diff target itself).
+    //   - any of the 9 design-system/ files -> the other 8 (bridge/design-system-layout.js is the
+    //     one definition of that set, so this can never drift from what a --design-system pull
+    //     actually writes).
+    const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     for (const f of files) {
       if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); continue; }
       const dest = snapshotPath(f);
@@ -400,7 +444,17 @@ function main(argv) {
       }
       if (!identical) fs.copyFileSync(f, dest);
       let n = 0;
-      try { const h = assetHashes(f, JSON.parse(fs.readFileSync(f, "utf8"))).hashes; n = Object.keys(h).length; fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n"); } catch { /* not JSON we understand — the copy is still the snapshot */ }
+      // Only a screen doc ({tree}/{nodes}) has asset paths worth hashing — a sibling like
+      // pages/index.json or a .vars.json/.assets.json copy is JSON but has none, and would otherwise
+      // get a spurious empty "<name>.assets.json" sidecar written beside its own real content.
+      try {
+        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
+        if (isScreen(parsed)) {
+          const h = assetHashes(f, parsed).hashes;
+          n = Object.keys(h).length;
+          fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+        }
+      } catch { /* not JSON we understand — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
     return;

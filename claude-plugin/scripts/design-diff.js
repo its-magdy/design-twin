@@ -9,6 +9,261 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
+// bridge/svg-normalize.js
+var require_svg_normalize = __commonJS({
+  "bridge/svg-normalize.js"(exports2, module2) {
+    "use strict";
+    var NUM_RE = /-?\d+\.\d+/g;
+    function normalizeSvgText(svg) {
+      return svg.replace(NUM_RE, (m) => {
+        const n = Number(m);
+        return Number.isFinite(n) ? n.toFixed(1) : m;
+      });
+    }
+    function isSvgName(fileName) {
+      return /\.svg$/i.test(String(fileName || ""));
+    }
+    module2.exports = { normalizeSvgText, isSvgName };
+  }
+});
+
+// bridge/asset-compare.js
+var require_asset_compare = __commonJS({
+  "bridge/asset-compare.js"(exports2, module2) {
+    "use strict";
+    var { normalizeSvgText, isSvgName } = require_svg_normalize();
+    function normalizeForCompare2(fileName, content) {
+      const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+      if (!isSvgName(fileName)) return buf;
+      return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
+    }
+    function sha1Hex2(buf) {
+      return require("crypto").createHash("sha1").update(buf).digest("hex");
+    }
+    function sameAsset(fileName, a, b) {
+      return Buffer.compare(normalizeForCompare2(fileName, a), normalizeForCompare2(fileName, b)) === 0;
+    }
+    module2.exports = { normalizeForCompare: normalizeForCompare2, sha1Hex: sha1Hex2, sameAsset };
+  }
+});
+
+// bridge/pages-layout.js
+var require_pages_layout = __commonJS({
+  "bridge/pages-layout.js"(exports2, module2) {
+    "use strict";
+    function safe(id) {
+      return String(id).replace(/[^a-zA-Z0-9]/g, "_");
+    }
+    function buildPageLayout(layersDoc, sep) {
+      const { layers, index: index2, ...meta } = layersDoc || {};
+      const join = (...parts) => ["pages"].concat(parts).join(sep);
+      const byPage = /* @__PURE__ */ new Map();
+      const pages = [];
+      const layerFiles = [];
+      const usedDirs = /* @__PURE__ */ new Set();
+      const uniqueDir = (name) => {
+        const base = safe(name) || "page";
+        if (!usedDirs.has(base)) {
+          usedDirs.add(base);
+          return base;
+        }
+        let i = 2;
+        while (usedDirs.has(base + "_" + i)) i++;
+        usedDirs.add(base + "_" + i);
+        return base + "_" + i;
+      };
+      (layers || []).forEach((l, i) => {
+        const pageName = l.page || "(no page)";
+        const key = l.pageId || "name:" + pageName;
+        let bucket = byPage.get(key);
+        if (!bucket) {
+          bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
+          byPage.set(key, bucket);
+          bucket.index = join(bucket.dir, "index.json");
+          pages.push(bucket);
+        }
+        const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+        layerFiles.push({
+          path: join(bucket.dir, base),
+          data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources }
+        });
+        bucket.entries.push({ ...(index2 || [])[i], file: join(bucket.dir, base) });
+      });
+      meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+      const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
+      return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
+    }
+    var NO_PAGE_DIR = "_unfiled";
+    function screenPaths(screenDoc, sep) {
+      const join = (...parts) => ["pages"].concat(parts).join(sep);
+      const page = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
+      const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
+      const dir = page ? safe(page) : NO_PAGE_DIR;
+      const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
+      const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
+      return {
+        page: page || null,
+        pageId: pageId || null,
+        nodeId: nodeId || null,
+        dir,
+        base,
+        screen: join(dir, base + ".json"),
+        variables: join(dir, base + ".vars.json"),
+        assets: join(dir, base + ".assets.json"),
+        index: join(dir, "index.json"),
+        rootIndex: join("index.json")
+      };
+    }
+    function mergeScreenIndex(prev, entry) {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+      layers.push(entry);
+      return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
+    }
+    function mergeRootIndex(prev, paths, layerCount) {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
+      pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
+      return Object.assign({}, base, { pageDirs });
+    }
+    module2.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, safe, NO_PAGE_DIR };
+  }
+});
+
+// bridge/design-system-layout.js
+var require_design_system_layout = __commonJS({
+  "bridge/design-system-layout.js"(exports2, module2) {
+    "use strict";
+    var { safe } = require_pages_layout();
+    var DIR = "design-system";
+    var COMPONENTS_DIR = "components";
+    var TOKENS = "tokens.json";
+    var STYLES_PAINT = "styles.paint.json";
+    var STYLES_TEXT = "styles.text.json";
+    var STYLES_EFFECT = "styles.effect.json";
+    var STYLES_GRID = "styles.grid.json";
+    var COMPONENTS_LOCAL = "components.local.json";
+    var COMPONENTS_LIBRARY = "components.library.json";
+    var HYGIENE = "hygiene.json";
+    var MANIFEST = "design-system.json";
+    function isLibraryEntry(c) {
+      return !!(c && c.remote === true);
+    }
+    function buildDesignSystemLayout(ds, sep) {
+      const d = ds || {};
+      const join = (name) => DIR + (sep || "/") + name;
+      const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
+      const components = Array.isArray(d.components) ? d.components : [];
+      const rawLocal = components.filter((c) => !isLibraryEntry(c));
+      const library = components.filter(isLibraryEntry);
+      const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
+      const usedNames = /* @__PURE__ */ new Set();
+      const uniqueDetailName = (name, id) => {
+        const base = safe(name || "component") + "__" + safe(id);
+        if (!usedNames.has(base)) {
+          usedNames.add(base);
+          return base;
+        }
+        let i = 2;
+        while (usedNames.has(base + "_" + i)) i++;
+        usedNames.add(base + "_" + i);
+        return base + "_" + i;
+      };
+      const componentFiles = [];
+      const local = rawLocal.map((c) => {
+        if (c.type === "COMPONENT" && c.node) {
+          const { node, ...rest } = c;
+          const detailName2 = uniqueDetailName(c.name, c.id);
+          const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
+          componentFiles.push({
+            path: detailPath2,
+            data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
+          });
+          return { ...rest, nodeFile: detailPath2 };
+        }
+        if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
+          return c;
+        }
+        const slimVariants = c.variants.map((v) => {
+          const { node, ...rest } = v || {};
+          return rest;
+        });
+        const detailName = uniqueDetailName(c.name, c.id);
+        const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
+        componentFiles.push({
+          path: detailPath,
+          data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
+        });
+        return { ...c, variants: slimVariants, variantsFile: detailPath };
+      });
+      const styles = d.styles || {};
+      const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
+      const stylesText = Array.isArray(styles.text) ? styles.text : [];
+      const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
+      const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
+      const files = [
+        { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
+        { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
+        { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
+        { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
+        { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
+        { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
+        { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
+        { path: join(HYGIENE), data: { ...stamp, hygiene } },
+        ...componentFiles
+      ];
+      const counts = {
+        collections: (d.collections || []).length,
+        variables: (d.variables || []).length,
+        stylesPaint: stylesPaint.length,
+        stylesText: stylesText.length,
+        stylesEffect: stylesEffect.length,
+        stylesGrid: stylesGrid.length,
+        components: local.length,
+        libraryComponents: library.length,
+        hygiene: hygiene.length
+      };
+      const manifest = {
+        ...stamp,
+        files: {
+          tokens: join(TOKENS),
+          stylesPaint: join(STYLES_PAINT),
+          stylesText: join(STYLES_TEXT),
+          stylesEffect: join(STYLES_EFFECT),
+          stylesGrid: join(STYLES_GRID),
+          componentsLocal: join(COMPONENTS_LOCAL),
+          componentsLibrary: join(COMPONENTS_LIBRARY),
+          hygiene: join(HYGIENE)
+        },
+        counts
+      };
+      const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
+      if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
+        manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
+      }
+      files.push({ path: MANIFEST, data: manifest });
+      return { files, manifest, counts, dir: DIR };
+    }
+    module2.exports = {
+      buildDesignSystemLayout,
+      isLibraryEntry,
+      DESIGN_SYSTEM_DIR: DIR,
+      DESIGN_SYSTEM_FILES: {
+        TOKENS,
+        STYLES_PAINT,
+        STYLES_TEXT,
+        STYLES_EFFECT,
+        STYLES_GRID,
+        COMPONENTS_LOCAL,
+        COMPONENTS_LIBRARY,
+        COMPONENTS_DIR,
+        HYGIENE,
+        MANIFEST
+      }
+    };
+  }
+});
+
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
@@ -51,7 +306,6 @@ var require_catalog_input = __commonJS({
 // design-to-code/design-diff.js
 var fs = require("fs");
 var path = require("path");
-var crypto = require("crypto");
 var { execFileSync } = require("child_process");
 var CATEGORY = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
@@ -296,19 +550,10 @@ function snapshotPath(file, cwd = process.cwd()) {
   const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
   return path.join(cwd, "design", ".sync", flat);
 }
-var SVG_NUM_RE = /-?\d+\.\d+/g;
-function normalizeSvgBytes(buf) {
-  const text = buf.toString("utf8");
-  const normalized = text.replace(SVG_NUM_RE, (m) => {
-    const n = Number(m);
-    return Number.isFinite(n) ? n.toFixed(1) : m;
-  });
-  return Buffer.from(normalized, "utf8");
-}
+var { normalizeForCompare, sha1Hex } = require_asset_compare();
 function hashAssetBytes(fileName, buf) {
-  return sha(/\.svg$/i.test(fileName) ? normalizeSvgBytes(buf) : buf);
+  return sha1Hex(normalizeForCompare(fileName, buf));
 }
-var sha = (buf) => crypto.createHash("sha1").update(buf).digest("hex");
 function assetPaths(doc) {
   const out = /* @__PURE__ */ new Set();
   const walk = (n) => {
@@ -386,6 +631,32 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} \u2014 used the newer one, so changes already applied are not listed again.`);
   return { ...useful[0], notes };
 }
+var { DESIGN_SYSTEM_FILES } = require_design_system_layout();
+var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+function siblingFilesOf(f) {
+  const abs = path.resolve(f);
+  const dir = path.dirname(abs);
+  const base = path.basename(abs);
+  const out = [];
+  if (DS_FILE_NAMES.includes(base)) {
+    for (const name of DS_FILE_NAMES) if (name !== base) out.push(path.relative(process.cwd(), path.join(dir, name)));
+    return out;
+  }
+  const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
+  if (m) {
+    for (const suf of [".vars.json", ".assets.json"]) {
+      const p = path.join(dir, m + suf);
+      if (fs.existsSync(p)) out.push(path.relative(process.cwd(), p));
+    }
+  }
+  const pageDir = dir;
+  const pagesDir = path.dirname(pageDir);
+  if (path.basename(pagesDir) === "pages") {
+    const idx = path.join(pagesDir, "index.json");
+    if (fs.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+  }
+  return out;
+}
 function main(argv) {
   const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
@@ -401,11 +672,12 @@ ${USAGE}`);
   }
   if (argv[0] === "--snapshot") {
     const force = argv.includes("--force");
-    const files = argv.slice(1).filter((a) => a !== "--force");
-    if (!files.length) {
+    const requested = argv.slice(1).filter((a) => a !== "--force");
+    if (!requested.length) {
       console.error(USAGE);
       process.exit(2);
     }
+    const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     for (const f of files) {
       if (!fs.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
@@ -437,9 +709,12 @@ ${USAGE}`);
       if (!identical) fs.copyFileSync(f, dest);
       let n = 0;
       try {
-        const h = assetHashes(f, JSON.parse(fs.readFileSync(f, "utf8"))).hashes;
-        n = Object.keys(h).length;
-        fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
+        if (isScreen(parsed)) {
+          const h = assetHashes(f, parsed).hashes;
+          n = Object.keys(h).length;
+          fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+        }
       } catch {
       }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);

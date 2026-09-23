@@ -123,6 +123,24 @@
     }
   });
 
+  // ../bridge/svg-normalize.js
+  var require_svg_normalize = __commonJS({
+    "../bridge/svg-normalize.js"(exports, module) {
+      "use strict";
+      var NUM_RE = /-?\d+\.\d+/g;
+      function normalizeSvgText2(svg) {
+        return svg.replace(NUM_RE, (m) => {
+          const n = Number(m);
+          return Number.isFinite(n) ? n.toFixed(1) : m;
+        });
+      }
+      function isSvgName(fileName) {
+        return /\.svg$/i.test(String(fileName || ""));
+      }
+      module.exports = { normalizeSvgText: normalizeSvgText2, isSvgName };
+    }
+  });
+
   // ../bridge/design-system-layout.js
   var require_design_system_layout = __commonJS({
     "../bridge/design-system-layout.js"(exports, module) {
@@ -355,6 +373,7 @@
   // src/util.ts
   var import_pages_layout = __toESM(require_pages_layout());
   var import_errmsg = __toESM(require_errmsg());
+  var import_svg_normalize = __toESM(require_svg_normalize());
   var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
   var round = (n) => typeof n === "number" ? Math.round(n * 100) / 100 : n;
   var propName = (k) => k.split("#")[0];
@@ -466,15 +485,8 @@
 
   // src/assets.ts
   var ASSET_DIR = "assets/";
-  var NUM_RE = /-?\d+\.\d+/g;
-  function normalizeSvgForHash(svg) {
-    return svg.replace(NUM_RE, (m) => {
-      const n = Number(m);
-      return Number.isFinite(n) ? n.toFixed(1) : m;
-    });
-  }
   function contentHash(a) {
-    const src = a.text != null ? normalizeSvgForHash(a.text) : a.base64 != null ? a.base64 : "";
+    const src = a.text != null ? (0, import_svg_normalize.normalizeSvgText)(a.text) : a.base64 != null ? a.base64 : "";
     let h = 2166136261;
     for (let i = 0; i < src.length; i++) {
       h ^= src.charCodeAt(i);

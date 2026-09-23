@@ -16,6 +16,7 @@ const { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTi
 const { buildDesignSystemLayout } = require("./design-system-layout.js");
 const { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } = require("./library-layout.js");
 const { mergeVariablesDoc } = require("./variables-merge.js");
+const { sameAsset, sha1Hex, normalizeForCompare } = require("./asset-compare.js");
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
@@ -192,14 +193,27 @@ function writeAssets(dir, assets, log, subdir) {
     const priorName = claimed.get(key);
     if (priorName !== undefined) {
       // Something with this name (case-insensitively) is already on disk or already written this
-      // batch. Same bytes -> reuse it silently (this IS the same asset, re-pulled). Different bytes ->
-      // this is a genuinely different asset that collides only in name/case; give the NEW one a
-      // content-hash suffix rather than touch the file that was there first.
-      let same = false;
-      try { same = Buffer.compare(fs.readFileSync(path.join(adir, priorName)), bytes) === 0; } catch (e) { same = false; }
+      // batch. Same asset -> reuse it silently (this IS the same icon, re-pulled). Different asset ->
+      // give the NEW one a content-hash suffix rather than touch the file that was there first.
+      //
+      // "Same" is decided by sameAsset() (bridge/svg-normalize.js), NOT a raw Buffer.compare: a real
+      // re-pull of an unchanged SVG icon drifts sub-pixel on EVERY pull (finding 222 — that is the
+      // NORMAL case, not the exception), so a byte-exact compare would suffix every single re-pull of
+      // every icon (`-<hash6>`, then `_1`, then `_2`…), which is finding 25's "one chevron, eight
+      // files" happening all over again, just inside this function instead of across screens.
+      let priorBytes = null;
+      try { priorBytes = fs.readFileSync(path.join(adir, priorName)); } catch (e) { /* fall through as different */ }
+      const same = priorBytes && sameAsset(baseName, priorBytes, bytes);
       if (same) {
         a.file = dirPrefix + "/" + priorName;
-        n++; // counted as written even though the byte-identical file was left untouched
+        // The manifest (writeScreenAssets, called right after this on the same array) hashes whatever
+        // is in `a.text`/`a.base64` — it must hash what is ACTUALLY ON DISK under `a.file`, or a
+        // normalised-equal-but-byte-different re-pull would record a hash for bytes that were never
+        // written (the exact "recorded hash matches nothing on disk" shape findings 23/104 complain
+        // about, just introduced by this fix instead of fixed by it). Replace with the disk content.
+        if (a.text != null) a.text = priorBytes.toString("utf8");
+        else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
+        n++; // counted as written even though the on-disk file was left untouched
         continue;
       }
       const ext = path.extname(baseName);
@@ -410,16 +424,40 @@ function readJsonOr(file, fallback) {
 // This index answers it directly, and the content hash makes the duplication visible — the same
 // sidebar icon exported once per instance path shows up as several names under one hash, so a
 // consumer can import one file instead of five without diffing bytes itself.
+// Every file's NORMALISED content hash (bridge/svg-normalize.js), over the WHOLE shared assets/
+// directory — not just this pull's own array. `assets/` is explicitly shared and cumulative (see
+// writeAssets' header), so a duplicate between this screen's icon and one a DIFFERENT screen's pull
+// wrote is exactly as real as one within this pull, and finding 27 is precisely that a per-pull-array
+// computation could never see it: "it cannot see the byte-identical Ellipse_2327 pair or the eight
+// chevrons... it is computed from hashes that are already stale for four of the five screens." The
+// clobber-avoidance fix in writeAssets means a NEW duplicate of this shape mostly can't be created
+// going forward (a re-pull of an unchanged icon now reuses the existing file), but files already on
+// disk from before that fix — or two independently-named layers that just happen to render the same
+// icon — still need catching, hence a real directory scan rather than trusting the write history.
+function sharedAssetHashes(assetsDir) {
+  const out = new Map(); // normalised hash -> ["assets/<file>", ...]
+  let names = [];
+  try { names = fs.readdirSync(assetsDir); } catch (e) { return out; }
+  for (const name of names) {
+    let bytes;
+    try { bytes = fs.readFileSync(path.join(assetsDir, name)); } catch (e) { continue; }
+    const hash = sha1Hex(normalizeForCompare(name, bytes));
+    if (!out.has(hash)) out.set(hash, []);
+    out.get(hash).push("assets/" + name);
+  }
+  return out;
+}
+
 function writeScreenAssets(dir, paths, assets) {
   if (!Array.isArray(assets) || !assets.length) return null;
-  const crypto = require("crypto");
-  const byHash = new Map();
+  const shared = sharedAssetHashes(path.join(dir, "assets"));
   const files = [];
   const reference = []; // the frame's own screenshot — see note below on why it's split out
+  const dupHashes = new Set();
   for (const a of assets) {
     if (!a || !a.file) continue;
     const bytes = a.text != null ? Buffer.from(a.text, "utf8") : a.base64 != null ? Buffer.from(a.base64, "base64") : null;
-    const hash = bytes ? crypto.createHash("sha1").update(bytes).digest("hex") : null;
+    const hash = bytes ? sha1Hex(bytes) : null; // exact bytes-on-disk hash (writeAssets keeps a.text/a.base64 in sync with disk on reuse)
     const file = "assets/" + path.basename(a.file);
     const entry = { file, node: a.id, bytes: bytes ? bytes.length : 0, hash };
     if (Array.isArray(a.from) && a.from.length > 1) entry.from = a.from; // one file, several nodes reached it
@@ -431,12 +469,14 @@ function writeScreenAssets(dir, paths, assets) {
     // which exist to answer "how much of this do I actually ship".
     if (a.kind === "reference") { reference.push(entry); continue; }
     files.push(entry);
-    if (hash) {
-      if (!byHash.has(hash)) byHash.set(hash, []);
-      byHash.get(hash).push(file);
-    }
+    const normHash = bytes ? sha1Hex(normalizeForCompare(a.file, bytes)) : null;
+    if (normHash && (shared.get(normHash) || []).length > 1) dupHashes.add(normHash);
   }
-  const duplicates = [...byHash.entries()].filter(([, f]) => f.length > 1).map(([hash, f]) => ({ hash, bytes: (files.find((x) => x.hash === hash) || {}).bytes, files: f }));
+  const duplicates = [...dupHashes].map((hash) => {
+    const group = shared.get(hash);
+    const first = files.find((f) => group.includes(f.file));
+    return { hash, bytes: first ? first.bytes : undefined, files: group };
+  });
   const monochrome = files.filter((f) => f.monochrome).map((f) => f.file);
   const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || f.paths >= BUSY_SVG_PATHS).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths }));
   const doc = {
@@ -448,13 +488,16 @@ function writeScreenAssets(dir, paths, assets) {
     heavy,
     reference: reference.length ? reference : undefined,
     note:
-      "Every SHIPPABLE asset this screen references, with a content hash. Files sharing a hash are " +
-      "byte-identical. `monochrome` lists the SVGs whose every fill/stroke is one colour — those are the " +
-      "ones safe to recolour to currentColor at render time; the rest carry semantic colour (a red trash, " +
-      "a green tick) and must keep it. `heavy` lists assets too large to inline. `reference` (if present) " +
-      "is the frame's own whole-screen screenshot — useful for visual comparison, not something the app " +
-      "ships, so it is excluded from `count`/`totalBytes`. Never edit an exported asset in place: the " +
-      "producer owns these filenames and a re-pull will overwrite them.",
+      "Every SHIPPABLE asset this screen references, with a content hash. `duplicates` is computed over " +
+      "the WHOLE shared assets/ directory (every screen ever pulled), not just this screen's own files, " +
+      "and treats two SVGs as the same asset when they agree modulo Figma's own sub-pixel export noise " +
+      "(bridge/svg-normalize.js) — so it also catches the same icon exported under two different names or " +
+      "in two different pulls. `monochrome` lists the SVGs whose every fill/stroke is one colour — those " +
+      "are the ones safe to recolour to currentColor at render time; the rest carry semantic colour (a red " +
+      "trash, a green tick) and must keep it. `heavy` lists assets too large to inline. `reference` (if " +
+      "present) is the frame's own whole-screen screenshot — useful for visual comparison, not something " +
+      "the app ships, so it is excluded from `count`/`totalBytes`. Never edit an exported asset in place: " +
+      "the producer owns these filenames and a re-pull will overwrite them.",
     files,
   };
   writeJson(dir, paths.assets, doc, true);

@@ -511,12 +511,28 @@ async function disconnectErr(code, reason) {
 
   // outDir is positional, so every value-taking flag above must be excluded from the search — the
   // failure this guards is `--children 131:1879` writing an export into a directory named "131:1879".
+  //
+  // The default outDir itself is CWD-dependent (bridge/project-layout.js's findExportDir walks
+  // process.cwd() looking for an existing flat `design/` export to stay backward-compatible with).
+  // Asserting a literal "design" here silently depended on whichever directory happened to be the
+  // test runner's cwd ALREADY having a legacy-flat `design/` in it — true by accident on some dev
+  // checkouts, false in a clean git worktree (round-2 orchestrator finding: these 4 checks are NOT
+  // pre-existing/environmental, they're a cwd-dependent test in this file's own column). Run `parse()`
+  // from a fresh, empty temp cwd instead, so the default is deterministically LAYOUT.EXPORT_DIR
+  // ("design/export") regardless of where the suite happens to run.
+  const freshCwd = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-argparse-cwd-"));
+  const parseInFreshCwd = (argv) => {
+    const before = process.cwd();
+    process.chdir(freshCwd);
+    try { return pull.parseArgs(argv); } finally { process.chdir(before); }
+  };
+  const LAYOUT = require("../bridge/project-layout.js");
   ok("[args] --children <id> value is not mistaken for outDir", (() => {
-    const r = parse(["--children", "131:1879"]);
-    return r.childrenId === "131:1879" && r.outDir === "design";
+    const r = parseInFreshCwd(["--children", "131:1879"]);
+    return r.childrenId === "131:1879" && r.outDir === LAYOUT.EXPORT_DIR;
   })());
-  ok("[args] --timeout value is not mistaken for outDir", parse(["--timeout", "600"]).outDir === "design");
-  ok("[args] --page value is not mistaken for outDir", parse(["--page", "1:2"]).outDir === "design");
+  ok("[args] --timeout value is not mistaken for outDir", parseInFreshCwd(["--timeout", "600"]).outDir === LAYOUT.EXPORT_DIR);
+  ok("[args] --page value is not mistaken for outDir", parseInFreshCwd(["--page", "1:2"]).outDir === LAYOUT.EXPORT_DIR);
   ok("[args] a real positional outDir is still picked up", parse(["out", "--page", "1:2"]).outDir === "out");
   ok("[args] outDir works AFTER a value flag too", parse(["--page", "1:2", "out"]).outDir === "out");
 
@@ -548,8 +564,8 @@ async function disconnectErr(code, reason) {
   // (peek) and --screenshot (PNG only), so it must accept the same id shapes --children does and join
   // the scopes/indexCmds mutual-exclusion guards below rather than living in its own lane.
   ok("[args] --node <id> value is not mistaken for outDir", (() => {
-    const r = parse(["--node", "131:1879"]);
-    return r.nodeId === "131:1879" && r.outDir === "design";
+    const r = parseInFreshCwd(["--node", "131:1879"]);
+    return r.nodeId === "131:1879" && r.outDir === LAYOUT.EXPORT_DIR;
   })());
   ok("[args] --node with no value is an ERROR", /needs a node id/.test(usage(["--node"]) || ""));
   ok("[args] --node= form is accepted", parse(["--node=131:1879"]).nodeId === "131:1879");
@@ -2174,6 +2190,49 @@ async function disconnectErr(code, reason) {
     await b.waitForIdentified(2000);
     const after = b.listClients()[0];
     ok("[identify] waitForIdentified waits for the hello, then returns", after && after.identified === true && after.file === "App — Base");
+    ws1.close();
+    b.close();
+  }
+
+  // ---------------------------------------------------------------- P5 round 2: request() stall detector (findings 202/213)
+  console.log("\nserver-core — request() stall detector (findings 202/213, a client that never answers):");
+  {
+    // The fake client in this suite (per its own header comment) — connects, gets `hello`d, but never
+    // replies to a command and never sends a progress frame either. This is EXACTLY the shape
+    // findings 202/213 describe: a bridge that IS connected, sitting silent for the full timeout.
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-1", file: "Silent File" }));
+    await b.waitForIdentified(1000);
+    const start = Date.now();
+    let err = null;
+    try { await b.request("exportNode", { nodeId: "7314:87192" }, 60000, undefined, 300); }
+    catch (e) { err = e; }
+    const elapsed = Date.now() - start;
+    ok("[stall] a client that never answers and never reports progress is aborted by the STALL timeout, not the full one",
+      !!err && elapsed < 5000 && /dtwin serve/.test(err.message) && /7314:87192/.test(err.message));
+    ws1.close();
+    b.close();
+  }
+  {
+    // The inverse: progress frames arriving periodically must keep resetting the stall clock, so a
+    // genuinely slow (but working) export is never mistaken for a stalled one — a stall detector that
+    // fires on ANY export slower than its window would be worse than the bug it fixes.
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    ws1.send(JSON.stringify({ type: "hello", instanceId: "slow-1", file: "Slow File" }));
+    await b.waitForIdentified(1000);
+    // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
+    // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
+    const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch (e) {} }, 100);
+    const req = b.request("exportFull", {}, 5000, undefined, 300);
+    let rejectedWithStall = false;
+    req.catch((e) => { if (e && /no response from the Figma plugin/.test(e.message)) rejectedWithStall = true; });
+    await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
+    clearInterval(ticker);
+    ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
+    // Now let it actually go quiet — the SAME request must still time out via the stall path shortly
+    // after progress stops, proving the reset was real and not just "it never fires at all".
+    await new Promise((r) => setTimeout(r, 900)); // stallMs (300) + the 500ms poll granularity, with margin
+    ok("[stall] once progress genuinely stops, the same request is still eventually aborted by the stall check", rejectedWithStall);
     ws1.close();
     b.close();
   }
