@@ -623,7 +623,16 @@ function toMarkdown(res) {
   return L.join("\n") + "\n";
 }
 
-module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN };
+// finding 136: a stable id per blocker finding, so a plan's `auditGate.overridden` can name exactly
+// which blocker(s) the user decided to build past. Findings carry no id of their own; `<code>#<i>`
+// (i = position among this doc's blockers, in report order) is stable for a given audit run and is
+// what plan-skeleton.js pre-fills and verify-build.js checks against.
+function blockerIds(auditDoc) {
+  const findings = (auditDoc && Array.isArray(auditDoc.findings)) ? auditDoc.findings : [];
+  return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+}
+
+module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds };
 
 // CLI: node design-to-code/audit.js <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]

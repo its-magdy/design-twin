@@ -1532,7 +1532,11 @@ function toMarkdown(res) {
   }
   return L.join("\n") + "\n";
 }
-module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN };
+function blockerIds(auditDoc) {
+  const findings = auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
+  return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+}
+module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds };
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");

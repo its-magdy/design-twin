@@ -132,4 +132,31 @@ check("the shipped bundle runs from outside the repo", (() => {
   return b.status === 0 && b.stdout === r.stdout;
 })());
 
+// ---------------------------------------------------------------- P6-136: auditGate pre-fill
+// Real audit: FX/design/audit/System_Configurations.json (5 blockers, copied verbatim from the
+// livetest-3 run). Global Policies (System_Configurations__1359_21337) is the screen it belongs to.
+console.log("finding 136 — auditGate is pre-filled from an existing Blocked audit:");
+{
+  const auditCwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-cwd-"));
+  fs.mkdirSync(path.join(auditCwd, "design", "audit"), { recursive: true });
+  fs.copyFileSync(path.join(FX, "audit", "System_Configurations.json"), path.join(auditCwd, "design", "audit", "System_Configurations.json"));
+  const gp = run([screen(GP), vars(GP), DS], { cwd: auditCwd });
+  const p = JSON.parse(gp.stdout);
+  check("[P6-136] a screen with a Blocked audit on disk gets auditGate pre-filled: auditFile, verdict, every blocker id, overridden empty",
+    gp.status === 0 && p.auditGate && p.auditGate.auditFile === "design/audit/System_Configurations.json" && p.auditGate.verdict === "blocked"
+      && p.auditGate.blockers.length === 5 && Array.isArray(p.auditGate.overridden) && p.auditGate.overridden.length === 0 && p.auditGate.reason === null);
+  check("[P6-136] a screen with no matching audit (Job Roles: no design/audit/positions*.json in this fixture) gets auditGate: null", JSON.parse(r.stdout).auditGate === null);
+
+  // merge(): a person's decision (overridden/reason/decidedBy/decidedAt) survives a re-run — the
+  // skeleton must never clear what was already decided.
+  const decided = Object.assign({}, p, { auditGate: Object.assign({}, p.auditGate, { overridden: p.auditGate.blockers, reason: "provenance issues, not build issues", decidedBy: "owner", decidedAt: "2026-09-23" }) });
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-plan-"));
+  const planFile = path.join(out, "plan.json");
+  fs.writeFileSync(planFile, JSON.stringify(decided, null, 2));
+  const merged = run([screen(GP), vars(GP), DS, "--out", planFile], { cwd: auditCwd });
+  const after = JSON.parse(fs.readFileSync(planFile, "utf8"));
+  check("[P6-136] a re-run (--out onto an existing plan) keeps the decided overridden/reason/decidedBy — never clears it",
+    merged.status === 0 && after.auditGate.overridden.length === 5 && after.auditGate.reason === "provenance issues, not build issues" && after.auditGate.decidedBy === "owner");
+}
+
 report();
