@@ -1038,8 +1038,8 @@ async function main() {
       console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
       console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
     }
-    console.error("[dtwin] next: dtwin pull design --page <id>   (repeatable; add --no-assets to skip the render pass)");
-    console.error("[dtwin]       or: dtwin pull design --node <id>   (just ONE node, fully exported with its own assets)");
+    console.error("[dtwin] next: dtwin pull --page <id>   (repeatable; add --no-assets to skip the render pass)");
+    console.error("[dtwin]       or: dtwin pull --node <id>   (just ONE node, fully exported with its own assets)");
     console.error("[dtwin]       unsure which of two same-named frames? dtwin screenshot <id> renders one cheaply.");
     // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
     // forever after printing (found live: still resident and holding port 8787 a minute later,

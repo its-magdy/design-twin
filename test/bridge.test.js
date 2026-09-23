@@ -367,6 +367,13 @@ async function disconnectErr(code, reason) {
     const j = pullSrc.indexOf("} else if (asLibrary) {");
     return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
   })());
+  // P4 round 3: `dtwin list`'s own "next step" hint used to recommend `dtwin pull design --page/--node
+  // <id>` — the finding-14/15 outDir trap, printed by the tool itself right after the command that
+  // discovers ids to pull. A user-facing STRING, not a doc, so the doc-only grep in the ground rules
+  // never caught it. Pin it at the source level (this hint only prints after a live plugin
+  // connection, which a unit test cannot fake cheaply) so it can never regress silently.
+  ok("[args] the `list` next-step hint never recommends the outDir-trap form `dtwin pull design `",
+    !pullSrc.split("\n").some((l) => /console\.(error|log)/.test(l) && /pull design /.test(l)));
 
   console.log("\nfigma-pull — argument parsing:");
   // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
