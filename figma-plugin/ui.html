@@ -337,7 +337,10 @@
             instanceId: idn.instanceId || null,
             file: idn.file || null,
             fileKey: idn.fileKeyAvailable ? idn.fileKey : null,
-            page: idn.page || null
+            page: idn.page || null,
+            // Finding 327: the plugin's own build version (baked in at build time — see build.js),
+            // so the bridge can tell a stale plugin apart from a freshly reloaded one.
+            pluginVersion: idn.pluginVersion || null
           }));
         }
         if (idn.file) setBridge("on", "connected", "Connected to the bridge on this computer as " + JSON.stringify(idn.file) + ".");

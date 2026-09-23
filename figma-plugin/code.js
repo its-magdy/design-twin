@@ -3100,7 +3100,13 @@
           file: figma.root.name,
           page: figma.currentPage.name,
           pageId: figma.currentPage.id,
-          editorType: figma.editorType
+          editorType: figma.editorType,
+          // Finding 327: baked in at build time (build.js's esbuild `define`) from
+          // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
+          // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
+          // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
+          // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
+          pluginVersion: "0.1.0"
         };
         try {
           r.fileKey = typeof figma.fileKey !== "undefined" ? figma.fileKey : null;

@@ -41,6 +41,12 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
         page: figma.currentPage.name,
         pageId: figma.currentPage.id,
         editorType: figma.editorType,
+        // Finding 327: baked in at build time (build.js's esbuild `define`) from
+        // figma-plugin/package.json — the one way to tell a stale plugin in Figma apart from a
+        // freshly reloaded one, since neither startedAt nor code.js's mtime can. Reused verbatim by
+        // the `hello` announcement below (main.ts's get-identity -> ui.html -> bridge), so `whoami`,
+        // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
+        pluginVersion: __PLUGIN_VERSION__,
       };
       // Same guarded read as `ping`: `fileKey` is typed `string | undefined` and only populated for
       // private plugins, but touching it must never throw the probe that exists to test for it.

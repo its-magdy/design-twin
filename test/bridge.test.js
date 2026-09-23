@@ -2395,6 +2395,50 @@ async function disconnectErr(code, reason) {
     b.close();
   }
 
+  // ---------------------------------------------------------------- P5 round 4: plugin version reporting (finding 327)
+  console.log("\nserver-core — plugin version reporting and staleness (finding 327):");
+  ok("[version] pluginStalenessNote is null with no plugin version reported (an old, pre-327 bundle) — 'unknown' is named separately by the caller, not blamed as stale",
+    core.pluginStalenessNote(null) === null && core.pluginStalenessNote(undefined) === null);
+  ok("[version] pluginStalenessNote is null for a plugin version equal to or newer than the bridge",
+    core.pluginStalenessNote(core.BRIDGE_VERSION) === null);
+  ok("[version] pluginStalenessNote fires for a plugin version strictly older than the bridge, and names both",
+    (() => { const n = core.pluginStalenessNote("0.0.1"); return typeof n === "string" && /0\.0\.1/.test(n) && n.includes(core.BRIDGE_VERSION) && /reload the plugin/.test(n); })());
+  {
+    // The fake client sends its version in `hello`, exactly like a real plugin's identity relay
+    // (figma-plugin/src/bridge.ts's `pluginVersion` -> ui.html's `hello` -> here).
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    ws1.send(JSON.stringify({ type: "hello", instanceId: "old-1", file: "Old Bundle File", pluginVersion: "0.0.1" }));
+    await b.waitForIdentified(1000);
+    const row = b.listClients()[0];
+    ok("[version] a hello's pluginVersion is recorded and surfaced on the client row", row && row.pluginVersion === "0.0.1");
+    ok("[version] an old plugin's row carries the staleness note", row && typeof row.pluginStale === "string" && /0\.0\.1/.test(row.pluginStale));
+    ws1.close();
+    b.close();
+  }
+  {
+    // A pre-327 plugin never sends `pluginVersion` at all — must not be reported stale (it's simply
+    // unknown), and must not crash anything downstream.
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
+    await b.waitForIdentified(1000);
+    const row = b.listClients()[0];
+    ok("[version] a hello with no pluginVersion at all records null, not a crash or a false staleness note",
+      row && row.pluginVersion === null && row.pluginStale === null);
+    ws1.close();
+    b.close();
+  }
+
+  console.log("\ndoctor — plugin staleness surfaces as a warn, distinct from the multi-client ok (finding 327):");
+  ok("[doctor-version] one current-version client stays a plain ok",
+    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: core.BRIDGE_VERSION, pluginStale: null }] }, 10).status === "ok");
+  ok("[doctor-version] one STALE client is a warn, naming the reload step",
+    (() => {
+      const c = doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginVersion: "0.0.1", pluginStale: "plugin v0.0.1 is older — reload the plugin in Figma" }] }, 10);
+      return c.status === "warn" && /reload the plugin/.test(c.next || "");
+    })());
+  ok("[doctor-version] several CURRENT clients still stay ok (multi-client alone is not staleness)",
+    doctor.checkPlugin({ clients: [{ file: "A", identified: true, pluginStale: null }, { file: "B", identified: true, pluginStale: null }] }, 10).status === "ok");
+
   // ---------------------------------------------------------------- P5 round 2: request() stall detector (findings 202/213)
   console.log("\nserver-core — request() stall detector (findings 202/213, a client that never answers):");
   {
