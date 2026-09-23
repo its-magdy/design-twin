@@ -59,9 +59,16 @@ function looksLikeExportDir(dir) {
 // in it is reported as "no export yet" rather than as a legacy project.
 function findExportDir(cwd) {
   const modern = path.join(cwd, EXPORT_DIR);
-  if (looksLikeExportDir(modern)) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR };
   const legacy = path.join(cwd, DESIGN_DIR);
-  if (looksLikeExportDir(legacy)) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
+  const modernExists = looksLikeExportDir(modern);
+  const legacyExists = looksLikeExportDir(legacy);
+  // Both layouts present at once (P4 #14/#33/#203's fallout): a stray `dtwin pull design …` wrote a
+  // second, parallel export tree directly in design/ beside the real design/export/. The modern one
+  // still wins (it is where every tool looks), but the caller must be told the legacy one exists too
+  // — picking one silently is exactly what a project in this state cannot afford, since the two trees
+  // can disagree (e.g. two different `variables.json`).
+  if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+  if (legacyExists) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
   return { dir: modern, layout: "none", rel: EXPORT_DIR };
 }
 

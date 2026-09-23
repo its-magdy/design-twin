@@ -149,11 +149,13 @@ function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(
       "dtwin init [--mcp] [--dry-run]\n\n" +
-      "  Run in the root of the project you are BUILDING. Creates:\n" +
-      "    design/                  your decisions (target.json, codeconnect.local.json, plan/, audit/, verify/)\n" +
-      "    design/export/           where every dtwin pull lands — safe to delete and re-pull\n" +
+      "  Run in the root of the project you are BUILDING. Creates exactly these four things:\n" +
+      "    design/                  the directory your decisions live under\n" +
+      "    design/export/           where every dtwin pull lands, empty at first — safe to delete and re-pull\n" +
       "    design/README.md         which half of design/ a re-pull is allowed to destroy\n" +
       "    design/target.json       the detected stack, or profile:null for build-screen to fill in\n" +
+      "  It does NOT create codeconnect.local.json, plan/, audit/ or verify/ — those are written later,\n" +
+      "  on demand, by map-bootstrap.js, build-screen, audit-design and verify respectively.\n" +
       "  …makes sure a bridge token exists, and prints the remaining steps.\n\n" +
       "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten)\n" +
       "  --dry-run  print what would happen; write nothing (no token is created either)\n\n" +

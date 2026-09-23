@@ -266,8 +266,12 @@ Copy this checklist into your notes and keep it updated:
    `mapModule` on anchors (step 3), `route`, `target`, `architecture`, `files[]` (step 3),
    `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
    `verification` (step 5). Re-running it merges; filled fields survive. The `Stop` hook checks the
-   built code against this file, so it must exist before step 3. Sections to decide (show
-   large-screen plans to the user too):
+   built code against this file, so it must exist before step 3. **On a large export, filling in
+   these decisions genuinely takes several turns — that is normal and does not need a status.**
+   `status` stays `"pending"` the whole time a decision is still being worked out; `"awaiting-user"`
+   is reserved for a real external block (a MISSING token, an audit blocker, a map needing review) —
+   do not reach for it just because the plan is still being filled in mid-session. Sections to decide
+   (show large-screen plans to the user too):
    - **Architecture** → the `architecture` object, decided *before* the first file and recorded so
      the next feature can follow it. **Inspect the repo first and follow what is already there**; only
      on a genuinely fresh scaffold propose a layout, get a yes, and record it. Where code goes is a
@@ -451,6 +455,12 @@ Copy this checklist into your notes and keep it updated:
      values — not just a visual read of the `.png`. Computed colors come back as `rgb()`/`rgba()`, not
      hex — convert one side before comparing, don't string-match `rgb(229, 231, 235)` against `#E5E7EB`
      and call it a mismatch.
+   - **Getting a dev server up is itself a step, not an assumption.** Follow whatever the repo already
+     documents (a `README`/`Makefile`/`package.json` script, a `docker-compose.yml`) — the first
+     attempt at an unfamiliar or cross-arch setup (e.g. a container built for a different CPU
+     architecture than the host) commonly needs one platform-specific flag before it boots; treat that
+     failure as a one-line environment fix to make and record, not a reason to fall back to
+     `static-only`. Only fall back once starting it has genuinely been tried and failed.
    - **Measure per node, against the design's own numbers.** Generate the expectation and diff it:
 
      ```
@@ -510,6 +520,12 @@ Copy this checklist into your notes and keep it updated:
      header gaps, a deviation without `{nodeId, field, designed, built, reason}`. A resolved value that
      must stay literal goes in `allowedLiterals`: `{"value": "#5B5FC7", "reason": "…"}` (exact string,
      alpha included) or `{"file": "…", "reason": "…"}` for a generated token file.
+   - **Run it by hand** the same way the Stop hook does:
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json` (the plan
+     path is a positional argument). It reads the hook's JSON from stdin only when fd 0 is not a TTY;
+     a piped payload that delivers nothing within 1 s is treated as "no payload"; the whole read is
+     capped at 60 s naming what it was still waiting on. A manual run from a terminal never blocks on
+     stdin at all.
    - **Status is computed, never stored.** The hook records its result and a hash of every file in
      `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed

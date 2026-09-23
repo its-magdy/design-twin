@@ -41,31 +41,37 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 
 ```
 node test/design-to-code.test.js       # expect: 288/288 checks passed, exit 0
-node test/audit.test.js                # expect: 70/70 checks passed, exit 0
-node test/verify-build.test.js         # expect: 77/77 checks passed, exit 0 — the build-screen Stop-hook gate,
-                                       # and that claude-plugin/scripts/ is in sync with design-to-code/
-                                       # (stale? run: node claude-plugin/build-scripts.js)
+node test/audit.test.js                # expect: 81/81 checks passed, exit 0
+node test/verify-build.test.js         # expect: 127/127 checks passed, exit 0 — the build-screen Stop-hook gate
+                                       # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
+                                       # computed --status never stored), and that claude-plugin/scripts/ is in
+                                       # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.js)
+node test/plan-skeleton.test.js        # expect: 28/28 checks passed, exit 0 — the shared plan shape/visibility
+                                       # helpers (visibility, rootsOf) every skill and verify-build.js walk with
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.js          # expect: 47/47 checks passed, exit 0 — the JOIN between a screen and the
+node test/cross-check.test.js          # expect: 53/53 checks passed, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
-                                       # that was derived rather than drawn
-node test/verify-screen.test.js        # expect: 44/44 checks passed, exit 0 — the per-node comparison behind a
+                                       # that was derived rather than drawn, and auto-discovery of
+                                       # design/export/variables.json (never a stale design/variables.json sibling)
+node test/verify-screen.test.js        # expect: 118/118 checks passed, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
-                                       # coverage, reactions-driven interaction checks, and the rule that an
+                                       # coverage, reactions/--interactions-driven checks, and the rule that an
                                        # unmeasured expectation is not a passed one
-node test/design-diff.test.js          # expect: 27/27 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
-                                       # token diffs, baseline choice, re-drawn assets, snapshot CLI)
+node test/design-diff.test.js          # expect: 31/31 checks passed, exit 0 — the sync-design change list (node-id diff, leaf paths, catalog +
+                                       # token diffs, baseline choice, re-drawn assets, --snapshot/--force CLI)
 node test/identity.test.js             # expect: 48/48 checks passed, exit 0 — token and component IDENTITY on livetest-3's
                                        # real export (test/fixtures/livetest3/): two variables sharing a name are both
                                        # emitted, diffed and attributed by KEY; theme.css cannot shadow Tailwind's scale;
                                        # a re-keyed (duplicated) catalog yields name+prop-signature PROPOSALS, never auto-accepted
+node test/resolve-screen.test.js       # expect: 27/27 checks passed, exit 0 — the shared node-id/layer-name/indexed-title
+                                       # resolver every skill uses to turn "the Job Roles screen" into one exact file
 node test/mcp-share.test.js            # expect: 4/4 checks passed, exit 0 — two MCP servers on one port share the bridge
 node test/mcp-smoke.test.js            # expect: 12/12 checks passed, exit 0 — boots the real MCP server over stdio
                                        # (port 8789, fixed token), lists tools, calls figma_write dryRun, and drives the inline size guard with a fake plugin
-node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js design-to-code/cross-check.js design-to-code/verify-screen.js design-to-code/component-match.js design-to-code/slice-sources.js
+node --check design-to-code/tokens.js design-to-code/map-validate.js design-to-code/drift-lint.js design-to-code/map-bootstrap.js design-to-code/audit.js design-to-code/catalog-input.js design-to-code/verify-build.js design-to-code/design-diff.js design-to-code/cross-check.js design-to-code/verify-screen.js design-to-code/component-match.js design-to-code/slice-sources.js design-to-code/plan-skeleton.js design-to-code/resolve-screen.js
 ```
 
 `test/audit.test.js` drives `design-to-code/audit.js` (the pre-build design audit behind the
@@ -101,9 +107,14 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 529/529 checks passed, exit 0
+node test/bridge.test.js        # expect: 559/559 checks passed, exit 0
 # NOTE: run this with no dtwin daemon holding port 8787. A live daemon makes doctor's plugin
-# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (528/529).
+# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (558/559).
+# NOTE: also run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases
+# spawn with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config
+# dir but do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
+# CI/ephemeral escape-hatch token) defeats the "no token there" setup and the same
+# `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```
 

@@ -534,8 +534,28 @@ if (unknown.length) {
 // Default: design/export — dtwin writes only there, so `rm -rf design/export && re-pull` cannot take
 // the component map, the plan or the audit with it. A project created under the older flat layout
 // keeps working: its export is still found (bridge/project-layout.js findExportDir).
-const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) ||
+const userOutDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i));
+const outDir = userOutDir ||
   (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
+
+// P4 #14/#201: `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
+// positional outDir (never special-cased; see the note above), but when the project ALREADY has a
+// design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
+// other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
+// project genuinely named "design" for something else is legitimate, and refusing would be the parser
+// getting magic about one string.
+if (userOutDir) {
+  const requested = path.resolve(process.cwd(), userOutDir);
+  const alreadyHasExport = fs.existsSync(path.join(requested, "export"));
+  if (alreadyHasExport) {
+    console.error(
+      `[dtwin] warn: ${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
+      ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
+      ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
+      ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`
+    );
+  }
+}
 
 // Scope flags are MUTUALLY EXCLUSIVE, and the loser used to be discarded in silence: collectFull is
 // `if (allPages) … else if (page)`, so `--all-pages --page Foo` exported all 25 pages while the user

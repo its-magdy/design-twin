@@ -50,9 +50,11 @@ var require_project_layout = __commonJS({
     }
     function findExportDir(cwd) {
       const modern = path.join(cwd, EXPORT_DIR);
-      if (looksLikeExportDir(modern)) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR };
       const legacy = path.join(cwd, DESIGN_DIR);
-      if (looksLikeExportDir(legacy)) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
+      const modernExists = looksLikeExportDir(modern);
+      const legacyExists = looksLikeExportDir(legacy);
+      if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
+      if (legacyExists) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
       return { dir: modern, layout: "none", rel: EXPORT_DIR };
     }
     function findMapFile(cwd) {

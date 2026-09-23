@@ -79,6 +79,19 @@ When there is no catalog at all (a single-screen pull), say so in the plan's `ar
 the split you chose is then a reasonable guess, not a derived fact, and the next person should know
 which it was.
 
+**Evolving a shared component the catalog covers 0% of.** On a screen whose catalog match rate is
+0% (`catalog-covers-nothing`, or every instance is `matchedByName` only), the FIRST screen to build a
+given design-system component is also the one that shapes its code — there is no existing shared
+implementation to conform to yet. Build it in the shared directory under the catalog's own name and
+props (never the feature folder, even though nothing will fail if you put it there today), sized to
+what this screen actually needs; record in `architecture.notes` that it is the first real
+implementation of that catalog entry, not a finished one. The second screen that uses the same
+catalog key must **extend the existing shared component** — add the prop or variant it needs — never
+duplicate it into its own feature folder because the first version doesn't quite fit. A builder
+working from weaker instructions than "reuse, don't regenerate" has nothing here to catch a `DataTable`
+silently copied into a feature folder instead of extended; treat a same-catalog-key component that
+already exists in the shared directory as a hard signal to extend, not to re-derive.
+
 ## 4. What the plan records
 
 ```json

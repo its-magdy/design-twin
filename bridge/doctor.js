@@ -179,13 +179,20 @@ function checkProject(cwd, now = Date.now()) {
     if (ex.layout === "legacy-flat") {
       out.push(warn("layout", "Layout", "this project uses the older flat layout — exports live directly in design/, beside your hand-owned target.json / plan / audit",
         "it keeps working as is. To adopt the current split, move the export into design/export/ (pages/, design-system/, assets/, variables.json, libraries/) so `rm -rf design/export` can never take your decisions with it"));
+    } else if (ex.layout === "export-subdir" && ex.parallelLegacy) {
+      // P4 #14/#33/#203: a stray `dtwin pull design ...` wrote a SECOND export tree directly under
+      // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside
+      // the real one at design/export/. Doctor reads only design/export/ below, so say so out loud —
+      // silently picking one, as before, is exactly the trap this project is in.
+      out.push(warn("layout", "Layout", `found BOTH layouts: reading ${ex.rel}/ (the current one), but design/pages/, design/assets/, design/variables.json and/or design/design-system/ ALSO exist beside it — a stray pull wrote a second, parallel export tree`,
+        "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
 
     const snap = readSnapshotInfo(ex.dir);
     // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
     // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.js checks all three; naming only
     // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
-    if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull design --node <id>   (or --page <name> / --design-system)"));
+    if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull --node <id>   (or --page <name> / --design-system)"));
     else if (snap.error) out.push(warn("export", "Export", snap.error, "re-run the pull"));
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
@@ -318,7 +325,14 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
   }
 
   add(...checkProject(cwd));
-  return { ok: !checks.some((c) => c.status === "fail"), checks };
+  // P4 #203: a "not checked" warn (the plugin probe skipped, a port held by something else, etc.) is
+  // not advice like an ordinary warn — it means a check that was supposed to answer "can this project
+  // actually pull anything" never ran. `ok: true` beside one of those is worse than `ok: false`: it
+  // tells an automated caller (or a human skimming --json) that everything was verified when in fact
+  // it wasn't. Only a genuine "not checked" counts here — a warn about project state (stale export,
+  // legacy layout, parallel layout, no map) is real advice and must not flip the roll-up.
+  const notChecked = (c) => c.status === "warn" && /not checked/i.test(c.detail || "");
+  return { ok: !checks.some((c) => c.status === "fail" || notChecked(c)), checks };
 }
 
 const MARK = { ok: "✓", warn: "!", fail: "✗" };
