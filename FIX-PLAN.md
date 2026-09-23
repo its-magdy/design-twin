@@ -1,0 +1,115 @@
+# FIX-PLAN — livetest-3 (branch `fix/livetest-3`, base 7568d78)
+
+Evidence: `/Users/mohamedomarwork/design-twin-livetest-3` (read-only). Prompts: `FIX-PROMPTS.md` there.
+Orchestrator validated every prompt's reproduce block against this checkout on 2026-09-23 before any
+fix was started. All headline claims reproduce, with the exceptions listed under "Disagreements".
+
+## Baseline (before any fix)
+
+| suite | result |
+|---|---|
+| test/design-to-code.test.js | 281/281 |
+| test/audit.test.js | 70/70 |
+| test/verify-build.test.js | 77/77 |
+| test/ui.test.js | 14/14 |
+| test/cross-check.test.js | 47/47 |
+| test/verify-screen.test.js | 44/44 |
+| test/design-diff.test.js | 27/27 |
+| test/bridge.test.js | 528/529 — the one failure (`[doctor-cli] with no token, the plugin probe is SKIPPED`) is environmental: `FIGMA_BRIDGE_TOKEN` is exported in this shell and overrides the saved token. Run that suite with `env -u FIGMA_BRIDGE_TOKEN` to see 529/529. |
+| test/harness.js | 414/414 |
+
+Reproduced today (same numbers as the findings): `specs 272 hidden 83 / instances 112 hidden 61 /
+interactions 28 hidden 22`; both plans `verified` vs reports `fail`; `--spacing-space-4: 16px`;
+`--radius-xl: 16px` and `--radius-full: 1000000000px` from `design-system/tokens.json`; assets
+MISMATCHED 14/39 (positions) and 15/43 (Job Role Details); `Angle-left.svg` single case-folded
+file; `variables.json` has no `exportedAt`; root `pages/index.json` is a directory of directories;
+cross-check 2 blockers without `--variables`, 5 with.
+
+Live Figma IS available while this plan runs: `dtwin serve` daemon on 8787 (pid 45697) with both
+`TeamSmart (Copy)` and `Design System - NERA (Copy)` connected. Read-only pulls into scratch dirs are
+fine. **Nobody stops or restarts the shared daemon except the orchestrator.**
+
+## How work is isolated
+
+Every subagent works in its own git worktree (branch off `fix/livetest-3`), commits there, and
+reports branch + path. The orchestrator merges into `fix/livetest-3` after verifying. Worktrees have
+no `node_modules`: symlink `bridge/node_modules` and `figma-plugin/node_modules` from the main
+checkout before running anything.
+
+Tests: `node test/<name>.test.js` (each prints `N/N checks passed`, exit 0). Plugin: edit
+`figma-plugin/src/*.ts` → `cd figma-plugin && npm run typecheck && npm run build` → commit
+`figma-plugin/code.js` → `node test/harness.js`. Scripts: edit `design-to-code/*.js` →
+`node claude-plugin/build-scripts.js` → commit `claude-plugin/scripts/*.js` (never hand-edit;
+`test/design-to-code.test.js` fails if stale). A new CLI script must be added to `ENTRIES` in
+`claude-plugin/build-scripts.js`.
+
+## File ownership (who may edit which function)
+
+| file | Prompt 1 (Wave A) | Prompt 3 (Wave A) | Prompt 5 (Wave A) | Prompt 2 (Wave B) | Prompt 4 (Wave C) | Prompt 6 (Wave C) |
+|---|---|---|---|---|---|---|
+| `design-to-code/tokens.js` | emitters: `toDTCG`, `toCSS`/`cssVarName`, `toTailwind`/`TW_*`, sentinel | — | — | — | — | output-file selection for `--web/--native` (225) |
+| `design-to-code/design-diff.js` | `diffTokens()` + its `keyed()` only | — | `previous()`, `at()`, asset-hash comparison, `--snapshot`, JSON `warned`/`baseline` | — | — | — |
+| `design-to-code/cross-check.js` | `token-name-collision` attribution; component verdict (`catalog-rekeyed`, name+prop matching) | — | — | — | `--variables` auto-discovery + "not checked" note wording (135, 749) | — |
+| `design-to-code/audit.js` | wording/logic of the 0%-by-key provenance finding | `--out` default naming (`<Layer>__<id>`) | — | hidden-node filtering of every emitter (74) | `--grid` echo in headline | optional `self-inconsistent-geometry` (172) |
+| `design-to-code/drift-lint.js` | 0%-by-key verdict wording | — | — | coverage-metric wording | — | exit code (123) — investigate first |
+| `design-to-code/map-bootstrap.js` | stub from confirmed name+prop matches | — | — | — | ordering (screen-coverage first) | — |
+| `design-to-code/verify-screen.js` | — | `--out` default naming only | — | everything else (hidden filter, `FIELDS`, `compare`, coverage, `token:`, third state, `missingComponents`) | — | — |
+| `design-to-code/verify-build.js` | — | plan header schema (`screenName`,`nodeId`,`route`,`file`) validation | — | hook reshape §2.9 (b)(c)(d)(e), `reused` check, hex scan scope, plan-vs-report reconciliation | docs only | `auditGate` (136) |
+| new `design-to-code/plan-skeleton.js` | — | — | — | owner | — | — |
+| new `design-to-code/resolve-screen.js` (recommended) | — | owner | — | — | — | — |
+| `bridge/variables-merge.js` | `_conflicts` + `hygiene` for same-name/different-key | — | freshness signal (top-level `exportedAt` derived from `_slices[].at`) | — | — | — |
+| `bridge/write-out.js` | — | `writeScreen` + index rows (`title`, `texts`, root index rows) | `writeAssets`, `writeScreenAssets` | — | — | — |
+| `bridge/pages-layout.js` | — | owner | — | — | — | — |
+| `bridge/server-core.js`, `bridge/daemon.js` | — | — | owner | — | — | — |
+| `bridge/figma-pull.js` | — | — | `list clients` wait, client resolution, daemon guidance, **and** the line-854 `mkdirSync` move (finding 13, taken from Prompt 6) | — | outDir-is-`design/` warning | verify 13 only |
+| `bridge/doctor.js` | — | — | `daemon` check (89) | — | export check (178–186), `ok` roll-up (311), parallel-layout warning | — |
+| `bridge/init.js` | — | — | — | — | help text (153) | — |
+| `figma-plugin/src/assets.ts` | — | — | owner (case fold, coordinate normalisation) | — | — | — |
+| `claude-plugin/hooks/hooks.json` | — | — | — | owner | — | — |
+| `claude-plugin/agents/visual-verifier.md` | — | — | — | owner | — | — |
+| `skills/extract/SKILL.md` | tokens.js input rule (218–231) | shared resolution procedure ref; `pages/index.json` description (16) | — | — | pull examples (64–65, 91), cross-check command (205) | 225 rule |
+| `skills/build-screen/SKILL.md` | tokens rule (72–74, 253), utility names | resolution ref (*Where everything is*) | — | `--compare` claim, `data-dt-node` expectation | 144, 158, 168, 187, 487, map-bootstrap ordering, dev-server step | 225, auditGate |
+| `skills/build-screen/profiles/web-tailwind.md` | owner | — | — | — | — | — |
+| `skills/build-screen/references/architecture.md` | — | — | — | — | evolving a shared component (143) | — |
+| `skills/verify/SKILL.md`, `references/verify.md` | — | step 1 resolution | — | coverage-first verdict, no-browser correction, interaction-evidence channel | — | — |
+| `skills/sync-design/SKILL.md` | — | step 1 resolution | steps 2–3: `.sync/`/`sync/`, `dtwin serve`, non-destructive snapshot | — | design-system branch with `--client`, 9-file snapshot list, pull command | — |
+| `skills/audit-design/SKILL.md` | — | output-naming contract (72, 73) | — | — | — | per-screen cost / batch (80) |
+| `skills/help/SKILL.md` | — | — | — | — | 120–131 | — |
+
+Rule: if a prompt needs a change outside its column, it writes a note in its report instead of
+editing, and the orchestrator routes it.
+
+## Waves
+
+- **A (parallel, worktrees):** P1 (Opus), P3 (Sonnet), P5 (Sonnet). Merge order: P3 → P5 → P1.
+- **B (after A):** P2 split in two Opus agents that do not share files:
+  - P2a — `verify-screen.js`, `audit.js` hidden emitters, `drift-lint.js` wording, `verify/SKILL.md`, `references/verify.md`, the `--compare` claim in `build-screen/SKILL.md`, `visual-verifier.md`.
+  - P2b — `verify-build.js` (§2.9 b–e, 131, 100, 132, 155/189 reconciliation), `plan-skeleton.js` (§2.9 f), `hooks.json`, the hook/plan sections of `build-screen/SKILL.md`.
+- **C (after B):** P4 (Sonnet), then P6 (Sonnet). Docs describe final flags.
+- **D:** P7 (Opus, fresh, no fix context) — CLI/script-level re-test in a new empty directory. The
+  parts that need a human (invoking `/designtwin:*` skills from a consumer session, and making four
+  edits in Figma for Phase 7b) are handed to the owner with exact steps.
+
+## Disagreements with the findings / prompts (decided by the orchestrator)
+
+1. **Prompt 2 §2.9(a) — "the hook must measure the rendered DOM".** Rejected as written. There is no
+   renderer in the plugin (finding 127 itself proves `verify-screen.js` has no browser); a
+   SubagentStop hook that launches Playwright would add a heavy dependency and a multi-second stall
+   to every build. P2b instead: (i) the hex scan ignores comments, string-literal provenance notes,
+   and any `.svg`/non-source file; (ii) the hook reads `design/verify/<Screen>.report.json` when it
+   exists and treats `verdict: "fail"` as blocking `verified`; (iii) §2.9 (b)–(f) as written.
+2. **Finding 123 (`drift-lint.js` exits 0).** Not reproducible: run today with the livetest map and
+   catalog it prints the ERROR and exits **1**. The original run piped through `tail`/`tee`, which
+   is the most likely source of the 0. P6 must reproduce with the exact pipeline before changing
+   anything; if it cannot, it records the finding as not-a-bug with the command that proves it.
+3. **Prompt 1 criterion 1** says `tokens.js` on the merged `variables.json` must emit 24 "for a
+   screen whose .vars.json binds the 24-valued key". The merged file has no notion of "the screen".
+   Read as: both keys are emitted under distinct, reachable identifiers, the warning names both keys
+   / values / source slices, and the skills state the rule "generate a screen's theme from that
+   screen's own `.vars.json` (or the design system's `tokens.json`), never from the union".
+4. **Finding 13 moves from Prompt 6 to Prompt 5** (same line of `figma-pull.js` P5 already edits).
+5. **Prompt 3 acceptance 3–4** describe skill prose. To make it testable the procedure is implemented
+   once as a script (`resolve-screen.js`) that every skill calls; prose only points at it.
+6. **Prompt 7** cannot be fully executed by a subagent: skills run only in a consumer Claude Code
+   session and Phase 7b needs a human to edit Figma. The subagent runs everything CLI/script-level
+   and writes a checklist for the owner for the rest.
