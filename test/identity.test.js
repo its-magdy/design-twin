@@ -34,7 +34,7 @@ const K24 = "e26d506ea43ae0582896add59d9e04156fb3f6d5", K16 = "64928e3a5f094c0d9
 console.log("tokens.js on the merged variables.json:");
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, "variables.json"), out, "--web", "tailwind"]);
+  const r = node("tokens.js", [path.join(FX, "variables.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
   const dtcg = fs.existsSync(path.join(out, "tokens.dtcg.json")) ? JSON.parse(fs.readFileSync(path.join(out, "tokens.dtcg.json"), "utf8")) : {};
@@ -57,14 +57,14 @@ console.log("tokens.js on the merged variables.json:");
   // Order must not decide anything: the old emitters kept "the later one".
   const rev = clone(read("variables.json")); rev.variables.reverse();
   const revDir = tmp(); fs.writeFileSync(path.join(revDir, "v.json"), JSON.stringify(rev));
-  node("tokens.js", [path.join(revDir, "v.json"), revDir, "--web", "tailwind"]);
+  node("tokens.js", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
   const decls = (t) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
   const a = decls(theme), b = decls(fs.existsSync(path.join(revDir, "theme.css")) ? fs.readFileSync(path.join(revDir, "theme.css"), "utf8") : "");
   ok("[44] reversing the input rows changes no name→value pair in theme.css", a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x)));
 }
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind"]);
+  const r = node("tokens.js", [path.join(FX, POS + ".vars.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   ok("[95] a screen's OWN .vars.json (Job Roles: one Space 4) gets the plain name, at the value its Figma binds: 24",
     r.status === 0 && /--spacing-figma-space-4: 24px;/.test(theme));
@@ -73,7 +73,7 @@ console.log("tokens.js on the merged variables.json:");
 }
 {
   const out = tmp();
-  const r = node("tokens.js", [path.join(FX, "design-system/tokens.json"), out, "--web", "tailwind"]);
+  const r = node("tokens.js", [path.join(FX, "design-system/tokens.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
   ok("[183] no generated @theme variable redefines Tailwind's own scale: 0 lines of `--radius-xl:` (rounded-xl stays 12px)",

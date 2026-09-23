@@ -643,8 +643,17 @@ build(tmp).then(async () => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
     const input = path.join(out, "tokens.json");
     fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
-    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui", "--also-generic"], { encoding: "utf8" });
     return r.status === 0 && fs.existsSync(path.join(out, "tokens.dtcg.json")) && /static let aB: Color/.test(fs.readFileSync(path.join(out, "DesignTokens.swift"), "utf8"));
+  })());
+  check("finding 225: --native WITHOUT --also-generic writes ONLY the native file, not the generic set, and names the canonical file", (() => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
+    const input = path.join(out, "tokens.json");
+    fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    return r.status === 0 && fs.existsSync(path.join(out, "DesignTokens.swift")) && !fs.existsSync(path.join(out, "tokens.dtcg.json"))
+      && !fs.existsSync(path.join(out, "tokens.css")) && !fs.existsSync(path.join(out, "tokens.resolver.json")) && !fs.existsSync(path.join(out, "tokens"))
+      && /wrote DesignTokens\.swift/.test(r.stdout) && /NOT written here.*design\//.test(r.stdout);
   })());
 
   // Findings 99/133 (§2.9 d/e): stdin is read only when it is not a terminal, never waited on forever.

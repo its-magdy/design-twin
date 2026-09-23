@@ -1053,9 +1053,10 @@ if (require.main === module) {
   const native = flag("--native");
   const web = flag("--web");
   const kotlinPackage = flag("--package");
+  const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
   const input = args[0];
   const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind]";
+  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n       Without a target flag, only the generic set is written (unchanged).";
   if (args.includes("--help") || args.includes("-h")) {
     console.log(USAGE);
     process.exit(0);
@@ -1086,20 +1087,25 @@ ${USAGE}`);
   assertNotManifest(ds, input, "variables", "design-system/tokens.json");
   fs.mkdirSync(outDir, { recursive: true });
   const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: require_slice_sources().sourcesOf(ds, input, fs, path) });
-  fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-  fs.writeFileSync(path.join(outDir, "tokens.css"), css);
-  fs.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
-  for (const rel of Object.keys(resolverFiles)) {
-    const dest = path.join(outDir, ...rel.split("/"));
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+  const hasTarget = web !== void 0 || native !== void 0;
+  const writeGeneric = !hasTarget || alsoGeneric;
+  const genericCount = Object.keys(resolverFiles).length;
+  if (writeGeneric) {
+    fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs.writeFileSync(path.join(outDir, "tokens.css"), css);
+    fs.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    for (const rel of Object.keys(resolverFiles)) {
+      const dest = path.join(outDir, ...rel.split("/"));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+    }
   }
-  let nativeNote = "";
+  let canonicalFile = null;
   if (web !== void 0) {
     const tw = tailwind;
     const file = WEB_TARGETS[web];
     fs.writeFileSync(path.join(outDir, file), tw.text);
-    nativeNote += ` + ${file}`;
+    canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
@@ -1107,8 +1113,13 @@ ${USAGE}`);
     const n = toNative(ds, native, { package: kotlinPackage || void 0 });
     fs.writeFileSync(path.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
-    nativeNote = ` + ${n.file}`;
+    canonicalFile = n.file;
   }
   warnings.forEach((w) => console.error("warn  " + w));
-  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/)${nativeNote} (${(ds.variables || []).length} variables)`);
+  if (hasTarget) {
+    const genericNote = writeGeneric ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ \u2014 also written here because --also-generic was passed)` : ` \u2014 the generic handoff set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/) was NOT written here; it belongs under design/, not the app's source tree (pass --also-generic to also write it to ${outDir})`;
+    console.log(`wrote ${canonicalFile} to ${outDir} \u2014 this is the file your app should import${genericNote} (${(ds.variables || []).length} variables)`);
+  } else {
+    console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
+  }
 }
