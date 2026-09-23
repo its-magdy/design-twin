@@ -1123,7 +1123,7 @@ async function disconnectErr(code, reason) {
   // visible title "Job Roles"), pruned to the fields deriveTitle/collectTexts read.
   {
     const fixtureScreen = JSON.parse(fs.readFileSync(
-      path.join(__dirname, "fixtures", "livetest3", "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+      path.join(__dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
     const screenResult = OUT.writeScreen(sdir, {
       screenName: "positions ",
