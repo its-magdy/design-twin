@@ -45,7 +45,8 @@
 //
 // Computed statuses: pending (hook has not checked this version of the plan) · blocked · stale (a
 // file changed since the hook passed) · failed (a verify report exists and does not say pass) ·
-// unverified (no report, or it predates the code/export) · static-only · verified.
+// unverified (no report, a report that is "incomplete", or one that predates the code / export /
+// expectation) · static-only · verified.
 //
 // ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
@@ -722,9 +723,12 @@ function checkPlan({ plan, file }, cwd, opts) {
 // ================================================================ the verify report behind a plan
 
 // Reports are found by name first — `<Layer>__<id>` (verify-screen's default --out since P3), the plan's
-// own name, its `screen` — then by content: a report whose `nodeId` is the plan's, or whose `screen`
-// is the frame's layer name when that name is unique in the export (the pre-P3 `JobRoles.report.json`
+// own name, its `screen` — then by content: a report whose `nodeId` is the plan's, whose sibling
+// `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
+// the frame's layer name when that name is unique in the export (the pre-P3 `JobRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
+// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|fail|incomplete,
+// `headline`, `inputs.expectationSha256` — the expectation it was computed against).
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path.join(cwd, "design", "verify");
   if (!fs.existsSync(dir)) return [];
@@ -744,13 +748,22 @@ function locateReports(plan, planFile, cwd, exp) {
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
+    const expFile = path.join(dir, stem + ".expected.json");
+    const expFrame = () => { const x = readJsonOr(expFile, null); return x && x.frame && x.frame.nodeId; };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
-    out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, verdict: r.verdict || null, why: Array.isArray(r.why) ? r.why : [], deltas: Array.isArray(r.deltas) ? r.deltas : null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs });
+    // @2: which expectation the report was computed against, and whether that file still says the same
+    const want = r.inputs && r.inputs.expectationSha256;
+    let expectationChanged = false;
+    if (want && fs.existsSync(expFile)) { try { expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want; } catch { /* ignore */ } }
+    out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
+      why: Array.isArray(r.why) ? r.why : [], deltas: Array.isArray(r.deltas) ? r.deltas : null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
+      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null });
   }
   return out;
 }
@@ -773,10 +786,15 @@ function computeStatus(plan, opts) {
   if (ch.length) return { status: "stale", reasons: reasons.concat(`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`), reports: [] };
   const exp = o.export === undefined ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const failing = reports.filter((r) => r.verdict !== "pass");
-  if (failing.length) {
-    return { status: "failed", reasons: reasons.concat(failing.map((r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.why.length ? `: ${r.why.join("; ")}` : ""}`)), reports };
-  }
+  const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const failing = reports.filter((r) => r.verdict === "fail");
+  if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
+  // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
+  // not a pass — and not a failure the build caused either.
+  const notPass = reports.filter((r) => r.verdict !== "pass");
+  if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
+  const moved = reports.filter((r) => r.expectationChanged);
+  if (moved.length) return { status: "unverified", reasons: reasons.concat(moved.map((r) => `${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`)), reports };
   const mode = plan.verification && plan.verification.mode;
   if (!reports.length) {
     if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically — not rendered (${plan.verification.reason || "no reason recorded"})`), reports };

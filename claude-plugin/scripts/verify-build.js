@@ -1302,8 +1302,14 @@ function locateReports(plan, planFile, cwd, exp) {
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
     let by = null;
+    const expFile = path.join(dir, stem + ".expected.json");
+    const expFrame = () => {
+      const x = readJsonOr(expFile, null);
+      return x && x.frame && x.frame.nodeId;
+    };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
+    else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
@@ -1311,7 +1317,28 @@ function locateReports(plan, planFile, cwd, exp) {
       mtimeMs = fs.statSync(abs).mtimeMs;
     } catch {
     }
-    out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, verdict: r.verdict || null, why: Array.isArray(r.why) ? r.why : [], deltas: Array.isArray(r.deltas) ? r.deltas : null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs });
+    const want = r.inputs && r.inputs.expectationSha256;
+    let expectationChanged = false;
+    if (want && fs.existsSync(expFile)) {
+      try {
+        expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want;
+      } catch {
+      }
+    }
+    out.push({
+      rel: path.relative(cwd, abs).split(path.sep).join("/"),
+      matchedBy: by,
+      schema: r.schema || null,
+      verdict: r.verdict || null,
+      headline: r.headline || null,
+      why: Array.isArray(r.why) ? r.why : [],
+      deltas: Array.isArray(r.deltas) ? r.deltas : null,
+      exportedAt: r.exportedAt || null,
+      measuredAt: r.measuredAt || null,
+      mtimeMs,
+      expectationChanged,
+      expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null
+    });
   }
   return out;
 }
@@ -1331,10 +1358,13 @@ function computeStatus(plan, opts) {
   if (ch.length) return { status: "stale", reasons: reasons.concat(`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`), reports: [] };
   const exp = o.export === void 0 ? locateExport(plan, o.planFile, cwd) : o.export;
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
-  const failing = reports.filter((r) => r.verdict !== "pass");
-  if (failing.length) {
-    return { status: "failed", reasons: reasons.concat(failing.map((r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.why.length ? `: ${r.why.join("; ")}` : ""}`)), reports };
-  }
+  const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const failing = reports.filter((r) => r.verdict === "fail");
+  if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
+  const notPass = reports.filter((r) => r.verdict !== "pass");
+  if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
+  const moved = reports.filter((r) => r.expectationChanged);
+  if (moved.length) return { status: "unverified", reasons: reasons.concat(moved.map((r) => `${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`)), reports };
   const mode = plan.verification && plan.verification.mode;
   if (!reports.length) {
     if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`), reports };

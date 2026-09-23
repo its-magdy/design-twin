@@ -547,6 +547,36 @@ console.log("P2b end to end — plan-skeleton.js writes the plan, the hook check
     r2.status === 0 && st.status === "failed" && /JobRoles\.report\.json/.test(st.reasons.join(" ")));
 }
 
+console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a changed expectation invalidates the report:");
+{
+  const crypto = require("crypto");
+  const sha = (t) => crypto.createHash("sha256").update(t).digest("hex");
+  // A plan that passes its hook; its report is then swapped between @2 shapes (field names as
+  // verify-screen.js --compare writes them since P2a: verdict pass|fail|incomplete, headline, inputs).
+  const setup = (report, expectation) => {
+    const root = project({ "a.tsx": "" }, { status: "pending", nodeId: "7314:87192", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["a.tsx"], deltas: [] } });
+    const past = new Date(Date.now() - 60000);
+    fs.utimesSync(path.join(root, "a.tsx"), past, past);
+    fs.mkdirSync(path.join(root, "design", "verify"), { recursive: true });
+    if (expectation !== undefined) fs.writeFileSync(path.join(root, "design", "verify", "JobRoles.expected.json"), expectation);
+    fs.writeFileSync(path.join(root, "design", "verify", "JobRoles.report.json"), JSON.stringify(report));
+    runHook(root);
+    return computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  };
+  const EXP = JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "7314:87192", name: "positions " }, hidden: { ids: [] } });
+  const v2 = (verdict, extra) => Object.assign({ schema: "designtwin/verify-report@2", screen: "positions ", verdict, headline: `${verdict.toUpperCase()} — nodes measured 180/189`, why: [], inputs: { expectationSha256: sha(EXP) }, summary: { componentsAbsent: 0 } }, extra);
+  const inc = setup(v2("incomplete"), EXP);
+  check(`an @2 report found through its expectation's frame.nodeId; verdict "incomplete" → unverified, quoting the headline (got ${inc.status})`,
+    inc.status === "unverified" && inc.reports[0].matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
+  const pass = setup(v2("pass"), EXP);
+  check(`an @2 "pass" against the expectation still on disk → verified (got ${pass.status})`, pass.status === "verified");
+  const moved = setup(v2("pass"), EXP.replace("positions ", "positions"));
+  check(`an @2 "pass" whose inputs.expectationSha256 no longer matches the .expected.json on disk → unverified (got ${moved.status})`,
+    moved.status === "unverified" && /inputs\.expectationSha256 no longer matches/.test(moved.reasons.join(" ")));
+  const fail = setup(v2("fail"), EXP);
+  check(`an @2 "fail" → failed (got ${fail.status})`, fail.status === "failed");
+}
+
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
 const BOOT = require.resolve("../design-to-code/map-bootstrap.js");
 const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));

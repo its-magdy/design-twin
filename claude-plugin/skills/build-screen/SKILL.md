@@ -418,13 +418,13 @@ Copy this checklist into your notes and keep it updated:
      the stack's modal/sheet; transitions use the given duration (seconds → ms) and easing. The export
      hands over the whole interaction graph keyed by node id, and step 5 drives every edge of it — so
      a button wired to nothing now fails verification instead of passing as a nice-looking mockup.
-   - **Carry the node id into the markup** where it names one element: `data-dt-node="4210:1873"` on
-     web, `accessibilityIdentifier` on SwiftUI, `testTag` on Compose, `Semantics(identifier:)` on
-     Flutter — on sections, controls and each instance's root, so step 5 measures the right element
-     instead of guessing from text. **Full coverage is not expected:** rows rendered by one `.map()`
-     carry at most one row's ids, and a shell shared by two screens carries the ids of the frame it
-     was built from. Both follow the reuse rules and are correct: an untagged node is one the verifier
-     could not measure, not a component never built. Tags are a measurement aid, never component
+   - **Carry the node id into the markup** on every element that implements a node one-to-one:
+     `data-dt-node="4210:1873"` on web, `accessibilityIdentifier` on SwiftUI, `testTag` on Compose,
+     `Semantics(identifier:)` on Flutter — so step 5 measures the right element instead of guessing
+     from text. A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where
+     one exists; a shell shared by two screens keeps the ids of the frame it was built from (verify
+     matches the other frame through the component path). Both follow the reuse rules; untagged sets
+     are reported as tag coverage, never as "missing". Tags are a measurement aid, never component
      identity — that is the plan's `components[]` (catalog match, `design/codeconnect.local.json`).
 
 4. **States, scaling, theme, direction.** Before calling a component done:
