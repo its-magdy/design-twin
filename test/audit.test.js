@@ -279,4 +279,20 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[172] a HUG box whose declared size is smaller than its content (40 vs computed 56) DOES fire", resShortHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
 })();
 
+// ---------- --grid default is echoed, and flagged when the design system's own scale disagrees (P4 #43) ----------
+{
+  const dsTokens = {
+    collections: [{ name: "Spacing", variables: [
+      { valuesByMode: { Mode1: 8 } }, { valuesByMode: { Mode1: 16 } }, { valuesByMode: { Mode1: 24 } },
+    ] }],
+  };
+  const withDefault = audit([{ doc: screen, label: "s" }], { catalog: catalog.components, designSystem: { tokens: dsTokens } });
+  check("[grid] the default (no --grid given) is recorded as assumed", withDefault.gridAssumed === true && withDefault.grid === 4);
+  check("[grid] an 8px design-system spacing scale is detected and reported as a mismatch", withDefault.gridMismatch === 8);
+  check("[grid] the markdown headline names the real step and suggests --grid 8", /grid 4px .*8px.*--grid 8/.test(toMarkdown(withDefault).split("\n")[2]));
+
+  const withExplicit = audit([{ doc: screen, label: "s" }], { catalog: catalog.components, designSystem: { tokens: dsTokens }, grid: 8 });
+  check("[grid] passing --grid explicitly turns gridAssumed off and reports no mismatch", withExplicit.gridAssumed === false && withExplicit.gridMismatch === null);
+  check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(toMarkdown(withExplicit).split("\n")[2]));
+}
 report();

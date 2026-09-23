@@ -107,9 +107,10 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 559/559 checks passed, exit 0
+node test/bridge.test.js        # expect: 571/571 checks passed, exit 0
 # NOTE: run this with no dtwin daemon holding port 8787. A live daemon makes doctor's plugin
-# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` fails (558/559).
+# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` (plus the P4 #203
+# assertion chained off the same doctor report) fail — 569/571.
 # NOTE: also run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases
 # spawn with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config
 # dir but do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a

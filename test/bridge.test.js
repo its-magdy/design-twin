@@ -497,6 +497,26 @@ async function disconnectErr(code, reason) {
       const r = run(["--dry-run", "--mcp"]);
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
     })());
+
+    // P4 #2: `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
+    // filesystem diff after a real `init` and cross-check it against the four paths named in --help.
+    ok("[init] --help lists exactly what init creates — a filesystem diff after init matches the help text", (() => {
+      const helpRun = require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "init", "--help"], { encoding: "utf8", timeout: 5000 });
+      const help = helpRun.stdout;
+      // Never promise to create the hand-owned files that only get written later, on demand.
+      if (/Creates:.*codeconnect\.local\.json/s.test(help) || /Creates:.*plan\//s.test(help) || /Creates:.*audit\//s.test(help) || /Creates:.*verify\//s.test(help)) return false;
+      if (!/codeconnect\.local\.json/.test(help) || !/plan\//.test(help) || !/audit\b/.test(help) || !/verify\//.test(help)) return false; // still SAID, just not claimed as created
+      const d = mk({});
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const walk = (dir, base) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const rel = path.join(base, e.name);
+        return e.isDirectory() ? [rel, ...walk(path.join(dir, e.name), rel)] : [rel];
+      });
+      const created = walk(d, "").map((p) => p.split(path.sep).join("/")).sort();
+      const expected = ["design", "design/README.md", "design/export", "design/target.json"].sort();
+      return JSON.stringify(created) === JSON.stringify(expected)
+        && /design\/export\//.test(help) && /design\/README\.md/.test(help) && /design\/target\.json/.test(help);
+    })());
   }
   ok("[args] --json is accepted on the printing commands", parse(["--list-clients", "--json"]).json === true && parse(["--list-libraries", "--json"]).json === true && parse(["--list", "--json"]).json === true && parse(["--list"]).json === false);
   ok("[args] --json on an export is refused (it writes files, prints no result)", /--json applies to the commands that PRINT/.test(usage(["--all-pages", "--json"]) || "") && /--json applies/.test(usage(["--json"]) || ""));
@@ -2103,6 +2123,44 @@ async function disconnectErr(code, reason) {
   fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
 
+  // P4 #14/#33/#203: a stray `dtwin pull design ...` writes a SECOND export tree directly under
+  // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside the
+  // real one at design/export/. Doctor must name which layout it reads AND warn that the other one
+  // also exists, rather than silently picking the modern one and saying nothing.
+  {
+    const parDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-parallel-"));
+    fs.mkdirSync(path.join(parDir, "design", "export", "pages"), { recursive: true });
+    fs.writeFileSync(path.join(parDir, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: new Date().toISOString(), file: "Real File" }));
+    // The stray legacy tree beside it:
+    fs.mkdirSync(path.join(parDir, "design", "pages"), { recursive: true });
+    fs.writeFileSync(path.join(parDir, "design", "variables.json"), JSON.stringify({ collections: [] }));
+    const checks = doctor.checkProject(parDir);
+    const layout = byId(checks, "layout");
+    ok("[doctor] parallel layout: warns (never fails) that BOTH design/export/ and a stray design/pages exist",
+      layout && layout.status === "warn" && /BOTH layouts/.test(layout.detail) && /design\/pages/.test(layout.detail));
+    ok("[doctor] parallel layout: says which one it is actually reading", /design\/export/.test(layout.detail));
+    ok("[doctor] parallel layout: the fix points at `dtwin pull --node`, and calls out `dtwin pull design ...` as the trap to avoid, never as the recommended fix",
+      /never `dtwin pull design/.test(layout.next) && /dtwin pull --node/.test(layout.next));
+
+    // No parallel tree, no warning:
+    const cleanDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-clean-"));
+    fs.mkdirSync(path.join(cleanDir, "design", "export"), { recursive: true });
+    fs.writeFileSync(path.join(cleanDir, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: new Date().toISOString(), file: "Real File" }));
+    ok("[doctor] no parallel tree, no layout warning", !byId(doctor.checkProject(cleanDir), "layout"));
+  }
+
+  // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be
+  // false, not just when something outright failed.
+  {
+    const okChecks = [{ id: "a", status: "ok" }, { id: "b", status: "ok" }];
+    const notCheckedWarn = [{ id: "a", status: "ok" }, { id: "plugin", status: "warn", detail: "not checked — port 8787 is held by something else" }];
+    const ordinaryWarn = [{ id: "a", status: "ok" }, { id: "export", status: "warn", detail: "exported 3 days ago — the Figma file may have moved on" }];
+    const runOk = (checks) => !checks.some((c) => c.status === "fail" || (c.status === "warn" && /not checked/i.test(c.detail || "")));
+    ok("[doctor] ok roll-up: all-ok is true", runOk(okChecks) === true);
+    ok("[doctor] ok roll-up: a plain warn (advice about project state) stays true", runOk(ordinaryWarn) === true);
+    ok("[doctor] ok roll-up: a 'not checked' warn makes it false, even with zero fails", runOk(notCheckedWarn) === false);
+  }
+
   console.log("\ndoctor — probes (real sockets, spare ports):");
   const httpSrv = require("http").createServer((q, s) => s.end("hi"));
   await new Promise((r) => httpSrv.listen(0, "127.0.0.1", r));
@@ -2152,6 +2210,8 @@ async function disconnectErr(code, reason) {
   ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));
   ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
     byId(docReport.checks, "plugin").status === "warn" && byId(docReport.checks, "token").status === "warn");
+  ok("[doctor-cli] P4 #203: ok is false while the plugin check is a 'not checked' warn, not just on an outright fail",
+    docReport.ok === false && /not checked/.test(byId(docReport.checks, "plugin").detail));
   ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
   const docHuman = runDoctor([]);
   ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Node\.js:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
@@ -2172,6 +2232,22 @@ async function disconnectErr(code, reason) {
     const r = spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
+  }
+
+  // ---------------------------------------------------------------- P4: figma-pull.js, outDir trap (findings 14/201)
+  console.log("\nfigma-pull.js — outDir-already-has-export/ warning (findings 14/201):");
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-trap-"));
+    fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
+    // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
+    // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
+    const r = spawnSync(process.execPath, [cli, "design", "--list"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    ok("[outdir-trap] warns when the user-typed outDir already contains export/",
+      /warn: design already contains design(\/|\\)export/.test(r.stderr));
+    ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
+    const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
+    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
   // ---------------------------------------------------------------- P5: server-core waitForIdentified (finding 216)
