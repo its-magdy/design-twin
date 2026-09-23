@@ -268,6 +268,24 @@ function snapshotPath(file, cwd = process.cwd()) {
 // ---- asset bytes. A node's `asset` path is derived from its id, so a re-drawn icon keeps the same
 // path and the JSON is identical — only the file on disk differs. The snapshot records a hash per
 // asset beside it; against git HEAD the committed blob is hashed instead.
+//
+// Figma's SVG export is not bit-reproducible (findings 25/222): re-exporting the SAME icon with
+// NOTHING changed in the design comes back with different floating-point path coordinates, ≤0.002px
+// apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull. This is the
+// SAME normalisation figma-plugin/src/assets.ts applies before its own content-hash (round every
+// numeric token to 2 decimal places, ~0.01px — coarse enough to absorb the export noise, fine enough
+// that the eight real arrow-down*.svg variants — three genuinely different icons — stay distinct).
+// Non-SVG bytes (PNG) are hashed as-is: they have no textual coordinate space to normalise, and a
+// changed pixel there is real signal.
+const SVG_NUM_RE = /-?\d+\.\d+/g;
+function normalizeSvgBytes(buf) {
+  const text = buf.toString("utf8");
+  const normalized = text.replace(SVG_NUM_RE, (m) => { const n = Number(m); return Number.isFinite(n) ? n.toFixed(2) : m; });
+  return Buffer.from(normalized, "utf8");
+}
+function hashAssetBytes(fileName, buf) {
+  return sha(/\.svg$/i.test(fileName) ? normalizeSvgBytes(buf) : buf);
+}
 const sha = (buf) => crypto.createHash("sha1").update(buf).digest("hex");
 function assetPaths(doc) {
   const out = new Set();
@@ -283,7 +301,7 @@ function assetRoot(file, assets) {
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
-  if (root) for (const a of assets) { try { out[a] = sha(fs.readFileSync(path.join(root, a))); } catch { /* not exported (--no-assets) */ } }
+  if (root) for (const a of assets) { try { out[a] = hashAssetBytes(a, fs.readFileSync(path.join(root, a))); } catch { /* not exported (--no-assets) */ } }
   return { root, hashes: out };
 }
 function redrawnAssets(file, newDoc, prev, cwd) {
@@ -292,7 +310,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   for (const [a, h] of Object.entries(now.hashes)) {
     let before;
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
-    else if (prev.kind === "git") { try { before = sha(execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
+    else if (prev.kind === "git") { try { before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 })); } catch { /* not committed */ } }
     if (before && before !== h) out.add(a);
   }
   return out;
@@ -313,7 +331,27 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     found.push({ doc: JSON.parse(text), source: "git HEAD", kind: "git" });
   } catch { /* not a repo, or not committed */ }
   if (!found.length) return null;
-  const at = (d) => (d && typeof d.exportedAt === "string" ? d.exportedAt : null);
+  // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged
+  // `variables.json` (bridge/variables-merge.js) has no single `exportedAt` that means anything — it is
+  // the union of every screen ever pulled into this project — so `at()` used to fall through to `null`
+  // for it, `previous()`'s "this baseline is the SAME export, don't use it" check could never fire, and
+  // a diff against a stale variables.json baseline that has since been re-pulled with a genuinely
+  // identical export reported nothing wrong to warn about... but also could never tell "same" from
+  // "different" this way (finding 218). `_slices[]` (one per pulled screen) each carry their own `at`
+  // timestamp that DOES change meaningfully — this reads the MAX of them as the document's freshness,
+  // falling back to `exportedAt` for every other doc kind. This is a freshness signal only: the actual
+  // value comparison in diffTokens() is still by variable key (Prompt 1's `keyed()`/`diffTokens`), so a
+  // `_slices[].at` that re-appends on every re-pull (finding 223) does not, by itself, manufacture a
+  // fake "changed" token — it only lets `previous()` recognise which baseline is newer.
+  const at = (d) => {
+    if (!d) return null;
+    if (typeof d.exportedAt === "string") return d.exportedAt;
+    if (Array.isArray(d._slices) && d._slices.length) {
+      const times = d._slices.map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+      if (times.length) return times.reduce((mx, t) => (t > mx ? t : mx));
+    }
+    return null;
+  };
   const now = at(current), notes = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) — ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
@@ -324,22 +362,42 @@ function previous(file, against, cwd = process.cwd(), current = null) {
 }
 
 function main(argv) {
-  const USAGE = "usage: node design-diff.js --snapshot <file.json>...\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
+  const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); process.exit(argv.length ? 0 : 2); }
-  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help"];
+  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
   const unknown = argv.filter((a) => a.startsWith("-") && !KNOWN.includes(a));
   if (unknown.length) { console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})\n${USAGE}`); process.exit(2); }
   if (argv[0] === "--snapshot") {
-    const files = argv.slice(1);
+    const force = argv.includes("--force");
+    const files = argv.slice(1).filter((a) => a !== "--force");
     if (!files.length) { console.error(USAGE); process.exit(2); }
     for (const f of files) {
       if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); continue; }
       const dest = snapshotPath(f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(f, dest);
+      // Non-destructive: `--snapshot` used to be `fs.copyFileSync(f, dest)`, an unconditional overwrite
+      // with no existence check — run step 2 of sync-design twice (once per re-pull, as the skill
+      // instructs) and the SECOND call replaced the first baseline with what was, by then, already the
+      // POST-first-re-pull export, so the diff against the true original baseline was gone for good
+      // (finding 205). A snapshot identical to what's already there is a genuine no-op (re-running the
+      // same step twice in a row must not complain); a snapshot that would actually CHANGE an existing
+      // baseline is refused unless the caller says --force, in which case the old one is kept as
+      // `<name>.prev` (one level — this is a working snapshot, not a version history) so `--force` can
+      // never actually destroy data either.
+      let identical = false;
+      if (fs.existsSync(dest)) { try { identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0; } catch { /* treat as different */ } }
+      if (fs.existsSync(dest) && !identical && !force) {
+        console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change — refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        continue;
+      }
+      if (fs.existsSync(dest) && !identical && force) {
+        try { fs.copyFileSync(dest, dest + ".prev"); } catch { /* best effort */ }
+        try { if (fs.existsSync(dest + ".assets.json")) fs.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev"); } catch { /* best effort */ }
+      }
+      if (!identical) fs.copyFileSync(f, dest);
       let n = 0;
       try { const h = assetHashes(f, JSON.parse(fs.readFileSync(f, "utf8"))).hashes; n = Object.keys(h).length; fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n"); } catch { /* not JSON we understand — the copy is still the snapshot */ }
-      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}`);
+      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
     return;
   }
@@ -359,7 +417,11 @@ function main(argv) {
   try { diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : new Set() }); }
   catch (e) { console.error(`design-diff: ${file}: ${e.message}`); process.exit(2); }
   diff.warnings = [...prev.notes, ...(diff.warnings || [])];
-  const result = { file, against: prev.source, ...diff };
+  // `warned`/`baseline` let a script decide "should I trust this diff" without re-parsing the markdown
+  // or counting `warnings.length` itself — the same two facts `tokens.json`'s human-readable warnings
+  // already convey (finding 218's "zero warnings" complaint was specifically that variables.json had
+  // no equivalent of this at all).
+  const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) { fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true }); fs.writeFileSync(out, text); console.log(`wrote ${out} — ${JSON.stringify(result.summary)}${result.warnings.length ? ` — ${result.warnings.length} warning(s), read them` : ""}`); }
   else process.stdout.write(text);

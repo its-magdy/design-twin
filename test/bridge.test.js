@@ -2032,7 +2032,12 @@ async function disconnectErr(code, reason) {
   ok("[doctor] token: none saved is a note pointing at init", doctor.checkToken({ ...tokS, stored: false, activeSource: "ephemeral", fingerprint: null }).status === "warn");
   ok("[doctor] token: env shadowing a saved token is named", /OVERRIDING/.test(doctor.checkToken({ ...tokS, envSet: true, activeSource: "env", shadowed: true }).detail));
   ok("[doctor] token: loose permissions get the chmod", /chmod 600/.test(doctor.checkToken({ ...tokS, loosePerms: true }).next));
-  ok("[doctor] daemon: none running is ok, not a problem", doctor.checkDaemon(null, 8787).status === "ok");
+  // Finding 204: a missing daemon used to report `ok` for "none running", which undersold the real
+  // cost — every pull without one starts its own bridge and waits out the plugin's full reconnect
+  // window (findings 202/213/220). Never a `fail` (no daemon really is the normal, unconfigured
+  // state), but a `warn` that names `dtwin serve` as the fix.
+  ok("[doctor] daemon: none running is a warn naming `dtwin serve`, not a plain ok",
+    doctor.checkDaemon(null, 8787).status === "warn" && /dtwin serve/.test(doctor.checkDaemon(null, 8787).next || ""));
   ok("[doctor] daemon: a running one reports its connected file names",
     doctor.checkDaemon({ pid: 1, port: 8787, pluginConnected: true, clients: [{ file: "App — Base" }] }, 8787).detail.includes("App — Base"));
   ok("[doctor] port: unset → 8787; an allowed value is kept", doctor.resolvePort(undefined).port === 8787 && doctor.resolvePort("8789").port === 8789);

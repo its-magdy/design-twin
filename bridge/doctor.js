@@ -84,9 +84,19 @@ function connectedDetail(clients, prefix) {
   };
 }
 
-// `st` is daemon.status(port): null when none is running. No daemon is the normal state, not a problem.
+// `st` is daemon.status(port): null when none is running. Without a daemon, every `dtwin pull` starts
+// its own throwaway bridge and waits out the plugin's full reconnect window — the difference between
+// an 8s pull and a 300s+ timeout (findings 202/213/220), and `--client c1` becomes reconnect-order
+// roulette (finding 209) instead of a stable id across a daemon's lifetime. That is a real cost, not a
+// cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
 function checkDaemon(st, port) {
-  if (!st) return ok("daemon", "Daemon", `none running on port ${port} (optional — \`dtwin serve\` keeps the connection open between pulls)`);
+  if (!st) {
+    return warn(
+      "daemon", "Daemon",
+      `none running on port ${port} — every pull will start its own bridge and wait out the plugin's reconnect window (this is what turns a normal export into a 300s+ timeout, and makes --client c1 unstable across runs)`,
+      "run `dtwin serve` in a background terminal before pulling — it keeps one bridge alive so plugins stay connected between commands"
+    );
+  }
   const who = st.pluginConnected ? `plugin connected: ${fileNames(st.clients)}` : "no plugin connected to it";
   return ok("daemon", "Daemon", `running (pid ${st.pid}, port ${st.port}) — ${who}`);
 }

@@ -466,8 +466,15 @@
 
   // src/assets.ts
   var ASSET_DIR = "assets/";
+  var NUM_RE = /-?\d+\.\d+/g;
+  function normalizeSvgForHash(svg) {
+    return svg.replace(NUM_RE, (m) => {
+      const n = Number(m);
+      return Number.isFinite(n) ? n.toFixed(2) : m;
+    });
+  }
   function contentHash(a) {
-    const src = a.text != null ? a.text : a.base64 != null ? a.base64 : "";
+    const src = a.text != null ? normalizeSvgForHash(a.text) : a.base64 != null ? a.base64 : "";
     let h = 2166136261;
     for (let i = 0; i < src.length; i++) {
       h ^= src.charCodeAt(i);
@@ -504,11 +511,12 @@
     }
     const base = baseNameFor(a);
     let file = base + "." + fmt;
-    const taken = byName.get(file);
+    const key = file.toLowerCase();
+    const taken = byName.get(key);
     if (taken !== void 0 && taken !== hash) {
       file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
     }
-    byName.set(file, hash);
+    byName.set(file.toLowerCase(), hash);
     const asset = { ...a, file, hash };
     assets.push(asset);
     if (dedupable) byContent.set(hash + "." + fmt, { file, asset });

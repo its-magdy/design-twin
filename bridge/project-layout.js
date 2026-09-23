@@ -94,6 +94,21 @@ delete the whole directory and re-pull and you lose nothing.
     export/variables.json                          the union of every screen's slice (merged, never replaced)
     export/assets/                                 shared and cumulative across screens
 
+## design/.sync/ — a working snapshot, not an export
+
+\`design-diff.js --snapshot <file>\` copies a file here BEFORE you re-pull it, so the sync-design skill
+can diff the old export against the new one afterwards. It is non-destructive by default (a snapshot
+that would replace an existing, DIFFERENT one is refused unless you pass \`--force\`, which keeps the
+old copy as \`<name>.prev\`) — see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
+Figma-owned export above and not something a re-pull ever writes to; delete it any time, it only
+affects what the next diff compares against.
+
+## design/sync/ — where a diff report lands
+
+\`design-diff.js ... --out design/sync/<screen>.md\` writes its human-readable report here, per the
+sync-design skill's step 4. Also yours: it is evidence of what changed on a given sync, not something
+\`dtwin pull\` regenerates.
+
 ## Everything else here — you own it
 
 These are decisions and evidence. They are not regenerable, and a re-pull never touches them.

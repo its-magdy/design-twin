@@ -296,6 +296,18 @@ function snapshotPath(file, cwd = process.cwd()) {
   const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
   return path.join(cwd, "design", ".sync", flat);
 }
+var SVG_NUM_RE = /-?\d+\.\d+/g;
+function normalizeSvgBytes(buf) {
+  const text = buf.toString("utf8");
+  const normalized = text.replace(SVG_NUM_RE, (m) => {
+    const n = Number(m);
+    return Number.isFinite(n) ? n.toFixed(2) : m;
+  });
+  return Buffer.from(normalized, "utf8");
+}
+function hashAssetBytes(fileName, buf) {
+  return sha(/\.svg$/i.test(fileName) ? normalizeSvgBytes(buf) : buf);
+}
 var sha = (buf) => crypto.createHash("sha1").update(buf).digest("hex");
 function assetPaths(doc) {
   const out = /* @__PURE__ */ new Set();
@@ -316,7 +328,7 @@ function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = sha(fs.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs.readFileSync(path.join(root, a)));
     } catch {
     }
   }
@@ -330,7 +342,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = sha(execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -357,7 +369,15 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   } catch {
   }
   if (!found.length) return null;
-  const at = (d) => d && typeof d.exportedAt === "string" ? d.exportedAt : null;
+  const at = (d) => {
+    if (!d) return null;
+    if (typeof d.exportedAt === "string") return d.exportedAt;
+    if (Array.isArray(d._slices) && d._slices.length) {
+      const times = d._slices.map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+      if (times.length) return times.reduce((mx, t) => t > mx ? t : mx);
+    }
+    return null;
+  };
   const now = at(current), notes = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) \u2014 ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
@@ -367,12 +387,12 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   return { ...useful[0], notes };
 }
 function main(argv) {
-  const USAGE = "usage: node design-diff.js --snapshot <file.json>...\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
+  const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
     process.exit(argv.length ? 0 : 2);
   }
-  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help"];
+  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
   const unknown = argv.filter((a) => a.startsWith("-") && !KNOWN.includes(a));
   if (unknown.length) {
     console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})
@@ -380,7 +400,8 @@ ${USAGE}`);
     process.exit(2);
   }
   if (argv[0] === "--snapshot") {
-    const files = argv.slice(1);
+    const force = argv.includes("--force");
+    const files = argv.slice(1).filter((a) => a !== "--force");
     if (!files.length) {
       console.error(USAGE);
       process.exit(2);
@@ -392,7 +413,28 @@ ${USAGE}`);
       }
       const dest = snapshotPath(f);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(f, dest);
+      let identical = false;
+      if (fs.existsSync(dest)) {
+        try {
+          identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0;
+        } catch {
+        }
+      }
+      if (fs.existsSync(dest) && !identical && !force) {
+        console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        continue;
+      }
+      if (fs.existsSync(dest) && !identical && force) {
+        try {
+          fs.copyFileSync(dest, dest + ".prev");
+        } catch {
+        }
+        try {
+          if (fs.existsSync(dest + ".assets.json")) fs.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+        } catch {
+        }
+      }
+      if (!identical) fs.copyFileSync(f, dest);
       let n = 0;
       try {
         const h = assetHashes(f, JSON.parse(fs.readFileSync(f, "utf8"))).hashes;
@@ -400,7 +442,7 @@ ${USAGE}`);
         fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}`);
+      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
     return;
   }
@@ -434,7 +476,7 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
     process.exit(2);
   }
   diff.warnings = [...prev.notes, ...diff.warnings || []];
-  const result = { file, against: prev.source, ...diff };
+  const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });

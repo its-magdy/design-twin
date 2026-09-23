@@ -141,20 +141,81 @@ function writeLibrary(dir, designSystem, log) {
 const BIG_ASSET_BYTES = 250 * 1024;
 const BUSY_SVG_PATHS = 400;
 
+// assets/ is SHARED and CUMULATIVE across pulls (design/README.md; finding 20 — accumulate, don't
+// replace, is deliberate and stays). What is NOT acceptable is a later pull silently overwriting an
+// earlier screen's file under the same name (finding 23/104/125) — including a same-name collision
+// that differs only in CASE, which is one path on macOS's default case-insensitive filesystem (finding
+// 124: `angle-left.svg` vs `Angle-left.svg`). So every write here is refuse-or-version, never clobber:
+// if a file already on disk (matched case-INSENSITIVELY, since that is the filesystem's own rule)
+// has different bytes than what this pull is about to write, the NEW one gets a content-hash suffix
+// instead of overwriting — mirroring exactly the suffixing the plugin's own `register()` does for a
+// same-run collision (figma-plugin/src/assets.ts). Identical bytes are left alone (no-op, not a
+// rewrite) so an unrelated re-pull doesn't touch a file's mtime for nothing.
+//
+// `a.file` (and therefore anything that reads it afterwards — writeScreenAssets, called right after
+// this on the same array, and the `entry.assets`/`root.reference` pointers in writeScreen) is mutated
+// in place to the name ACTUALLY written, so nothing downstream can point at a name this function
+// decided not to use.
+function readExistingDirCaseFold(adir) {
+  const map = new Map(); // lowercased basename -> real basename on disk
+  let names = [];
+  try { names = fs.readdirSync(adir); } catch (e) { /* doesn't exist yet */ }
+  for (const n of names) map.set(n.toLowerCase(), n);
+  return map;
+}
+
+function shortHashOf(a, bytes) {
+  // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
+  // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
+  if (typeof a.hash === "string" && a.hash) return a.hash.replace(/[^a-z0-9]/gi, "").slice(0, 6);
+  return require("crypto").createHash("sha1").update(bytes).digest("hex").slice(0, 6);
+}
+
 function writeAssets(dir, assets, log, subdir) {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
+  const existing = readExistingDirCaseFold(adir); // lower -> real name already on disk
+  const claimed = new Map(); // lower -> real name this call has written/claimed so far (this batch)
+  for (const [k, v] of existing) claimed.set(k, v);
   const heavy = [];
   let n = 0;
   for (const a of assets) {
-    // a.file is the name the plugin already put in the tree's `asset` path — write exactly that.
-    const file = path.join(adir, path.basename(a.file));
-    let bytes = 0, paths = 0;
-    if (a.text != null) { fs.writeFileSync(file, a.text); bytes = Buffer.byteLength(a.text); paths = (a.text.match(/<path\b/g) || []).length; }
-    else if (a.base64 != null) { const b = Buffer.from(a.base64, "base64"); fs.writeFileSync(file, b); bytes = b.length; }
+    let bytes;
+    if (a.text != null) bytes = Buffer.from(a.text, "utf8");
+    else if (a.base64 != null) bytes = Buffer.from(a.base64, "base64");
     else continue; // manifest-only entry (e.g. an asset the plugin skipped) — nothing to write
-    if (bytes >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS) heavy.push({ file: path.basename(a.file), node: a.id, bytes, paths });
+
+    let baseName = path.basename(a.file);
+    const dirPrefix = path.dirname(a.file); // usually "assets"
+    let key = baseName.toLowerCase();
+    const priorName = claimed.get(key);
+    if (priorName !== undefined) {
+      // Something with this name (case-insensitively) is already on disk or already written this
+      // batch. Same bytes -> reuse it silently (this IS the same asset, re-pulled). Different bytes ->
+      // this is a genuinely different asset that collides only in name/case; give the NEW one a
+      // content-hash suffix rather than touch the file that was there first.
+      let same = false;
+      try { same = Buffer.compare(fs.readFileSync(path.join(adir, priorName)), bytes) === 0; } catch (e) { same = false; }
+      if (same) {
+        a.file = dirPrefix + "/" + priorName;
+        n++; // counted as written even though the byte-identical file was left untouched
+        continue;
+      }
+      const ext = path.extname(baseName);
+      const stem = baseName.slice(0, baseName.length - ext.length);
+      baseName = stem + "-" + shortHashOf(a, bytes) + ext;
+      key = baseName.toLowerCase();
+      // Vanishingly unlikely (a 6-char hex suffix colliding too), but never loop forever on it.
+      let guard = 0;
+      while (claimed.has(key) && guard++ < 5) { baseName = stem + "-" + shortHashOf(a, bytes) + "_" + guard + ext; key = baseName.toLowerCase(); }
+    }
+    const file = path.join(adir, baseName);
+    fs.writeFileSync(file, bytes);
+    claimed.set(key, baseName);
+    a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
+    const paths = a.text != null ? (a.text.match(/<path\b/g) || []).length : 0;
+    if (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths });
     n++;
   }
   if (log) log("wrote " + n + " asset(s) to " + adir);
@@ -171,6 +232,26 @@ function writeAssets(dir, assets, log, subdir) {
     );
   }
   return n;
+}
+
+// A high `assetsGeometry` count means a large share of this screen's icons could not be exported as
+// SVG and were recovered as raw path data instead (figma-plugin/src/assets.ts geometryOf) — usable,
+// but a strictly worse asset than a real export. Finding 30: 40% of a screen's nodes fell back this
+// way with `manifest.warnings: []` and no pull-time signal at all — the tool warned unprompted about a
+// heavy SVG (see BIG_ASSET_BYTES above) but stayed silent about degraded icon exports an order of
+// magnitude more consequential. Exported for the caller that has the manifest in hand (writeScreen —
+// owned outside this file; not called from here so as not to reach into that function) to log
+// alongside its other per-screen output.
+const ASSETS_GEOMETRY_WARN_RATIO = 0.1; // 10%+ of nodes recovered as raw geometry is worth a line
+function assetsGeometryWarning(manifest) {
+  const nodes = manifest && typeof manifest.nodes === "number" ? manifest.nodes : 0;
+  const geo = manifest && typeof manifest.assetsGeometry === "number" ? manifest.assetsGeometry : 0;
+  if (!nodes || !geo) return null;
+  const ratio = geo / nodes;
+  if (ratio < ASSETS_GEOMETRY_WARN_RATIO) return null;
+  return `warn  ${geo} of ${nodes} nodes (${Math.round(ratio * 100)}%) fell back to raw geometry instead of an SVG export — ` +
+    `usable, but check a sample of these icons; a bulk fallback like this usually means the source vectors have an ` +
+    `unusual paint/blend setup Figma's exporter can't rasterize.`;
 }
 
 // Reference PNGs land in assets/, the same place a --node pull puts the frame's own reference.
@@ -334,6 +415,7 @@ function writeScreenAssets(dir, paths, assets) {
   const crypto = require("crypto");
   const byHash = new Map();
   const files = [];
+  const reference = []; // the frame's own screenshot — see note below on why it's split out
   for (const a of assets) {
     if (!a || !a.file) continue;
     const bytes = a.text != null ? Buffer.from(a.text, "utf8") : a.base64 != null ? Buffer.from(a.base64, "base64") : null;
@@ -342,6 +424,12 @@ function writeScreenAssets(dir, paths, assets) {
     const entry = { file, node: a.id, bytes: bytes ? bytes.length : 0, hash };
     if (Array.isArray(a.from) && a.from.length > 1) entry.from = a.from; // one file, several nodes reached it
     if (a.text != null && /\.svg$/i.test(a.file)) Object.assign(entry, svgPalette(a.text));
+    // The whole-frame reference PNG (a.kind === "reference", <id>_ref.png — see figma-plugin/src/assets.ts)
+    // is a discovery/self-check aid, not a shippable UI asset: on one real screen it was 196,049 of
+    // 312,234 total bytes (63%) and headed the `heavy` list purely because of its own size (finding 28).
+    // It still gets a manifest ROW (build-screen looks it up), just not counted into `count`/`totalBytes`,
+    // which exist to answer "how much of this do I actually ship".
+    if (a.kind === "reference") { reference.push(entry); continue; }
     files.push(entry);
     if (hash) {
       if (!byHash.has(hash)) byHash.set(hash, []);
@@ -358,12 +446,15 @@ function writeScreenAssets(dir, paths, assets) {
     duplicates,
     monochrome,
     heavy,
+    reference: reference.length ? reference : undefined,
     note:
-      "Every asset this screen references, with a content hash. Files sharing a hash are byte-identical. " +
-      "`monochrome` lists the SVGs whose every fill/stroke is one colour — those are the ones safe to " +
-      "recolour to currentColor at render time; the rest carry semantic colour (a red trash, a green tick) " +
-      "and must keep it. `heavy` lists assets too large to inline. Never edit an exported asset in place: " +
-      "the producer owns these filenames and a re-pull will overwrite them.",
+      "Every SHIPPABLE asset this screen references, with a content hash. Files sharing a hash are " +
+      "byte-identical. `monochrome` lists the SVGs whose every fill/stroke is one colour — those are the " +
+      "ones safe to recolour to currentColor at render time; the rest carry semantic colour (a red trash, " +
+      "a green tick) and must keep it. `heavy` lists assets too large to inline. `reference` (if present) " +
+      "is the frame's own whole-screen screenshot — useful for visual comparison, not something the app " +
+      "ships, so it is excluded from `count`/`totalBytes`. Never edit an exported asset in place: the " +
+      "producer owns these filenames and a re-pull will overwrite them.",
     files,
   };
   writeJson(dir, paths.assets, doc, true);
@@ -422,4 +513,4 @@ function inlineLimitChars(env = process.env) {
   return Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8);
 }
 
-module.exports = { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };
+module.exports = { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };

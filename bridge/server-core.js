@@ -477,6 +477,26 @@ function createBridge(port = PORT) {
     });
   }
 
+  // A socket being open is not the same as it being IDENTIFIED: the plugin's `hello` (which carries
+  // `file`, used by --client <name>) arrives a beat after the WebSocket handshake, not in the same
+  // tick. Resolving a name-based --client the instant waitForConnection settles was a coin flip
+  // (finding 216: "one run in four failed ... the plugin's identified message has not arrived yet"),
+  // because `resolveClient` can only match `file` on entries that already have it. This waits (briefly
+  // — plugin identification is sub-second once connected) for at least one live client to be
+  // identified, OR for `timeoutMs` to elapse, whichever comes first; it never rejects — callers still
+  // get whatever resolveClient() decides afterwards, including its own honest error.
+  function waitForIdentified(timeoutMs = 3000, pollMs = 100) {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      (function poll() {
+        const live = liveClients();
+        if (!live.length || live.some((e) => e.instanceId)) return resolve();
+        if (Date.now() - start > timeoutMs) return resolve();
+        setTimeout(poll, pollMs);
+      })();
+    });
+  }
+
   // Shut the server down so the process can exit ON ITS OWN. Without this a caller's only way out was
   // process.exit(), which on a PIPE discards whatever stdout hasn't flushed — Node's stdout is async
   // for pipes, so a large `--list` payload was silently cut at one 64KB pipe buffer (measured:
@@ -493,7 +513,7 @@ function createBridge(port = PORT) {
     try { wss.close(); } catch { /* already closing */ }
   }
 
-  return { request, isConnected, waitForConnection, connectionInfo, listClients, resolveClient, close, port };
+  return { request, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port };
 }
 
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's

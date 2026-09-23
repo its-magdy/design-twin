@@ -340,6 +340,15 @@ listing shows what you can address:
 Address one with --client <connId | fileKey | part of the file name>, e.g. --client "App".
 ```
 
+**`c1`/`c2` are display labels, not stable ids.** They are assigned in *reconnect order* for the
+current bridge's lifetime — whichever plugin's WebSocket lands first becomes `c1`. Two runs of the
+same `--client c1` can select **different Figma files** if the bridge restarted (no `dtwin serve`
+daemon) and the reconnect race went the other way between runs (finding 209). Prefer the **file name**
+(a substring match, e.g. `--client "App"`) or the **fileKey** when one is available — both are stable
+across restarts; `c1`/`c2` are only for telling two *currently open* files apart in one sitting, exactly
+like `--list-clients`' own listing does. Under a running `dtwin serve` daemon, connIds are assigned
+once per plugin connection and stay stable until that plugin's window disconnects/reconnects.
+
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
 dtwin design/base --client c1 --page 12:34

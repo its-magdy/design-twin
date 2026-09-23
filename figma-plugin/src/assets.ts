@@ -27,12 +27,31 @@ import { checkCancelled, progress } from "./progress";
 // definition, build-screen looks it up by id, and every doc names that shape.
 const ASSET_DIR = "assets/";
 
+// Figma's own SVG export is not bit-reproducible: re-exporting the SAME icon, with NOTHING changed in
+// the design, comes back with different floating-point path coordinates (measured ≤0.002px drift —
+// findings 25/222, e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
+// d="…8.7793 …4.97596…", the same icon exported twice). Hashing the raw SVG text made every re-pull
+// with zero design changes report a fresh batch of "changed" assets, and made two genuinely identical
+// icons dedupe-fail (finding 24). Rounding every numeric token in the `d`/coordinate attributes to 2
+// decimal places (~0.01px — an order of magnitude coarser than the observed drift, two orders finer
+// than anything a human would call "moved") absorbs the export noise while still telling apart the
+// eight real `arrow-down*.svg` variants, which are THREE genuinely different icons at >0.1px apart.
+// PNG/base64 assets are untouched: they have no textual coordinate space to normalise, and their
+// pixels really do change when Figma recompresses them, which is legitimate signal, not noise.
+const NUM_RE = /-?\d+\.\d+/g;
+function normalizeSvgForHash(svg: string): string {
+  return svg.replace(NUM_RE, (m) => {
+    const n = Number(m);
+    return Number.isFinite(n) ? n.toFixed(2) : m;
+  });
+}
+
 // FNV-1a, 32-bit. Not a cryptographic hash and does not need to be — it decides whether two byte
 // strings in ONE export are the same, and a collision would at worst reuse one icon for another
 // (which the length check below makes vanishingly unlikely). The Figma plugin sandbox has no
 // crypto.subtle, so this is also the only option that does not cost a round trip.
 function contentHash(a: { base64?: string; text?: string }): string {
-  const src = a.text != null ? a.text : a.base64 != null ? a.base64 : "";
+  const src = a.text != null ? normalizeSvgForHash(a.text) : a.base64 != null ? a.base64 : "";
   let h = 0x811c9dc5;
   for (let i = 0; i < src.length; i++) {
     h ^= src.charCodeAt(i);
@@ -89,13 +108,22 @@ function register(a: { id: string; name: string; format: string; base64?: string
 
   const base = baseNameFor(a);
   let file = base + "." + fmt;
-  const taken = byName.get(file);
+  // Fold case for the UNIQUENESS check, not for the name written to disk: `angle-left.svg` and
+  // `Angle-left.svg` are two different Figma layers that collide into ONE path on a case-insensitive
+  // filesystem (macOS default) — write-out.js writes both into the same shared assets/ dir, so
+  // whichever pull ran second silently clobbered the first (finding 124). Comparing case-folded keys
+  // here means the SECOND name is treated as "taken" even though it differs only in case, so it gets
+  // the same content-hash suffix a same-name-different-content collision gets — both files end up with
+  // distinct, filesystem-safe names.
+  const key = file.toLowerCase();
+  const taken = byName.get(key);
   if (taken !== undefined && taken !== hash) {
-    // Same human name, different bytes — two distinct icons that happen to share a leaf name. Keep
-    // both, tell them apart by content, and never let the second silently replace the first.
+    // Same human name (case-insensitively), different bytes — two distinct icons that happen to share
+    // a leaf name, or differ only in case. Keep both, tell them apart by content, and never let the
+    // second silently replace the first.
     file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
   }
-  byName.set(file, hash);
+  byName.set(file.toLowerCase(), hash);
 
   const asset: Asset = { ...a, file, hash };
   assets.push(asset);

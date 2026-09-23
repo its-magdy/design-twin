@@ -75,6 +75,7 @@ function mergeVariablesDoc(prev, next, slice) {
     const nameConflicts = sameNameConflicts(doc.variables, doc._slices);
     applyNameConflicts(doc, nameConflicts, []);
     doc._note = MERGE_NOTE;
+    doc.exportedAt = docExportedAt(doc._slices);
     return {
       doc,
       stats: { added: doc.variables.length, updated: 0, kept: 0, conflicts: [], nameConflicts, collections: doc.collections.length, first: true },
@@ -177,6 +178,7 @@ function mergeVariablesDoc(prev, next, slice) {
   stats.nameConflicts = sameNameConflicts(variables, slices);
   applyNameConflicts(doc, stats.nameConflicts, valueConflicts);
   doc._note = MERGE_NOTE;
+  doc.exportedAt = docExportedAt(doc._slices);
   return { doc, stats };
 }
 
@@ -257,4 +259,19 @@ function sliceEntry(slice, doc) {
   };
 }
 
-module.exports = { mergeVariablesDoc, sameNameConflicts, varId, collId, MERGE_NOTE };
+// A top-level freshness stamp, derived from `_slices[].at` (never invented separately from it) so a
+// consumer that expects every export document to carry `exportedAt` (design-diff.js's `previous()`,
+// `dtwin doctor`'s export-age check) has one to read (finding 218 — variables.json had none, so the
+// stale-baseline check that works for tokens.json could never fire for it). This is a MAX over the
+// slice times, i.e. "when did the most recent contributing pull happen" — not a plain re-stamped
+// "now", which the prompt is explicit must be avoided: `_slices[].at` legitimately re-appends on every
+// re-pull of any ONE screen (finding 223), so `exportedAt` moves whenever slices do, same as they do,
+// and nothing here compares variable VALUES by exportedAt equality — that comparison stays keyed
+// (`varId`/`sameValue` above), so a moved `exportedAt` alone can never manufacture a fake "token
+// changed" the way a naive independent timestamp would.
+function docExportedAt(slices) {
+  const times = (Array.isArray(slices) ? slices : []).map((s) => s && typeof s.at === "string" ? s.at : null).filter(Boolean);
+  return times.length ? times.reduce((mx, t) => (t > mx ? t : mx)) : null;
+}
+
+module.exports = { mergeVariablesDoc, sameNameConflicts, varId, collId, MERGE_NOTE, docExportedAt };

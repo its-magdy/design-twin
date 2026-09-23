@@ -464,7 +464,9 @@ const asLibrary = takeValues(args, "--as-library", "a library name, e.g. --as-li
 // a scope or a read option — it is the ADDRESS, and it composes with all of them. Omit it and the
 // bridge uses the only connected file; with several connected it refuses and lists them rather than
 // guessing, so an export can never silently come from the wrong file. Accepts a connId (from
-// --list-clients), a fileKey, or part of the file's name.
+// --list-clients), a fileKey, or part of the file's name. The connId (c1, c2, …) is a reconnect-order
+// LABEL for the current bridge lifetime, not a stable id across restarts (finding 209) — prefer the
+// file name or fileKey in a script; connId is fine for a human picking between two files open right now.
 const client = takeValues(args, "--client", "--client needs a connection id, fileKey, or part of a file name (see --list-clients)")[0] || null;
 
 // --token-file <path>: read the bridge token from somewhere other than the stored default. A
@@ -693,6 +695,9 @@ function formatClients(rows) {
   lines.push("");
   lines.push("Address one with --client <connId | fileKey | part of the file name>, e.g. --client " +
     (list[0].file ? JSON.stringify(list[0].file.split(/\s+/)[0]) : list[0].connId) + ".");
+  lines.push("Note: c1/c2 are reconnect-order LABELS for this bridge's current lifetime, not stable ids —" +
+    " a restart without `dtwin serve` can hand a different file the same label next time. Prefer the" +
+    " file name or fileKey when you script this.");
   return lines.join("\n");
 }
 
@@ -849,9 +854,12 @@ async function main() {
   const d = await daemon.connect();
   if (d) console.error("[dtwin] using the running daemon (" + d.sock + ") — no reconnect needed.");
 
-  // Only the export paths write to outDir; --list/--children print to stdout and are explicitly "a
-  // decision aid, not a build input", so they must not leave an empty design/ behind as a side effect.
-  if (!listOnly && !childrenId && !listLibraries && !whoami && !listClients) fs.mkdirSync(outDir, { recursive: true });
+  // outDir is created lazily by each writer (writeExport/writeScreen/writeScreenshot all
+  // fs.mkdirSync(dir, {recursive:true}) themselves) rather than eagerly here. Creating it up front —
+  // before the client was even resolved — meant a command that fails on the multi-client check (or any
+  // other pre-export validation) still left a stray empty outDir behind (finding 13): `dtwin
+  // nonexistent` with two clients connected exited 1 on "say which one to use" and left `./nonexistent/`
+  // on disk. `--list`/`--children` never write outDir at all, so they need no mkdir either way.
 
   let bridge = null;
   let send;
@@ -864,16 +872,26 @@ async function main() {
     console.error("[dtwin] listening on ws://localhost:" + bridge.port);
     console.error('[dtwin] Open your Figma file and run "Design Twin" (it auto-connects)…');
     console.error("[dtwin] tip: --serve keeps this connection open so later pulls skip the reconnect.");
-    // --list-clients is the one command that is MEANINGFUL with nothing connected ("which files can I
-    // talk to?" → "none, open one"), so it must not sit in the 10-minute connect wait that exists for
-    // commands which genuinely need a plugin on the other end.
-    if (!listClients) {
-      try { await bridge.waitForConnection(connectWaitMs); }
-      catch (e) {
+    // --list-clients IS meaningful with nothing ever connecting ("which files can I talk to?" →
+    // "none, open one"), but with no daemon running it is talking to a bridge it JUST opened, and every
+    // plugin window currently open in Figma is mid-reconnect to it (they retry every 3s). Skipping the
+    // wait here used to make `list clients` answer `{"clients":[]}` with exit 0 while two files were
+    // connected a second later (finding 210) — the documented `--timeout` window applies to this
+    // command too. The difference from an export is only what happens on a full timeout: no plugin
+    // ever showing up is this command's legitimate "none" answer, not an error, so the wait is capped
+    // at `connectWaitMs` but a timeout falls through to the (possibly still empty) listClients() below
+    // instead of throwing.
+    try { await bridge.waitForConnection(connectWaitMs); }
+    catch (e) {
+      if (!listClients) {
         bridge.close();
         throw new Error(`no Figma plugin connected within ${Math.round(connectWaitMs / 1000)}s. In Figma DESKTOP open the file and run Plugins → Development → Design Twin, then run this again (--timeout <seconds> waits longer; \`dtwin doctor\` says what is wrong if it still won't connect).`);
       }
+      // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
     }
+    // A name/fileKey target (not a bare c<N> connId, which never depends on identification) can lose
+    // the race against the plugin's `hello` — see waitForIdentified's comment (finding 216).
+    if (client && !/^c\d+$/.test(client)) await bridge.waitForIdentified();
     send = (cmd, args, timeoutMs) => bridge.request(cmd, args, timeoutMs, client);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to
