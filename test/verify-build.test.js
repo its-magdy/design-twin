@@ -275,7 +275,8 @@ check("[189] a failing verify report turns the same plan into `failed`, whatever
   fs.writeFileSync(path.join(root, "design", "verify", "login.report.json"), JSON.stringify({ schema: "designtwin/verify-report@2", verdict: "fail", why: ["4 high-severity value mismatch(es)"] }));
   const before = statusOf(root);
   const r = runHook(root);
-  return before === "pending" && r.status === 0 && planOf(root).status === undefined && /removed the stored "status": "verified"/.test(r.stderr)
+  // precedence 2: a failing @2 report is "failed" even before the hook has run — never hidden behind "pending"
+  return before === "failed" && r.status === 0 && planOf(root).status === undefined && /removed the stored "status": "verified"/.test(r.stderr)
     && statusOf(root) === "failed";
 })());
 check("[§2.9c] a hand edit to a file the plan describes turns `static-only` into `stale`, and re-opens the plan for the hook", (() => {
@@ -486,13 +487,13 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   const st = (s) => computeStatus(JSON.parse(fs.readFileSync(planFile(s), "utf8")), { cwd: root, planFile: planFile(s) });
   const before = [st(JR), st(GP)];
   check("[155] before the hook runs, the stored \"verified\" is ignored — computed status is pending, and says why",
-    fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /older hook and is ignored/.test(s.reasons[0])));
+    fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0])));
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const after = { jr: JSON.parse(fs.readFileSync(planFile(JR), "utf8")), gp: JSON.parse(fs.readFileSync(planFile(GP), "utf8")) };
   check("[155] the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
   const jr = st(JR), gp = st(GP);
   check(`[155/316] Job Roles: not verified — its report (JobRoles.report.json, schema @1) is flagged as predating @2, and its false "31 component(s) … never built" is NOT repeated (got ${jr.status})`,
-    jr.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1 — it predates designtwin\/verify-report@2/.test(jr.reasons.join(" "))
+    jr.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\) — it predates designtwin\/verify-report@2/.test(jr.reasons.join(" "))
     && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0].matchedBy === "layer name");
   check(`[189] Global Policies: not verified either (got ${gp.status} — its hook run blocked on the unanchored footer)`, gp.status !== "verified" && gp.status === "blocked");
   const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
@@ -668,6 +669,29 @@ check("[325] …nor a file whose only occurrence is the token's own definition l
     { files: ["theme.css", "Card.tsx"], tokens: [brand], verification: STATIC });
   return b.length === 1 && /in Card\.tsx, but/.test(b[0]);
 })());
+
+console.log("P2b follow-up — --status on the untouched live plan: precedence, and a why that is never empty:");
+{
+  // Exactly the livetest-3 state: plan as written (stored "verified", no verification.hook), and the
+  // original schema-@1 JobRoles.report.json saying fail.
+  const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
+  const cli = spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" });
+  const row = JSON.parse(cli.stdout)[0];
+  check(`the untouched Job Roles plan → pending, with a why naming the ignored stored status, the unrun hook, and the @1 report and its verdict (got ${row.status}; why ${row.why === null ? "null" : "set"})`,
+    cli.status === 0 && row.status === "pending" && typeof row.why === "string"
+    && /stored "status": "verified" was not confirmed/.test(row.why) && /Stop hook has not checked this plan/.test(row.why)
+    && /JobRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\)/.test(row.why) && /Regenerate it/.test(row.why)
+    && !/never built|31 component/.test(row.why));
+  const all = JSON.parse(spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" }).stdout);
+  check("every non-verified row of --status --json carries a non-empty why", all.length === 2 && all.every((r) => r.status === "verified" || (typeof r.why === "string" && r.why.length > 0)));
+  // precedence 2 over 5: an @2 report that FAILS is reported as failed even though the hook never ran
+  const rep = JSON.parse(fs.readFileSync(path.join(root, "design/verify/JobRoles.report.json"), "utf8"));
+  fs.writeFileSync(path.join(root, "design/verify/JobRoles.report.json"), JSON.stringify(Object.assign(rep, { schema: "designtwin/verify-report@2", headline: "FAIL — nodes measured 76/186" })));
+  const r2 = JSON.parse(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout)[0];
+  check(`precedence: a failing @2 report is "failed" even before the hook has run, and why still says the hook has not (got ${r2.status})`,
+    r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why) && /hook: the build-screen Stop hook has not checked/.test(r2.why));
+  check("--help documents the precedence", /First match wins/.test(spawnSync(process.execPath, [HOOK, "--help"], { encoding: "utf8" }).stdout));
+}
 
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
 const BOOT = require.resolve("../design-to-code/map-bootstrap.js");
