@@ -179,8 +179,11 @@ function status() {
     // exactly the wrong thing to do. A fingerprint is only meaningful for a token that persists.
     fingerprint: active.source === "ephemeral" ? null : fingerprint(active.token),
     loosePerms: stored ? loosePerms(file) : false,
-    // A stored token that is being SHADOWED by the env var is the confusing case worth naming.
-    shadowed: !!stored && !!envTok,
+    // A stored token that is being SHADOWED by a DIFFERENT env var value is the confusing case worth
+    // naming — a project that always exports FIGMA_BRIDGE_TOKEN set to the SAME value as the saved
+    // file has nothing to fix, and warning on every run just trains the user to ignore the note
+    // (livetest-4 finding 328).
+    shadowed: !!stored && !!envTok && stored !== envTok,
   };
 }
 

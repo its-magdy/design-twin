@@ -107,7 +107,7 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 577/577 checks passed, exit 0 — deterministic whether or not
+node test/bridge.test.js        # expect: 584/584 checks passed, exit 0 — deterministic whether or not
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS

@@ -80,6 +80,8 @@ if (require.main === module) {
 //   dtwin screenshot 12:34            # a reference PNG of one node — look before you pull
 //   dtwin pull --node 12:34           # export ONE screen into design/export (tokens, tree, assets)
 //   dtwin doctor                      # something not working? checks token, port, daemon, plugin, project
+//   More than one Figma file connected? Add --client <fileKey|part of the file name> to every command
+//   above that reaches the plugin — see `dtwin list clients` for the address book.
 //
 // Where things land: everything a pull writes goes under design/export/ and nowhere else, so that
 // directory can be deleted and re-pulled without touching design/target.json, design/codeconnect.local.json,
