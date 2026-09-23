@@ -420,6 +420,18 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
       () => r.coverage.nodesMatchedByComponentPath >= 1 && r.coverage.instanceSetsWithEvidence > gpRep.coverage.instanceSetsWithEvidence);
   }
 
+  {
+    // finding 170: the search field's id spread onto the inner <input> (330x20) instead of the <label>
+    // that draws the 380x36 field. The real input measurement, attached to the Text Input frame's id.
+    const m = clone(jrMeasured);
+    const input = m.nodes.find((n) => n.nodeId === "I20173:142047;885:2724");
+    m.nodes.push(Object.assign(clone(input), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
+    const r = compare(jrExp, m);
+    ok("[lt3-leaf] 170: a FRAME's id on a leaf <input> is not graded as the frame (no size/fill/radius/padding deltas), and says why", () =>
+      r.deltas.filter((d) => d.nodeId === "I20173:142047;885:2724;880:3724").length === 0 &&
+      r.fieldsNotMeasured.some((f) => f.nodeId === "I20173:142047;885:2724;880:3724" && /leaf <input>/.test(f.why)));
+  }
+
   console.log("verify-screen — livetest-3: text and pseudo-elements (163/177):");
   {
     const m = clone(jrMeasured);

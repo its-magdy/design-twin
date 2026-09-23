@@ -531,6 +531,9 @@ function radiusCorners(v) {
 var clampRadius = (r, w, h) => num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r;
 var TABLE_TAGS = /* @__PURE__ */ new Set(["table", "thead", "tbody", "tfoot", "tr"]);
 var CONTAINER_TAGS = /* @__PURE__ */ new Set(["th", "td", "tr", "button", "label", "li", "a", "section", "article", "header", "footer", "nav", "table", "input"]);
+var LEAF_TAGS = /* @__PURE__ */ new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
+var CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
+var LEAF_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
 var isContainer = (got) => got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0);
 var LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
@@ -635,6 +638,8 @@ function compare(expectation, measured, opts) {
     const container = isText && isContainer(got);
     const tb = got.textBox && typeof got.textBox === "object" ? got.textBox : null;
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
+    const onLeaf = CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase());
+    const leafWhy = onLeaf && `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container`;
     for (const f of FIELDS) {
       if (spec[f.key] === void 0) continue;
       let val = got[f.key];
@@ -650,6 +655,10 @@ function compare(expectation, measured, opts) {
       tally(f.key, present);
       if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) {
         gap(spec, f.label, stateWhy);
+        continue;
+      }
+      if (onLeaf && LEAF_FIELDS.has(f.key)) {
+        gap(spec, f.label, leafWhy);
         continue;
       }
       if (isText && f.box && container && !tb) {
@@ -696,7 +705,8 @@ function compare(expectation, measured, opts) {
         });
       }
     }
-    if (spec.radiusCorners) {
+    if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
+    else if (spec.radiusCorners) {
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
       if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
@@ -714,6 +724,7 @@ function compare(expectation, measured, opts) {
       tally("padding", got.padding !== void 0);
       if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property");
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
+      else if (onLeaf) gap(spec, "padding", leafWhy);
       else {
         fieldsChecked++;
         const bad = comparePadding(spec.padding, got.padding);
