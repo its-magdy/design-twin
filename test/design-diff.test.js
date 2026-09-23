@@ -186,7 +186,7 @@ check("catalog: removed / added components and a new variant option are all seen
   const d = diffDocs(cat(), b);
   return d.kind === "catalog" && d.removed[0].name === "Chip" && d.added[0].name === "Badge" && d.changed.length === 1 && d.changed[0].fields.length === 1 && d.changed[0].fields[0].field === "variantProps.State[2]" && /every built screen/.test(markdown(d, "x"));
 })());
-check("the REAL catalog: dropping 3 components is 3 removals", (() => { const real = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "design", "design-system-teamsmart", "components.local.json"), "utf8")); const b = clone(real); b.components = b.components.slice(3); return diffCatalog(real, b).removed.length === 3; })());
+check("a catalog-sized catalog: dropping 3 components is 3 removals", (() => { const real = { components: Array.from({ length: 40 }, (_, i) => ({ key: "k" + i, id: "1:" + i, name: "Component " + i, type: i % 3 ? "COMPONENT" : "COMPONENT_SET", page: "DS", ...(i % 3 ? {} : { variantProps: { State: ["default", "pressed"] } }) })) }; const b = clone(real); b.components = b.components.slice(3); return diffCatalog(real, b).removed.length === 3; })());
 check("a file that is none of the three kinds is refused, not reported as unchanged", (() => { try { diffDocs({ a: 1 }, { a: 2 }); return false; } catch (e) { return /nothing here can be diffed/.test(e.message); } })());
 
 console.log("CLI — baseline choice, asset bytes, flags:");
