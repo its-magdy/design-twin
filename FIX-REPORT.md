@@ -248,4 +248,45 @@ Status: **C** closed · **P** partially closed · **N** not closed · **R** reje
 
 ## 7. Prompt 7 re-test
 
-_(filled in when the re-test agent reports — see the end of this file)_
+Run by a fresh Opus agent with no fix context, in the empty directory
+`/Users/mohamedomarwork/design-twin-livetest-4` (report: `RETEST.md` there), CLI/script level only,
+against head 1536c7d. Caveats it recorded: the `dtwin serve` daemon is the operator's (no-daemon
+criteria not testable); the plugin bundle inside Figma may still be pre-fix (no version is reported —
+new finding 327); no app was built and no browser driven.
+
+**First pass: 53 criterion rows — 39 pass, 5 fail, 9 not testable.** Verified by the re-tester against
+the JSON, not the tool's own summary: 185/185 asset hashes match disk; `angle-left`/`Angle-left`
+separate; 45/45 bound tokens resolve; `_conflicts`/hygiene name both `Space 4`/`Space 2` pairs;
+`Space 4` = 24px, both `Space 3` reachable, `--radius-figma-xl`, no 1e9; hidden 0/0/0 in `--expect`
+and in the plan skeleton (45 tokens / 51 instances); the `radius` probe gets a loud NEVER MEASURED
+headline; coverage 78/186 consistent; Stop hook ≤1.2 s with no stdin 100/100, does not block on a
+hex in a comment, an SVG stroke or a reused component; a stored `verified` is cleared; snapshot
+non-destructive; no-change re-pull diffs clean. Nothing over 90 s.
+
+**The five fails and the new blockers (new findings 310–333 in RETEST.md):**
+
+| # | sev | what | routed to |
+|---|---|---|---|
+| 310 | blocker | once the empty-state sibling `7314:83742` (layer `Job roles`) is pulled, "Job Roles" resolves to it at the exact-layer-name stage although two frames carry the title | P3 (exact stages evaluated together; >1 → stop) |
+| 311 | blocker | `audit.js` still reads the merged `variables.json`, claims the sibling `.vars.json` "was not available", and its `--gate` re-raises the false `Space 4` blocker (5 vs cross-check's 3) | P1 (same slice discovery as cross-check) |
+| 312 | friction | five of sync-design step 4's ten diff commands exit 2 (`styles.*.json`, `hygiene.json`) | P5 (`design-diff.js` document kinds) |
+| 313 | friction | four skills quote `node design-to-code/resolve-screen.js`, a repo path absent in a consumer project | P3 (`${CLAUDE_PLUGIN_ROOT}/scripts/…` + test) |
+| 314 | friction | a no-change re-pull (only `exportedAt`) demotes the screen to `unverified` | P2b (content hash, not time) |
+| 315 | friction | `--expect --out <nickname>` still writes a second artefact set | P3 (refuse unless `--force`) |
+| 316 | friction | `--status` quotes a schema-@1 report's false "31 components never built" | P2b |
+| 317 | friction | no code hash/revision in the verify report; freshness by mtime | P2b |
+| 318 | friction | cross-check component coverage buckets do not partition (62 vs 41) | P1 |
+| 319 | friction | no way to name a screen by title before the first pull | P3 (documented; plugin-side `title` in `dtwin list` is a follow-up) |
+| 320–326, 328 | cosmetic/friction | snapshot messages/exit code, `_note` path, reference PNG "too heavy", hook message names an allow-listed file, message grammar, doctor token warning | P5 / P2b / P1 / P4 |
+| 327 | friction | plugin reports no version, so a stale bundle in Figma is undetectable | P5 (version in hello + doctor warn) |
+| 329 | friction | `dtwin --help` never mentions `--client` | P4 |
+| 330–333 | positive | asset pipeline truthful; hook fast and never writes a green; verify-screen honest about coverage; token pipeline keeps both `Space 4` | — |
+
+Re-tester's closing answer: *"Closer, but still no."* The verifier and the hook no longer produce a
+false green and the asset/token pipelines could not be broken offline, but a newcomer cannot name the
+screen by title before the first pull (319), pulling the empty-state sibling moves every later skill
+to the wrong frame (310), the first build gate re-raises the false `Space 4` blocker (311), four
+skills quote a path that does not exist in the user's project (313), and half of sync-design's diffs
+error (312).
+
+**Second pass (after the routed fixes):** _see the end of this file._

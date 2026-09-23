@@ -177,3 +177,14 @@ editing, and the orchestrator routes it.
   init help matches the filesystem. Sent back for: finding 33 (doctor still attributes the export
   to the design-system file — screens carry no source-file stamp; granted `write-out.js` to add
   `sourceFile`), and its own new doctor test being machine-dependent (live daemon on 8787).
+
+## Wave D log (orchestrator)
+
+- P4 merged (rounds 2–3: `sourceFile` stamp + per-source doctor line; env-independent doctor tests →
+  bridge 578/578 with the daemon running; `list`'s own next-step hint no longer recommends the trap;
+  README `--client` example uses a file name). Head 1536c7d. Every suite green.
+- Prompt 7 (fresh Opus, `design-twin-livetest-4/RETEST.md`): 39 pass / 5 fail / 9 not testable;
+  new findings 310–333, two blockers (310 title-vs-layer-name ambiguity once a sibling is pulled;
+  311 audit.js still reads the union). All routed back to the owning agents in one parallel round
+  (P1: 311/318/326; P3: 310/313/315/319; P5: 312/320/322/323/324/327; P2b: 314/316/317/325;
+  P4: 321/328/329). Orchestrator re-checks the five failed criteria after the merges.
