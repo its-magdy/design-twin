@@ -486,7 +486,7 @@ if (require.main === module) {
     argv.splice(i, 1);
     return true;
   };
-  const USAGE = "usage:\n  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen>\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data. Read them; never retype them.\n  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'.";
+  const USAGE = "usage:\n  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen>\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data. Read them; never retype them.\n      --out defaults to design/verify/<the first input file's own basename>.\n  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'.\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     process.exit(argv.length ? 0 : 2);
@@ -521,7 +521,8 @@ if (require.main === module) {
     }
     const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    write(out, exp);
+    const outBase = out || path.join("design", "verify", path.basename(argv[0], ".json"));
+    write(outBase, exp);
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s)`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
     process.exit(0);
@@ -539,8 +540,8 @@ if (require.main === module) {
   );
   const rep = compare(expectation, measured);
   const md = reportToMarkdown(rep);
-  write(out, rep, md);
-  if (!out) process.stdout.write(md);
+  const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
+  write(compareBase, rep, md);
   console.error(`${rep.verdict.toUpperCase()} \u2014 ${rep.summary.high} high, ${rep.summary.medium} medium, ${rep.summary.missingComponents} component(s) missing, ${rep.coverage.interactionsPassed}/${rep.coverage.interactionsExpected} interactions confirmed`);
   process.exit(rep.verdict === "pass" ? 0 : 1);
 }

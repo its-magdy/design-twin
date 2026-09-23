@@ -168,4 +168,32 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     /^# Verify/m.test(reportToMarkdown(rep)) && /What was actually checked/.test(reportToMarkdown(rep)));
 }
 
+// ---------- CLI: --out defaults to the input file's own basename (P3 #152) ----------------------
+// Live-run finding 152: `--expect` run once by base name and once by a nickname for the SAME screen
+// wrote two byte-identical files under two names in design/verify/. Defaulting `--out` to the input
+// file's own basename (already `<LayerName>__<node-id>` by construction) means two runs against the
+// same export always land on the same artefact.
+(() => {
+  const { spawnSync } = require("child_process");
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-out-"));
+  const screenFile = path.join(cwd, "positions___7314_87192.json");
+  fs.writeFileSync(screenFile, JSON.stringify({
+    exportedAt: "2026-09-22T00:00:00.000Z", screen: "positions ",
+    nodes: [{ type: "FRAME", id: "7314:87192", name: "positions ", children: [] }],
+  }));
+  const scriptPath = path.join(__dirname, "..", "design-to-code", "verify-screen.js");
+  const r = spawnSync(process.execPath, [scriptPath, "--expect", screenFile], { encoding: "utf8", cwd });
+  ok("[cli-out] --expect with no --out writes design/verify/<the input file's own basename>.expected.json",
+    r.status === 0 && fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.expected.json")));
+  const expFile = path.join(cwd, "design", "verify", "positions___7314_87192.expected.json");
+  const measuredFile = path.join(cwd, "measured.json");
+  fs.writeFileSync(measuredFile, JSON.stringify({ measuredAt: "2026-09-22T00:00:01.000Z", renderer: "test", viewport: { w: 1, h: 1 }, artifacts: {}, nodes: [], components: [], interactions: [] }));
+  spawnSync(process.execPath, [scriptPath, "--compare", expFile, measuredFile], { encoding: "utf8", cwd });
+  ok("[cli-out] --compare defaults to the .expected.json's own basename, not a new name",
+    fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.report.json")));
+})();
+
 report();
