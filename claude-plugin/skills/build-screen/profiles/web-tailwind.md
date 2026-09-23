@@ -81,6 +81,9 @@ Output
   share that name with different values; the suffix is the variable's key. Use the one whose key the
   screen's own `.vars.json` carries — never the other because it looks shorter.
 - Figma's "fully rounded" corner (a literal 1e9) is emitted as `9999px`; `rounded-full` is equivalent.
+- With `--web tailwind`, `tokens.js` writes **only `theme.css`** to the given directory — the generic
+  handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) is not written there;
+  pass `--also-generic` if you need it, and put it under `design/`, not the app's source tree.
 
 **Native controls, not rebuilt ones** — a Figma widget maps to the HTML element that already has the
 behaviour, keyboard handling and accessibility; style it, don't rebuild it from `div`s. Checkbox →

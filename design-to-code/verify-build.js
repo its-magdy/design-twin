@@ -717,7 +717,31 @@ function checkPlan({ plan, file }, cwd, opts) {
   warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...validatePlanHeader(plan));
+  warnings.push(...auditGateWarnings(plan, cwd, exp));
   return { blocking, warnings };
+}
+
+// Finding 136: only a WARNING (this file blocks on exactly two things — a raw colour and an
+// unanchored node). When design/audit/<screen>.json (or a legacy-named audit) has blocker(s) and the
+// plan has no auditGate covering them, a build reading a Blocked audit and proceeding would otherwise
+// be indistinguishable, on disk, from one that never read it.
+function auditGateWarnings(plan, cwd, exp) {
+  let auditGateStatus;
+  try { ({ auditGateStatus } = require("./audit-gate.js")); } catch { return []; }
+  const screenFile = plan.file ? path.resolve(cwd, plan.file) : null;
+  const screenName = plan.screenName || (exp && exp.layerName) || null;
+  let g;
+  try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
+  if (!g || !g.auditFile || !g.blockers || !g.blockers.length) return [];
+  const gate = plan.auditGate;
+  if (!gate || typeof gate !== "object") {
+    return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
+  }
+  const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
+  const uncovered = g.blockers.filter((id) => !overridden.has(id));
+  if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} — either resolve them or add them with a reason`];
+  if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` — say why it is safe to build past ${g.auditFile}`];
+  return [];
 }
 
 // ================================================================ the verify report behind a plan
@@ -943,7 +967,7 @@ async function main(argv) {
 
 module.exports = {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification,
+  verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, hex6, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 

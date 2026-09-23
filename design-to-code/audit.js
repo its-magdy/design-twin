@@ -221,6 +221,40 @@ function audit(input, opts = {}) {
       add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) — infer a flow layout and ask how it should resize`, node, here);
     }
 
+    // finding 172 (round 2 correction): the export can state a box.h that its own layout.padding +
+    // children's box.h cannot produce (the real case: header padding [16,32,16,32] with a 24-high
+    // text child declares box.h=44, but 16+24+16=56 — content genuinely overflows a FIXED box).
+    // First cut over-fired on ordinary auto-layout: a FIXED-height row (heightMode absent/"fixed")
+    // whose children are simply SHORTER than the box (e.g. a 40-high sidebar row, padding [0,4,0,12],
+    // a 24-high icon centred in it) is normal — content fitting inside a fixed box is not a
+    // contradiction. The export's own sizing-mode field (figma-plugin/src/serialize.ts:
+    // layoutSizingVertical -> node.heightMode, default "fixed", also "hug"/"fill") tells the two
+    // cases apart: a FIXED/FILL box only contradicts itself when content OVERFLOWS it; a HUG box's
+    // declared size is supposed to equal the content exactly, so any mismatch (over OR under) is a
+    // contradiction (the table row 20173:142081 is heightMode:"hug", declares 48, computes 56).
+    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
+      const [padTop, , padBottom] = node.layout.padding;
+      const kids = node.children.filter((c) => c && c.box && typeof c.box.h === "number");
+      if (kids.length === node.children.length && kids.length) {
+        const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
+        const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
+        let expectedH = null;
+        if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
+        else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
+        const heightMode = node.heightMode || "fixed"; // absent = FIXED (the emitter's own default)
+        const delta = expectedH === null ? 0 : expectedH - node.box.h;
+        const overflow = expectedH !== null && delta > 1; // content genuinely does not fit a fixed/fill box
+        const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1; // hug must equal content, either direction
+        if (overflow || hugMismatch) {
+          const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
+          const why = heightMode === "hug"
+            ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}`
+            : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
+          add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) — ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself — decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
+        }
+      }
+    }
+
     // ---- system chrome drawn into a mobile frame (top-level-ish only)
     if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
       const label = `${node.name || ""} ${node.component || ""} ${(node.mainComponent && node.mainComponent.setName) || ""}`;
@@ -604,7 +638,16 @@ function toMarkdown(res) {
   return L.join("\n") + "\n";
 }
 
-module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN };
+// finding 136: a stable id per blocker finding, so a plan's `auditGate.overridden` can name exactly
+// which blocker(s) the user decided to build past. Findings carry no id of their own; `<code>#<i>`
+// (i = position among this doc's blockers, in report order) is stable for a given audit run and is
+// what plan-skeleton.js pre-fills and verify-build.js checks against.
+function blockerIds(auditDoc) {
+  const findings = (auditDoc && Array.isArray(auditDoc.findings)) ? auditDoc.findings : [];
+  return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
+}
+
+module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds };
 
 // CLI: node design-to-code/audit.js <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]

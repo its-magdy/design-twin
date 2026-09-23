@@ -6,7 +6,8 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { checkPlan, computeStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
-  scanText, isSourceFile, verificationContradictions, deviationWarnings } = require("../design-to-code/verify-build");
+  scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } = require("../design-to-code/verify-build");
+const { blockerIds } = require("../design-to-code/audit");
 const { check, report } = require("./assert");
 
 const HOOK = require.resolve("../design-to-code/verify-build.js");
@@ -643,8 +644,17 @@ build(tmp).then(async () => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
     const input = path.join(out, "tokens.json");
     fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
-    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui", "--also-generic"], { encoding: "utf8" });
     return r.status === 0 && fs.existsSync(path.join(out, "tokens.dtcg.json")) && /static let aB: Color/.test(fs.readFileSync(path.join(out, "DesignTokens.swift"), "utf8"));
+  })());
+  check("finding 225: --native WITHOUT --also-generic writes ONLY the native file, not the generic set, and names the canonical file", (() => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-tokens-"));
+    const input = path.join(out, "tokens.json");
+    fs.writeFileSync(input, JSON.stringify({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [{ name: "a/b", type: "COLOR", collection: "C", values: { M: "#ffffff" } }] }));
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), input, out, "--native", "swiftui"], { encoding: "utf8" });
+    return r.status === 0 && fs.existsSync(path.join(out, "DesignTokens.swift")) && !fs.existsSync(path.join(out, "tokens.dtcg.json"))
+      && !fs.existsSync(path.join(out, "tokens.css")) && !fs.existsSync(path.join(out, "tokens.resolver.json")) && !fs.existsSync(path.join(out, "tokens"))
+      && /wrote DesignTokens\.swift/.test(r.stdout) && /NOT written here.*design\//.test(r.stdout);
   })());
 
   // Findings 99/133 (§2.9 d/e): stdin is read only when it is not a terminal, never waited on forever.
@@ -671,5 +681,53 @@ build(tmp).then(async () => {
   const h = hooks.hooks.SubagentStop[0].hooks[0];
   check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js and gives it longer than its own 60 s cut-off",
     /scripts\/verify-build\.js"?$/.test(h.command) && h.timeout > 60);
+
+  // ---------------------------------------------------------------- P6-136: first-class auditGate
+  // Real audit: design/audit/System_Configurations.json (5 blockers, copied verbatim from the
+  // livetest-3 run). auditGateWarnings is a WARNING only — this file blocks on exactly two things
+  // (a raw colour, an unanchored node) — never a `blocking` entry.
+  {
+    const auditDoc = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "plan", "audit", "System_Configurations.json"), "utf8"));
+    const ids = blockerIds(auditDoc);
+    check("[P6-136] the real System_Configurations audit has 5 blocker ids", ids.length === 5 && ids[0] === "catalog-covers-nothing#0");
+    const mkCwd = () => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-"));
+      fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
+      fs.writeFileSync(path.join(d, "design", "audit", "System_Configurations.json"), JSON.stringify(auditDoc));
+      return d;
+    };
+    {
+      const cwd = mkCwd();
+      const plan = { screenName: "System Configurations" };
+      const w = auditGateWarnings(plan, cwd, null);
+      check("[P6-136] a Blocked audit with no auditGate at all on the plan WARNS, naming the file and every blocker id",
+        w.length === 1 && /System_Configurations\.json/.test(w[0]) && ids.every((id) => w[0].includes(id)));
+    }
+    {
+      const cwd = mkCwd();
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: [ids[0], ids[1]], reason: "provenance issues, not build issues" } };
+      const w = auditGateWarnings(plan, cwd, null);
+      check("[P6-136] an auditGate that overrides only 2 of 5 blockers WARNS about the 3 not covered",
+        w.length === 1 && ids.slice(2).every((id) => w[0].includes(id)) && !w[0].includes(ids[0]));
+    }
+    {
+      const cwd = mkCwd();
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids } };
+      const w = auditGateWarnings(plan, cwd, null);
+      check("[P6-136] every blocker overridden but no `reason` still WARNS (a reason is required)", w.length === 1 && /reason/.test(w[0]));
+    }
+    {
+      const cwd = mkCwd();
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-09-23" } };
+      const w = auditGateWarnings(plan, cwd, null);
+      check("[P6-136] every blocker overridden with a reason: no warning at all", w.length === 0);
+    }
+    {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "p6-136-noaudit-"));
+      const w = auditGateWarnings({ screenName: "Nothing Here" }, cwd, null);
+      check("[P6-136] no audit file at all for this screen: no warning (nothing to gate)", w.length === 0);
+    }
+  }
+
   report();
 });

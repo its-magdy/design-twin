@@ -972,10 +972,14 @@ if (require.main === module) {
   const native = flag("--native");
   const web = flag("--web");
   const kotlinPackage = flag("--package");
+  const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
   const input = args[0];
   const outDir = args[1] || ".";
   const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n" +
-    "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind]";
+    "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
+    "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
+    "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +
+    "       Without a target flag, only the generic set is written (unchanged).";
   if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = args.filter((a) => a.startsWith("-"));
   if (stray.length) { console.error(`tokens: unknown flag ${stray.join(", ")}\n${USAGE}`); process.exit(1); }
@@ -990,24 +994,33 @@ if (require.main === module) {
   // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
   // across every output it touches, naming the screen(s) each colliding variable came from.
   const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: require("./slice-sources.js").sourcesOf(ds, input, fs, path) });
-  fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-  fs.writeFileSync(path.join(outDir, "tokens.css"), css);
-  // Resolver document + the set files it $refs. The refs are relative to the resolver document, and
-  // the keys of resolverFiles ARE those refs — so join each key onto outDir and the links hold.
-  // Every key is a fileSlug()ed, collision-checked "tokens/<name>.json"; split on "/" rather than
-  // passing the key straight to path.join so the layout is identical on Windows.
-  fs.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
-  for (const rel of Object.keys(resolverFiles)) {
-    const dest = path.join(outDir, ...rel.split("/"));
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+  // finding 225: a --web/--native target used to get the generic set (dtcg/css/resolver/tokens/)
+  // written on top of it unconditionally, with no indication of which file the app actually
+  // consumes. Now: a target selected -> ONLY that target's file(s) are written to outDir, unless
+  // --also-generic is passed. No target -> unchanged (generic set only).
+  const hasTarget = web !== undefined || native !== undefined;
+  const writeGeneric = !hasTarget || alsoGeneric;
+  const genericCount = Object.keys(resolverFiles).length;
+  if (writeGeneric) {
+    fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs.writeFileSync(path.join(outDir, "tokens.css"), css);
+    // Resolver document + the set files it $refs. The refs are relative to the resolver document, and
+    // the keys of resolverFiles ARE those refs — so join each key onto outDir and the links hold.
+    // Every key is a fileSlug()ed, collision-checked "tokens/<name>.json"; split on "/" rather than
+    // passing the key straight to path.join so the layout is identical on Windows.
+    fs.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    for (const rel of Object.keys(resolverFiles)) {
+      const dest = path.join(outDir, ...rel.split("/"));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+    }
   }
-  let nativeNote = "";
+  let canonicalFile = null;
   if (web !== undefined) {
     const tw = tailwind;
     const file = WEB_TARGETS[web];
     fs.writeFileSync(path.join(outDir, file), tw.text);
-    nativeNote += ` + ${file}`;
+    canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
@@ -1015,8 +1028,15 @@ if (require.main === module) {
     const n = toNative(ds, native, { package: kotlinPackage || undefined });
     fs.writeFileSync(path.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
-    nativeNote = ` + ${n.file}`;
+    canonicalFile = n.file;
   }
   warnings.forEach((w) => console.error("warn  " + w));
-  console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${Object.keys(resolverFiles).length} set files under ${RESOLVER_DIR}/)${nativeNote} (${(ds.variables || []).length} variables)`);
+  if (hasTarget) {
+    const genericNote = writeGeneric
+      ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ — also written here because --also-generic was passed)`
+      : ` — the generic handoff set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/) was NOT written here; it belongs under design/, not the app's source tree (pass --also-generic to also write it to ${outDir})`;
+    console.log(`wrote ${canonicalFile} to ${outDir} — this is the file your app should import${genericNote} (${(ds.variables || []).length} variables)`);
+  } else {
+    console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
+  }
 }

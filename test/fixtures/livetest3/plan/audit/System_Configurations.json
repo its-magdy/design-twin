@@ -1,0 +1,2624 @@
+{
+  "platform": "web",
+  "platformAssumed": true,
+  "crossFile": {
+    "summary": {
+      "blockers": 5,
+      "warnings": 14,
+      "info": 1
+    },
+    "coverage": {
+      "instances": 87,
+      "distinct": 61,
+      "matchedByKey": 10,
+      "matchedByLocalKey": 0,
+      "matchedByName": 19,
+      "ambiguousName": 24,
+      "unmatched": 32,
+      "pct": 16,
+      "localPct": 0,
+      "entries": [
+        {
+          "setName": "Component 1",
+          "key": "36850cc1bec817d3daa8a7a6d28a525d3c7b6aa7",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 4,
+          "instances": 1
+        },
+        {
+          "setName": "Component 2",
+          "key": "10995e568c35521423872127bc066a6f9ce51ad4",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/element-4",
+          "key": "64b6b56c445ff1478830cce0724c63f7e6d2ae0c",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/linear/element-4",
+          "catalogKey": "5978d2610e4ba1cebd1deabc56e2f4c18344ddec",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Component 5",
+          "key": "37bc010c9431e0626f73b9830333cde029a39c05",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/calendar-tick",
+          "key": "2e4221ab8613b0b8716d8f3c12533de74ddd14a4",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/linear/calendar-tick",
+          "catalogKey": "52e2b60121ada6969f56afe289d19b9482164773",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "License Health Check",
+          "key": "ed6c890075a7c256d0669c6efd24f5eb6531db4d",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Linear / School / Diploma",
+          "key": "b5f3db1f5268c5a382138193a5c3602b951d4d0a",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Linear / School / Diploma",
+          "catalogKey": "1dfaea16a193abacdb3c62246cbe7c8660a84315",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Org Management",
+          "key": "e6a30c98eecd5b069da25c4abb330d7c6d8c4950",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/bold/buliding",
+          "key": "f6fe342df276f5f69fb2926d2395668c477c91d6",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/bold/buliding",
+          "catalogKey": "b80e1d5d56871a7345d0353237cba03ce2858110",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Staff Management",
+          "key": "808d3393234c5c2a08cd4aae4c3e7a84652ed6d3",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "shift Demand",
+          "key": "7967f3aa842a96af1aa38e66e1c835571f2d3b30",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Projects",
+          "key": "570d4125e99bdc4ab3515045c5bcf92ec0ff482f",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "activity demand",
+          "key": "f63cf6973fbb91dad8dbd8376820bc7ccd7eeeba",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Component 7",
+          "key": "2d6d9f0244b0e58d0786add7d62b88fb0e6e972a",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/activity",
+          "key": "c337ad3a9eb7c1cb26cb50f9d461051545fbd696",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/linear/activity",
+          "catalogKey": "8b3a4f3ba1ac274cd472d44596eb0f302387a89c",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Requests",
+          "key": "ba1e9ff4c8fe10144aa4539e45da742d935569df",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Outline / Messages, Conversation / Inbox In",
+          "key": "657dae6b4bd296208a72fdc17dcc1e3ac82f1fd5",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Outline / Messages, Conversation / Inbox In",
+          "catalogKey": "d091d89c09eb06361b0c4d372eceac1c3fdaa4e6",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Component 8",
+          "key": "219e5ab7cdd1009a07bc26585240c4351ee2b8d9",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/calendar-edit",
+          "key": "a2c65dc607036dd7bc97afd0aac3ed0a6319162d",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/linear/calendar-edit",
+          "catalogKey": "f4dc91cb25edd2a58071d884eab483624317a8f2",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "OJT Management",
+          "key": "a7ff7e05322babe4bfc275665eb8402d7c223781",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/book",
+          "key": "862f3434529d3b111d8e42e260df9acce0141d92",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "vuesax/linear/book",
+          "catalogKey": "d70086c8d72a1b65f188c630c828a069f368caca",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "reports",
+          "key": "8d20b81bf3674d46dfa831cf5c81e37798dd7344",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Component 1/vuesax/linear/Property 33",
+          "key": "1731c129c22919fae3f2347b621ac47fcefa7cba",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Header",
+          "key": "67bb9450ae5895f4d757c571695033c4624b0513",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 3,
+          "instances": 1
+        },
+        {
+          "setName": "sun",
+          "key": "c8d6f9b4a2846159659f91b1805d937e8394b689",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "sun",
+          "instances": 1
+        },
+        {
+          "setName": "User Avatar",
+          "key": "d566d4b2ac52a865ba1fe79951b2b417dfa31358",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/arrow-down",
+          "key": "bdd3626355b8b9d4a8fe6bc29d81c1ea2f726d69",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "vuesax/linear/arrow-down",
+          "instances": 1
+        },
+        {
+          "setName": "Page Title",
+          "key": "af7b6c6f4080c3e7a744f65267c7a5760b58c3c5",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Page Title",
+          "catalogKey": "3d1b2e45c50ce7458c32a85eda900ac483378d7a",
+          "propOverlap": "10/10",
+          "instances": 1
+        },
+        {
+          "setName": "Breadcrumb",
+          "key": "94cb6f8380ee6c6ad34cc61bc8e0079fae29440e",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "breadcrumbs text",
+          "key": "2aeb3ce88bbd22d9fa70f12cdcd5a261b29f0309",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "breadcrumbs text",
+          "catalogKey": "5eaeb38480ef06a4fa4ec94469420cf105fc800d",
+          "propOverlap": "1/1",
+          "instances": 3
+        },
+        {
+          "setName": "Right Icon",
+          "key": "daf67c241cdcd274523836091b162607f9822211",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "Right Icon",
+          "instances": 6
+        },
+        {
+          "setName": "back link",
+          "key": "836912580a091b07719b224faeac074a26952504",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "back link",
+          "catalogKey": "3bbe273cfcdc1a1a69087e281e390fd9c4ea4136",
+          "propOverlap": "1/1",
+          "instances": 1
+        },
+        {
+          "setName": "Left Icon",
+          "key": "af02a3a3a30b0dc19e8b6cbf635c31f4058802b6",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "Left Icon",
+          "instances": 2
+        },
+        {
+          "setName": "Right Icon",
+          "key": "e312ed3a5fadf29c198097d9fcabed2c760908fc",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "Right Icon",
+          "instances": 1
+        },
+        {
+          "setName": "input Field",
+          "key": "7da157c047474784d0d05b02a907fddb4ac95a7e",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "Question Icon",
+          "key": "752cfd5dbd4c66e119a769a5eab893c19cb8f079",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 2
+        },
+        {
+          "setName": "Down Icon",
+          "key": "e2e2176a7e8d213edaf53d082b3bb83461f13649",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "down icon",
+          "catalogKey": "cd9391587020acef41372e5c1d008d30935745bd",
+          "propOverlap": "0/0",
+          "instances": 2
+        },
+        {
+          "setName": "Button",
+          "key": "0e35aaaa0831e6dee5e5c23ddf688f7b5c15f5ba",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 4,
+          "instances": 3
+        },
+        {
+          "setName": "Add Icon",
+          "key": "b1995eb4d94bb5c9bdbe4fe04b4ec4cf57ce4d44",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Add Icon",
+          "catalogKey": "f160445c3d9f3b5a8874b028c01eef9d1b34b2aa",
+          "propOverlap": "0/0",
+          "instances": 3
+        },
+        {
+          "setName": "Menu Buttons",
+          "key": "57501821312308e8062bb4f73632f52c400673aa",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 4,
+          "instances": 1
+        },
+        {
+          "setName": "More Icon",
+          "key": "4dcbfcaebcc3d1fc9ef567997a3d95d94492ea06",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "More Icon",
+          "catalogKey": "4b06295c9a5741301f74664ae5cc3581b10f37ab",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/import",
+          "key": "06b06877f426e65212a404919bd669248e472d5e",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "vuesax/linear/import",
+          "instances": 1
+        },
+        {
+          "setName": "search and filter",
+          "key": "eb2f897f7d60b4703b8fdd57197b4b1a48e7b1b0",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "search and filter",
+          "catalogKey": "a0304c35b027b03602bdea505331b14369fa9f2a",
+          "propOverlap": "3/3",
+          "instances": 1
+        },
+        {
+          "setName": "search bar",
+          "key": "f54f23f8baedb75c62822ceaa7d7172a02f0428c",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "search bar",
+          "catalogKey": "8347f98ff3bf9c8241256a43aede0fa649f28206",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/outline/search-normal",
+          "key": "ec84d08848ba6a00960337395a60a2bf11eae968",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "vuesax/outline/search-normal",
+          "instances": 1
+        },
+        {
+          "setName": "filter button",
+          "key": "15b0d7dacc67e3242bacf220399fb914e91543c5",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 1
+        },
+        {
+          "setName": "filter icon",
+          "key": "67b0023b55493e11c02b8956cd710fd852fe7525",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "filter icon",
+          "catalogKey": "480c203fa53993d656f06e23951cbafe1c26c0e5",
+          "propOverlap": "0/0",
+          "instances": 1
+        },
+        {
+          "setName": "Date",
+          "key": "0634ac883c5e4ca2d827e0365fef7a19720a08e5",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Date",
+          "catalogKey": "0bbdc3cbba6a5603ec1d2f2ca3bd5b4c44fa2ad0",
+          "propOverlap": "1/1",
+          "instances": 1
+        },
+        {
+          "setName": "Right Icon",
+          "key": "f1e64ecc0db0a17bf9c000cc7c5f472982697bdc",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 3,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/arrow-down",
+          "key": "0ad903d4d8f644fa3ed521e4d98261f29f9dd582",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "vuesax/linear/arrow-down",
+          "instances": 1
+        },
+        {
+          "setName": "Segmented Control",
+          "key": "5b9c3f1dacd23a93eda4c0ce5f8865250d87cef0",
+          "matchedBy": "name",
+          "verified": false,
+          "catalogName": "Segmented Control",
+          "catalogKey": "eae3875d0962d8f0b8fc61699a92eaaaf1889961",
+          "propOverlap": "1/1",
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/calendar-2",
+          "key": "de46928825ef552e16f693eefac8a37f2b4722a8",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        },
+        {
+          "setName": "Badge",
+          "key": "0c15b62f930d59cf70a028ecf5f1b723930d4ef2",
+          "matchedBy": null,
+          "ambiguous": true,
+          "candidates": 2,
+          "instances": 5
+        },
+        {
+          "setName": "Info Icon",
+          "key": "16d484783f90a4da256d02401421c2c7c69d7ba2",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "Info Icon",
+          "instances": 5
+        },
+        {
+          "setName": "vuesax/linear/edit-2",
+          "key": "3f9af8f31ac040014c4cf13c227646ee58c6dc2a",
+          "matchedBy": "key",
+          "scope": "library",
+          "verified": true,
+          "catalogName": "vuesax/linear/edit-2",
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/shield-tick",
+          "key": "c3a070a20cbfb4d35cc065e33478909425314a21",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        },
+        {
+          "setName": "vuesax/linear/calendar-remove",
+          "key": "9b431f03c63ab6eb61b1e9c4c60e4a70b5b1e85b",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        },
+        {
+          "setName": "_Search list field",
+          "key": "50d62573bcfef33df992943ef52c9a12a46a669d",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        },
+        {
+          "setName": "_input-blinker",
+          "key": "263483bfffee86e7ceeda480e1d904ab44338dc4",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        },
+        {
+          "setName": "_Selection item",
+          "key": "0fb45bd8d9a5cfeb8dc1d148054b76a88fe2b23e",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 5
+        },
+        {
+          "setName": "_selected icon",
+          "key": "3eb5ef18443bc8ee4444df65a8fd87573dc7c528",
+          "matchedBy": null,
+          "verified": false,
+          "instances": 1
+        }
+      ]
+    },
+    "findings": [
+      {
+        "severity": "blocker",
+        "code": "catalog-covers-nothing",
+        "message": "0 of 61 component(s) used on this screen (0%) are in components.local.json by key — the catalog you exported is not the library this screen is built from. 10 more match components.library.json, which only means both files consume the same third-party set. 19 match BY NAME only and are marked unverified: a lead, not a mapping. 24 more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. A \"318/318 mapped\" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > \"Go to main component\" — it jumps to the file that defines it. Then connect that file and run `dtwin pull design --as-library \"<name>\"`. Until then every instance is correctly a `verdict:\"new\"` build, not a port of the catalog.",
+        "coverage": {
+          "distinct": 61,
+          "byLocalKey": 0,
+          "byKey": 10,
+          "byName": 19,
+          "ambiguousName": 24,
+          "localPct": 0
+        }
+      },
+      {
+        "severity": "blocker",
+        "code": "text-style-near-miss",
+        "message": "1 text style name(s) differ from a design-system style ONLY by case or punctuation: 'Medium/14 Medium' vs 'Medium/14 medium'. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.",
+        "styles": [
+          {
+            "name": "Medium/14 Medium",
+            "near": "Medium/14 medium"
+          }
+        ]
+      },
+      {
+        "severity": "blocker",
+        "code": "token-name-collision",
+        "message": "'Space 4' share a name but resolve DIFFERENTLY: screen {\"Desktop\":\"16\",\"Tablet\":\"8\",\"Mobile\":\"8\"} vs design system {\"Mode 1\":\"24\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+        "token": "Space 4",
+        "screenValue": {
+          "Desktop": "16",
+          "Tablet": "8",
+          "Mobile": "8"
+        },
+        "designSystemValue": {
+          "Mode 1": "24"
+        },
+        "usedAt": [
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;1929:15178",
+            "field": "paddingLeft"
+          },
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;1929:15178",
+            "field": "paddingRight"
+          },
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;1929:15308",
+            "field": "paddingLeft"
+          }
+        ]
+      },
+      {
+        "severity": "blocker",
+        "code": "token-name-collision",
+        "message": "'Warning/Warning Medium' share a name but resolve DIFFERENTLY: screen {\"Mode 1\":\"#ffa71f\"} vs design system {\"Dark\":\"-> Yellow Shades/Yellow 300\",\"Light\":\"-> Yellow Shades/Yellow 400\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+        "token": "Warning/Warning Medium",
+        "screenValue": {
+          "Mode 1": "#ffa71f"
+        },
+        "designSystemValue": {
+          "Dark": "-> Yellow Shades/Yellow 300",
+          "Light": "-> Yellow Shades/Yellow 400"
+        },
+        "usedAt": []
+      },
+      {
+        "severity": "blocker",
+        "code": "token-name-collision",
+        "message": "'(Space 3)' and the design system's 'Space 3' share a name but resolve DIFFERENTLY: screen {\"Desktop\":\"12\",\"Tablet\":\"8\",\"Mobile\":\"8\"} vs design system {\"Mode 1\":\"16\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+        "token": "(Space 3)",
+        "alsoKnownAs": "Space 3",
+        "screenValue": {
+          "Desktop": "12",
+          "Tablet": "8",
+          "Mobile": "8"
+        },
+        "designSystemValue": {
+          "Mode 1": "16"
+        },
+        "usedAt": [
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;1929:15178",
+            "field": "itemSpacing"
+          },
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;1929:15308",
+            "field": "itemSpacing"
+          },
+          {
+            "screen": "System_Configurations__1359_21337",
+            "nodeId": "I20170:126629;72:3440",
+            "field": "itemSpacing"
+          }
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "ambiguous-component-name",
+        "message": "24 component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: 'Component 1' (4 candidates), 'Component 2' (2 candidates), 'Component 5' (2 candidates), 'License Health Check' (2 candidates), 'Org Management' (2 candidates), 'Staff Management' (2 candidates), 'shift Demand' (2 candidates), 'Projects' (2 candidates), …. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — binding code to one of them by name would be a guess with a 1-in-4 chance.",
+        "components": [
+          {
+            "setName": "Component 1",
+            "candidates": 4
+          },
+          {
+            "setName": "Component 2",
+            "candidates": 2
+          },
+          {
+            "setName": "Component 5",
+            "candidates": 2
+          },
+          {
+            "setName": "License Health Check",
+            "candidates": 2
+          },
+          {
+            "setName": "Org Management",
+            "candidates": 2
+          },
+          {
+            "setName": "Staff Management",
+            "candidates": 2
+          },
+          {
+            "setName": "shift Demand",
+            "candidates": 2
+          },
+          {
+            "setName": "Projects",
+            "candidates": 2
+          },
+          {
+            "setName": "activity demand",
+            "candidates": 2
+          },
+          {
+            "setName": "Component 7",
+            "candidates": 2
+          },
+          {
+            "setName": "Requests",
+            "candidates": 2
+          },
+          {
+            "setName": "Component 8",
+            "candidates": 2
+          },
+          {
+            "setName": "OJT Management",
+            "candidates": 2
+          },
+          {
+            "setName": "reports",
+            "candidates": 2
+          },
+          {
+            "setName": "Component 1/vuesax/linear/Property 33",
+            "candidates": 2
+          },
+          {
+            "setName": "Header",
+            "candidates": 3
+          },
+          {
+            "setName": "User Avatar",
+            "candidates": 2
+          },
+          {
+            "setName": "Breadcrumb",
+            "candidates": 2
+          },
+          {
+            "setName": "input Field",
+            "candidates": 2
+          },
+          {
+            "setName": "Button",
+            "candidates": 4
+          },
+          {
+            "setName": "Menu Buttons",
+            "candidates": 4
+          },
+          {
+            "setName": "filter button",
+            "candidates": 2
+          },
+          {
+            "setName": "Right Icon",
+            "candidates": 3
+          },
+          {
+            "setName": "Badge",
+            "candidates": 2
+          }
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "font-family-stray",
+        "message": "77 text node(s) use 2 different font families: Poppins (73), Roboto (4). 'Poppins' carries 73; the rest are strays — usually a starter-kit style (Figma's Material 3 kit leaks `material-theme/*`) left on a layer. Ask the designer before shipping a second webfont for 4 node(s).",
+        "families": [
+          {
+            "family": "Poppins",
+            "count": 73
+          },
+          {
+            "family": "Roboto",
+            "count": 4
+          }
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "font-not-in-design-system",
+        "message": "font 'Roboto' appears on the screen but NO design-system text style uses it (the design system's text styles are all Poppins). Nothing in the export declares a font file or a webfont for either, so \"is it installed and licensed\" is a question only the designer can answer.",
+        "fonts": [
+          "Roboto"
+        ],
+        "designSystemFonts": [
+          "Poppins"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "foreign-token-library",
+        "message": "13 of 14 variable collection(s) the screen binds are NOT in the design-system export — the screen consumes a DIFFERENT library than the one you pulled. 7 of them carry a design-system collection's name under a different key ('Semantic Variables 02', 'Semantic Variables 01', 'Font Sizes'), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run `dtwin list libraries --client <the screen's file>` — variable collections are the ONE thing Figma attributes to a library by name — then open that file and export it with `dtwin pull design --as-library \"<name>\"`.",
+        "collections": [
+          {
+            "name": "Collection",
+            "key": "0c263e267aa11acb7202afd50d0e22eb8fb1dfd2"
+          },
+          {
+            "name": "Semantic Variables 02",
+            "key": "64113d4ce0a7ed4e684ed50731b100fc118933c7",
+            "twinKey": "ebac83f1d34ce22ff59bcdda30f337414811535e",
+            "twinName": "Semantic Variables 02"
+          },
+          {
+            "name": "Semantic Variables 01",
+            "key": "c3725b5d4997d525070f01258b9c3fa87582b768",
+            "twinKey": "b6a895deedd695ce7cd8eb920b60faed003f14eb",
+            "twinName": "Semantic Variables 01"
+          },
+          {
+            "name": "Font Sizes",
+            "key": "954ec1a8a445c1d79556278393920849c0ba8643",
+            "twinKey": "fac1bd6eb1ea541919af21e1b6b5ff6c056add96",
+            "twinName": "Font sizes"
+          },
+          {
+            "name": "Spacing",
+            "key": "69f809cec215ff47e90e204a34cea34702fcfc11",
+            "twinKey": "02aa410b3b9bbdef8ea21ef8b95a0b20ab54108d",
+            "twinName": "Spacing"
+          },
+          {
+            "name": "Fonts",
+            "key": "b75dc467623deb8c656774bf88798b6c8e6208f3"
+          },
+          {
+            "name": "Spacing",
+            "key": "a0d882e0e7fbe6669cf1b0ae59c20e9574b95384",
+            "twinKey": "02aa410b3b9bbdef8ea21ef8b95a0b20ab54108d",
+            "twinName": "Spacing"
+          },
+          {
+            "name": "Border Radius",
+            "key": "164b155cc6d63cc580f28f95623eb3676be668d8",
+            "twinKey": "4e4f87153d88894c94314c32f329508c5c239444",
+            "twinName": "Border Radius"
+          },
+          {
+            "name": "Default",
+            "key": "a4c6c8731c777b92801bc94c7bab342549e40fcb"
+          },
+          {
+            "name": "Collection 1",
+            "key": "c5f336207f7ecc577e003f77adb9c806f3110f9a"
+          },
+          {
+            "name": "Primitive",
+            "key": "f48164854e20708b91615b854c1c06b7ed66b9c1",
+            "twinKey": "dd7728a69fa251c6ab1668ecf2ded93ca569d34b",
+            "twinName": "Primitive"
+          },
+          {
+            "name": "M3",
+            "key": "c5d408a1dcb9f7a3cd3c36a5070f681cf8ab13ae"
+          },
+          {
+            "name": "Base Colors",
+            "key": "0ca2aa936d32dd85048e256b9da16ab0ca0ee6b9"
+          }
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "sentinel-token-value",
+        "message": "1 token value(s) are sentinels, not measurements: 'Full' = 1000000000 (Mode 1). Figma's \"fully rounded\" corner exports as a literal 1e9. Emit these as the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) — never as `1000000000px`.",
+        "tokens": [
+          {
+            "name": "Full",
+            "collection": "Border Radius",
+            "mode": "Mode 1",
+            "value": 1000000000
+          }
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Semantic Variables 02' in mode 'Dark', but it defines 2 modes (Dark, Light). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Dark-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Semantic Variables 02",
+        "exportedMode": "Dark",
+        "modes": [
+          "Dark",
+          "Light"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Semantic Variables 01' in mode 'Dark', but it defines 2 modes (Dark, Light). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Dark-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Semantic Variables 01",
+        "exportedMode": "Dark",
+        "modes": [
+          "Dark",
+          "Light"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Font Sizes' in mode 'desktop', but it defines 3 modes (desktop, IPad, mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'IPad' / 'mobile' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Font Sizes",
+        "exportedMode": "desktop",
+        "modes": [
+          "desktop",
+          "IPad",
+          "mobile"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Fonts' in mode 'Desktop', but it defines 3 modes (Desktop, Tablet, Mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Tablet' / 'Mobile' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Fonts",
+        "exportedMode": "Desktop",
+        "modes": [
+          "Desktop",
+          "Tablet",
+          "Mobile"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Spacing' in mode 'Desktop', but it defines 3 modes (Desktop, Tablet, Mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Tablet' / 'Mobile' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Spacing",
+        "exportedMode": "Desktop",
+        "modes": [
+          "Desktop",
+          "Tablet",
+          "Mobile"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'Default' in mode 'Light', but it defines 2 modes (Light, Dark). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Light-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Dark' too, or have the designer confirm the derivation before it ships.",
+        "collection": "Default",
+        "exportedMode": "Light",
+        "modes": [
+          "Light",
+          "Dark"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "single-mode-export",
+        "message": "every exported frame resolved collection 'M3' in mode 'Light', but it defines 32 modes (Light, Light High Contrast, Light Medium Contrast, Dark, Dark High Contrast, Dark Medium Contrast, Monochrome LT, Monochrome DT, Pink LT, Pink DT, Rose LT, Rose DT, Red LT, Red DT, Orange LT, Orange DT, Yellow LT, Yellow DT, Chartreuse LT, Chartreuse DT, Green LT, Green DT, Teal LT, Teal DT, Cyan LT, Cyan DT, Blue LT, Blue DT, Indigo LT, Indigo DT, Purple LT, Purple DT). The other 31 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Light-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light High Contrast' / 'Light Medium Contrast' / 'Dark' / 'Dark High Contrast' / 'Dark Medium Contrast' / 'Monochrome LT' / 'Monochrome DT' / 'Pink LT' / 'Pink DT' / 'Rose LT' / 'Rose DT' / 'Red LT' / 'Red DT' / 'Orange LT' / 'Orange DT' / 'Yellow LT' / 'Yellow DT' / 'Chartreuse LT' / 'Chartreuse DT' / 'Green LT' / 'Green DT' / 'Teal LT' / 'Teal DT' / 'Cyan LT' / 'Cyan DT' / 'Blue LT' / 'Blue DT' / 'Indigo LT' / 'Indigo DT' / 'Purple LT' / 'Purple DT' too, or have the designer confirm the derivation before it ships.",
+        "collection": "M3",
+        "exportedMode": "Light",
+        "modes": [
+          "Light",
+          "Light High Contrast",
+          "Light Medium Contrast",
+          "Dark",
+          "Dark High Contrast",
+          "Dark Medium Contrast",
+          "Monochrome LT",
+          "Monochrome DT",
+          "Pink LT",
+          "Pink DT",
+          "Rose LT",
+          "Rose DT",
+          "Red LT",
+          "Red DT",
+          "Orange LT",
+          "Orange DT",
+          "Yellow LT",
+          "Yellow DT",
+          "Chartreuse LT",
+          "Chartreuse DT",
+          "Green LT",
+          "Green DT",
+          "Teal LT",
+          "Teal DT",
+          "Cyan LT",
+          "Cyan DT",
+          "Blue LT",
+          "Blue DT",
+          "Indigo LT",
+          "Indigo DT",
+          "Purple LT",
+          "Purple DT"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "text-style-absent",
+        "message": "6 of 9 text style(s) used on the screen are not in the design-system export: 'material-theme/label/large', 'material-theme/body/medium', 'Body/SM Regular', 'Body/Base Regular', 'Body/XS Regular', 'Medium/SM Medium (Buttons & Labels)'.",
+        "styles": [
+          "material-theme/label/large",
+          "material-theme/body/medium",
+          "Body/SM Regular",
+          "Body/Base Regular",
+          "Body/XS Regular",
+          "Medium/SM Medium (Buttons & Labels)"
+        ]
+      },
+      {
+        "severity": "warning",
+        "code": "token-absent-from-design-system",
+        "message": "14 token name(s) the screen binds do not exist in the design-system export (1 differ from a design-system name only by case or punctuation — e.g. '(Space 3)' vs 'Space 3'): 'Font-Size/Text-sm', 'Font-Weight/normal', 'Font-Size/Text-base', 'Font-Weight/medium', 'Semantic rounds/forms-rounded', 'Font-Size/Text-xs', '(Space 3)', 'Rounds Variables/roundes-lg', …. Build these as literals with a recorded decision — do not invent a design-system token for them.",
+        "tokens": [
+          {
+            "name": "Font-Size/Text-sm",
+            "near": null
+          },
+          {
+            "name": "Font-Weight/normal",
+            "near": null
+          },
+          {
+            "name": "Font-Size/Text-base",
+            "near": null
+          },
+          {
+            "name": "Font-Weight/medium",
+            "near": null
+          },
+          {
+            "name": "Semantic rounds/forms-rounded",
+            "near": null
+          },
+          {
+            "name": "Font-Size/Text-xs",
+            "near": null
+          },
+          {
+            "name": "(Space 3)",
+            "near": "Space 3"
+          },
+          {
+            "name": "Rounds Variables/roundes-lg",
+            "near": null
+          },
+          {
+            "name": "Components/Button/Global/borderRadiusLG",
+            "near": null
+          },
+          {
+            "name": "Colors/Neutral/Fill/colorFillSecondary",
+            "near": null
+          },
+          {
+            "name": "Colors/Neutral/colorBgBase",
+            "near": null
+          },
+          {
+            "name": "Medium Gray",
+            "near": null
+          },
+          {
+            "name": "light blue",
+            "near": null
+          },
+          {
+            "name": "Schemes/On Primary",
+            "near": null
+          }
+        ]
+      },
+      {
+        "severity": "info",
+        "code": "name-matched-components",
+        "message": "19 component(s) have no key in the catalog but DO have an exact name twin there: 'vuesax/linear/element-4' (props 0/0), 'vuesax/linear/calendar-tick' (props 0/0), 'Linear / School / Diploma' (props 0/0), 'vuesax/bold/buliding' (props 0/0), 'vuesax/linear/activity' (props 0/0), 'Outline / Messages, Conversation / Inbox In' (props 0/0), 'vuesax/linear/calendar-edit' (props 0/0), 'vuesax/linear/book' (props 0/0), 'Page Title' (props 10/10), 'breadcrumbs text' (props 1/1), …. Mapped BY NAME, UNVERIFIED — confirm one with \"Go to main component\" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.",
+        "components": [
+          {
+            "setName": "vuesax/linear/element-4",
+            "catalogName": "vuesax/linear/element-4",
+            "catalogKey": "5978d2610e4ba1cebd1deabc56e2f4c18344ddec",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "vuesax/linear/calendar-tick",
+            "catalogName": "vuesax/linear/calendar-tick",
+            "catalogKey": "52e2b60121ada6969f56afe289d19b9482164773",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "Linear / School / Diploma",
+            "catalogName": "Linear / School / Diploma",
+            "catalogKey": "1dfaea16a193abacdb3c62246cbe7c8660a84315",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "vuesax/bold/buliding",
+            "catalogName": "vuesax/bold/buliding",
+            "catalogKey": "b80e1d5d56871a7345d0353237cba03ce2858110",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "vuesax/linear/activity",
+            "catalogName": "vuesax/linear/activity",
+            "catalogKey": "8b3a4f3ba1ac274cd472d44596eb0f302387a89c",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "Outline / Messages, Conversation / Inbox In",
+            "catalogName": "Outline / Messages, Conversation / Inbox In",
+            "catalogKey": "d091d89c09eb06361b0c4d372eceac1c3fdaa4e6",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "vuesax/linear/calendar-edit",
+            "catalogName": "vuesax/linear/calendar-edit",
+            "catalogKey": "f4dc91cb25edd2a58071d884eab483624317a8f2",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "vuesax/linear/book",
+            "catalogName": "vuesax/linear/book",
+            "catalogKey": "d70086c8d72a1b65f188c630c828a069f368caca",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "Page Title",
+            "catalogName": "Page Title",
+            "catalogKey": "3d1b2e45c50ce7458c32a85eda900ac483378d7a",
+            "propOverlap": "10/10",
+            "verified": false
+          },
+          {
+            "setName": "breadcrumbs text",
+            "catalogName": "breadcrumbs text",
+            "catalogKey": "5eaeb38480ef06a4fa4ec94469420cf105fc800d",
+            "propOverlap": "1/1",
+            "verified": false
+          },
+          {
+            "setName": "back link",
+            "catalogName": "back link",
+            "catalogKey": "3bbe273cfcdc1a1a69087e281e390fd9c4ea4136",
+            "propOverlap": "1/1",
+            "verified": false
+          },
+          {
+            "setName": "Down Icon",
+            "catalogName": "down icon",
+            "catalogKey": "cd9391587020acef41372e5c1d008d30935745bd",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "Add Icon",
+            "catalogName": "Add Icon",
+            "catalogKey": "f160445c3d9f3b5a8874b028c01eef9d1b34b2aa",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "More Icon",
+            "catalogName": "More Icon",
+            "catalogKey": "4b06295c9a5741301f74664ae5cc3581b10f37ab",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "search and filter",
+            "catalogName": "search and filter",
+            "catalogKey": "a0304c35b027b03602bdea505331b14369fa9f2a",
+            "propOverlap": "3/3",
+            "verified": false
+          },
+          {
+            "setName": "search bar",
+            "catalogName": "search bar",
+            "catalogKey": "8347f98ff3bf9c8241256a43aede0fa649f28206",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "filter icon",
+            "catalogName": "filter icon",
+            "catalogKey": "480c203fa53993d656f06e23951cbafe1c26c0e5",
+            "propOverlap": "0/0",
+            "verified": false
+          },
+          {
+            "setName": "Date",
+            "catalogName": "Date",
+            "catalogKey": "0bbdc3cbba6a5603ec1d2f2ca3bd5b4c44fa2ad0",
+            "propOverlap": "1/1",
+            "verified": false
+          },
+          {
+            "setName": "Segmented Control",
+            "catalogName": "Segmented Control",
+            "catalogKey": "eae3875d0962d8f0b8fc61699a92eaaaf1889961",
+            "propOverlap": "1/1",
+            "verified": false
+          }
+        ]
+      }
+    ],
+    "notChecked": [],
+    "inputs": {
+      "screens": [
+        "System_Configurations__1359_21337"
+      ],
+      "variables": true,
+      "tokens": true,
+      "components": true,
+      "stylesText": true
+    }
+  },
+  "grid": 4,
+  "screenStatesScope": {
+    "rootsAudited": 1,
+    "singleFrame": true
+  },
+  "screens": [
+    "System Configurations"
+  ],
+  "summary": {
+    "blockers": 5,
+    "warnings": 24,
+    "info": 77
+  },
+  "tokenBinding": {
+    "color": {
+      "bound": 136,
+      "total": 140,
+      "pct": 97
+    },
+    "typography": {
+      "bound": 27,
+      "total": 77,
+      "pct": 35
+    },
+    "spacing": {
+      "bound": 38,
+      "total": 452,
+      "pct": 8
+    },
+    "radius": {
+      "bound": 7,
+      "total": 42,
+      "pct": 17
+    },
+    "effects": {
+      "bound": 0,
+      "total": 1,
+      "pct": 0
+    }
+  },
+  "components": [
+    {
+      "name": "back link",
+      "kind": "link",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "input Field",
+      "kind": "input",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "Button",
+      "kind": "button",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "search and filter",
+      "kind": "input",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "search bar",
+      "kind": "input",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "vuesax/outline/search-normal",
+      "kind": "input",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "filter button",
+      "kind": "button",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "tab",
+      "known": false,
+      "present": [],
+      "missing": [],
+      "note": "not in the component catalog — states unknown"
+    }
+  ],
+  "screenStates": {
+    "loading": "not-found",
+    "empty": "not-found",
+    "error": "not-found"
+  },
+  "annotations": [],
+  "questions": [
+    "No loading state was found in the exported layers — what shows while data loads (skeleton vs spinner, delay before showing)?",
+    "No empty state was found in the exported layers — what shows when there's no data (first use vs no results vs cleared)?",
+    "No error state was found in the exported layers — what shows when a request fails (inline vs full-screen, retry, offline)?"
+  ],
+  "findings": [
+    {
+      "severity": "blocker",
+      "code": "catalog-covers-nothing",
+      "message": "0 of 61 component(s) used on this screen (0%) are in components.local.json by key — the catalog you exported is not the library this screen is built from. 10 more match components.library.json, which only means both files consume the same third-party set. 19 match BY NAME only and are marked unverified: a lead, not a mapping. 24 more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. A \"318/318 mapped\" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > \"Go to main component\" — it jumps to the file that defines it. Then connect that file and run `dtwin pull design --as-library \"<name>\"`. Until then every instance is correctly a `verdict:\"new\"` build, not a port of the catalog.",
+      "crossFile": true,
+      "coverage": {
+        "distinct": 61,
+        "byLocalKey": 0,
+        "byKey": 10,
+        "byName": 19,
+        "ambiguousName": 24,
+        "localPct": 0
+      }
+    },
+    {
+      "severity": "blocker",
+      "code": "text-style-near-miss",
+      "message": "1 text style name(s) differ from a design-system style ONLY by case or punctuation: 'Medium/14 Medium' vs 'Medium/14 medium'. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.",
+      "crossFile": true,
+      "styles": [
+        {
+          "name": "Medium/14 Medium",
+          "near": "Medium/14 medium"
+        }
+      ]
+    },
+    {
+      "severity": "blocker",
+      "code": "token-name-collision",
+      "message": "'Space 4' share a name but resolve DIFFERENTLY: screen {\"Desktop\":\"16\",\"Tablet\":\"8\",\"Mobile\":\"8\"} vs design system {\"Mode 1\":\"24\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+      "crossFile": true,
+      "token": "Space 4",
+      "screenValue": {
+        "Desktop": "16",
+        "Tablet": "8",
+        "Mobile": "8"
+      },
+      "designSystemValue": {
+        "Mode 1": "24"
+      },
+      "usedAt": [
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;1929:15178",
+          "field": "paddingLeft"
+        },
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;1929:15178",
+          "field": "paddingRight"
+        },
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;1929:15308",
+          "field": "paddingLeft"
+        }
+      ]
+    },
+    {
+      "severity": "blocker",
+      "code": "token-name-collision",
+      "message": "'Warning/Warning Medium' share a name but resolve DIFFERENTLY: screen {\"Mode 1\":\"#ffa71f\"} vs design system {\"Dark\":\"-> Yellow Shades/Yellow 300\",\"Light\":\"-> Yellow Shades/Yellow 400\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+      "crossFile": true,
+      "token": "Warning/Warning Medium",
+      "screenValue": {
+        "Mode 1": "#ffa71f"
+      },
+      "designSystemValue": {
+        "Dark": "-> Yellow Shades/Yellow 300",
+        "Light": "-> Yellow Shades/Yellow 400"
+      },
+      "usedAt": []
+    },
+    {
+      "severity": "blocker",
+      "code": "token-name-collision",
+      "message": "'(Space 3)' and the design system's 'Space 3' share a name but resolve DIFFERENTLY: screen {\"Desktop\":\"12\",\"Tablet\":\"8\",\"Mobile\":\"8\"} vs design system {\"Mode 1\":\"16\"} — no mode name is shared and the two value sets are disjoint. Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.",
+      "crossFile": true,
+      "token": "(Space 3)",
+      "alsoKnownAs": "Space 3",
+      "screenValue": {
+        "Desktop": "12",
+        "Tablet": "8",
+        "Mobile": "8"
+      },
+      "designSystemValue": {
+        "Mode 1": "16"
+      },
+      "usedAt": [
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;1929:15178",
+          "field": "itemSpacing"
+        },
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;1929:15308",
+          "field": "itemSpacing"
+        },
+        {
+          "screen": "System_Configurations__1359_21337",
+          "nodeId": "I20170:126629;72:3440",
+          "field": "itemSpacing"
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "ambiguous-component-name",
+      "message": "24 component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: 'Component 1' (4 candidates), 'Component 2' (2 candidates), 'Component 5' (2 candidates), 'License Health Check' (2 candidates), 'Org Management' (2 candidates), 'Staff Management' (2 candidates), 'shift Demand' (2 candidates), 'Projects' (2 candidates), …. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — binding code to one of them by name would be a guess with a 1-in-4 chance.",
+      "crossFile": true,
+      "components": [
+        {
+          "setName": "Component 1",
+          "candidates": 4
+        },
+        {
+          "setName": "Component 2",
+          "candidates": 2
+        },
+        {
+          "setName": "Component 5",
+          "candidates": 2
+        },
+        {
+          "setName": "License Health Check",
+          "candidates": 2
+        },
+        {
+          "setName": "Org Management",
+          "candidates": 2
+        },
+        {
+          "setName": "Staff Management",
+          "candidates": 2
+        },
+        {
+          "setName": "shift Demand",
+          "candidates": 2
+        },
+        {
+          "setName": "Projects",
+          "candidates": 2
+        },
+        {
+          "setName": "activity demand",
+          "candidates": 2
+        },
+        {
+          "setName": "Component 7",
+          "candidates": 2
+        },
+        {
+          "setName": "Requests",
+          "candidates": 2
+        },
+        {
+          "setName": "Component 8",
+          "candidates": 2
+        },
+        {
+          "setName": "OJT Management",
+          "candidates": 2
+        },
+        {
+          "setName": "reports",
+          "candidates": 2
+        },
+        {
+          "setName": "Component 1/vuesax/linear/Property 33",
+          "candidates": 2
+        },
+        {
+          "setName": "Header",
+          "candidates": 3
+        },
+        {
+          "setName": "User Avatar",
+          "candidates": 2
+        },
+        {
+          "setName": "Breadcrumb",
+          "candidates": 2
+        },
+        {
+          "setName": "input Field",
+          "candidates": 2
+        },
+        {
+          "setName": "Button",
+          "candidates": 4
+        },
+        {
+          "setName": "Menu Buttons",
+          "candidates": 4
+        },
+        {
+          "setName": "filter button",
+          "candidates": 2
+        },
+        {
+          "setName": "Right Icon",
+          "candidates": 3
+        },
+        {
+          "setName": "Badge",
+          "candidates": 2
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "detached-instance",
+      "message": "'Square Button' is a detached component instance — map it back to the component unless the detach was deliberate",
+      "nodeId": "18580:60760",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000005261 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "warning",
+      "code": "detached-instance",
+      "message": "'Square Button' is a detached component instance — map it back to the component unless the detach was deliberate",
+      "nodeId": "18580:60880",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 2 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "warning",
+      "code": "detached-instance",
+      "message": "'Square Button' is a detached component instance — map it back to the component unless the detach was deliberate",
+      "nodeId": "18580:60767",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "warning",
+      "code": "detached-instance",
+      "message": "'Square Button' is a detached component instance — map it back to the component unless the detach was deliberate",
+      "nodeId": "18580:60774",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 2 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "warning",
+      "code": "detached-instance",
+      "message": "'Square Button' is a detached component instance — map it back to the component unless the detach was deliberate",
+      "nodeId": "20024:144125",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 3 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "warning",
+      "code": "font-family-stray",
+      "message": "77 text node(s) use 2 different font families: Poppins (73), Roboto (4). 'Poppins' carries 73; the rest are strays — usually a starter-kit style (Figma's Material 3 kit leaks `material-theme/*`) left on a layer. Ask the designer before shipping a second webfont for 4 node(s).",
+      "crossFile": true,
+      "families": [
+        {
+          "family": "Poppins",
+          "count": 73
+        },
+        {
+          "family": "Roboto",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "font-not-in-design-system",
+      "message": "font 'Roboto' appears on the screen but NO design-system text style uses it (the design system's text styles are all Poppins). Nothing in the export declares a font file or a webfont for either, so \"is it installed and licensed\" is a question only the designer can answer.",
+      "crossFile": true,
+      "fonts": [
+        "Roboto"
+      ],
+      "designSystemFonts": [
+        "Poppins"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "foreign-token-library",
+      "message": "13 of 14 variable collection(s) the screen binds are NOT in the design-system export — the screen consumes a DIFFERENT library than the one you pulled. 7 of them carry a design-system collection's name under a different key ('Semantic Variables 02', 'Semantic Variables 01', 'Font Sizes'), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run `dtwin list libraries --client <the screen's file>` — variable collections are the ONE thing Figma attributes to a library by name — then open that file and export it with `dtwin pull design --as-library \"<name>\"`.",
+      "crossFile": true,
+      "collections": [
+        {
+          "name": "Collection",
+          "key": "0c263e267aa11acb7202afd50d0e22eb8fb1dfd2"
+        },
+        {
+          "name": "Semantic Variables 02",
+          "key": "64113d4ce0a7ed4e684ed50731b100fc118933c7",
+          "twinKey": "ebac83f1d34ce22ff59bcdda30f337414811535e",
+          "twinName": "Semantic Variables 02"
+        },
+        {
+          "name": "Semantic Variables 01",
+          "key": "c3725b5d4997d525070f01258b9c3fa87582b768",
+          "twinKey": "b6a895deedd695ce7cd8eb920b60faed003f14eb",
+          "twinName": "Semantic Variables 01"
+        },
+        {
+          "name": "Font Sizes",
+          "key": "954ec1a8a445c1d79556278393920849c0ba8643",
+          "twinKey": "fac1bd6eb1ea541919af21e1b6b5ff6c056add96",
+          "twinName": "Font sizes"
+        },
+        {
+          "name": "Spacing",
+          "key": "69f809cec215ff47e90e204a34cea34702fcfc11",
+          "twinKey": "02aa410b3b9bbdef8ea21ef8b95a0b20ab54108d",
+          "twinName": "Spacing"
+        },
+        {
+          "name": "Fonts",
+          "key": "b75dc467623deb8c656774bf88798b6c8e6208f3"
+        },
+        {
+          "name": "Spacing",
+          "key": "a0d882e0e7fbe6669cf1b0ae59c20e9574b95384",
+          "twinKey": "02aa410b3b9bbdef8ea21ef8b95a0b20ab54108d",
+          "twinName": "Spacing"
+        },
+        {
+          "name": "Border Radius",
+          "key": "164b155cc6d63cc580f28f95623eb3676be668d8",
+          "twinKey": "4e4f87153d88894c94314c32f329508c5c239444",
+          "twinName": "Border Radius"
+        },
+        {
+          "name": "Default",
+          "key": "a4c6c8731c777b92801bc94c7bab342549e40fcb"
+        },
+        {
+          "name": "Collection 1",
+          "key": "c5f336207f7ecc577e003f77adb9c806f3110f9a"
+        },
+        {
+          "name": "Primitive",
+          "key": "f48164854e20708b91615b854c1c06b7ed66b9c1",
+          "twinKey": "dd7728a69fa251c6ab1668ecf2ded93ca569d34b",
+          "twinName": "Primitive"
+        },
+        {
+          "name": "M3",
+          "key": "c5d408a1dcb9f7a3cd3c36a5070f681cf8ab13ae"
+        },
+        {
+          "name": "Base Colors",
+          "key": "0ca2aa936d32dd85048e256b9da16ab0ca0ee6b9"
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "low-contrast",
+      "message": "'Search by ...' text contrast 3.21:1 is below WCAG AA 4.5:1 (normal text, #767680 on its background)",
+      "nodeId": "I20024:134073;885:2724;880:3726",
+      "nodeName": "Search by ...",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005090 > search bar > Text Input > Search by ...",
+      "ratio": 3.21,
+      "required": 4.5
+    },
+    {
+      "severity": "warning",
+      "code": "low-contrast",
+      "message": "'Table Header' text contrast 1:1 is below WCAG AA 4.5:1 (normal text, #ffffff on its background)",
+      "nodeId": "18580:60861",
+      "nodeName": "Table Header",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table header > Table Header",
+      "ratio": 1,
+      "required": 4.5
+    },
+    {
+      "severity": "warning",
+      "code": "low-token-binding",
+      "message": "only 35% of typography values are bound to tokens/styles (27/77) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token",
+      "category": "typography"
+    },
+    {
+      "severity": "warning",
+      "code": "low-token-binding",
+      "message": "only 8% of spacing values are bound to tokens/styles (38/452) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token",
+      "category": "spacing"
+    },
+    {
+      "severity": "warning",
+      "code": "low-token-binding",
+      "message": "only 17% of radius values are bound to tokens/styles (7/42) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token",
+      "category": "radius"
+    },
+    {
+      "severity": "warning",
+      "code": "sentinel-token-value",
+      "message": "1 token value(s) are sentinels, not measurements: 'Full' = 1000000000 (Mode 1). Figma's \"fully rounded\" corner exports as a literal 1e9. Emit these as the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) — never as `1000000000px`.",
+      "crossFile": true,
+      "tokens": [
+        {
+          "name": "Full",
+          "collection": "Border Radius",
+          "mode": "Mode 1",
+          "value": 1000000000
+        }
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Semantic Variables 02' in mode 'Dark', but it defines 2 modes (Dark, Light). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Dark-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Semantic Variables 02",
+      "exportedMode": "Dark",
+      "modes": [
+        "Dark",
+        "Light"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Semantic Variables 01' in mode 'Dark', but it defines 2 modes (Dark, Light). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Dark-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Semantic Variables 01",
+      "exportedMode": "Dark",
+      "modes": [
+        "Dark",
+        "Light"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Font Sizes' in mode 'desktop', but it defines 3 modes (desktop, IPad, mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'IPad' / 'mobile' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Font Sizes",
+      "exportedMode": "desktop",
+      "modes": [
+        "desktop",
+        "IPad",
+        "mobile"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Fonts' in mode 'Desktop', but it defines 3 modes (Desktop, Tablet, Mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Tablet' / 'Mobile' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Fonts",
+      "exportedMode": "Desktop",
+      "modes": [
+        "Desktop",
+        "Tablet",
+        "Mobile"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Spacing' in mode 'Desktop', but it defines 3 modes (Desktop, Tablet, Mobile). The other 2 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Desktop-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Tablet' / 'Mobile' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Spacing",
+      "exportedMode": "Desktop",
+      "modes": [
+        "Desktop",
+        "Tablet",
+        "Mobile"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'Default' in mode 'Light', but it defines 2 modes (Light, Dark). The other 1 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Light-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Dark' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "Default",
+      "exportedMode": "Light",
+      "modes": [
+        "Light",
+        "Dark"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "single-mode-export",
+      "message": "every exported frame resolved collection 'M3' in mode 'Light', but it defines 32 modes (Light, Light High Contrast, Light Medium Contrast, Dark, Dark High Contrast, Dark Medium Contrast, Monochrome LT, Monochrome DT, Pink LT, Pink DT, Rose LT, Rose DT, Red LT, Red DT, Orange LT, Orange DT, Yellow LT, Yellow DT, Chartreuse LT, Chartreuse DT, Green LT, Green DT, Teal LT, Teal DT, Cyan LT, Cyan DT, Blue LT, Blue DT, Indigo LT, Indigo DT, Purple LT, Purple DT). The other 31 mode(s) are DERIVED from variable values, never seen rendered — so any element whose Light-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in 'Light High Contrast' / 'Light Medium Contrast' / 'Dark' / 'Dark High Contrast' / 'Dark Medium Contrast' / 'Monochrome LT' / 'Monochrome DT' / 'Pink LT' / 'Pink DT' / 'Rose LT' / 'Rose DT' / 'Red LT' / 'Red DT' / 'Orange LT' / 'Orange DT' / 'Yellow LT' / 'Yellow DT' / 'Chartreuse LT' / 'Chartreuse DT' / 'Green LT' / 'Green DT' / 'Teal LT' / 'Teal DT' / 'Cyan LT' / 'Cyan DT' / 'Blue LT' / 'Blue DT' / 'Indigo LT' / 'Indigo DT' / 'Purple LT' / 'Purple DT' too, or have the designer confirm the derivation before it ships.",
+      "crossFile": true,
+      "collection": "M3",
+      "exportedMode": "Light",
+      "modes": [
+        "Light",
+        "Light High Contrast",
+        "Light Medium Contrast",
+        "Dark",
+        "Dark High Contrast",
+        "Dark Medium Contrast",
+        "Monochrome LT",
+        "Monochrome DT",
+        "Pink LT",
+        "Pink DT",
+        "Rose LT",
+        "Rose DT",
+        "Red LT",
+        "Red DT",
+        "Orange LT",
+        "Orange DT",
+        "Yellow LT",
+        "Yellow DT",
+        "Chartreuse LT",
+        "Chartreuse DT",
+        "Green LT",
+        "Green DT",
+        "Teal LT",
+        "Teal DT",
+        "Cyan LT",
+        "Cyan DT",
+        "Blue LT",
+        "Blue DT",
+        "Indigo LT",
+        "Indigo DT",
+        "Purple LT",
+        "Purple DT"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "text-style-absent",
+      "message": "6 of 9 text style(s) used on the screen are not in the design-system export: 'material-theme/label/large', 'material-theme/body/medium', 'Body/SM Regular', 'Body/Base Regular', 'Body/XS Regular', 'Medium/SM Medium (Buttons & Labels)'.",
+      "crossFile": true,
+      "styles": [
+        "material-theme/label/large",
+        "material-theme/body/medium",
+        "Body/SM Regular",
+        "Body/Base Regular",
+        "Body/XS Regular",
+        "Medium/SM Medium (Buttons & Labels)"
+      ]
+    },
+    {
+      "severity": "warning",
+      "code": "token-absent-from-design-system",
+      "message": "14 token name(s) the screen binds do not exist in the design-system export (1 differ from a design-system name only by case or punctuation — e.g. '(Space 3)' vs 'Space 3'): 'Font-Size/Text-sm', 'Font-Weight/normal', 'Font-Size/Text-base', 'Font-Weight/medium', 'Semantic rounds/forms-rounded', 'Font-Size/Text-xs', '(Space 3)', 'Rounds Variables/roundes-lg', …. Build these as literals with a recorded decision — do not invent a design-system token for them.",
+      "crossFile": true,
+      "tokens": [
+        {
+          "name": "Font-Size/Text-sm",
+          "near": null
+        },
+        {
+          "name": "Font-Weight/normal",
+          "near": null
+        },
+        {
+          "name": "Font-Size/Text-base",
+          "near": null
+        },
+        {
+          "name": "Font-Weight/medium",
+          "near": null
+        },
+        {
+          "name": "Semantic rounds/forms-rounded",
+          "near": null
+        },
+        {
+          "name": "Font-Size/Text-xs",
+          "near": null
+        },
+        {
+          "name": "(Space 3)",
+          "near": "Space 3"
+        },
+        {
+          "name": "Rounds Variables/roundes-lg",
+          "near": null
+        },
+        {
+          "name": "Components/Button/Global/borderRadiusLG",
+          "near": null
+        },
+        {
+          "name": "Colors/Neutral/Fill/colorFillSecondary",
+          "near": null
+        },
+        {
+          "name": "Colors/Neutral/colorBgBase",
+          "near": null
+        },
+        {
+          "name": "Medium Gray",
+          "near": null
+        },
+        {
+          "name": "light blue",
+          "near": null
+        },
+        {
+          "name": "Schemes/On Primary",
+          "near": null
+        }
+      ]
+    },
+    {
+      "severity": "info",
+      "code": "contrast-manual",
+      "message": "'Global Policies' sits on a gradient/image — check text contrast manually (needs 4.5:1)",
+      "nodeId": "I10970:109860;10215:94386;10968:81927",
+      "nodeName": "Global Policies",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Sub titles > Global Policies"
+    },
+    {
+      "severity": "info",
+      "code": "no-auto-layout",
+      "message": "'Component 1' has no auto layout (3 children placed by coordinates) — infer a flow layout and ask how it should resize",
+      "nodeId": "10970:109860",
+      "nodeName": "Component 1",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1"
+    },
+    {
+      "severity": "info",
+      "code": "no-auto-layout",
+      "message": "'User Avatar' has no auto layout (2 children placed by coordinates) — infer a flow layout and ask how it should resize",
+      "nodeId": "I18580:60746;842:3338",
+      "nodeName": "User Avatar",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Header > Frame 1000003497 > Frame 1000003082 > User Avatar"
+    },
+    {
+      "severity": "info",
+      "code": "no-auto-layout",
+      "message": "'ChartSquare' has no auto layout (3 children placed by coordinates) — infer a flow layout and ask how it should resize",
+      "nodeId": "I20024:134073;1578:18343;1578:18012",
+      "nodeName": "ChartSquare",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Segmented Control > Chart > ChartSquare"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Org Management' has unbound spacing off the 4px grid (gap=6) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386",
+      "nodeName": "Org Management",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000002925' has unbound spacing off the 4px grid (gap=6) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81916",
+      "nodeName": "Frame 1000002925",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Sub titles' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81925",
+      "nodeName": "Sub titles",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Sub titles"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81922",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81918",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81930",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Frame 1000004860 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;12115:127152",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Frame 1000004861 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;12115:127173",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Frame 1000004862 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004859' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10215:94386;10968:81934",
+      "nodeName": "Frame 1000004859",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Org Management > Frame 1000002925 > Sub titles > Frame 1000004859"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Outline / Messages, Conversation / Inbox In' has unbound spacing off the 4px grid (paddingTop=1.25, paddingRight=1.2500004768371582, paddingBottom=1.2499122619628906, paddingLeft=1.2499995231628418) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I10970:109860;10968:77220;10968:56880",
+      "nodeName": "Outline / Messages, Conversation / Inbox In",
+      "screen": "System Configurations",
+      "path": "System Configurations > Component 1 > Frame 1000004145 > Frame 1000004094 > Requests >  Hierarchy/Clicked > Frame 1000004144 > Outline / Messages, Conversation / Inbox In"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'light/dark' has unbound spacing off the 4px grid (paddingRight=6) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60746;45:1740",
+      "nodeName": "light/dark",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Header > Frame 1000003497 > light/dark"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'sun' has unbound spacing off the 4px grid (paddingTop=0.09375, paddingRight=0.09375, paddingBottom=0.09375, paddingLeft=0.09375) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60746;45:1741",
+      "nodeName": "sun",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Header > Frame 1000003497 > light/dark > sun"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004092' has unbound spacing off the 4px grid (gap=10, paddingTop=18, paddingBottom=18) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60746;45:1742",
+      "nodeName": "Frame 1000004092",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Header > Frame 1000003497 > light/dark > Frame 1000004092"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'breadcrumbs text' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3598;72:3485",
+      "nodeName": "breadcrumbs text",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Breadcrumb > breadcrumbs text"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=3.333383560180664, paddingRight=5.333384037017822, paddingBottom=3.333383560180664, paddingLeft=5.333383560180664) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3598;72:3488",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Breadcrumb > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'breadcrumbs text' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3598;72:3494",
+      "nodeName": "breadcrumbs text",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Breadcrumb > breadcrumbs text"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=3.333383560180664, paddingRight=5.333384037017822, paddingBottom=3.333383560180664, paddingLeft=5.333383560180664) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3598;72:3497",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Breadcrumb > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'breadcrumbs text' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3598;72:3491",
+      "nodeName": "breadcrumbs text",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Breadcrumb > breadcrumbs text"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Left Icon' has unbound spacing off the 4px grid (paddingTop=3.3331551551818848, paddingRight=5.333959102630615, paddingBottom=3.3334479331970215, paddingLeft=5.333133697509766) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3591;72:3576",
+      "nodeName": "Left Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > back link > Left Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=3.3331551551818848, paddingRight=5.333959102630615, paddingBottom=3.3334479331970215, paddingLeft=5.333133697509766) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3591;72:3578",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > back link > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Question Icon' has unbound spacing off the 4px grid (paddingTop=0.8333333134651184, paddingRight=0.8336588740348816, paddingBottom=0.8336588740348816, paddingLeft=0.8333333134651184) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15088;63:1940",
+      "nodeName": "Question Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Version > Label > Question Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Down Icon' has unbound spacing off the 4px grid (paddingTop=5.333155155181885, paddingRight=3.3339598178863525, paddingBottom=5.333449363708496, paddingLeft=3.3331334590911865) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15088;63:1943",
+      "nodeName": "Down Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Version > Text Input > Down Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Add Icon' has unbound spacing off the 4px grid (paddingTop=3.3330078125, paddingRight=3.3330078125, paddingBottom=3.3330078125, paddingLeft=3.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15178;1:1082",
+      "nodeName": "Add Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Add Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=4.16672945022583, paddingRight=6.666729927062988, paddingBottom=4.16672945022583, paddingLeft=6.66672945022583) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15178;1:1084",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Add Icon' has unbound spacing off the 4px grid (paddingTop=3.3330078125, paddingRight=3.3330078125, paddingBottom=3.3330078125, paddingLeft=3.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15308;1:1082",
+      "nodeName": "Add Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Add Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=4.16672945022583, paddingRight=6.666729927062988, paddingBottom=4.16672945022583, paddingLeft=6.66672945022583) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;1929:15308;1:1084",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Add Icon' has unbound spacing off the 4px grid (paddingTop=3.3330078125, paddingRight=3.3330078125, paddingBottom=3.3330078125, paddingLeft=3.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3440;1:1058",
+      "nodeName": "Add Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Add Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=4.16672945022583, paddingRight=6.666729927062988, paddingBottom=4.16672945022583, paddingLeft=6.66672945022583) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;72:3440;1:1060",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Button > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'More Icon' has unbound spacing off the 4px grid (paddingRight=2.8515615463256836, paddingLeft=2.1484384536743164) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;574:3246;1:1132",
+      "nodeName": "More Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Menu Buttons > More Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005202' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20170:126629;2006:22479",
+      "nodeName": "Frame 1000005202",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Frame 1000005202"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Question Icon' has unbound spacing off the 4px grid (paddingTop=0.8333333134651184, paddingRight=0.8336588740348816, paddingBottom=0.8336588740348816, paddingLeft=0.8333333134651184) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;885:2724;880:3723",
+      "nodeName": "Question Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005090 > search bar > Label > Question Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'filter icon' has unbound spacing off the 4px grid (paddingTop=1.875, paddingRight=1.0419921875, paddingBottom=1.875, paddingLeft=1.0419921875) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;885:2723;326:2840",
+      "nodeName": "filter icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005090 > filter button > filter icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=4.16672945022583, paddingRight=6.666729927062988, paddingBottom=4.16672945022583, paddingLeft=6.66672945022583) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;885:2723;326:2842",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005090 > filter button > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Left Icon' has unbound spacing off the 4px grid (paddingTop=5.000090599060059, paddingRight=8.000113487243652, paddingBottom=5.00009822845459, paddingLeft=8.000075340270996) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;1219:2538;104:3584",
+      "nodeName": "Left Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Date > Left Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Down Icon' has unbound spacing off the 4px grid (paddingTop=8.000090599060059, paddingRight=5.000113487243652, paddingBottom=8.00009822845459, paddingLeft=5.000075340270996) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;1219:2538;104:3590",
+      "nodeName": "Down Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Date > Search item > Down Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Right Icon' has unbound spacing off the 4px grid (paddingTop=5.000090599060059, paddingRight=8.000113487243652, paddingBottom=5.00009822845459, paddingLeft=8.000075340270996) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;1219:2538;104:3583",
+      "nodeName": "Right Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Date > Right Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Element3' has unbound spacing off the 4px grid (paddingTop=1.333333134651184, paddingRight=1.333332896232605, paddingBottom=1.333332896232605, paddingLeft=1.333333134651184) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;1578:18343;1578:18006",
+      "nodeName": "Element3",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Segmented Control > Grid > Element3"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'TextalignJustifycenter' has unbound spacing off the 4px grid (paddingTop=2.999999761581421, paddingRight=2.000000238418579, paddingBottom=3.000000238418579, paddingLeft=1.999999761581421) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I20024:134073;1578:18343;1578:18009",
+      "nodeName": "TextalignJustifycenter",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Segmented Control > Table > TextalignJustifycenter"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004168' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60756",
+      "nodeName": "Frame 1000004168",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000005261 > Frame 1000004168"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Square Button' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60760",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000005261 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'table header' has unbound spacing off the 4px grid (gap=146) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60859",
+      "nodeName": "table header",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table header"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005264' has unbound spacing off the 4px grid (gap=171) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60962",
+      "nodeName": "Frame 1000005264",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 01 > Frame 1000005264"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Info Icon' has unbound spacing off the 4px grid (paddingTop=1.3330078125, paddingRight=1.3330078125, paddingBottom=1.3330078125, paddingLeft=1.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60968;1:2746",
+      "nodeName": "Info Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 01 > Frame 1000005264 > Badge > Info Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004146' has unbound spacing off the 4px grid (gap=6) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60870",
+      "nodeName": "Frame 1000004146",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 3 > Frame 1000004146"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005264' has unbound spacing off the 4px grid (gap=171) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60956",
+      "nodeName": "Frame 1000005264",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 3 > Frame 1000005264"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005262' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60957",
+      "nodeName": "Frame 1000005262",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 3 > Frame 1000005264 > Frame 1000005262"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Info Icon' has unbound spacing off the 4px grid (paddingTop=1.3330078125, paddingRight=1.3330078125, paddingBottom=1.3330078125, paddingLeft=1.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60958;1:2734",
+      "nodeName": "Info Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 3 > Frame 1000005264 > Frame 1000005262 > Badge > Info Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Info Icon' has unbound spacing off the 4px grid (paddingTop=1.3330078125, paddingRight=1.3330078125, paddingBottom=1.3330078125, paddingLeft=1.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60937;1:2743",
+      "nodeName": "Info Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 2 > Badge > Info Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Square Button' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60880",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 2 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Info Icon' has unbound spacing off the 4px grid (paddingTop=1.3330078125, paddingRight=1.3330078125, paddingBottom=1.3330078125, paddingLeft=1.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60927;1:2743",
+      "nodeName": "Info Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 4 > Badge > Info Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005264' has unbound spacing off the 4px grid (gap=171) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60955",
+      "nodeName": "Frame 1000005264",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 6 > Frame 1000005264"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000005262' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60949",
+      "nodeName": "Frame 1000005262",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 6 > Frame 1000005264 > Frame 1000005262"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Info Icon' has unbound spacing off the 4px grid (paddingTop=1.3330078125, paddingRight=1.3330078125, paddingBottom=1.3330078125, paddingLeft=1.3330078125) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I18580:60941;1:2734",
+      "nodeName": "Info Icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004107 > table row 6 > Frame 1000005264 > Frame 1000005262 > Badge > Info Icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004168' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60763",
+      "nodeName": "Frame 1000004168",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004168"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Square Button' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60767",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 01 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004168' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60770",
+      "nodeName": "Frame 1000004168",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 2 > Frame 1000004168"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Square Button' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60774",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 2 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 1000004168' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "20024:144119",
+      "nodeName": "Frame 1000004168",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 3 > Frame 1000004168"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Square Button' has unbound spacing off the 4px grid (gap=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "20024:144125",
+      "nodeName": "Square Button",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > table row 3 > Frame 1000004110 > Square Button"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 6356238' has unbound spacing off the 4px grid (gap=3) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60776",
+      "nodeName": "Frame 6356238",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 6356238"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 192' has unbound spacing off the 4px grid (gap=10, paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "18580:60777",
+      "nodeName": "Frame 192",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 6356238 > Frame 192"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_Selection item' has unbound spacing off the 4px grid (paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21366",
+      "nodeName": "_Selection item",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_selected icon' has unbound spacing off the 4px grid (paddingTop=2, paddingRight=2, paddingBottom=2, paddingLeft=2) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "I1359:21366;6:87",
+      "nodeName": "_selected icon",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item > _selected icon"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_Selection item' has unbound spacing off the 4px grid (paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21367",
+      "nodeName": "_Selection item",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_Selection item' has unbound spacing off the 4px grid (paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21368",
+      "nodeName": "_Selection item",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_Selection item' has unbound spacing off the 4px grid (paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21369",
+      "nodeName": "_Selection item",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'_Selection item' has unbound spacing off the 4px grid (paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21370",
+      "nodeName": "_Selection item",
+      "screen": "System Configurations",
+      "path": "System Configurations > selection-list > lists > _Selection item"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 6356238' has unbound spacing off the 4px grid (gap=3) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21457",
+      "nodeName": "Frame 6356238",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 6356238"
+    },
+    {
+      "severity": "info",
+      "code": "off-grid-spacing",
+      "message": "'Frame 192' has unbound spacing off the 4px grid (gap=10, paddingTop=10, paddingBottom=10) — likely drift; fix it in Figma or bind a token. Until then the build uses these values EXACTLY — it must not round them to the grid",
+      "nodeId": "1359:21458",
+      "nodeName": "Frame 192",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 6356238 > Frame 192"
+    },
+    {
+      "severity": "info",
+      "code": "stroke-align",
+      "message": "'Vector' has a center stroke — a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box; the rendered size differs from box",
+      "nodeId": "I20170:126629;2073:3290;4013:1242",
+      "nodeName": "Vector",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Page Title > Title > Buttons > Frame 1000005202 > vuesax/linear/import > vuesax/linear/import > import > Vector"
+    },
+    {
+      "severity": "info",
+      "code": "stroke-align",
+      "message": "'Vector' has a center stroke — a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box; the rendered size differs from box",
+      "nodeId": "I20024:134073;1219:2514",
+      "nodeName": "Vector",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Search item > Frame 1000004503 > vuesax/linear/arrow-3 > vuesax/linear/arrow-3 > arrow-3 > Group > Vector"
+    },
+    {
+      "severity": "info",
+      "code": "stroke-align",
+      "message": "'Vector' has a center stroke — a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box; the rendered size differs from box",
+      "nodeId": "I20024:134073;1219:2516",
+      "nodeName": "Vector",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Search item > Frame 1000004503 > vuesax/linear/arrow-3 > vuesax/linear/arrow-3 > arrow-3 > Group > Vector"
+    },
+    {
+      "severity": "info",
+      "code": "stroke-align",
+      "message": "'Segmented Control' has a outside stroke — a CSS border is inside the box — use outline/box-shadow (no layout) or grow the box; the rendered size differs from box",
+      "nodeId": "I20024:134073;1578:18343",
+      "nodeName": "Segmented Control",
+      "screen": "System Configurations",
+      "path": "System Configurations > Frame 1000005061 > Frame 1000004489 > search and filter > Frame 1000005093 > Segmented Control"
+    }
+  ]
+}

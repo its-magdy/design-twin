@@ -49,6 +49,24 @@ Copy this checklist into your working notes and tick it off:
 - [ ] 7. Handed back: blockers + top questions summarized to the user
 ```
 
+**Cost.** `audit.js` itself runs in well under 0.1s — the minutes this skill takes are the LLM turn
+(steps 4-6 reading the screenshot/tree and writing the report), typically 90-150s per screen. Auditing
+5+ screens one at a time costs 5+ separate multi-minute turns. For more than one screen, run `audit.js`
+for all of them first in a single shell loop, THEN read only the headline (verdict + blocker count)
+and blockers of each before deciding which need the full step-4-6 review:
+
+```
+for f in design/export/pages/*/*.json; do
+  case "$f" in *.vars.json|*.assets.json) continue;; esac
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" "$f" --platform <platform> \
+    --design-system design/export/design-system --json | \
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['summary'], [x['code'] for x in d['findings'] if x['severity']=='blocker'])"
+done
+```
+
+Only screens with blockers, or that the user explicitly wants reviewed in depth, need steps 4-6's
+full turn; a clean summary can be reported from the JSON alone.
+
 1. **Scope.** The screen to audit is whatever was passed to this skill (the `ARGUMENTS` line at the
    end of this prompt). This skill runs in its own context and cannot see the conversation that
    invoked it, so if no screen was passed and `design/` holds more than one, don't guess — return

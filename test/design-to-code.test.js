@@ -819,4 +819,26 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   check("[native] prototype-named modes/tokens cannot break the emitter", (() => { try { toNative({ collections: [{ name: "__proto__", modes: ["__proto__", "constructor"], default: "__proto__" }], variables: [{ name: "__proto__", type: "COLOR", collection: "__proto__", values: { __proto__: "#fff", constructor: "#000" } }] }, "flutter"); return true; } catch { return false; } })());
 })();
 
+// ---------- P6-123: drift-lint CLI must exit non-zero at 0% screen coverage (not a bug, but pin it) ----------
+// Finding 123 claimed `--screen` printed ERROR [screen-coverage]/[catalog-rekeyed] yet exited 0.
+// Reproduced directly against the real livetest-3 map/catalog/screens (both the Job Role Details
+// export and the positions export, 0% coverage in both): the CLI exits 1 both times, run directly
+// AND through a pipe. Not reproducible on head — recorded here as a regression pin so a future
+// change cannot silently reintroduce it.
+{
+  const { spawnSync } = require("child_process");
+  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const emptyMapFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "p6-123-")), "map.json");
+  fs.writeFileSync(emptyMapFile, JSON.stringify({ components: {} }));
+  const catalogFile = path.join(FXL, "design-system", "components.local.json");
+  const screens = [
+    path.join(FXL, "verify", "positions___7314_87192.json"),
+    path.join(FXL, "verify", "System_Configurations__1359_21337.json"),
+  ];
+  for (const screen of screens) {
+    const r = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "drift-lint.js"), emptyMapFile, catalogFile, "--screen", screen], { encoding: "utf8" });
+    check(`[P6-123] drift-lint --screen exits non-zero at 0% coverage for ${path.basename(screen)}`, r.status !== 0 && /ERROR\s+\[(screen-coverage|catalog-rekeyed)\]/.test(r.stderr));
+  }
+}
+
 report();

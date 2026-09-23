@@ -344,10 +344,23 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const nodeId = doc.nodeId || root.id || null;
   const title = indexRow && indexRow.title;
   const rel = screenFile ? path.relative(cwd || process.cwd(), path.resolve(screenFile)).split(path.sep).join("/") : null;
+  const screenName = String(title || doc.screen || root.name || "").trim() || null;
+  // finding 136: pre-fill a first-class auditGate from an existing audit with blockers, so the model
+  // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
+  // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
+  // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
+  let auditGate = null;
+  try {
+    const { auditGateStatus } = require("./audit-gate.js");
+    const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
+    if (g.auditFile && g.blockers.length) {
+      auditGate = { auditFile: g.auditFile, verdict: "blocked", blockers: g.blockers, overridden: [], reason: null, decidedBy: null, decidedAt: null };
+    }
+  } catch { /* audit-gate.js is best-effort here; plan-skeleton must never fail on it */ }
   return {
     schema: "designtwin/plan@2",
     screen: screenFile ? path.basename(screenFile).replace(/\.json$/, "") : null,
-    screenName: String(title || doc.screen || root.name || "").trim() || null,
+    screenName,
     nodeId,
     route: route || null,
     file: rel,
@@ -361,6 +374,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     anchors,
     hidden: vis.hiddenRoots,
     deviations: [],
+    auditGate,
     counts: {
       tokens: tokens.length,
       tokensVisible: tokens.filter((t) => t.sites.visible > 0).length,
@@ -384,6 +398,8 @@ function merge(fresh, prev) {
     file: fresh.file,
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
+    // Never clear a decided auditGate; only fill one in if the plan never had one.
+    auditGate: (prev.auditGate && typeof prev.auditGate === "object") ? prev.auditGate : fresh.auditGate,
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
