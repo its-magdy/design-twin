@@ -604,7 +604,10 @@ if (require.main === module) {
     "       [--design-system design/design-system] [--variables design/variables.json]\n" +
     "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]\n" +
     "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
-    "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".";
+    "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
+    "  --out defaults to design/audit/<input file's own basename> — the same <LayerName>__<node-id>\n" +
+    "  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same\n" +
+    "  report pair instead of a new name each run.";
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = argv.filter((a) => a.startsWith("-"));
   if (stray.length || !argv.length) { console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
@@ -634,13 +637,20 @@ if (require.main === module) {
     maybe(path.join(path.dirname(argv[0]), "variables.json"));
   const res = audit(inputs, { platform, catalog, designSystem, variables, grid: gridArg ? Number(gridArg) : undefined });
   const md = jsonOnly ? "" : toMarkdown(res);
+  // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
+  // skill invented one each time (`positions`/`job-roles`/`global-policies`/`System_Configurations`
+  // for the SAME node). `--out`'s default is derived from the input FILE, which is itself already
+  // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
+  // so two runs on the same screen land on the same report pair without either caller having to
+  // agree on a name out of band. Only the first input names it when several are given at once.
+  const outBase = out || (argv[0] ? path.join("design", "audit", path.basename(argv[0], ".json")) : undefined);
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (out) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(out + ".md", md);
-    console.error(`wrote ${out}.json and ${out}.md`);
+  } else if (outBase) {
+    fs.mkdirSync(path.dirname(outBase), { recursive: true });
+    fs.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs.writeFileSync(outBase + ".md", md);
+    console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
   }
