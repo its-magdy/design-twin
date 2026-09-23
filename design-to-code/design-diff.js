@@ -146,25 +146,57 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
   return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
 }
 
-// Tokens are keyed by collection AND name: two collections may both hold `size/md`, and keyed by name
-// alone the second silently replaced the first — a change to either could then report nothing.
+// Tokens are keyed by their Figma KEY — the one thing that identifies a variable. Names are not
+// unique: livetest-3's merged variables.json held two `Spacing / Space 4` (24 and 16, distinct keys)
+// in the SAME collection, and the old `[collection, name]` key let a Map keep the last of them, so a
+// real change to the other was invisible and merely re-ordering the rows reported a false `24 → 16`
+// (livetest-3 #211). `[collection, name]` is only the fallback for a row with no key (hand-written
+// or very old files), and the human LABEL: a name shared by several variables is labelled with its
+// collection and its key, so the report says WHICH one changed.
 function diffTokens(oldDoc, newDoc) {
-  const keyed = (doc) => new Map((doc.variables || []).map((v) => [JSON.stringify([v.collection || "", v.name]), v]));
-  const label = (v, clash) => (clash.has(v.name) && v.collection ? `${v.collection} / ${v.name}` : v.name);
+  const idOf = (v) => (typeof v.key === "string" && v.key ? "k:" + v.key : "n:" + JSON.stringify([v.collection || "", v.name]));
+  const keyed = (doc) => new Map((doc.variables || []).map((v) => [idOf(v), v]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const counts = new Map(); for (const v of [...A.values(), ...B.values()]) counts.set(v.name, (counts.get(v.name) || new Set()).add(v.collection || ""));
-  const clash = new Set([...counts].filter(([, c]) => c.size > 1).map(([n]) => n));
-  const added = [...B].filter(([k]) => !A.has(k)).map(([, v]) => label(v, clash)), removed = [...A].filter(([k]) => !B.has(k)).map(([, v]) => label(v, clash)), changed = [];
+  // A row that carries a key on one side only (an export from before keys were written) still pairs
+  // with its keyless twin when [collection, name] names exactly one variable on each side.
+  const byName = (m) => { const o = new Map(); for (const [id, v] of m) { const n = JSON.stringify([v.collection || "", v.name]); o.set(n, o.has(n) ? null : id); } return o; };
+  const nA = byName(A), nB = byName(B), pairs = new Map(); // B id -> A id
+  for (const [id, v] of B) {
+    if (A.has(id)) { pairs.set(id, id); continue; }
+    const n = JSON.stringify([v.collection || "", v.name]), aId = nA.get(n);
+    if (aId && nB.get(n) === id && !B.has(aId) && (aId.startsWith("n:") || id.startsWith("n:"))) pairs.set(id, aId);
+  }
+  const pairedA = new Set(pairs.values());
+  // Which names need more than the name to say which variable they are.
+  const identities = new Map();
+  for (const v of [...A.values(), ...B.values()]) {
+    if (!identities.has(v.name)) identities.set(v.name, new Map());
+    identities.get(v.name).set(idOf(v), v.collection || "");
+  }
+  const label = (v) => {
+    const ids = identities.get(v.name);
+    if (!ids || ids.size < 2) return v.name;
+    const sameColl = [...ids.values()].filter((c) => c === (v.collection || "")).length > 1;
+    return (v.collection ? `${v.collection} / ${v.name}` : v.name) + (sameColl && typeof v.key === "string" && v.key ? ` (key ${v.key.slice(0, 8)}…)` : "");
+  };
+  const added = [...B].filter(([k]) => !pairs.has(k)).map(([, v]) => label(v));
+  const removed = [...A].filter(([k]) => !pairedA.has(k)).map(([, v]) => label(v));
+  const changed = [];
   for (const [k, b] of B) {
-    const a = A.get(k);
+    const a = pairs.has(k) ? A.get(pairs.get(k)) : null;
     if (!a) continue;
     const modes = [...new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
-    if (modes.length) changed.push({ name: label(b, clash), collection: b.collection, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
+    if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
   }
   // A new or renamed MODE changes every themed token at once, yet no single variable says so.
-  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.name, { modes: c.modes, default: c.default }]));
+  // Collections too are keyed by key where there is one: the same export holds TWO collections called
+  // `Spacing`, and a name-keyed Map compared whichever came last on each side.
+  const collNames = new Map();
+  for (const c of [...(oldDoc.collections || []), ...(newDoc.collections || [])]) collNames.set(c.name, (collNames.get(c.name) || new Set()).add(c.key || c.name));
+  const colLabel = (c) => (collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
+  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
-  for (const name of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs(name, CA.get(name), CB.get(name), "collection"));
+  for (const id of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, (CA.get(id) || {}).v, (CB.get(id) || {}).v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 
