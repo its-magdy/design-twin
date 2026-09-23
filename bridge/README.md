@@ -354,7 +354,7 @@ once per plugin connection and stay stable until that plugin's window disconnect
 
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
-dtwin design/base --client c1 --page 12:34
+dtwin design/base --client "Marketing" --page 12:34
 dtwin design/lib  --client "Acme UI" --as-library "Acme UI"
 ```
 Give each file its own output directory, as above, and their exports never collide.
