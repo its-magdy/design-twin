@@ -156,4 +156,39 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   return !/snap to the nearest/.test(msgs) && !/map raw values to the nearest/.test(msgs);
 })());
 
+// ---------- CLI: --out defaults to the INPUT file's own basename (P3 #72 #73) ------------------
+// Live-run findings 72/73: the SAME node audited twice under two names the skill invented on the
+// spot (`positions.md` vs `job-roles.md`, `global-policies.md` vs `System_Configurations.md`) wrote
+// byte-identical reports under two filenames in design/audit/. The export file is already named
+// `<LayerName>__<node-id>.json` (write-out.js/pages-layout.js) — the one artefact-naming rule — so
+// defaulting `--out` to that same basename means two runs against the SAME export file always land
+// on the SAME report pair, with no name to agree on out of band.
+(() => {
+  const { spawnSync } = require("child_process");
+  const fs = require("fs");
+  const os = require("os");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-out-"));
+  const screenFile = path.join(cwd, "positions___7314_87192.json");
+  fs.writeFileSync(screenFile, JSON.stringify({
+    exportedAt: "2026-09-22T00:00:00.000Z", screen: "positions ", page: "P", pageId: "1:1", nodeId: "7314:87192",
+    nodes: [{ type: "FRAME", name: "positions ", id: "7314:87192", box: { w: 100, h: 100 }, children: [] }],
+    manifest: { nodes: 1, truncated: 0, assetsFailed: 0, warnings: [] },
+  }));
+  const scriptPath = path.join(__dirname, "..", "design-to-code", "audit.js");
+  const r = spawnSync(process.execPath, [scriptPath, screenFile], { encoding: "utf8", cwd });
+  check("[cli-out] with no --out, a report pair is written under design/audit/<the input file's own basename>",
+    r.status === 0 &&
+    fs.existsSync(path.join(cwd, "design", "audit", "positions___7314_87192.md")) &&
+    fs.existsSync(path.join(cwd, "design", "audit", "positions___7314_87192.json")));
+  // Re-run: same input file -> same default -> same report pair, not a second name.
+  spawnSync(process.execPath, [scriptPath, screenFile], { encoding: "utf8", cwd });
+  const dir = fs.readdirSync(path.join(cwd, "design", "audit"));
+  check("[cli-out] re-auditing the SAME screen never produces a second name for it",
+    dir.filter((f) => f.startsWith("positions")).length === 2); // .md + .json, no duplicate under another name
+  check("[cli-out] an explicit --out still wins over the default", (() => {
+    const r2 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name")], { encoding: "utf8", cwd });
+    return r2.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
+  })());
+})();
+
 report();

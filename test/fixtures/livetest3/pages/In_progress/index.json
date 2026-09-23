@@ -1,0 +1,36 @@
+{
+  "page": "In progress",
+  "pageId": "18322:61590",
+  "layers": [
+    {
+      "name": "Create Activity Type",
+      "id": "18411:84111",
+      "type": "FRAME",
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "exportedAt": "2026-09-22T16:24:11.880Z",
+      "file": "pages/In_progress/Create_Activity_Type__18411_84111.json",
+      "variables": "pages/In_progress/Create_Activity_Type__18411_84111.vars.json",
+      "assets": "pages/In_progress/Create_Activity_Type__18411_84111.assets.json",
+      "reference": "assets/18411_84111_ref.png",
+      "nodes": 440,
+      "w": 1440,
+      "h": 1236
+    },
+    {
+      "name": "Create Activity Type",
+      "id": "18411:84502",
+      "type": "FRAME",
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "exportedAt": "2026-09-22T16:24:21.148Z",
+      "file": "pages/In_progress/Create_Activity_Type__18411_84502.json",
+      "variables": "pages/In_progress/Create_Activity_Type__18411_84502.vars.json",
+      "assets": "pages/In_progress/Create_Activity_Type__18411_84502.assets.json",
+      "reference": "assets/18411_84502_ref.png",
+      "nodes": 432,
+      "w": 1440,
+      "h": 1236
+    }
+  ]
+}

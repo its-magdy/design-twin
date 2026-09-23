@@ -28,6 +28,101 @@ function safe(id) {
   return String(id).replace(/[^a-zA-Z0-9]/g, "_");
 }
 
+// --------------------------------------------------------- title / texts (findings 16, 17, 70, 90, 120)
+//
+// The Figma LAYER name is not the name a user reads on screen: `positions ` (trailing space) IS "Job
+// Roles"; `System Configurations` IS "Global Policies". A user who types the name they see gets
+// nothing from the index unless the index also carries that visible title. It must come from the
+// frame's OWN title slot, never from a sidebar/nav label drawn on every sibling screen (finding 120:
+// "Global Policies" also appears as a `Sub titles` nav item on all three Organization-management
+// screens) — so the rule is: the first TEXT node inside a descendant literally named "Page Title",
+// and ONLY that; anywhere else and we would rather carry no title than a wrong one.
+function firstByName(node, name) {
+  if (!node || typeof node !== "object") return null;
+  if (node.name === name) return node;
+  for (const c of node.children || []) {
+    const found = firstByName(c, name);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Figma's own placeholder for an unbound TEXT override inside a component instance renders the
+// literal string "Text" (verified in the real export: a `Page Title` instance's leading `Breadcrumb`
+// child carries one, "Back to Employees" style nav trails do too) — never a real title, so it is
+// excluded rather than trusted as "the first text we found".
+const PLACEHOLDER_TEXT = new Set(["text", "label"]);
+
+function firstText(node) {
+  if (!node || typeof node !== "object") return null;
+  if (node.type === "TEXT" && typeof node.text === "string") {
+    const t = node.text.trim();
+    if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
+  }
+  for (const c of node.children || []) {
+    const found = firstText(c);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Within the Page Title slot, the layer that actually carries the visible title is itself named
+// "Title" (verified across all five real screens in the test export: `Page Title > Title(FRAME) >
+// Title Side(FRAME) > Title(TEXT)`, sitting AFTER a `Breadcrumb`/back-link instance that comes first
+// in reading order but carries only nav chrome and unbound placeholder text). Preferring the node
+// literally named "Title" over "first TEXT in the subtree" is what keeps the breadcrumb from winning.
+function firstNamedText(node, name) {
+  if (!node || typeof node !== "object") return null;
+  if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
+    return node.text;
+  }
+  for (const c of node.children || []) {
+    const found = firstNamedText(c, name);
+    if (found) return found;
+  }
+  return null;
+}
+
+// The frame's own `Page Title`-shaped instance's text first (finding 120's fix: a value that is
+// scoped to THIS frame, not repeated on every sibling), else the first TEXT node in the whole tree
+// in reading order (placeholder text excluded either way). If nothing yields a non-empty string,
+// return undefined — JSON.stringify drops an undefined value, so the row simply carries no `title`
+// (never a guessed/wrong one).
+function deriveTitle(root) {
+  const slot = firstByName(root, "Page Title");
+  if (slot) {
+    const named = firstNamedText(slot, "Title");
+    if (named) return named;
+    const anyText = firstText(slot);
+    if (anyText) return anyText;
+  }
+  const fallback = firstText(root);
+  return fallback || undefined;
+}
+
+// The first N distinct, non-empty text strings in the tree, in reading order — a coarse fingerprint
+// a text search (or a human eyeballing the index) can match against, independent of the layer name.
+function collectTexts(root, limit) {
+  const n = limit || 8;
+  const seen = new Set();
+  const out = [];
+  (function walk(node) {
+    if (!node || typeof node !== "object" || out.length >= n) return;
+    if (node.type === "TEXT" && typeof node.text === "string") {
+      const t = node.text.trim();
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+      }
+    }
+    for (const c of node.children || []) {
+      if (out.length >= n) break;
+      walk(c);
+    }
+  })(root);
+  return out;
+}
+
 /**
  * @param {any} layersDoc  the collector's layersDoc ({layers, index, ...manifest fields})
  * @param {string} sep     path separator: "/" for real directories, "__" for flat download names
@@ -82,13 +177,21 @@ function buildPageLayout(layersDoc, sep) {
       path: join(bucket.dir, base),
       data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources },
     });
-    bucket.entries.push({ ...((index || [])[i]), file: join(bucket.dir, base) });
+    // title/texts come from THIS layer's own tree (findings 16/17/70/90/120) — computed here, once,
+    // so both the per-page index and the root index (below) carry the same values for the same layer.
+    const title = l.tree ? deriveTitle(l.tree) : undefined;
+    const texts = l.tree ? collectTexts(l.tree) : undefined;
+    bucket.entries.push({ ...((index || [])[i]), title, texts, file: join(bucket.dir, base) });
   });
   // `pageId` is what makes two same-named entries tellable apart by a consumer — without it the only
   // difference between them would be the disambiguating "_2" on a directory name, which is a
   // filesystem artefact, not identity. Omitted (not null) on pre-pageId exports: JSON.stringify drops
   // an undefined value, so the field's ABSENCE means "this export predates page ids", not "no page".
   meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+  // A consumer is told to read the ROOT index (extract/SKILL.md), not walk every pageDirs.index one
+  // hop down (finding 16) — so the root carries the same per-screen rows the per-page index does,
+  // flattened across every page. Additive: pageDirs keeps its own shape/consumers (doctor.js et al).
+  meta.layers = pages.flatMap((b) => b.entries);
   // The per-page index CONTENTS, not just its path — same reasoning as layerFiles. Both writers used
   // to spell `{ page, layers: entries }` out themselves, which put the one shape this module exists to
   // single-source back into two files; now they only stringify and write.
@@ -155,11 +258,20 @@ function mergeScreenIndex(prev, entry) {
 // The root pages/index.json is the ONE entry point a consumer opens without knowing which pull shape
 // produced the tree: it lists every page directory, whether that page arrived as a whole-page sweep
 // or as single screens pulled one at a time.
-function mergeRootIndex(prev, paths, layerCount) {
+// `entry` is the SAME row shape a full-page pull puts in meta.layers (name, id, title, texts, file,
+// …) — so the root index looks identical to a consumer regardless of which pull shape produced it
+// (finding 16: the root is the ONE file every skill is told to read).
+function mergeRootIndex(prev, paths, layerCount, entry) {
   const base = prev && typeof prev === "object" ? prev : {};
   const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
   pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-  return Object.assign({}, base, { pageDirs });
+  const result = Object.assign({}, base, { pageDirs });
+  if (entry) {
+    const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+    layers.push(entry);
+    result.layers = layers;
+  }
+  return result;
 }
 
-module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, safe, NO_PAGE_DIR };
+module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };

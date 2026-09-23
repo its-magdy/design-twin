@@ -503,8 +503,10 @@ if (require.main === module) {
     "usage:\n" +
     "  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen>\n" +
     "      writes <Screen>.expected.json — the design's own numbers, as data. Read them; never retype them.\n" +
+    "      --out defaults to design/verify/<the first input file's own basename>.\n" +
     "  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> --out design/verify/<Screen>\n" +
-    "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'.";
+    "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'.\n" +
+    "      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); process.exit(argv.length ? 0 : 2); }
 
   const out = take("--out");
@@ -526,7 +528,14 @@ if (require.main === module) {
     if (!argv.length) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
     const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    write(out, exp);
+    // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
+    // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
+    // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST
+    // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.js) —
+    // means two runs against the same export file always land on the same name, whatever string the
+    // caller typed on the command line.
+    const outBase = out || path.join("design", "verify", path.basename(argv[0], ".json"));
+    write(outBase, exp);
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s)`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` — interaction coverage cannot be checked, and the report will say so rather than passing.");
     process.exit(0);
@@ -539,8 +548,11 @@ if (require.main === module) {
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, nodes:[{nodeId,styles}], components:[], interactions:[]}.");
   const rep = compare(expectation, measured);
   const md = reportToMarkdown(rep);
-  write(out, rep, md);
-  if (!out) process.stdout.write(md);
+  // Same rule as --expect (P3 #152): default to the EXPECTATION file's own basename (stripping the
+  // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`
+  // always reports under `<Screen>.report.*`, never a second name for the same screen.
+  const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
+  write(compareBase, rep, md);
   console.error(`${rep.verdict.toUpperCase()} — ${rep.summary.high} high, ${rep.summary.medium} medium, ${rep.summary.missingComponents} component(s) missing, ` +
     `${rep.coverage.interactionsPassed}/${rep.coverage.interactionsExpected} interactions confirmed`);
   process.exit(rep.verdict === "pass" ? 0 : 1);

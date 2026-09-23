@@ -52,8 +52,18 @@ Copy this checklist into your working notes and tick it off:
 1. **Scope.** The screen to audit is whatever was passed to this skill (the `ARGUMENTS` line at the
    end of this prompt). This skill runs in its own context and cannot see the conversation that
    invoked it, so if no screen was passed and `design/` holds more than one, don't guess — return
-   the list of candidates and ask which. Find the screen through the index, never by guessing a
-   filename: `design/export/pages/index.json` → the page's `index` → the layer's `file`. Screen files
+   the list of candidates and ask which. **The same rule applies to a name that WAS passed:** the
+   Figma layer name and the on-screen title are often different strings ("Job Roles" is the frame
+   named `positions `), and near-matches are a trap — a query of "Job Roles" string-matching only
+   "Job Role Details" is a DIFFERENT screen, not a fuzzy hit. Resolve with
+   `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name →
+   indexed `title` → plan `screenName`/`route`, each exact — the one procedure every skill uses, see
+   `extract/SKILL.md`); on zero or more than one exact match it stops and prints the candidates
+   (name, id, size, node count, `dtwin screenshot <id>`) instead of auditing a guess. A looser text
+   search runs last but never resolves by itself — even a single hit ("Job Roles" narrowing only to
+   "Job Role Details") is a candidate to confirm by node id, never something to audit outright. Find the screen
+   through the index, never by guessing a filename: the root
+   `design/export/pages/index.json` → the layer's `file`. Screen files
    are `pages/<Page>/<Screen>__<node-id>.json`, because a frame name does not identify a frame (two
    `Popup`s on one page are two screens). A project created before the export/ split keeps the same
    tree directly under `design/`. If it isn't exported, hand off to
@@ -87,9 +97,16 @@ Copy this checklist into your working notes and tick it off:
    ```
    node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" design/export/pages/<Page>/<Screen>__<id>.json \
      --platform <platform> \
-     --design-system design/export/design-system \
-     --out design/audit/<screen>
+     --design-system design/export/design-system
    ```
+
+   **Don't pass `--out`.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
+   screen file you just gave it, which write-out.js already named `<LayerName>__<node-id>` — so this
+   skill never has to invent a name, and re-auditing the same screen always overwrites the same
+   report pair instead of adding a new one under whatever string was typed that time (findings 72/73:
+   one node ended up with `positions.md`/`job-roles.md` byte-identical, and the same node twice as
+   `global-policies.md`/`System_Configurations.md`). Pass `--out` explicitly only if the user asks for
+   a specific filename.
 
    **`--design-system` is what makes this a real audit rather than a self-consistent one.** Without
    it every check reasons inside the screen's own JSON, and the token-binding table means "this node
@@ -148,7 +165,9 @@ Copy this checklist into your working notes and tick it off:
    corner smoothing off iOS, diamond gradients, progressive blur, P3 colors, blend modes). For each,
    state the planned approximation so nobody chases a pixel diff that can't close.
 
-6. **Write the report** to `design/audit/<screen>.md`. The script's markdown is the skeleton —
+6. **Write the report** to `design/audit/<Screen>__<id>.md` — the SAME basename step 3's `audit.js`
+   defaulted `--out` to (never rename it; the point is one screen, one report pair, always at the
+   same path). The script's markdown is the skeleton —
    keep its tables, then add:
    - **Verdict** (top line): *Ready* / *Ready with assumptions* / *Blocked*, and why in one sentence.
    - **Engineer review** — findings from step 4 grouped by the checklist headings, each citing node

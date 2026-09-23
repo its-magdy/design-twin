@@ -1,0 +1,140 @@
+{
+  "pageDirs": [
+    {
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "dir": "In_progress",
+      "index": "pages/In_progress/index.json",
+      "layers": 2
+    },
+    {
+      "page": "✅ Organization management ",
+      "pageId": "5282:58823",
+      "dir": "__Organization_management_",
+      "index": "pages/__Organization_management_/index.json",
+      "layers": 3
+    }
+  ],
+  "layers": [
+    {
+      "name": "Create Activity Type",
+      "id": "18411:84111",
+      "type": "FRAME",
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "exportedAt": "2026-09-22T16:24:11.880Z",
+      "file": "pages/In_progress/Create_Activity_Type__18411_84111.json",
+      "variables": "pages/In_progress/Create_Activity_Type__18411_84111.vars.json",
+      "assets": "pages/In_progress/Create_Activity_Type__18411_84111.assets.json",
+      "reference": "assets/18411_84111_ref.png",
+      "nodes": 440,
+      "title": "Add Activity Type",
+      "texts": [
+        "TeamSmart",
+        "Dashboard",
+        "Team Calendar",
+        "License Health Check",
+        "Org Management",
+        "Staff Management",
+        "Shift Demand",
+        "Shift Planning"
+      ]
+    },
+    {
+      "name": "Create Activity Type",
+      "id": "18411:84502",
+      "type": "FRAME",
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "exportedAt": "2026-09-22T16:24:21.148Z",
+      "file": "pages/In_progress/Create_Activity_Type__18411_84502.json",
+      "variables": "pages/In_progress/Create_Activity_Type__18411_84502.vars.json",
+      "assets": "pages/In_progress/Create_Activity_Type__18411_84502.assets.json",
+      "reference": "assets/18411_84502_ref.png",
+      "nodes": 432,
+      "title": "Add Activity Type",
+      "texts": [
+        "TeamSmart",
+        "Dashboard",
+        "Team Calendar",
+        "License Health Check",
+        "Org Management",
+        "Staff Management",
+        "Shift Demand",
+        "Shift Planning"
+      ]
+    },
+    {
+      "name": "Job Role Details",
+      "id": "20174:143363",
+      "type": "FRAME",
+      "page": "✅ Organization management ",
+      "pageId": "5282:58823",
+      "exportedAt": "2026-09-22T16:32:43.818Z",
+      "file": "pages/__Organization_management_/Job_Role_Details__20174_143363.json",
+      "variables": "pages/__Organization_management_/Job_Role_Details__20174_143363.vars.json",
+      "assets": "pages/__Organization_management_/Job_Role_Details__20174_143363.assets.json",
+      "reference": "assets/20174_143363_ref.png",
+      "nodes": 446,
+      "title": "Job Role Details",
+      "texts": [
+        "KPIs Library",
+        "Add KPI Group",
+        "Search by department",
+        "Engineering",
+        "Design",
+        "Human Resources",
+        "Quality Control",
+        "Marketing"
+      ]
+    },
+    {
+      "name": "positions ",
+      "id": "7314:87192",
+      "type": "FRAME",
+      "page": "✅ Organization management ",
+      "pageId": "5282:58823",
+      "exportedAt": "2026-09-22T20:55:45.024Z",
+      "file": "pages/__Organization_management_/positions___7314_87192.json",
+      "variables": "pages/__Organization_management_/positions___7314_87192.vars.json",
+      "assets": "pages/__Organization_management_/positions___7314_87192.assets.json",
+      "reference": "assets/7314_87192_ref.png",
+      "nodes": 383,
+      "title": "Job Roles",
+      "texts": [
+        "TeamSmart",
+        "Dashboard",
+        "Team Calendar",
+        "License Health Check",
+        "Org Management",
+        "Global Policies",
+        "Job Roles",
+        "Units"
+      ]
+    },
+    {
+      "name": "System Configurations",
+      "id": "1359:21337",
+      "type": "FRAME",
+      "page": "✅ Organization management ",
+      "pageId": "5282:58823",
+      "exportedAt": "2026-09-22T20:55:54.779Z",
+      "file": "pages/__Organization_management_/System_Configurations__1359_21337.json",
+      "variables": "pages/__Organization_management_/System_Configurations__1359_21337.vars.json",
+      "assets": "pages/__Organization_management_/System_Configurations__1359_21337.assets.json",
+      "reference": "assets/1359_21337_ref.png",
+      "nodes": 324,
+      "title": "Global Policies",
+      "texts": [
+        "TeamSmart",
+        "Dashboard",
+        "Team Calendar",
+        "License Health Check",
+        "Org Management",
+        "Global Policies",
+        "Job Roles",
+        "Units"
+      ]
+    }
+  ]
+}

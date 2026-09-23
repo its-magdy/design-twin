@@ -159,8 +159,30 @@ obviously about failure:
   elsewhere), `styles.{paint,text,effect,grid}.json`, `hygiene.json`. No page walk, no assets.
 
 The filename carries the node id because frame names do not identify a frame: two `Popup`s on one
-page are two different screens, and a name ending in a space sanitises to a trailing `_`. Read `pages/index.json` rather than reconstructing filenames — it carries each screen's
-real name, page, node id, size and the paths to all three files.
+page are two different screens, and a name ending in a space sanitises to a trailing `_`. Read the
+**root** `design/export/pages/index.json` rather than reconstructing filenames or opening a page
+directory's own `index.json` one hop down — it carries a row per screen with the Figma layer `name`,
+the visible `title` (the text on the frame's own title slot, NOT a sidebar/nav label that repeats on
+every sibling screen), a `texts[]` fingerprint, `page`, `pageId`, `id`, `w`/`h` and the paths to all
+three sibling files.
+
+**Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
+is very often NOT the Figma layer name — a layer named `positions ` (trailing space) can be the frame
+whose on-screen `<h1>` reads "Job Roles". Use the one shared procedure,
+`node design-to-code/resolve-screen.js <exportDir> "<name-or-id>" [planDir]` (installed at
+`${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js`), rather than re-deriving name matching here. It
+tries four EXACT stages, in order — node id → exact layer name (trimmed, case-insensitive) →
+indexed `title` (same) → a plan's `screenName`/`route` — and only ONE of those may "resolve": a
+stage matching zero rows falls through to the next; a stage matching more than one STOPS and prints
+every candidate (name, id, size, node count, `dtwin screenshot <id>`), never guessing the nearest.
+If none of the four resolve it, a fifth, looser stage — a case-insensitive substring over
+`name`/`title`/`texts[]` — runs, but **a hit there is never a result, only a candidate list**, even
+when there is exactly one hit: print the candidate(s) and ask the user to confirm by node id rather
+than building/auditing/verifying it. (This is what closed finding 70 for real — a single substring
+hit auto-resolving is the bug, not just multiple hits.) If NOT ONE row in the index carries a
+`title` at all, say so explicitly: the export predates title indexing, and a re-pull of the screen
+(`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. Every other skill that resolves
+a screen by name calls this same script; do not re-implement the procedure.
 
 `--design-system` counts and `dtwin list libraries` counts legitimately differ: the export includes
 variables this file merely *references* from a published library, flagged `remote: true`, and

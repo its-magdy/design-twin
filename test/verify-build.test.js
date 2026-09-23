@@ -5,7 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { checkPlan, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale } = require("../design-to-code/verify-build");
+const { checkPlan, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale, validatePlanHeader } = require("../design-to-code/verify-build");
 const { check, report } = require("./assert");
 
 const HOOK = require.resolve("../design-to-code/verify-build.js");
@@ -280,6 +280,18 @@ check("missing coverage / a11y evidence WARNS on a passing rendered plan — exi
   return r1.status === 0 && /coverage is missing/.test(r1.stderr) && /a11y is missing/.test(r1.stderr) && planOf(bare).status === "verified"
     && r2.status === 0 && !/warning/.test(r2.stderr);
 })());
+// P3 #150/#151/#180: validatePlanHeader is the reusable check for the schema'd plan header
+// (screenName/nodeId/route/file) other skills' screen-resolution step reads instead of the
+// free-text `screen` field. Not yet wired into the hook (see the note beside its one call site in
+// verify-build.js) — the plan WRITER (plan-skeleton.js) needs to populate the fields first.
+check("[header] a plan missing every header field is flagged, one message naming all of them",
+  (() => { const w = validatePlanHeader({}); return w.length === 1 && /screenName/.test(w[0]) && /nodeId/.test(w[0]) && /route/.test(w[0]) && /file/.test(w[0]); })());
+check("[header] a plan with a complete header is clean",
+  validatePlanHeader({ screenName: "Job Roles", nodeId: "7314:87192", route: "/job-roles", file: "src/JobRoles.tsx" }).length === 0);
+check("[header] a plan missing only `route` names just that field",
+  (() => { const w = validatePlanHeader({ screenName: "Job Roles", nodeId: "7314:87192", file: "x.tsx" }); return w.length === 1 && /`route`/.test(w[0]) && !/screenName/.test(w[0]); })());
+check("[header] an empty string counts as missing, not present", validatePlanHeader({ screenName: "", nodeId: "1:1", route: "/x", file: "x.tsx" }).length === 1);
+
 check("abandoned / already-closed plans are skipped (fast path)", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "abandoned", files: ["a.tsx"], tokens: [brand] });
   return runHook(root).status === 0 && planOf(root).status === "abandoned";

@@ -1,0 +1,18 @@
+{
+  "pageDirs": [
+    {
+      "page": "In progress",
+      "pageId": "18322:61590",
+      "dir": "In_progress",
+      "index": "pages/In_progress/index.json",
+      "layers": 2
+    },
+    {
+      "page": "✅ Organization management ",
+      "pageId": "5282:58823",
+      "dir": "__Organization_management_",
+      "index": "pages/__Organization_management_/index.json",
+      "layers": 3
+    }
+  ]
+}

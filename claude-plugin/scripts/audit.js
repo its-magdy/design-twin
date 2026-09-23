@@ -1493,7 +1493,14 @@ if (require.main === module) {
     return true;
   };
   const jsonOnly = strip("--json"), gate = strip("--gate");
-  const USAGE = 'usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]\n       [--design-system design/design-system] [--variables design/variables.json]\n       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]\n  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n  Without it every token-binding % below means "binds SOME variable", not "matches your design system".';
+  const USAGE = `usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]
+       [--design-system design/design-system] [--variables design/variables.json]
+       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
+  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
+  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
+  --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
+  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
+  report pair instead of a new name each run.`;
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     process.exit(0);
@@ -1523,13 +1530,14 @@ if (require.main === module) {
   const variables = maybe(varsFile) || maybe(path.join(exportRoot, "variables.json")) || maybe(argv[0].replace(/\.json$/, ".vars.json")) || maybe(path.join(path.dirname(argv[0]), "variables.json"));
   const res = audit(inputs, { platform, catalog, designSystem, variables, grid: gridArg ? Number(gridArg) : void 0 });
   const md = jsonOnly ? "" : toMarkdown(res);
+  const outBase = out || (argv[0] ? path.join("design", "audit", path.basename(argv[0], ".json")) : void 0);
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (out) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(out + ".md", md);
-    console.error(`wrote ${out}.json and ${out}.md`);
+  } else if (outBase) {
+    fs.mkdirSync(path.dirname(outBase), { recursive: true });
+    fs.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs.writeFileSync(outBase + ".md", md);
+    console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
   }
