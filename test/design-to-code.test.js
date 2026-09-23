@@ -863,4 +863,27 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   check("[map-bootstrap --screen] says on stderr how much it scoped, from -> to", new RegExp(`from ${fullCount} to ${scopedCount}`).test(scopedRun.stderr));
 })();
 
+// ---------- finding 313: a consumer-project path that does not exist in a consumer project --------
+// `design-to-code/<script>.js` is only a valid path INSIDE this repo. A consumer project has only
+// the plugin's own `${CLAUDE_PLUGIN_ROOT}/scripts/<script>.js` — a skill quoting the repo-relative
+// path hands the model a command that fails with `Cannot find module` the moment it runs. Comments
+// inside the GENERATED claude-plugin/scripts/*.js (the build banner, which legitimately says where
+// the source lives) and help/references/troubleshooting.md's explicit "working from a clone of the
+// repo instead" alternative are the only allowed exceptions; neither is a *.md under skills/ or
+// agents/ telling the model what command to run.
+(() => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
+  const PLUGIN_ROOT = path.join(__dirname, "..", "claude-plugin");
+  const offenders = [];
+  for (const f of [...walk(path.join(PLUGIN_ROOT, "skills")), ...walk(path.join(PLUGIN_ROOT, "agents"))]) {
+    const rel = path.relative(PLUGIN_ROOT, f);
+    if (rel === path.join("skills", "help", "references", "troubleshooting.md")) continue; // explicit "cloned repo" alternative, not a command to run in a consumer project
+    const text = fs.readFileSync(f, "utf8");
+    if (/design-to-code\//.test(text)) offenders.push(rel);
+  }
+  check("[313] no skill/agent doc quotes the repo-relative design-to-code/ path — every script is ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js" +
+    (offenders.length ? " — offenders: " + offenders.join(", ") : ""), offenders.length === 0);
+})();
+
 report();

@@ -169,20 +169,29 @@ three sibling files.
 **Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
 is very often NOT the Figma layer name — a layer named `positions ` (trailing space) can be the frame
 whose on-screen `<h1>` reads "Job Roles". Use the one shared procedure,
-`node design-to-code/resolve-screen.js <exportDir> "<name-or-id>" [planDir]` (installed at
-`${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js`), rather than re-deriving name matching here. It
-tries four EXACT stages, in order — node id → exact layer name (trimmed, case-insensitive) →
-indexed `title` (same) → a plan's `screenName`/`route` — and only ONE of those may "resolve": a
-stage matching zero rows falls through to the next; a stage matching more than one STOPS and prints
-every candidate (name, id, size, node count, `dtwin screenshot <id>`), never guessing the nearest.
-If none of the four resolve it, a fifth, looser stage — a case-insensitive substring over
-`name`/`title`/`texts[]` — runs, but **a hit there is never a result, only a candidate list**, even
-when there is exactly one hit: print the candidate(s) and ask the user to confirm by node id rather
-than building/auditing/verifying it. (This is what closed finding 70 for real — a single substring
-hit auto-resolving is the bug, not just multiple hits.) If NOT ONE row in the index carries a
-`title` at all, say so explicitly: the export predates title indexing, and a re-pull of the screen
-(`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. Every other skill that resolves
-a screen by name calls this same script; do not re-implement the procedure.
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name-or-id>" [planDir]`, rather
+than re-deriving name matching here. First, a node id (e.g. `7314:87192`) is tried alone and, if it
+matches, wins outright — an id is unique and never ambiguous with a name/title. Otherwise, THREE exact
+checks — layer name, indexed `title`, a plan's `screenName`/`route` (each trimmed, case-insensitive)
+— are evaluated TOGETHER as one pool, not as a sequence tried one after another: any row matching
+ANY of the three joins the pool. Exactly one row in that pool resolves; more than one STOPS and
+prints every candidate (name, id, size, node count, `dtwin screenshot <id>`, and WHICH field each one
+matched on) — never guessing the nearest, and never resolving on whichever field happened to be
+checked first. (Evaluating them as an in-order sequence is itself the bug a sequence looks safe but
+isn't: a case-insensitive layer-name hit can resolve and return before ever reaching the title stage,
+hiding a second row that is ALSO titled the same thing — the empty-state sibling of "Job Roles",
+layered `Job roles`, is exactly this case.) If the pool is empty, a final, looser stage — a
+case-insensitive substring over `name`/`title`/`texts[]` — runs, but **a hit there is never a result,
+only a candidate list**, even when there is exactly one hit: print the candidate(s) and ask the user
+to confirm by node id rather than building/auditing/verifying it. (This is what closed finding 70 for
+real — a single substring hit auto-resolving is the bug, not just multiple hits.) If NOT ONE row in
+the index carries a `title` at all, say so explicitly: the export predates title indexing, and a
+re-pull of the screen (`dtwin pull --node <id>`) — not a cleverer query — is what fixes it. **A screen
+that has never been pulled at all cannot be named by its title yet** — `dtwin list`/`dtwin
+screenshot` only ever show Figma layer names, so the FIRST pull of a screen must be by node id (from
+`dtwin list` or a screenshot), and title-based lookup only works from the second command onward, once
+that pull has indexed it. Every other skill that resolves a screen by name calls this same script; do
+not re-implement the procedure.
 
 `--design-system` counts and `dtwin list libraries` counts legitimately differ: the export includes
 variables this file merely *references* from a published library, flagged `remote: true`, and
