@@ -61,8 +61,8 @@ cheap calls to find the one frame you actually need:
 dtwin list                    # pages + their top-level LAYERS, with ids
 dtwin list children <id>      # peek inside one node before committing
 dtwin screenshot <id>         # look at a candidate before paying for a pull
-dtwin pull design --node <id> # then deep-pull ONE screen
-dtwin pull design --page <id> # or a whole page
+dtwin pull --node <id>         # then deep-pull ONE screen (writes design/export/…)
+dtwin pull --page <id>         # or a whole page
 dtwin list libraries          # which design libraries this file draws on — SLOW, see below
 ```
 
@@ -88,7 +88,7 @@ connected plugin, so with two files connected it refuses rather than guessing:
 ```
 dtwin list clients                              # the address book: connId, file name, fileKey
 dtwin list --client Marketing                   # …then scope every command to one file
-dtwin pull design --node <id> --client Marketing
+dtwin pull --node <id> --client Marketing
 ```
 
 A partial file name works and is what to reach for. The docs also offer `fileKey`, but on a
@@ -99,8 +99,8 @@ disambiguation will be needed. MCP twin: a `client: "<id|name>"` argument on eve
 MCP twins: `figma_list_libraries` → `figma_list_pages` → `figma_list_children` →
 `figma_export_full({page:[id]})`.
 
-Two narrower pulls worth knowing: `design --design-system` gets tokens/styles/components with **no**
-page walk and no assets; `design --as-library "<name>"` gets a library file's complete catalog (run it
+Two narrower pulls worth knowing: `dtwin pull --design-system` gets tokens/styles/components with **no**
+page walk and no assets; `dtwin pull --as-library "<name>"` gets a library file's complete catalog (run it
 with the *library* open, not the file consuming it).
 
 **Several frames with the same name?** Real files have them — one page held two frames with the same

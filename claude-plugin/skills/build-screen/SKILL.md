@@ -167,7 +167,7 @@ Copy this checklist into your notes and keep it updated:
 
      A `catalog-covers-nothing` or `foreign-token-library` blocker changes what you do next, so surface
      it to the user before building: the fix is to find the owning file (right-click an instance in
-     Figma → **Go to main component**), connect it, and `dtwin pull design --as-library "<name>"`.
+     Figma → **Go to main component**), connect it, and `dtwin pull --as-library "<name>"`.
      If the user would rather proceed, that is fine — but then every instance really is `verdict:"new"`,
      and the step-6 report says why.
 
@@ -193,7 +193,7 @@ Copy this checklist into your notes and keep it updated:
 
    - **Component map — check for the catalog FIRST.** Every command below reads
      `design/export/design-system/components.local.json`, and a single-screen pull
-     (`dtwin pull design --node <id>`) does **not** write it: that pull exports the screen, its assets
+     (`dtwin pull --node <id>`) does **not** write it: that pull exports the screen, its assets
      and the variables, nothing else. So `ls design/export/design-system/components.local.json`
      before anything, and take exactly one of these two branches:
      - **The catalog exists.** Run the drift check **with the screen**, which is the only form whose
@@ -204,17 +204,20 @@ Copy this checklist into your notes and keep it updated:
        `318/318 components mapped · 0 error(s)` on a map covering 0% of the screen about to be built,
        because it measures the catalog against itself. With `--screen` it prints SCREEN COVERAGE and
        exits non-zero at 0%. Fix an `ok:false` map before generating against it; heed a stale-snapshot
-       warning. No map at all → **stop**: run
+       warning. No map at all → **stop**, but run the coverage/cross-check FIRST and bootstrap only
+       what this screen actually uses — a full bootstrap on a real catalog stubs every component in
+       the file (318 on the live run, none of them on the screen about to be built) and produces a
+       confirm list nobody can evaluate:
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
-       --out design/codeconnect.local.json` and have the user confirm the stub entries before
-       continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form above
-       instead: a full bootstrap files every stub under a catalog key the screen's instances never
-       carry, so it would map nothing on this screen. After any hand edit, check its shape with
+       --out design/codeconnect.local.json --screen <screen json>` scopes the stubs to the keys/ids
+       this screen's own visible instances reference, and have the user confirm only that short list
+       before continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form
+       above instead (also already scoped to the screen's own instance keys). After any hand edit, check its shape with
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" design/codeconnect.local.json` — drift-lint
        assumes a well-formed map.
      - **The catalog does not exist** (the normal single-screen case). This is **not** a stop, and it
        is not a reason to run map-bootstrap anyway — it will just tell you the file is missing.
-       Offer the one-command fix: `dtwin pull design --design-system` writes
+       Offer the one-command fix: `dtwin pull --design-system` writes
        `design/export/design-system/` and is cheap (tokens/styles/components only — no page walk, no
        assets), after which you take the branch above. If the user declines, or no bridge is
        available, **build without a map**: every `INSTANCE` gets `verdict:"new"` in the plan's

@@ -126,7 +126,7 @@ steps it cannot do — importing the plugin into Figma and pasting the token —
 
 ```
 dtwin list                        # what is in the file: pages + top-level frames, with ids
-dtwin pull design --page Screens  # export ONE page into ./design
+dtwin pull --page Screens  # export ONE page into ./design/export
 dtwin screenshot 12:34            # a reference PNG of one node
 dtwin doctor                      # something not working? start here
 ```
@@ -228,8 +228,8 @@ dtwin list libraries           # 1. WHICH libraries does this file draw on?
 dtwin list pages               # 1b. page NAMES only (near-free — loads no page)
 dtwin list                     # 2. WHERE is what — pages + top-level frames (ids)
 dtwin list children <id>       # 3. (optional) peek inside one frame
-dtwin pull design --page <id>  # 4. pull only what you need — or just ONE node:
-dtwin pull design --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
+dtwin pull --page <id>  # 4. pull only what you need — or just ONE node:
+dtwin pull --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
 dtwin screenshot <id>          # 5. (optional) visually check ONE component after generating code for it
 ```
 (The flag spellings — `--whoami`, `--list-libraries`, `--list-pages`, `--list`, `--children`,

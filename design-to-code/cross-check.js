@@ -137,10 +137,14 @@ function crossCheck(input) {
   if (!tokens) {
     notChecked.push(
       "collection provenance — no design-system tokens.json was given, so nothing could verify that the screen's " +
-        "variables come from the design system you exported. Run `dtwin pull design --design-system` and pass it."
+        "variables come from the design system you exported. Run `dtwin pull --design-system` and pass it."
     );
   } else if (!screenColls.length) {
-    notChecked.push("collection provenance — no design/variables.json was given, so the screen's own token library is unknown.");
+    notChecked.push(
+      (input.variablesPath
+        ? `collection provenance — ${input.variablesPath} was checked but carries no collections for this screen, so its own token library is unknown.`
+        : `collection provenance — no variables.json was found (looked in design/export/variables.json), so the screen's own token library is unknown.`)
+    );
   } else {
     const foreign = [];
     for (const c of screenColls) {
@@ -163,7 +167,7 @@ function crossCheck(input) {
             : "") +
           `Names and values may still line up (check the collisions below), but nothing here is the same variable. ` +
           `To find the real owner: run \`dtwin list libraries --client <the screen's file>\` — variable collections are the ONE thing ` +
-          `Figma attributes to a library by name — then open that file and export it with \`dtwin pull design --as-library "<name>"\`.`,
+          `Figma attributes to a library by name — then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
         { collections: foreign }
       );
     } else {
@@ -498,7 +502,7 @@ function crossCheck(input) {
           (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") +
           `A "318/318 mapped" count measures the catalog against itself and means nothing here. ` +
           `To find the owning library: open any instance in Figma and use right-click > "Go to main component" — it jumps to the file that ` +
-          `defines it. Then connect that file and run \`dtwin pull design --as-library "<name>"\`. ` +
+          `defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. ` +
           `Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` +
           (rekey && rekey.summary.withCandidates
             ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature — ` +
@@ -916,12 +920,32 @@ if (require.main === module) {
     vars: maybe(f.replace(/\.json$/, ".vars.json")),
   }));
   const dsBase = dsDir || "design/design-system";
-  const variablesPath = varsFile || path.join(path.dirname(argv[0]), "variables.json");
+  // Auto-discover the merged variables.json the same way audit.js does (P4 #38/#39): a screen file
+  // lives at design/export/pages/<Page>/<Screen>.json, so the export root is two levels up. Prefer
+  // that root's variables.json (the merged union across every slice pulled so far) over the legacy
+  // sibling of the screen file, and NEVER walk further up to a stale `design/variables.json` left
+  // beside `design/export/` by an old parallel-layout pull (P4 #14/#201) — that file can disagree
+  // with the real one and picking it silently would be worse than not checking at all.
+  const exportRoot = path.resolve(path.dirname(argv[0]), "..", "..");
+  const exportRootVarsPath = path.join(exportRoot, "variables.json");
+  const siblingVarsPath = path.join(path.dirname(argv[0]), "variables.json");
+  let variablesPath = varsFile;
+  if (!variablesPath && fs.existsSync(exportRootVarsPath)) variablesPath = exportRootVarsPath;
+  if (!variablesPath && fs.existsSync(siblingVarsPath)) variablesPath = siblingVarsPath;
   const variablesDoc = maybe(variablesPath);
+  if (variablesPath) console.error(`variables: ${variablesPath}`);
+  // A stale legacy-layout `design/variables.json` next to `design/export/` (finding 14's fallout) is
+  // never auto-read, but a user should be told it exists and was NOT the file used, since it can
+  // carry a different, older set of slices than the one actually checked.
+  const staleLegacyVars = path.join(exportRoot, "..", "variables.json");
+  if (fs.existsSync(staleLegacyVars) && path.resolve(staleLegacyVars) !== path.resolve(variablesPath || "")) {
+    console.error(`warn  ${staleLegacyVars} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
+  }
   const res = crossCheck({
     screens,
     sliceSources: variablesDoc ? require("./slice-sources.js").sourcesOf(variablesDoc, variablesPath, fs, path) : null,
     variables: variablesDoc,
+    variablesPath,
     tokens: maybe(path.join(dsBase, "tokens.json")),
     components: maybe(path.join(dsBase, "components.local.json")),
     componentsLibrary: maybe(path.join(dsBase, "components.library.json")),

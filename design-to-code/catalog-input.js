@@ -58,7 +58,7 @@ function readJsonFile(file, what, hint) {
 // exports that screen and nothing else. Callers append their own "…and here is what to do instead",
 // which differs per tool (the map tools can proceed without a map; tokens.js has variables.json).
 const NO_DESIGN_SYSTEM_HINT =
-  "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen — it does not\n" +
-  "       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+  "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
+  "       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
 module.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };

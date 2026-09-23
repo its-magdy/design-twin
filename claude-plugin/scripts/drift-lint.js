@@ -274,7 +274,7 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
     module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
@@ -717,7 +717,7 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
           `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.
        The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
        the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,
-       then export it with \`dtwin pull design --as-library "<name>"\`. Until then build every instance as new.`
+       then export it with \`dtwin pull --as-library "<name>"\`. Until then build every instance as new.`
         );
       } else if (cov.unmapped.length) {
         console.error(
