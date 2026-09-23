@@ -9,7 +9,7 @@ The plugin's hidden UI iframe is a WebSocket **client**; these processes are the
 ## Install (once)
 ```
 cd bridge
-npm install        # ws + @modelcontextprotocol/sdk (+ zod, and build deps for the MCP server)
+npm install        # ws + @modelcontextprotocol/sdk (+ zod)
 ```
 The plugin manifest allows the bridge in **both** dev and published builds
 (`allowedDomains: ws://localhost:{8787,8788,8789}`), so re-import the plugin in Figma after pulling
@@ -203,7 +203,7 @@ concept: `tokens.json` (variable collections → modes → variables), one file 
 Paint/Text/Effect/Grid style system), `components.local.json` (components that are real nodes in this
 file — a `COMPONENT_SET`'s heavy per-variant node trees, or a standalone `COMPONENT`'s own node tree,
 are NOT inlined here; they live in a sibling `design-system/components/<name>__<id>.json`, pointed at
-by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `design-to-code/get-component.js`
+by that entry's `variantsFile`/`nodeFile`, opt-in via `--variant-visuals`; see `design-to-code/get-component.ts`
 below), `components.library.json` (`remote: true` —
 consumed from a published library, recovered from instances, props possibly inferred) and
 `hygiene.json` (the lint report). Every part repeats the
@@ -495,7 +495,7 @@ and "what props does this component *really* take?".
 
 Because the layout matches `design-system/`, existing tooling runs on it unchanged:
 ```
-node design-to-code/tokens.js design/export/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
+node design-to-code/tokens.ts design/export/libraries/nera-ab12cd34/tokens.json ./out   # DTCG + CSS, no special-casing
 ```
 
 Scope note: the **design system** (variables, styles, component catalog) always spans the whole
@@ -531,7 +531,7 @@ reason to gate them the way `--design-system` gates a page walk. **Two honest li
    `design-system/components/<name>__<id>.json`, pointed at by that entry's `variantsFile` (sets) or
    `nodeFile` (standalone components) — absent when nothing was exported for that entry. `entry.variants[]`
    in the slim catalog keeps only `id`/`name`/`key`/`values`. Fetch one component's real node tree(s) with
-   `node design-to-code/get-component.js design/export/design-system/components.local.json <key|id|name>`.
+   `node design-to-code/get-component.ts design/export/design-system/components.local.json <key|id|name>`.
 2. It only covers components DEFINED in this file. Components consumed from a published library
    (the `remote:true` entries, recovered via instance-walk — see the honest-limits note above) are
    not covered here; pull `--as-library` on the *source* library file for those. There is no
@@ -555,7 +555,7 @@ open and let later invocations reuse it:
 ```
 dtwin --serve          # holds the bridge open until stopped (Ctrl-C works too)
 dtwin --daemon-status  # is one up, and is the plugin connected?
-node bridge/dtwin --stop
+dtwin --stop           # or: dtwin stop
 ```
 Every ordinary command detects a running daemon and **routes through it automatically** — same
 invocations, no reconnect, no second bridge to collide on 8787.
@@ -607,7 +607,7 @@ catalog it builds is exactly what that flag enriches.
 
 ### `writeToDisk` — the export path that doesn't go through the context window
 Every export tool takes `writeToDisk: true` (plus an optional `outDir`). It writes the export through
-the same `write-out.js` the CLI uses — same layout, by construction — and returns a **compact index**
+the same `write-out.ts` the CLI uses — same layout, by construction — and returns a **compact index**
 (counts + file paths) instead of the node payloads. The agent then Reads/Greps those files at whatever
 granularity it needs.
 

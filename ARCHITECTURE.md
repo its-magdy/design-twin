@@ -54,7 +54,7 @@ is the calling convention, spelled out under the diagram.
 
 **The real split is not CLI-vs-MCP — it is "does the payload go through the context window".**
 Both front-ends speak the *same* plugin commands (`figma-plugin/src/bridge.ts`) over the *same*
-`createBridge()`, and both now write through the *same* `write-out.js`. What differs is the calling
+`createBridge()`, and both now write through the *same* `write-out.ts`. What differs is the calling
 convention and where the bytes land:
 - **Bulk payloads → disk, always.** The CLI has always done this; the MCP export tools do it too via
   `writeToDisk: true`, which returns a compact index (counts + paths) instead of the tree. Inline MCP
@@ -78,13 +78,13 @@ convention and where the bytes land:
   surface.
 
 **One bridge, shared.** Port 8787 has one owner. `dtwin serve` and `figma-mcp` both publish the
-bridge they own on the daemon socket (`daemon.js`), and every later `dtwin` command or MCP server —
+bridge they own on the daemon socket (`daemon.ts`), and every later `dtwin` command or MCP server —
 a second Claude Code session, say — routes through that socket instead of binding the port; an MCP
 server re-resolves the owner per call, so it takes the bridge over when the owning session ends.
 Only a one-shot pull does not share: a process that finds the port held by one exits on `EADDRINUSE`
-(`server-core.js`). `writeToDisk` remains the in-session way to get files.
+(`server-core.ts`). `writeToDisk` remains the in-session way to get files.
 
-**But MANY plugins at once — one per open Figma file.** `server-core.js` keeps a registry of
+**But MANY plugins at once — one per open Figma file.** `server-core.ts` keeps a registry of
 connections (`clients`, keyed by a server-minted `connId`) rather than a single socket, so a design
 file and the library it draws on are both connected and separately addressable. `request()` takes a
 routing target as its optional 4th argument; the CLI passes `--client`, MCP passes `client`.
@@ -114,7 +114,7 @@ Design decisions worth not re-litigating:
 - **Not two ports.** `devAllowedDomains` pins each port literally — the only wildcard syntax is for
   subdomains (`*.example.com`) or fully-open `*`, never ports. A second port costs a manifest edit
   plus a plugin re-import, i.e. all the friction of the real fix with none of the benefit.
-- **Output.** `write-out.js` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`, so give each
+- **Output.** `write-out.ts` resolves `outDir` from an argument or `FIGMA_EXPORT_DIR`, so give each
   connected file its own directory and their exports never collide.
 - **Isolation.** Pending requests record their `connId`, so one file closing its plugin window fails
   only its own in-flight work — never a long export running in another file.
@@ -147,7 +147,7 @@ Design decisions worth not re-litigating:
   Match patterns take **no port wildcard**, so every reachable port must be listed literally: we declare
   `ws://localhost:{8787,8788,8789}` and the plugin walks all three. Adding a fourth needs a new
   published version, which is why `FIGMA_BRIDGE_PORT` is validated against that set
-  (`bridge/server-core.js` `ALLOWED_PORTS`) instead of accepting any number.
+  (`bridge/src/server-core.ts` `ALLOWED_PORTS`) instead of accepting any number.
 - **Whole-document read (dynamic-page, required for new plugins):** `documentAccess: "dynamic-page"`;
   call `figma.loadAllPagesAsync()` before traversing other pages; `findAllWithCriteria` needs pages loaded.
   Under dynamic-page **all reads are async** — use `getMainComponentAsync`, `getLocalPaintStylesAsync`,
@@ -232,7 +232,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **Variables:** `tier` (primitive/semantic from alias+scopes), `scopes`, `codeSyntax {WEB,ANDROID,iOS}`
   (free per-platform token names), `remote`; COLOR values folded to hex so **alpha survives**.
 - **Components:** catalog keeps the real `#uid` prop `key` + `type` + `default` + `options` + `description`
-  + node `id` (the last lets `bridge/seed-components.js` map Code Connect node-ids → names). Every entry
+  + node `id` (the last lets `bridge/src/seed-components.ts` map Code Connect node-ids → names). Every entry
   also carries `visuals` — the component/variant NODE's own `fills`/`strokes`/`effects`/`radius`/`opacity`/
   `blendMode`, the same mixins any other node has. Always on: these are plain synchronous property getters
   (Figma's Plugin API only suffixes the genuinely expensive calls `Async` — `getCSSAsync`, `exportAsync` —
@@ -362,7 +362,7 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   (2) The component catalog's `visuals` for a `COMPONENT_SET` were the **set wrapper's own** fills/radius —
   Figma's purple dashed *selection chrome*, not a design value — while every variant was skipped outright
   (`componentPropertyDefinitions` throws on a variant, so the catalog walk routed around them rather than
-  reading their real paint). New opt-in **`--variant-visuals`** flag (registered once in `bridge/read-opts.js`,
+  reading their real paint). New opt-in **`--variant-visuals`** flag (registered once in `bridge/src/read-opts.ts`,
   so the CLI/MCP schema pick it up for free) walks each set's variants — already found by the same
   `findAllWithCriteria` pass, no second traversal — and attaches **`entry.variants[]`** with each variant's
   real `layout`/`fills`/`radius`/`tokens`/`css` via the existing node `serialize()` (injected as a parameter
@@ -376,12 +376,12 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
 - **`components.local.json` index/detail split (2026-08-18):** `--variant-visuals` made the catalog huge
   on a real design-system file — one real export measured `components.local.json` at 4.3MB, almost
   entirely `variants[].node` trees an agent doesn't need just to see a component's prop table. Neither
-  `design-to-code/drift-lint.js` nor `design-to-code/map-bootstrap.js` ever reads `.node` (both key off
-  `name`/`id`/`key`/`type`/`props`), so `bridge/design-system-layout.js` now strips it out of each
+  `design-to-code/drift-lint.ts` nor `design-to-code/map-bootstrap.ts` ever reads `.node` (both key off
+  `name`/`id`/`key`/`type`/`props`), so `bridge/src/design-system-layout.ts` now strips it out of each
   `COMPONENT_SET` entry into a sibling `design-system/components/<safe(name)>__<safe(id)>.json`, and adds
   a `variantsFile` pointer on the entry (absent, not null, when the set had no exported node trees — same
   convention as `pageId`'s absence on pre-pageId exports). Every variant keeps its `id`/`name`/`key`/
-  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `design-to-code/get-component.js`
+  `values` in the slim catalog. Manifest gained `files.componentsDir`. New `design-to-code/get-component.ts`
   resolves one entry by key/id/name and follows `variantsFile` to print its full detail — the read path
   for an agent that DOES want one component's real variant visuals. On that same real export the split
   took `components.local.json` from 4.3MB to 196KB with drift-lint/map-bootstrap unmodified against it
@@ -392,9 +392,9 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   pull its real layout/tokens/css. `collectComponentCatalog` (`figma-plugin/src/components.ts`) now also
   runs `serializeVariant` on a standalone `COMPONENT` (same depth budget, same forced `skipAssets`) and
   attaches the result as **`entry.node`** (not `entry.variants[]` — there is no set to enumerate variants
-  of). `bridge/design-system-layout.js` splits any local `COMPONENT` entry carrying `.node` into the same
+  of). `bridge/src/design-system-layout.ts` splits any local `COMPONENT` entry carrying `.node` into the same
   `design-system/components/<name>__<id>.json` sibling file, replacing it with a **`nodeFile`** pointer
-  (mirroring `variantsFile`). `design-to-code/get-component.js` resolves either pointer. Flag-off and
+  (mirroring `variantsFile`). `design-to-code/get-component.ts` resolves either pointer. Flag-off and
   `COMPONENT_SET` output are byte-identical (regression-tested).
 
 ## Claude Code integration (verified)
@@ -403,12 +403,13 @@ The exporter now also reads (all verified fields, all guarded by `in`/`figma.mix
   **ws** (via `.mcp.json` / `claude mcp add-json` only). Our MCP server exposes **stdio** to Claude Code
   and keeps the WebSocket-to-plugin internal.
 - **`.mcp.json`** (project scope, committable): `{ "mcpServers": { "designtwin": { "type":"stdio",
-  "command":"node", "args":["/abs/path/to/bridge/figma-mcp.mjs"] } } }` — registered in the
-  project you point the bridge at, never in this repo.
+  "command":"node", "args":["/abs/path/to/bridge/src/figma-mcp.ts"] } } }` — `bridge/dist/figma-mcp.js`
+  (npm install) or `bridge/src/figma-mcp.ts` (repo checkout) — registered in the project you point the
+  bridge at, never in this repo.
 - **Permissions:** MCP tools are `mcp__<server>__<tool>`; pre-approve via `permissions.allow`
   (`"mcp__designtwin__*"`). CLI: allowlist `"Bash(dtwin:*)"`.
 - **Skill vs MCP:** the skills **orchestrate** — `audit-design` reviews the export before code
-  (`design-to-code/audit.js` does the deterministic checks; the skill adds engineer judgment and
+  (`design-to-code/audit.ts` does the deterministic checks; the skill adds engineer judgment and
   designer questions), `build-screen` gates on that audit → maps → builds → verifies by rendering;
   MCP/CLI **provide the data**. Complementary. The audit is offline-only (reads `design/`), like
   drift-lint.
@@ -445,8 +446,8 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
 2. ✅ **`dtwin` CLI** (done, optional) — the plugin has a hidden-iframe WS client
    (`allowedDomains: ["ws://localhost:PORT"]`); the CLI hosts an ephemeral WS server, pulls, writes
    the same files, exits. Removes the manual click. No MCP. Packaged as the `designtwin` npm package
-   (**not yet published** — until it is, run `node bridge/figma-pull.js` from a clone);
-   `bridge/figma-pull.js` is its entry point. `dtwin init` sets a consumer project up in one command.
+   (**not yet published** — until it is, run `node bridge/src/figma-pull.ts` from a clone);
+   `bridge/src/figma-pull.ts` is its entry point. `dtwin init` sets a consumer project up in one command.
 3. ✅ **`dtwin mcp` server** (done, opt-in only) — stdio↔Claude Code, persistent WS↔plugin. The
    interactive front-end: the same reads as the CLI as typed tools, plus `figma_write`, the only
    code→design path. Kept a separate process so the write surface never touches the CLI's read path.
@@ -459,7 +460,7 @@ our own `code.js` / `profiles/*.md` / skills. Our `build-screen` skill stays the
   reading the source — a stronger guarantee than a self-asserted one.
 - Bridge: `ws://localhost` only → reaches your machine, never the internet. But loopback is *reachability*,
   not authentication — any local process, and any page in your browser, can open the port. So the bridge
-  requires a **shared token**, generated on first use and persisted per-user (`bridge/token-store.js`:
+  requires a **shared token**, generated on first use and persisted per-user (`bridge/src/token-store.ts`:
   `~/.config/design-twin/bridge-token` / `%APPDATA%`, mode `0600`; `--token-file` and
   `FIGMA_BRIDGE_TOKEN` override it). Pasted into the plugin once and kept in `clientStorage`.
   Connections without it are rejected at the handshake (401, compared as SHA-256 digests through

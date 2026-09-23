@@ -2,7 +2,7 @@
 // ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js).
 //
 // Why a bundle and not a copy or a symlink: an installed plugin is ONLY the claude-plugin/ directory.
-// drift-lint.ts and get-component.ts import ../bridge/*.js, which does not exist there, and a symlink
+// drift-lint.ts and get-component.ts import ../bridge/src/*.ts, which does not exist there, and a symlink
 // pointing outside the plugin directory is not installed at all — so either one ships a plugin whose
 // Stop hook and every scripts/ call fail. bundle:true inlines those imports, so each output file is
 // self-contained (Node builtins only).
@@ -17,7 +17,7 @@
 //
 // Run from the repo root:  node claude-plugin/build-scripts.js [outDir]
 // test/verify-build.test.ts rebuilds into a temp dir and fails if scripts/ is stale — the same
-// committed-artifact gate figma-plugin/code.js and bridge/figma-mcp.mjs have.
+// committed-artifact gate figma-plugin/code.js has.
 import path from "node:path";
 import fs from "node:fs";
 // esbuild is a devDependency of the bridge/ and figma-plugin/ workspaces, hoisted to the repo-root

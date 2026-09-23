@@ -120,7 +120,7 @@ full turn; a clean summary can be reported from the JSON alone.
    ```
 
    **Don't pass `--out`.** It defaults to `design/audit/<Screen>__<id>` — the exact basename of the
-   screen file you just gave it, which write-out.js already named `<LayerName>__<node-id>` — so this
+   screen file you just gave it, which write-out.ts already named `<LayerName>__<node-id>` — so this
    skill never has to invent a name, and re-auditing the same screen always overwrites the same
    report pair instead of adding a new one under whatever string was typed that time (findings 72/73:
    one node ended up with `positions.md`/`job-roles.md` byte-identical, and the same node twice as

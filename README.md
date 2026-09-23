@@ -33,7 +33,7 @@ The repo ships **three products**, installed separately:
 | Piece | What it is | How you install it |
 |---|---|---|
 | `figma-plugin/` | The Figma-side extractor. Reads the open file and exports JSON, variables, and SVG/PNG assets. | Imported into Figma desktop from its manifest |
-| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | `npm install` + `npm link` from a clone (not on npm yet) |
+| `bridge/` | The `dtwin` CLI and the MCP server. Both talk to the Figma plugin over a localhost WebSocket (port `8787`). | root `npm install` + `npm link --workspace bridge` from a clone (not on npm yet) |
 | `claude-plugin/` | The `designtwin` Claude Code plugin: skills, stack profiles and agents. It has no dependencies. | `claude plugin install` |
 
 There are three ways to get a design out of Figma:
@@ -65,13 +65,13 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 
 ```bash
 git clone https://github.com/its-magdy/design-twin.git
-cd design-twin/bridge
+cd design-twin
 npm install
-npm link          # puts `dtwin` on your PATH
+npm link --workspace bridge   # or: cd bridge && npm link — puts `dtwin` on your PATH
 dtwin --version
 ```
 
-If you skip `npm link`, use `node /path/to/design-twin/bridge/figma-pull.js` wherever this README says `dtwin`.
+If you skip `npm link`, use `node /path/to/design-twin/bridge/src/figma-pull.ts` wherever this README says `dtwin`.
 
 ### 2. Import the Figma plugin
 
@@ -285,21 +285,24 @@ it there, and `dtwin doctor` reports which layout it found.
 Everything runs offline, without Figma:
 
 ```bash
-npm ci --prefix bridge && npm ci --prefix figma-plugin
+npm ci
 node test/harness.ts              # Figma plugin extractor, against a mock `figma`
 node test/bridge.test.ts          # CLI + bridge
 node test/design-to-code.test.ts  # tokens, maps, drift-lint
 ```
 
-Every other `test/*.test.ts` suite runs the same way. `TESTING.md` lists each suite, its expected
-count, and the live-Figma checks. The plugin's `code.js`, `bridge/figma-mcp.mjs` and
-`claude-plugin/scripts/` are committed build output. After editing their sources, rebuild them:
+Every other `test/*.test.ts` suite runs the same way, or run them all with `npm test`. `TESTING.md`
+lists each suite, its expected count, and the live-Figma checks. The plugin's `code.js` and
+`claude-plugin/scripts/` are committed build output (the bridge's `dist/` is gitignored, built on
+demand or on `prepack`). After editing their sources, rebuild them:
 
 ```bash
-npm run build --prefix figma-plugin
-npm run build --prefix bridge
-node claude-plugin/build-scripts.js
+npm run build
 ```
+
+That runs each workspace's own build — `tsc` → `bridge/dist/` for the bridge, esbuild →
+`figma-plugin/code.js` for the plugin — and then `node claude-plugin/build-scripts.js` to re-bundle
+`claude-plugin/scripts/`.
 
 CI fails if the committed build output doesn't match what the sources produce.
 

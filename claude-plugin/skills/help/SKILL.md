@@ -51,7 +51,7 @@ Reach for the CLI or MCP once someone's pulling repeatedly or wants Claude to qu
 
 **Through the CLI**, Claude runs `dtwin`. Check `which dtwin` first — it is normally already a
 global binary, and only if it is missing are you inside a clone of the Design Twin repo, where every
-`dtwin` is `node bridge/figma-pull.js`. `dtwin help` prints a quick start, the commands and every
+`dtwin` is `node bridge/src/figma-pull.ts`. `dtwin help` prints a quick start, the commands and every
 flag, and each command answers `--help` with its own page (`dtwin screenshot --help`,
 `dtwin list --help`, `dtwin pull --help`, `dtwin mcp --help`) without doing anything else while doing
 so. A mistyped flag is refused, not ignored. Each command is shorthand for a flag (`dtwin list pages`
@@ -109,8 +109,9 @@ manual version:
      file name is the form to reach for: `figma.fileKey` is gated to private plugins, so on a
      self-imported plugin it is `null` and cannot address anything.
    - **Live MCP tools in the project being built** → same install as the CLI, plus a `.mcp.json` *in
-     that project* pointing at the absolute path of `bridge/figma-mcp.mjs` (`dtwin init --mcp` writes
-     it); enable it via `/mcp` and restart. No token goes in that file — the MCP server reads the same per-user stored token.
+     that project* pointing at the absolute path of `bridge/dist/figma-mcp.js` (npm install) or
+     `bridge/src/figma-mcp.ts` (repo checkout) (`dtwin init --mcp` writes it); enable it via `/mcp` and
+     restart. No token goes in that file — the MCP server reads the same per-user stored token.
 3. **(Optional) config maps** so the agent reuses your components/tokens instead of regenerating —
    `design/target.json` (stack, auto-detected if absent), `design/tokens.json` (Figma variable → your
    code token — hand-authored; do NOT confuse with the generated `design/export/design-system/tokens.json`,

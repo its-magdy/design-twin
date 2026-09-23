@@ -62,7 +62,7 @@ one → generated markup) and emits token references instead of literals.
 ## The map: `codeconnect.local.json`
 Keyed by the **stable component publish `key`** (name is a low-confidence fallback only). Prop transforms
 are **declarative value-tables — no functions, no eval** (validated by Figma's own "files are not
-executed" design). Full shape is enforced by `map-validate.js` (and documented here); each entry:
+executed" design). Full shape is enforced by `map-validate.ts` (and documented here); each entry:
 ```jsonc
 "<component key>": {
   "figma": { "key": "…", "name": "Button" },          // key = identity; name = advisory
@@ -79,9 +79,9 @@ executed" design). Full shape is enforced by `map-validate.js` (and documented h
 
 ## Relationship to the existing `design/` maps
 The repo already had a simpler `design/components.json` (`{import, component, props}`) and `design/tokens.json`,
-plus `bridge/seed-components.js` (which seeds the component map from *code-side* Code Connect files).
+plus `bridge/src/seed-components.ts` (which seeds the component map from *code-side* Code Connect files).
 `design-to-code/` is the **formalized superset**: a schema'd, validated, drift-checked, bootstrappable map plus a
-DTCG token pipeline. `bridge/seed-components.js` seeds from the code side; `design-to-code/map-bootstrap.ts` seeds
+DTCG token pipeline. `bridge/src/seed-components.ts` seeds from the code side; `design-to-code/map-bootstrap.ts` seeds
 from the Figma side — they are complementary. Consolidating the codegen skill onto the `design-to-code/` format is
 part of the deferred resolver work (needs a target repo).
 

@@ -27,7 +27,7 @@ Also always run the syntax check after (re)building the plugin:
 
 ```
 node --check figma-plugin/code.js
-node --check bridge/seed-components.js
+node --check bridge/src/seed-components.ts
 ```
 
 When you add a new extracted field, edit the relevant `figma-plugin/src/*.ts` module, rebuild, then add
@@ -83,12 +83,12 @@ platform (web 24px / iOS 44pt / Android 48dp targets differ).
 
 ### `bridge/` — handshake auth + seed CLI
 
-`test/bridge.test.ts` covers the bridge files the plugin harness can't reach: `server-core.js`'s
+`test/bridge.test.ts` covers the bridge files the plugin harness can't reach: `server-core.ts`'s
 `verifyClient` (the bridge's **only** real access control — token, Origin, loopback Host),
-`token-store.js` (where that token lives between runs — precedence, `0600` permissions, the
+`token-store.ts` (where that token lives between runs — precedence, `0600` permissions, the
 lifecycle commands), the
-`seed-components.js` CLI driven as a subprocess against a temp directory, `write-out.js` (the one
-writer both front-ends share), and `daemon.js`. It also owns `figma-pull.js`'s argument parsing and
+`seed-components.ts` CLI driven as a subprocess against a temp directory, `write-out.ts` (the one
+writer both front-ends share), and `daemon.ts`. It also owns `figma-pull.ts`'s argument parsing and
 its `--list-libraries` renderer: the CLI/MCP layer is testable without a plugin on the other end
 (arg guards, table/empty-case output, and the built MCP bundle's tool schema), and the plugin-side
 library reads are the harness's job, not this suite's.
@@ -99,8 +99,8 @@ chunks for multi-megabyte replies, stale-socket recovery after a crash, and refu
 `--serve` rather than stealing a live socket. They bind port `19787`, never `8787`, so running the
 suite can't contend with a bridge you have open.
 
-`verbs.js` (`dtwin <verb>` → flags) is tested as the pure argv → argv function it is, plus subprocess
-runs proving a verb and its flag are the same command. `doctor.js` is tested three ways: its pure
+`verbs.ts` (`dtwin <verb>` → flags) is tested as the pure argv → argv function it is, plus subprocess
+runs proving a verb and its flag are the same command. `doctor.ts` is tested three ways: its pure
 check functions directly; its probes against real sockets on spare ports (a plain HTTP server, a real
 bridge answering `426`, and plugin-shaped clients with the right and the wrong token); and one
 subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the plugin probe is skipped
@@ -111,14 +111,14 @@ node test/bridge.test.ts        # expect: 584/584 checks passed, exit 0 — dete
                                  # a real dtwin daemon is running elsewhere on this machine: the two
                                  # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
                                  # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
-                                 # in bridge/doctor.js) so they never race a daemon that only ever
+                                 # in bridge/src/doctor.ts) so they never race a daemon that only ever
                                  # holds one port at a time.
 # NOTE: run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases spawn
 # with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config dir but
 # do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
 # CI/ephemeral escape-hatch token) defeats the "no token there" setup and the
 # `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
-node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
+node --check bridge/src/server-core.ts bridge/src/seed-components.ts bridge/src/figma-pull.ts bridge/src/write-out.ts bridge/src/daemon.ts bridge/src/token-store.ts bridge/src/verbs.ts bridge/src/doctor.ts
 ```
 
 `verifyClient` deserves direct coverage because the interesting cases are negative ones — a sandboxed
@@ -209,7 +209,7 @@ index.json to find the LAYER, then read only that file — never a whole directo
 
 ### Discovering which libraries a file uses (do this first)
 
-Before any pull, run `node bridge/figma-pull.js --list-libraries` (MCP twin: `figma_list_libraries`).
+Before any pull, run `node bridge/src/figma-pull.ts --list-libraries` (MCP twin: `figma_list_libraries`).
 It prints the local file's published assets plus every **enabled** team library, each with its variable
 collections and a component count, then you scope the pull with `--list` → `--page <id>`.
 
@@ -228,12 +228,12 @@ What to check in the output, and what NOT to read into it:
 
 `--list` (or the manual export) only shows a page's TOP-LEVEL frames — no recursion. To see what's
 *inside* one of those frames before committing to a full recursive pull of it, use the node-scoped
-twin: `node bridge/figma-pull.js --children <id>` lists that one node's direct children only (same
+twin: `node bridge/src/figma-pull.ts --children <id>` lists that one node's direct children only (same
 no-recursion, no-asset cost as `--list`), which is otherwise a jump straight to "pull everything."
 
 ### Visually checking one component after generating code for it
 
-`node bridge/figma-pull.js --screenshot <id> [--scale N]` renders ONE node to `screenshots/<id>_ref.png` —
+`node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` renders ONE node to `screenshots/<id>_ref.png` —
 skips `serialize()` and the recursive asset walk, so it stays cheap even on a node deep inside a large
 tree. Use it after `build-screen` generates code for a specific component in a dense screen, where the
 one whole-frame reference PNG every export already carries is too zoomed-out to compare against.
@@ -279,7 +279,7 @@ style system), `components.local.json` / `components.library.json`, `hygiene.jso
 
 ### Component-map seeding (optional, tested separately)
 
-`node bridge/seed-components.js [codeRoot] [outDir]` scans the codebase for Code Connect files
+`node bridge/src/seed-components.ts [codeRoot] [outDir]` scans the codebase for Code Connect files
 (`figma.connect(...)`, `@FigmaConnect`, or `// url=`/`// component=`/`// source=` templates) and seeds
 `design/components.json`. Verify it finds your mappings and fills `component`/`source`/`nodeId` without
 clobbering hand-authored fields.
@@ -342,7 +342,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 - [ ] **Staleness**: a fresh `components.local.json` (just exported) reports no freshness warning; hand-edit
       its `exportedAt` to >24h ago → `stale-snapshot` warning naming the age; delete `exportedAt` entirely →
       `unknown-freshness` warning. Override the threshold with `node design-to-code/drift-lint.ts map.json components.local.json --max-age <hours>`
-      (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/figma-pull.js` both surface the
+      (or `DRIFT_MAX_AGE_HOURS`). `figma_status` (MCP) and `node bridge/src/figma-pull.ts` both surface the
       same `exportedAt` stamp — `figma_status`'s `snapshot.ageMs` reads whatever `design/export/design-system.json`
       manifest (or `$FIGMA_EXPORT_DIR/design-system.json`) last landed on disk.
 
@@ -369,20 +369,20 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 | `node test/verify-screen.test.ts` | Per-node verification and its verdict — expect `44/44` |
 | `node test/bridge.test.ts` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |
-| `node bridge/figma-pull.js --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
-| `node bridge/figma-pull.js --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
-| `node bridge/figma-pull.js --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
-| `node bridge/figma-pull.js --list-pages` | Cheap: page names only, no page load (prints to stdout) |
-| `node bridge/figma-pull.js --list` | Cheap: pages + their top-level frames (prints to stdout) |
-| `node bridge/figma-pull.js --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
-| `node bridge/figma-pull.js --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `screenshots/<id>_ref.png` (writes a file, unlike the row above) |
-| `node bridge/figma-pull.js design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
-| `node bridge/figma-pull.js design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
-| `node bridge/figma-pull.js design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
-| `node bridge/figma-pull.js design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
+| `node bridge/src/figma-pull.ts --list-clients` | Cheap: which Figma files are connected (connId, name, fileKey) — the address book for `--client` |
+| `node bridge/src/figma-pull.ts --whoami` | Cheap: who is connected — plugin instance id, file, `fileKey` availability, socket uptime, takeover count |
+| `node bridge/src/figma-pull.ts --list-libraries` | Cheap: which design libraries this file draws on (prints a table to stdout) |
+| `node bridge/src/figma-pull.ts --list-pages` | Cheap: page names only, no page load (prints to stdout) |
+| `node bridge/src/figma-pull.ts --list` | Cheap: pages + their top-level frames (prints to stdout) |
+| `node bridge/src/figma-pull.ts --children <id>` | Cheap: one node's DIRECT children only (prints to stdout) |
+| `node bridge/src/figma-pull.ts --screenshot <id> [--scale N]` | Cheap-ish: renders ONE node to `screenshots/<id>_ref.png` (writes a file, unlike the row above) |
+| `node bridge/src/figma-pull.ts design --page <id>` | Live pull of one/several named pages (repeatable `--page`) |
+| `node bridge/src/figma-pull.ts design --all-pages` | Live pull over the local bridge (`--timeout N` to extend) |
+| `node bridge/src/figma-pull.ts design --design-system` | Live pull of ONLY tokens/styles/components/hygiene — no page walk, no assets. Each component carries its own fills/strokes/effects/radius/opacity/blendMode under `visuals` (see bridge/README.md) |
+| `node bridge/src/figma-pull.ts design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check design-to-code/*.ts` | Syntax check the tooling scripts |
-| `node bridge/seed-components.js . design` | Seed components.json from Code Connect files (code side) |
+| `node bridge/src/seed-components.ts . design` | Seed components.json from Code Connect files (code side) |
 | `node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
 | `node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
 | `node design-to-code/get-component.ts design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |

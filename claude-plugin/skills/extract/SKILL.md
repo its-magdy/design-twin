@@ -49,7 +49,7 @@ the CLI.
 **Where `dtwin` comes from.** Check `which dtwin` first — it is usually already on PATH, installed
 globally from the `designtwin` npm package (and it can be on PATH by other means; don't assume npm).
 Only if it is missing are you inside a clone of the Design Twin repo, where every `dtwin` below is
-`node bridge/figma-pull.js`. If neither works, the CLI isn't installed: fall back to the plugin's own
+`node bridge/src/figma-pull.ts`. If neither works, the CLI isn't installed: fall back to the plugin's own
 export buttons, which need nothing.
 
 ## Discover, then scope — never open with a whole-file pull
