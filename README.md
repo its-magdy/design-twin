@@ -144,11 +144,17 @@ reusing yours, and the token drift check has nothing to compare against:
    --design-system design/export/design-system --out design/audit/<screen>`.
 4. Build: `/designtwin:build-screen <screen>`. It reads the audit (or runs the script itself) and
    records every default it had to assume.
-5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?") — it
-   renders the screen, measures every node's computed style against the design's own numbers, checks
-   that every component on the frame was actually built and that every designed interaction works,
-   and writes `design/verify/<Screen>.report.json`. The verdict is computed from that file, so a
-   "pass" is never something anyone asserts. It changes no code.
+5. Check a built screen any time: `/designtwin:verify <screen>` ("does this match the design?"). The
+   `visual-verifier` agent renders the screen, measures every VISIBLE node (hidden layers are skipped)
+   and drives each designed interaction, recording the selector it drove. `verify-screen.js --compare`
+   has no browser: it compares those measurements with the design's own numbers — type, colour,
+   radius, spacing, size and frame-relative position — and takes interaction results from
+   `measured.json` or an `--interactions <file>`. Anything nobody drove is `not-probed`, never passed.
+   The instance-set count it reports is `data-dt-node` tag coverage, not proof a component is present;
+   only a component the probe reports absent fails the screen. It writes
+   `design/verify/<Screen>.report.json`, whose headline states how much was actually measured. The
+   verdict is computed from that file, so a "pass" is never something anyone asserts. It changes no
+   code.
 6. When the design changes later: `/designtwin:sync-design <screen>`. It keeps the previous export,
    re-pulls, diffs the two by node id (`design-to-code/design-diff.js`) and patches only what moved —
    a rebuild would throw away every hand edit since step 4. Commit `design/` so a previous export
