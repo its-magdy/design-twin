@@ -246,6 +246,13 @@ function checkPlan({ plan }, cwd) {
   problems.push(...checkVerification(plan, cwd));
   return problems;
 }
+function validatePlanHeader(plan) {
+  const missing = ["screenName", "nodeId", "route", "file"].filter((k) => plan[k] === void 0 || plan[k] === null || plan[k] === "");
+  if (!missing.length) return [];
+  return [
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} \u2014 other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing`
+  ];
+}
 function verificationWarnings(plan) {
   const v = plan.verification;
   if (!v || v.mode !== "rendered") return [];
@@ -299,5 +306,5 @@ function main() {
   }
   process.exit(0);
 }
-module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
+module.exports = { verificationWarnings, validatePlanHeader, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
 if (require.main === module) main();

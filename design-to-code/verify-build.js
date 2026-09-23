@@ -426,6 +426,22 @@ function checkPlan({ plan }, cwd) {
 // Evidence worth having that must not block: a build verified on one frame is legitimate, but the
 // report should be able to say which states nobody looked at. Printed on a passing run (exit 0), so
 // the agent sees it and the turn still ends.
+// P3 #150/#151/#180: verify-build.js is the ONE writer that rewrites plans, so it is the one place
+// that can guarantee every plan carries the schema'd header every other skill's screen-resolution
+// step reads (`screenName`, `nodeId`, `route`, `file`) — rather than each reader falling back to a
+// human-written free-text `screen` string, which finding 180 shows works only when that string
+// happens to be well written, and finding 151 shows its sibling plan from the SAME run may not be.
+// This only WARNS (verify-build.js's exit code / `status` semantics are unchanged) — a plan missing
+// a header field still passes if its checks pass; the warning is what tells the builder to fix it
+// before another skill has to fall back to guessing.
+function validatePlanHeader(plan) {
+  const missing = ["screenName", "nodeId", "route", "file"].filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
+  if (!missing.length) return [];
+  return [
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing`,
+  ];
+}
+
 function verificationWarnings(plan) {
   const v = plan.verification;
   if (!v || v.mode !== "rendered") return [];
@@ -486,6 +502,10 @@ function main() {
 
   // All plans check out — close them so re-runs later this session stay on the fast path.
   for (const { file, plan } of plans) {
+    // validatePlanHeader (below) is exported for plan-skeleton.js / the plan writer to call once a
+    // plan actually carries screenName/nodeId/route — wiring it into every stop here, before
+    // anything populates those fields, would warn on every existing plan in every project. Not
+    // wired into this loop; see the P3 report for why.
     for (const w of verificationWarnings(plan)) console.error(`verify-build: warning (${path.basename(file)}): ${w}`);
     plan.status = passedStatus(plan);
     fs.writeFileSync(file, JSON.stringify(plan, null, 2) + "\n");
@@ -493,6 +513,6 @@ function main() {
   process.exit(0);
 }
 
-module.exports = { verificationWarnings, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
+module.exports = { verificationWarnings, validatePlanHeader, ownPlans, checkPlan, checkVerification, passedStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale };
 
 if (require.main === module) main();
