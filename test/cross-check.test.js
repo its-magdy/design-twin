@@ -297,4 +297,40 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
 }
 
+// ---------- cross-check never cites a hidden layer (P2a; hidden.js predicate in both walks) ----------
+// Real Job Roles export (test/fixtures/livetest3/verify/). Before: `walkWithBg` skipped
+// `visible === false` (a flag the export never sets) and the token-usage walk skipped nothing, so
+// `token-name-collision` cited the hidden `I20173:137670;1929:15178` / `;1929:15308` buttons and the
+// derived-mode contrast check graded hidden text.
+{
+  const fs = require("fs");
+  const path = require("path");
+  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const jr = JSON.parse(fs.readFileSync(path.join(FXL, "verify", "positions___7314_87192.json"), "utf8"));
+  const hidden = new Set();
+  (function w(n, h) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
+  const citesHidden = (f) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
+  const rd = (p) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8"));
+  const tokRes = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }],
+    variables: rd("pages/__Organization_management_/positions___7314_87192.vars.json"), tokens: rd("design-system/tokens.json"),
+    components: rd("design-system/components.local.json"), componentsLibrary: rd("design-system/components.library.json") });
+  ok("[hidden] token findings on the real Job Roles export cite no hidden node", tokRes.findings.length > 0 && !tokRes.findings.some(citesHidden));
+  // Derived-mode contrast. The export was rendered in 'Semantic Variables 01' = Dark (root.resolvedModes);
+  // a 'Dim' mode (rendered nowhere — note 'Light' IS rendered, by the 'Default' collection) is declared
+  // and both pairs are given a 1:1 contrast there. Pair A
+  // ('Text/Description' on 'Backgrounds/Page Color') is used ONLY by hidden text (7 nodes); pair B
+  // ('Text/Main Titles' on 'Backgrounds/Table header') only by visible text (5 nodes) — the control.
+  const vars = {
+    collections: [{ name: "Semantic Variables 01", modes: ["Dark", "Dim"] }],
+    variables: [
+      { name: "Text/Description", values: { Dim: "#1d1d1f" } }, { name: "Backgrounds/Page Color", values: { Dim: "#1d1d1f" } },
+      { name: "Text/Main Titles", values: { Dim: "#46464f" } }, { name: "Backgrounds/Table header", values: { Dim: "#46464f" } },
+    ],
+  };
+  const c = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }], variables: vars });
+  const dm = c.findings.find((f) => f.code === "derived-mode-contrast");
+  ok("[hidden] derived-mode contrast still fires on VISIBLE text (the check is not dead)", !!dm && dm.pairs.some((p) => p.fg === "Text/Main Titles"));
+  ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !dm.pairs.some((p) => p.fg === "Text/Description") && !citesHidden(dm));
+}
+
 report();

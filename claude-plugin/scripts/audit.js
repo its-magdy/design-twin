@@ -308,11 +308,13 @@ var require_slice_sources = __commonJS({
 var require_cross_check = __commonJS({
   "design-to-code/cross-check.js"(exports2, module2) {
     var { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
+    var { hiddenSelf: hiddenSelf2 } = require_hidden();
     var SEVERITY_ORDER2 = { blocker: 0, warning: 1, info: 2 };
     var ABSURD_NUMBER = 1e4;
     var WRONG_CATALOG_PCT = 5;
     function walk(node, fn) {
       if (!node || typeof node !== "object") return;
+      if (hiddenSelf2(node)) return;
       fn(node);
       for (const c of node.children || []) walk(c, fn);
     }
@@ -881,7 +883,7 @@ var require_cross_check = __commonJS({
     }
     function walkWithBg(node, bgToken, fn) {
       if (!node || typeof node !== "object") return;
-      if (node.visible === false) return;
+      if (hiddenSelf2(node)) return;
       let bg = bgToken;
       const own = node.tokens && node.tokens.fills || (node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
       if (own && typeof own === "string" && node.type !== "TEXT") bg = own;

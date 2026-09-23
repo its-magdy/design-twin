@@ -29,6 +29,9 @@
 // of a billion, font strays), and says plainly which cross-file checks it could not run.
 
 const { visibleInstances, matchByNameAndSignature, isRekeyed } = require("./component-match.js");
+// hidden.js's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
+// hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
+const { hiddenSelf } = require("./hidden.js");
 
 const SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 
@@ -39,8 +42,11 @@ const ABSURD_NUMBER = 10000;
 // A component-key overlap at or below this is not "partial coverage", it is the wrong catalog.
 const WRONG_CATALOG_PCT = 5;
 
+// Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
+// a token the build has to resolve (livetest-3 P2a — the same rule as audit.js and verify-screen.js).
 function walk(node, fn) {
   if (!node || typeof node !== "object") return;
+  if (hiddenSelf(node)) return;
   fn(node);
   for (const c of node.children || []) walk(c, fn);
 }
@@ -814,7 +820,9 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
 // against whatever surface it sits on, which is virtually never its own parent's own fill.
 function walkWithBg(node, bgToken, fn) {
   if (!node || typeof node !== "object") return;
-  if (node.visible === false) return;
+  // Was `node.visible === false`, which the export never uses — so every hidden layer's text was
+  // contrast-checked. `hidden` (and, by not descending, its ancestry) is the flag.
+  if (hiddenSelf(node)) return;
   let bg = bgToken;
   const own = (node.tokens && node.tokens.fills) ||
     ((node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));

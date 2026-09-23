@@ -7,7 +7,8 @@
 // 1. The two screen exports, EVERY node kept (the hidden-layer counts depend on the whole tree), with
 //    only the fields no verifier/audit reads dropped. The build asserts that verify-screen --expect
 //    and audit.js give byte-identical results on the pruned and the full file, so pruning cannot
-//    change what the tests see.
+//    change what the tests see. `resolvedModes`/`variableModes` are kept: cross-check's derived-mode
+//    contrast check needs them (test/cross-check.test.js).
 // 2. The real probe outputs: design/verify/{JobRoles,GlobalPolicies}.measured.json (notes dropped).
 // 3. GlobalPolicies.dom.json: the independent Playwright pass over the running Global Policies build
 //    (scripts-test/out/phase6/global-policies/measured-independent.json — tag, x/y, svgFill,
@@ -19,7 +20,7 @@ const L = process.argv[2] || "/Users/mohamedomarwork/design-twin-livetest-3";
 const OUT = __dirname;
 const P = path.join(L, "design/export/pages/__Organization_management_");
 const SCREENS = ["positions___7314_87192", "System_Configurations__1359_21337"];
-const DROP = new Set(["overrides", "propRefs", "exposedInstances", "pin", "gridColumnStart", "gridRowStart", "variableModes", "resolvedModes", "exportSettings", "layoutGrids", "flipped", "aspectRatio", "strokesInLayout"]);
+const DROP = new Set(["overrides", "propRefs", "exposedInstances", "pin", "gridColumnStart", "gridRowStart", "exportSettings", "layoutGrids", "flipped", "aspectRatio", "strokesInLayout"]);
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
 const write = (f, v) => { fs.writeFileSync(path.join(OUT, f), JSON.stringify(v) + "\n"); console.log("wrote", f, fs.statSync(path.join(OUT, f)).size, "bytes"); };
 

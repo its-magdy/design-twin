@@ -196,6 +196,39 @@ var require_component_match = __commonJS({
   }
 });
 
+// design-to-code/hidden.js
+var require_hidden = __commonJS({
+  "design-to-code/hidden.js"(exports2, module2) {
+    var hiddenSelf2 = (node) => !!(node && typeof node === "object" && node.hidden);
+    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf2(node);
+    function walkWithHidden(root, fn, opts) {
+      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+      (function go(node, parentHidden, path, parent, depth) {
+        if (!node || typeof node !== "object") return;
+        const hidden = isHidden(node, parentHidden);
+        fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+        const kids = Array.isArray(node.children) ? node.children : [];
+        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+      })(root, false, root && pathOf(root, 0), null, 0);
+    }
+    function hiddenIds(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && n.id) out.push(n.id);
+      });
+      return out;
+    }
+    function hiddenRoots(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && !c.parentHidden) out.push(n);
+      });
+      return out;
+    }
+    module2.exports = { hiddenSelf: hiddenSelf2, isHidden, walkWithHidden, hiddenIds, hiddenRoots };
+  }
+});
+
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
@@ -273,11 +306,13 @@ var require_slice_sources = __commonJS({
 
 // design-to-code/cross-check.js
 var { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
+var { hiddenSelf } = require_hidden();
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 var ABSURD_NUMBER = 1e4;
 var WRONG_CATALOG_PCT = 5;
 function walk(node, fn) {
   if (!node || typeof node !== "object") return;
+  if (hiddenSelf(node)) return;
   fn(node);
   for (const c of node.children || []) walk(c, fn);
 }
@@ -846,7 +881,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
 }
 function walkWithBg(node, bgToken, fn) {
   if (!node || typeof node !== "object") return;
-  if (node.visible === false) return;
+  if (hiddenSelf(node)) return;
   let bg = bgToken;
   const own = node.tokens && node.tokens.fills || (node.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
   if (own && typeof own === "string" && node.type !== "TEXT") bg = own;
