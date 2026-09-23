@@ -31,7 +31,7 @@ Suites at the final head (all run from the merged tree, `dtwin serve` daemon liv
 | test/identity.test.js | — | 48 (new) |
 | test/resolve-screen.test.js | — | 33 (new) |
 | test/harness.js (plugin, mock figma) | 414 | 414 |
-| test/bridge.test.js | 528/529 | 593/593 (the old environmental failure is fixed: the doctor tests pin a spare port) |
+| test/bridge.test.js | 528/529 | 596/596 (the old environmental failure is fixed: the doctor tests pin a spare port) |
 
 Every new test is driven by fixtures pruned from the real export in the test directory
 (`test/fixtures/livetest3/**`, each with a `build.js`/`build.py` that regenerates it and asserts the
@@ -304,7 +304,7 @@ per-file code hashes + `gitHead` in the report, explicit precedence and a non-em
 (coverage buckets partition 41/38 + hidden-only), 319 (documented: the first pull needs the node
 id), 320–326, 328, 329, and 327 (plugin version baked into the bundle, shown by `list clients` /
 `whoami` / `doctor`, doctor warns when a plugin is older than the bridge or reports no version).
-Not closed: 168 (unchanged). Suites at e088029: all green, bridge 593/593.
+Not closed: 168 (unchanged). Suites at the final head: all green, bridge 596/596. Doctor now warns live on this machine that the running daemon and the loaded plugin predate version reporting.
 
 **Still owner-only:** re-run the plugin in both Figma files and restart `dtwin serve` (until then
 `list clients` shows `pluginVersion` unknown and doctor warns about it); the no-daemon checks; the
