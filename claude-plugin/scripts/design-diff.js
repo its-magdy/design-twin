@@ -583,14 +583,44 @@ function diffCatalog(oldDoc, newDoc) {
   return { kind: "catalog", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
 }
 var CATALOG_IGNORED = /* @__PURE__ */ new Set(["page", "pageId", "box", "renderBox"]);
+function styleKey(s) {
+  return s && typeof s.key === "string" && s.key ? "k:" + s.key : "n:" + String(s && s.name || "");
+}
+var STYLE_IGNORED = /* @__PURE__ */ new Set(["key", "id"]);
+function diffStyles(oldDoc, newDoc) {
+  const keyed = (doc) => new Map((doc.styles || []).map((s) => [styleKey(s), s]));
+  const A = keyed(oldDoc), B = keyed(newDoc);
+  const brief2 = (s) => ({ key: s.key, id: s.id, name: s.name });
+  const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief2(s));
+  const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief2(s));
+  const changed = [];
+  for (const [k, b] of B) {
+    const a = A.get(k);
+    if (!a) continue;
+    const fields = [];
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "style"));
+    if (fields.length) changed.push({ ...brief2(b), fields });
+  }
+  return { kind: "styles", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
+}
+function diffHygiene(oldDoc, newDoc) {
+  const A = new Set((oldDoc.hygiene || []).map(String)), B = new Set((newDoc.hygiene || []).map(String));
+  const added = [...B].filter((h) => !A.has(h));
+  const removed = [...A].filter((h) => !B.has(h));
+  return { kind: "hygiene", summary: { added: added.length, removed: removed.length, changed: 0 }, warnings: [], added, removed, changed: [] };
+}
 var isTokens = (doc) => Array.isArray(doc && doc.variables);
 var isCatalog = (doc) => Array.isArray(doc && doc.components);
+var isStyles = (doc) => Array.isArray(doc && doc.styles);
+var isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
 var isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || doc.tree && typeof doc.tree === "object");
 function diffDocs(oldDoc, newDoc, opts) {
   if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
   if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
+  if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
+  if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
   if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  throw new Error("not a screen export, a token file or a component catalog (no `tree`/`nodes`, `variables` or `components` at the top level) \u2014 nothing here can be diffed");
+  throw new Error("not a screen export, a token file, a component catalog, a style sheet or hygiene.json (no `tree`/`nodes`, `variables`, `components`, `styles` or `hygiene` at the top level) \u2014 nothing here can be diffed");
 }
 function markdown(d, label) {
   const s = d.summary, L = [`# What changed \u2014 ${label}`, ""];
@@ -611,6 +641,18 @@ function markdown(d, label) {
     if (d.changed.length) L.push("## Components changed", ...d.changed.flatMap((c) => [one(c), ...c.fields.map(line)]), "");
     if (d.added.length) L.push("## Components added", ...d.added.map(one), "");
     if (d.removed.length) L.push("## Components removed", ...d.removed.map(one), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "styles") {
+    const one = (s2) => `- **${s2.name}** (key \`${s2.key || s2.id}\`)`;
+    if (d.changed.length) L.push("## Styles changed", ...d.changed.flatMap((s2) => [one(s2), ...s2.fields.map(line)]), "");
+    if (d.added.length) L.push("## Styles added", ...d.added.map(one), "");
+    if (d.removed.length) L.push("## Styles removed", ...d.removed.map(one), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "hygiene") {
+    if (d.added.length) L.push("## New warning(s)", ...d.added.map((h) => `- ${h}`), "");
+    if (d.removed.length) L.push("## Resolved warning(s)", ...d.removed.map((h) => `- ${h}`), "");
     return L.join("\n") + "\n";
   }
   if (d.changed.length) L.push("## Changed", ...d.changed.flatMap((c) => [`- **${c.path}** (\`${c.id}\`, ${c.categories.join(" + ")})`, ...c.fields.map(line)]), "");
@@ -683,6 +725,17 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     }
     found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
+  if (fs.existsSync(snap + ".prev")) {
+    let assets = null;
+    try {
+      assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8"));
+    } catch {
+    }
+    try {
+      found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+    } catch {
+    }
+  }
   try {
     const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
@@ -715,7 +768,12 @@ function siblingFilesOf(f) {
   const base = path.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    for (const name of DS_FILE_NAMES) if (name !== base) out.push(path.relative(process.cwd(), path.join(dir, name)));
+    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
+    for (const name of DS_FILE_NAMES) {
+      if (name === base) continue;
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
+      out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
+    }
     return out;
   }
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
@@ -754,6 +812,7 @@ ${USAGE}`);
       process.exit(2);
     }
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
+    let refused = 0;
     for (const f of files) {
       if (!fs.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
@@ -770,6 +829,7 @@ ${USAGE}`);
       }
       if (fs.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        refused++;
         continue;
       }
       if (fs.existsSync(dest) && !identical && force) {
@@ -795,6 +855,7 @@ ${USAGE}`);
       }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
+    if (refused) process.exitCode = 1;
     return;
   }
   const take = (flag) => {
@@ -836,4 +897,4 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   } else process.stdout.write(text);
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

@@ -8,6 +8,31 @@
 const { WebSocketServer } = require("ws");
 const crypto = require("crypto");
 
+// Finding 327: the plugin used to report no version at all, so a stale bundle in Figma (several fixes
+// live only in figma-plugin/code.js — SVG normalisation, case-folded asset names) could not be told
+// apart from a fresh one — a plugin instance's startedAt and code.js's own mtime can land in the same
+// minute either way. `BRIDGE_VERSION` is this PACKAGE's version (bridge/package.json — the CLI/MCP the
+// user is actually running); `pluginStalenessNote` compares it against whatever the connected plugin
+// announced in its `hello`. A simple numeric [major,minor,patch] compare, not semver ranges: this is an
+// internal tool with one version number moving in one repo, not a published dependency graph.
+const BRIDGE_VERSION = (() => { try { return require("./package.json").version; } catch (e) { return null; } })();
+function parseVersion(v) {
+  if (typeof v !== "string") return null;
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function versionOlder(a, b) {
+  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] < b[i]; }
+  return false;
+}
+// `null` means "nothing to warn about" — either the plugin didn't report a version (a pre-327 bundle;
+// already named separately, at the call site, as "unknown") or it isn't older than this CLI/MCP.
+function pluginStalenessNote(pluginVersion) {
+  const p = parseVersion(pluginVersion), b = parseVersion(BRIDGE_VERSION);
+  if (!p || !b || !versionOlder(p, b)) return null;
+  return `plugin v${pluginVersion} is older than this ${BRIDGE_VERSION} bridge — reload the plugin in Figma (Plugins → Development → Design Twin) to pick up recent fixes`;
+}
+
 // The ONLY ports a published plugin can reach. figma-plugin/manifest.json lists these three in
 // `networkAccess.allowedDomains`, Figma's match patterns have no port wildcard, and a plugin socket to
 // any other port is blocked by Figma before it leaves the iframe. So FIGMA_BRIDGE_PORT is a choice of
@@ -258,7 +283,7 @@ function createBridge(port = PORT) {
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
     const connId = "c" + ++connSeq;
-    const entry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, lastActivity: Date.now() };
+    const entry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, lastActivity: Date.now() };
     ws._connId = connId;
     clients.set(connId, entry);
     console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
@@ -295,8 +320,14 @@ function createBridge(port = PORT) {
         entry.file = typeof msg.file === "string" ? msg.file : null;
         entry.fileKey = typeof msg.fileKey === "string" && msg.fileKey ? msg.fileKey : null;
         entry.page = typeof msg.page === "string" ? msg.page : null;
+        // Finding 327: the plugin's own build version (figma-plugin/package.json, baked in at build
+        // time — see figma-plugin/build.js). `null` for a plugin bundle old enough to predate this
+        // field entirely, which is itself a useful signal (definitely stale).
+        entry.pluginVersion = typeof msg.pluginVersion === "string" && msg.pluginVersion ? msg.pluginVersion : null;
+        const stalenessNote = pluginStalenessNote(entry.pluginVersion);
         console.error(`[bridge] ${connId} identified: ${JSON.stringify(entry.file || "(unnamed file)")}` +
-          (entry.fileKey ? ` [fileKey ${entry.fileKey}]` : " [no fileKey — private-plugin API not in effect]"));
+          (entry.fileKey ? ` [fileKey ${entry.fileKey}]` : " [no fileKey — private-plugin API not in effect]") +
+          ` [plugin v${entry.pluginVersion || "unknown"}]` + (stalenessNote ? ` — ${stalenessNote}` : ""));
         return;
       }
       const p = pending.get(msg.id);
@@ -375,6 +406,8 @@ function createBridge(port = PORT) {
     connectedAt: e.connectedAt,
     uptimeMs: Date.now() - e.connectedAt,
     identified: !!e.instanceId,
+    pluginVersion: e.pluginVersion || null,
+    pluginStale: e.instanceId ? pluginStalenessNote(e.pluginVersion) : null,
   });
 
   function listClients() {
@@ -563,4 +596,4 @@ function createBridge(port = PORT) {
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore };
+module.exports = { createBridge, verifyClient, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote };

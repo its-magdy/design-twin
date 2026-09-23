@@ -270,7 +270,7 @@ if (require.main === module) {
 
 // TIMEOUTS is the per-command budget table both front-ends read (server-core.js) — the tiers below
 // pick from it rather than restating them, so the CLI and the MCP tools cannot drift apart.
-const { createBridge, TIMEOUTS, exportTimeout, errMsg, tokenStore } = require("./server-core");
+const { createBridge, TIMEOUTS, exportTimeout, errMsg, tokenStore, pluginStalenessNote } = require("./server-core");
 // node-id.js is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
 // (its own header). This file used to hand --children's raw token straight to the plugin, whose only
 // normalisation is replace(/-/g, ":") — so a pasted design URL worked through the MCP twin
@@ -712,7 +712,11 @@ function formatClients(rows) {
     if (c.page) bits.push("page " + JSON.stringify(c.page));
     bits.push(c.fileKey ? "fileKey " + c.fileKey : "no fileKey (private-plugin API not in effect)");
     bits.push("up " + (mins >= 1 ? mins + "m" : Math.round((c.uptimeMs || 0) / 1000) + "s"));
+    // Finding 327: a version per row, so a stale plugin bundle is visible right where the user is
+    // already looking to pick a file — not just buried in a separate `dtwin doctor` run.
+    if (c.identified) bits.push("plugin v" + (c.pluginVersion || "unknown"));
     lines.push("        " + bits.join(" · "));
+    if (c.pluginStale) lines.push("        ! " + c.pluginStale);
   }
   lines.push("");
   lines.push("Address one with --client <connId | fileKey | part of the file name>, e.g. --client " +
@@ -973,6 +977,11 @@ async function main() {
     console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
     console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
       ", up " + Math.round((r.uptimeMs || 0) / 1000) + "s.");
+    // Finding 327: printed even when nothing is stale, so "no version at all" (an old bundle that
+    // predates this field) is visibly different from "version reported, and it's current".
+    console.error("[dtwin] plugin version: " + (r.pluginVersion || "unknown (older bundle — predates version reporting)"));
+    const stale = pluginStalenessNote(r.pluginVersion);
+    if (stale) console.error("[dtwin] ! " + stale);
     console.error("[dtwin] fileKey: " + (r.fileKeyAvailable
       ? r.fileKey + " (available — usable as a stable routing key)"
       : "UNAVAILABLE (gated to private plugins; routing must use a server-minted id)"));

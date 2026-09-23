@@ -274,7 +274,11 @@ function writeAssets(dir, assets, log, subdir) {
     byContent.set(contentHash, baseName); // so a LATER asset in this same call also dedups against it
     a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
     const paths = a.text != null ? (a.text.match(/<path\b/g) || []).length : 0;
-    if (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths });
+    // Finding 324: the whole-frame reference PNG (a.kind === "reference") is never inlined or shipped
+    // — writeScreenAssets already excludes it from `count`/`totalBytes` and its own `heavy` list for
+    // exactly this reason (finding 28's comment). This pull-time warning must agree: a "20174_143363_
+    // ref.png 0.25 MB is too heavy to inline" is pure noise about a file the app never inlines.
+    if (a.kind !== "reference" && (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS)) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths });
     n++;
   }
   if (log) log("wrote " + n + " asset(s) to " + adir);

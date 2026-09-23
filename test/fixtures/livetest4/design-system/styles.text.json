@@ -1,0 +1,195 @@
+{
+  "exportedAt": "2026-09-23T08:48:19.574Z",
+  "file": "Design System - NERA (Copy)",
+  "colorProfile": "srgb",
+  "styles": [
+    {
+      "name": "Bold/H1",
+      "size": 48,
+      "font": "Poppins",
+      "weight": "Bold",
+      "lineHeight": {
+        "value": 48,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "H1",
+        "fontStyle": "Bold",
+        "lineHeight": "Semantic Spaces/XL Padding"
+      },
+      "key": "89e9103153e24c1cee4b0e469ab80ffa3c0a5788",
+      "id": "S:89e9103153e24c1cee4b0e469ab80ffa3c0a5788,"
+    },
+    {
+      "name": "Semi-bold/40 semi-bold",
+      "size": 40,
+      "font": "Poppins",
+      "weight": "SemiBold",
+      "lineHeight": {
+        "value": 44,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "H2",
+        "fontStyle": "Semi Bold"
+      },
+      "key": "926c0b880e793c18d87c7aa5346d8b885b5fbf30",
+      "id": "S:926c0b880e793c18d87c7aa5346d8b885b5fbf30,"
+    },
+    {
+      "name": "Semi-bold/32 semi-bold",
+      "size": 32,
+      "font": "Poppins",
+      "weight": "SemiBold",
+      "lineHeight": {
+        "value": 40,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "H3",
+        "fontStyle": "Semi Bold"
+      },
+      "key": "953190c08bfdcfabc48d242308ee60b8b2e3d029",
+      "id": "S:953190c08bfdcfabc48d242308ee60b8b2e3d029,"
+    },
+    {
+      "name": "Semi-bold/24 semi-bold",
+      "size": 24,
+      "font": "Poppins",
+      "weight": "SemiBold",
+      "lineHeight": {
+        "value": 28,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "H4",
+        "fontStyle": "Semi Bold"
+      },
+      "key": "1b19849cb652c33af87193b11f01bdd6f857a219",
+      "id": "S:1b19849cb652c33af87193b11f01bdd6f857a219,"
+    },
+    {
+      "name": "Medium/20 medium",
+      "size": 20,
+      "font": "Poppins",
+      "weight": "Medium",
+      "lineHeight": {
+        "value": 24,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 1",
+        "fontStyle": "Medium"
+      },
+      "key": "3bfb10f7e3bb9230dd92b0e2076f9c32ff7a78f6",
+      "id": "S:3bfb10f7e3bb9230dd92b0e2076f9c32ff7a78f6,"
+    },
+    {
+      "name": "Medium/18 medium",
+      "size": 18,
+      "font": "Poppins",
+      "weight": "Medium",
+      "lineHeight": {
+        "value": 22,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 2",
+        "fontStyle": "Medium"
+      },
+      "key": "b91ab07670db40d38b363daa56cf646a1a324703",
+      "id": "S:b91ab07670db40d38b363daa56cf646a1a324703,"
+    },
+    {
+      "name": "Medium/16 medium",
+      "size": 16,
+      "font": "Poppins",
+      "weight": "Medium",
+      "lineHeight": {
+        "value": 20,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 3",
+        "fontStyle": "Medium"
+      },
+      "key": "647f84431666f8461f6d35ca69408de1b5a2611d",
+      "id": "S:647f84431666f8461f6d35ca69408de1b5a2611d,"
+    },
+    {
+      "name": "Medium/14 medium",
+      "size": 14,
+      "font": "Poppins",
+      "weight": "Medium",
+      "lineHeight": {
+        "value": 18,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 4",
+        "fontStyle": "Medium"
+      },
+      "key": "9eb874a5d54ed6c70193eda5ca18da0c87b2d1df",
+      "id": "S:9eb874a5d54ed6c70193eda5ca18da0c87b2d1df,"
+    },
+    {
+      "name": "Medium/12 Medium",
+      "size": 12,
+      "font": "Poppins",
+      "weight": "Medium",
+      "lineHeight": {
+        "unit": "auto"
+      },
+      "key": "a49fd8219290725f0ffb5ebb706c44a63de19b33",
+      "id": "S:a49fd8219290725f0ffb5ebb706c44a63de19b33,"
+    },
+    {
+      "name": "regular/16 regular",
+      "size": 16,
+      "font": "Poppins",
+      "weight": "Regular",
+      "lineHeight": {
+        "value": 20,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 3",
+        "fontStyle": "Regular"
+      },
+      "key": "a5c79bed4e5730e46d16ea5c53d392041e8d68c5",
+      "id": "S:a5c79bed4e5730e46d16ea5c53d392041e8d68c5,"
+    },
+    {
+      "name": "regular/14 regular",
+      "size": 14,
+      "font": "Poppins",
+      "weight": "Regular",
+      "lineHeight": {
+        "value": 18,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 4",
+        "fontStyle": "Regular"
+      },
+      "key": "5d543fae827eb20465ff1d86aa49617e1ae7980b",
+      "id": "S:5d543fae827eb20465ff1d86aa49617e1ae7980b,"
+    },
+    {
+      "name": "regular/12 regular",
+      "size": 12,
+      "font": "Poppins",
+      "weight": "Regular",
+      "lineHeight": {
+        "value": 14,
+        "unit": "px"
+      },
+      "tokens": {
+        "fontSize": "Body 5",
+        "fontStyle": "Regular"
+      },
+      "key": "e96c907b8a26c457d0d2ed4ccbdf1526538cc464",
+      "id": "S:e96c907b8a26c457d0d2ed4ccbdf1526538cc464,"
+    }
+  ]
+}

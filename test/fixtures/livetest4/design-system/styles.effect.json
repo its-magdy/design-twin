@@ -1,0 +1,104 @@
+{
+  "exportedAt": "2026-09-23T08:48:19.574Z",
+  "file": "Design System - NERA (Copy)",
+  "colorProfile": "srgb",
+  "styles": [
+    {
+      "name": "SM",
+      "effects": [
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 1
+          },
+          "radius": 2,
+          "spread": -1
+        },
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 1
+          },
+          "radius": 3
+        }
+      ],
+      "key": "82236f98cefe787e4064fff66a74622297f294dc",
+      "id": "S:82236f98cefe787e4064fff66a74622297f294dc,"
+    },
+    {
+      "name": "md",
+      "effects": [
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 2
+          },
+          "radius": 4,
+          "spread": -2
+        },
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 4
+          },
+          "radius": 6,
+          "spread": -1
+        }
+      ],
+      "key": "c8501fd3b6f8a1901fd3946bf0ee9e7e8e7e16f0",
+      "id": "S:c8501fd3b6f8a1901fd3946bf0ee9e7e8e7e16f0,"
+    },
+    {
+      "name": "lg",
+      "effects": [
+        {
+          "type": "drop_shadow",
+          "color": "#e5e7eb1a",
+          "offset": {
+            "x": 0,
+            "y": 10
+          },
+          "radius": 15,
+          "spread": -3
+        }
+      ],
+      "key": "d7ba068bbae44575a4ee2ecb974a73bf223e20bd",
+      "id": "S:d7ba068bbae44575a4ee2ecb974a73bf223e20bd,"
+    },
+    {
+      "name": "XL",
+      "effects": [
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 8
+          },
+          "radius": 10,
+          "spread": -6
+        },
+        {
+          "type": "drop_shadow",
+          "color": "#0000001a",
+          "offset": {
+            "x": 0,
+            "y": 20
+          },
+          "radius": 25,
+          "spread": -5
+        }
+      ],
+      "key": "ff7ea8b5bc59d2e6c0f73c15d539d11976282e42",
+      "id": "S:ff7ea8b5bc59d2e6c0f73c15d539d11976282e42,"
+    }
+  ]
+}

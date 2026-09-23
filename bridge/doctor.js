@@ -93,12 +93,23 @@ const fileNames = (clients) => (clients || []).map((c) => c.file || "(unidentifi
 // correct, but doctor used to report both connections as a plain ✓, so the next command's refusal
 // came as a surprise (live run #2). A connected-and-ambiguous bridge is healthy AND needs a flag;
 // say both.
+//
+// Finding 327: also surfaces a stale plugin bundle here — the ONE place doctor already reports which
+// files are connected, so a version mismatch is seen in the same breath rather than needing a second
+// command. `pluginStale` is computed server-side (server-core.js's `describe()`), so doctor doesn't
+// duplicate the version-compare logic; it just relays whichever client(s) are behind.
 function connectedDetail(clients, prefix) {
   const detail = `${prefix}: ${fileNames(clients)}`;
-  if ((clients || []).length < 2) return { detail };
+  const stale = (clients || []).map((c) => c.pluginStale).filter(Boolean);
+  if ((clients || []).length < 2 && !stale.length) return { detail };
+  const bits = [];
+  if ((clients || []).length >= 2) bits.push(`${detail} — ${clients.length} files, so commands must say which`);
+  const nexts = [];
+  if ((clients || []).length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
+  if (stale.length) nexts.push(...new Set(stale));
   return {
-    detail: `${detail} — ${clients.length} files, so commands must say which`,
-    next: "add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)",
+    detail: bits.length ? bits[0] : detail,
+    next: nexts.length ? nexts.join(" ") : undefined,
   };
 }
 
@@ -144,7 +155,11 @@ function checkPlugin(r, waitSec) {
   if (r.skipped) return warn("plugin", title, `not checked — ${r.skipped}`, r.next);
   if (r.clients && r.clients.length) {
     const c = connectedDetail(r.clients, "connected");
-    return { id: "plugin", title, status: "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
+    // A stale plugin bundle IS a problem worth a warn, unlike the multi-client case (still `ok` — being
+    // connected to several files at once is healthy, it just needs `--client`). Only staleness demotes
+    // the status; an ambiguous-but-current multi-client connection stays `ok` exactly as before.
+    const stale = r.clients.some((cl) => cl.pluginStale);
+    return { id: "plugin", title, status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
   }
   if (r.badToken) {
     return fail("plugin", title, `a plugin IS running, but with a different token (fingerprint ${r.badToken.fingerprint || "none — its token field is empty"} vs expected ${r.expected})`, "run `dtwin --show-token`, paste it into the plugin's \"Bridge token\" field, Save");
@@ -362,9 +377,15 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
     if (st) {
       viaDaemon = true;
       // The daemon owns the bridge, so its view IS the answer — no second bridge needed (or possible).
+      // Status is `ok` unless a connected client is running a stale plugin bundle (finding 327) — that
+      // demotion is independent of, and composes with, the shadowed-token classification below (P4
+      // #328), which reads `pluginCheck.status` to decide whether the token warning is real.
       pluginCheck = st.pluginConnected
-        ? (() => { const c = connectedDetail(st.clients, "connected (through the daemon)");
-            return { id: "plugin", title: "Figma plugin", status: "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) }; })()
+        ? (() => {
+            const c = connectedDetail(st.clients, "connected (through the daemon)");
+            const stale = (st.clients || []).some((cl) => cl.pluginStale);
+            return { id: "plugin", title: "Figma plugin", status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
+          })()
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");
       add(pluginCheck);
     } else if (!probe.free) {

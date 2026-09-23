@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath } = require("../design-to-code/design-diff");
+const { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } = require("../design-to-code/design-diff");
 const { check, report } = require("./assert");
 
 const CLI = require.resolve("../design-to-code/design-diff.js");
@@ -91,10 +91,11 @@ check("a second --snapshot of DIFFERENT content is refused without --force, and 
   const forced = run("--snapshot", rel, "--force");
   const nowChanged = fs.readFileSync(snapFile, "utf8") !== firstBytes;
   const prevKept = fs.existsSync(snapFile + ".prev") && fs.readFileSync(snapFile + ".prev", "utf8") === firstBytes;
-  // Refusing to overwrite is reported the same way "nothing to snapshot yet" is (a warning on stderr,
-  // exit 0) — --snapshot never hard-fails a whole `--snapshot a b c` batch because ONE of several files
-  // needed --force; it just leaves that one alone and says so.
-  return first.status === 0 && second.status === 0 && /refusing to overwrite/.test(second.stderr) && stillFirst && forced.status === 0 && nowChanged && prevKept;
+  // Finding 322: a refusal exits 1 — a script driving `--snapshot` (sync-design step 2) must be able
+  // to see that it didn't get the baseline it asked for, not just a human reading stderr. It still
+  // does not hard-fail the WHOLE `--snapshot a b c` batch just because one of several files needed
+  // --force — every file is still attempted, and this is a single-file batch either way.
+  return first.status === 0 && second.status === 1 && /refusing to overwrite/.test(second.stderr) && stillFirst && forced.status === 0 && nowChanged && prevKept;
 })());
 check("re-running --snapshot with UNCHANGED content is a silent no-op, not an error", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-force-noop-"));
@@ -113,18 +114,27 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
 // pages/index.json it is indexed under.
 console.log("CLI — --snapshot copies the sibling set (finding 206):");
 check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
+  // Finding 320: the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
+  // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
+  // header comment) — not flat alongside them, which is what this fixture used to (wrongly) assume.
   const { DESIGN_SYSTEM_FILES } = require("../bridge/design-system-layout.js");
   const names = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });
-  for (const n of names) fs.writeFileSync(path.join(dsDir, n), JSON.stringify({ file: n }));
+  for (const n of names) {
+    const at = n === DESIGN_SYSTEM_FILES.MANIFEST ? path.join(root, "design", "export", n) : path.join(dsDir, n);
+    fs.writeFileSync(at, JSON.stringify({ file: n }));
+  }
   const rel = path.join("design", "export", "design-system", "tokens.json");
   const run = (...a) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
   const r = run("--snapshot", rel);
   const syncDir = path.join(root, "design", ".sync");
-  const gotAll = names.every((n) => fs.existsSync(path.join(syncDir, "export__design-system__" + n)));
-  return r.status === 0 && gotAll;
+  const gotAll = names.every((n) => {
+    const flat = n === DESIGN_SYSTEM_FILES.MANIFEST ? "export__" + n : "export__design-system__" + n;
+    return fs.existsSync(path.join(syncDir, flat));
+  });
+  return r.status === 0 && !/not found/.test(r.stderr) && gotAll;
 })());
 check("snapshotting a screen file also snapshots its .vars.json/.assets.json and pages/index.json", (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-screen-siblings-"));
@@ -211,5 +221,89 @@ check("a re-drawn icon (same node id, same path, different bytes) is a change", 
 })());
 check("an unknown flag is an error, not a silently different command", (() => { const root = project(); put(root, "v1", "2026-01-01T00:00:00Z"); const r = cli(root, "design/login.json", "--agains", "x.json"); return r.status === 2 && /unknown flag --agains/.test(r.stderr); })());
 check("a file of an unknown kind exits 2 with the reason", (() => { const root = project(); fs.writeFileSync(path.join(root, "a.json"), "{}"); fs.writeFileSync(path.join(root, "b.json"), "{}"); const r = cli(root, "a.json", "--against", "b.json"); return r.status === 2 && /nothing here can be diffed/.test(r.stderr); })());
+
+// ---------------------------------------------------------------- P5 round 4: style + hygiene diffs (finding 312)
+// sync-design step 4 lists a diff command for EVERY design-system file a --design-system pull writes,
+// including the four styles.*.json and hygiene.json — and all five used to exit 2 with "nothing here
+// can be diffed", so a typography-only or effect-only design-system change (or a new/resolved hygiene
+// warning) was exactly as undetectable as the skill warns it would be without them. Fixtures are the
+// REAL design-system files from the livetest-4 export (test/fixtures/livetest4/design-system/).
+console.log("style + hygiene diffs (finding 312, real design-system fixtures):");
+const FIX_DS = path.join(__dirname, "fixtures", "livetest4", "design-system");
+const readFix = (n) => JSON.parse(fs.readFileSync(path.join(FIX_DS, n), "utf8"));
+check("styles.text.json: a real design-system file is recognised and diffs cleanly (isStyles)", (() => {
+  const a = readFix("styles.text.json"), b = clone(a);
+  const d = diffDocs(a, b);
+  return d.kind === "styles" && d.summary.added === 0 && d.summary.removed === 0 && d.summary.changed === 0;
+})());
+check("styles.text.json: a changed field on an existing style is reported, keyed by style key", (() => {
+  const a = readFix("styles.text.json"), b = clone(a);
+  b.styles[0].size = b.styles[0].size + 8;
+  const d = diffStyles(a, b);
+  return d.summary.changed === 1 && d.changed[0].key === a.styles[0].key && d.changed[0].fields.some((f) => f.field === "size");
+})());
+check("styles.text.json: a removed style and an added one are both seen", (() => {
+  const a = readFix("styles.text.json"), b = clone(a);
+  const removedName = b.styles.pop().name;
+  b.styles.push({ name: "Brand New Style", size: 12, font: "Poppins", weight: "Regular", key: "brandnewkey123", id: "S:brandnewkey123," });
+  const d = diffStyles(a, b);
+  return d.removed.length === 1 && d.removed[0].name === removedName && d.added.length === 1 && d.added[0].name === "Brand New Style";
+})());
+check("styles.effect.json: an effect array change is a field diff, not a blob", (() => {
+  const a = readFix("styles.effect.json"), b = clone(a);
+  b.styles[0].effects[0].radius = 999;
+  const d = diffStyles(a, b);
+  return d.summary.changed === 1 && d.changed[0].fields.some((f) => /effects/.test(f.field));
+})());
+check("styles.paint.json / styles.grid.json (empty `styles: []` in this real export): recognised, 'Nothing changed'", (() => {
+  const paint = readFix("styles.paint.json"), grid = readFix("styles.grid.json");
+  const dp = diffDocs(paint, clone(paint)), dg = diffDocs(grid, clone(grid));
+  return dp.kind === "styles" && /Nothing changed/.test(markdown(dp, "x")) && dg.kind === "styles" && /Nothing changed/.test(markdown(dg, "x"));
+})());
+check("hygiene.json: a real hygiene file is recognised (isHygiene) and 'nothing changed' when identical", (() => {
+  const a = readFix("hygiene.json");
+  const d = diffDocs(a, clone(a));
+  return d.kind === "hygiene" && d.summary.added === 0 && d.summary.removed === 0;
+})());
+check("hygiene.json: a new warning line is 'added', a resolved one is 'removed' — order doesn't matter", (() => {
+  const a = readFix("hygiene.json"), b = clone(a);
+  const resolved = b.hygiene.shift(); // the first line is no longer a problem
+  b.hygiene.push("ALL_SCOPES on 'Brand New Variable' (pollutes every picker)"); // a new one appeared
+  b.hygiene.reverse(); // order is not meaningful — must not read as N changes
+  const d = diffHygiene(a, b);
+  return d.added.length === 1 && d.added[0].includes("Brand New Variable") && d.removed.length === 1 && d.removed[0] === resolved;
+})());
+check("markdown renders styles/hygiene kinds without throwing, and names the right sections", (() => {
+  const a = readFix("styles.text.json"), b = clone(a); b.styles[0].size += 1;
+  const md1 = markdown(diffStyles(a, b), "styles.text.json");
+  const h = readFix("hygiene.json"), hb = clone(h); hb.hygiene.push("new line");
+  const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
+  return /Styles changed/.test(md1) && /New warning/.test(md2);
+})());
+check("CLI end to end: every one of sync-design step 4's design-system diff commands succeeds on the real fixtures", (() => {
+  const root = project();
+  const dsDir = path.join(root, "design", "export", "design-system");
+  fs.mkdirSync(dsDir, { recursive: true });
+  const files = ["tokens.json", "styles.text.json", "styles.paint.json", "styles.effect.json", "styles.grid.json", "hygiene.json"];
+  // tokens.json isn't in the trimmed fixture set (already covered by the tokens tests above) — a
+  // minimal stand-in is enough here, since this check is about the OTHER five exiting cleanly.
+  fs.writeFileSync(path.join(dsDir, "tokens.json"), JSON.stringify({ variables: [] }));
+  for (const f of files.slice(1)) fs.writeFileSync(path.join(dsDir, f), fs.readFileSync(path.join(FIX_DS, f)));
+  let allOk = true;
+  for (const f of files) {
+    const rel = path.join("design", "export", "design-system", f);
+    const r = cli(root, rel);
+    if (r.status !== 0 && !(r.status === 2 && /no snapshot/.test(r.stderr))) allOk = false; // first run has no baseline yet — that's a separate, already-tested exit 2
+  }
+  // Now snapshot + re-run: this is the real step-4 shape (snapshot in step 2, diff after step 3's re-pull).
+  cli(root, "--snapshot", ...files.map((f) => path.join("design", "export", "design-system", f)));
+  let allDiffOk = true;
+  for (const f of files) {
+    const rel = path.join("design", "export", "design-system", f);
+    const r = cli(root, rel);
+    if (r.status !== 0) allDiffOk = false;
+  }
+  return allOk && allDiffOk;
+})());
 
 report();

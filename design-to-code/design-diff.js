@@ -218,14 +218,56 @@ function diffCatalog(oldDoc, newDoc) {
 }
 const CATALOG_IGNORED = new Set(["page", "pageId", "box", "renderBox"]);
 
+// The four style files (styles.paint/text/effect/grid.json — bridge/design-system-layout.js) share one
+// shape: `{ exportedAt, file, colorProfile, styles: [{ name, key, id, ...fields }] }`. Finding 312:
+// sync-design's own step 4 lists a diff command for each of these (and for hygiene.json below), and
+// all five used to exit 2 with "nothing here can be diffed" — so a typography-only or effect-only
+// design-system change was exactly as undetectable as the skill warns it would be without them. Keyed
+// by `key` (Figma's style key — stable across pulls; PaintStyle/TextStyle/EffectStyle/GridStyle all
+// have one), falling back to `name` for a style that somehow has none.
+function styleKey(s) {
+  return (s && typeof s.key === "string" && s.key) ? "k:" + s.key : "n:" + String((s && s.name) || "");
+}
+const STYLE_IGNORED = new Set(["key", "id"]);
+function diffStyles(oldDoc, newDoc) {
+  const keyed = (doc) => new Map((doc.styles || []).map((s) => [styleKey(s), s]));
+  const A = keyed(oldDoc), B = keyed(newDoc);
+  const brief = (s) => ({ key: s.key, id: s.id, name: s.name });
+  const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief(s));
+  const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief(s));
+  const changed = [];
+  for (const [k, b] of B) {
+    const a = A.get(k);
+    if (!a) continue;
+    const fields = [];
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!STYLE_IGNORED.has(key)) fields.push(...fieldDiffs(key, a[key], b[key], "style"));
+    if (fields.length) changed.push({ ...brief(b), fields });
+  }
+  return { kind: "styles", summary: { added: added.length, removed: removed.length, changed: changed.length }, warnings: [], added, removed, changed };
+}
+
+// hygiene.json is `{ ..., hygiene: [<sentence>, ...] }` — a flat list of lint-style lines, not keyed
+// records, so the diff is by LINE: a sentence present in one and not the other is added/removed. Order
+// doesn't carry meaning here (collect.ts appends as it walks), so it's compared as a set.
+function diffHygiene(oldDoc, newDoc) {
+  const A = new Set((oldDoc.hygiene || []).map(String)), B = new Set((newDoc.hygiene || []).map(String));
+  const added = [...B].filter((h) => !A.has(h));
+  const removed = [...A].filter((h) => !B.has(h));
+  return { kind: "hygiene", summary: { added: added.length, removed: removed.length, changed: 0 }, warnings: [], added, removed, changed: [] };
+}
+
 const isTokens = (doc) => Array.isArray(doc && doc.variables);
 const isCatalog = (doc) => Array.isArray(doc && doc.components);
+const isStyles = (doc) => Array.isArray(doc && doc.styles);
+const isHygiene = (doc) => Array.isArray(doc && doc.hygiene);
 const isScreen = (doc) => !!doc && (Array.isArray(doc.nodes) || (doc.tree && typeof doc.tree === "object"));
 function diffDocs(oldDoc, newDoc, opts) {
   if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
   if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
+  if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
+  if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
   if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  throw new Error("not a screen export, a token file or a component catalog (no `tree`/`nodes`, `variables` or `components` at the top level) — nothing here can be diffed");
+  throw new Error("not a screen export, a token file, a component catalog, a style sheet or hygiene.json (no `tree`/`nodes`, `variables`, `components`, `styles` or `hygiene` at the top level) — nothing here can be diffed");
 }
 function markdown(d, label) {
   const s = d.summary, L = [`# What changed — ${label}`, ""];
@@ -246,6 +288,18 @@ function markdown(d, label) {
     if (d.changed.length) L.push("## Components changed", ...d.changed.flatMap((c) => [one(c), ...c.fields.map(line)]), "");
     if (d.added.length) L.push("## Components added", ...d.added.map(one), "");
     if (d.removed.length) L.push("## Components removed", ...d.removed.map(one), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "styles") {
+    const one = (s) => `- **${s.name}** (key \`${s.key || s.id}\`)`;
+    if (d.changed.length) L.push("## Styles changed", ...d.changed.flatMap((s) => [one(s), ...s.fields.map(line)]), "");
+    if (d.added.length) L.push("## Styles added", ...d.added.map(one), "");
+    if (d.removed.length) L.push("## Styles removed", ...d.removed.map(one), "");
+    return L.join("\n") + "\n";
+  }
+  if (d.kind === "hygiene") {
+    if (d.added.length) L.push("## New warning(s)", ...d.added.map((h) => `- ${h}`), "");
+    if (d.removed.length) L.push("## Resolved warning(s)", ...d.removed.map((h) => `- ${h}`), "");
     return L.join("\n") + "\n";
   }
   if (d.changed.length) L.push("## Changed", ...d.changed.flatMap((c) => [`- **${c.path}** (\`${c.id}\`, ${c.categories.join(" + ")})`, ...c.fields.map(line)]), "");
@@ -321,6 +375,18 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     let assets = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")); } catch { /* older snapshot, or no assets */ }
     found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
+  // Finding 322: `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
+  // (design-to-code/design-diff.js's own --snapshot handler) specifically so it stays available as a
+  // diff baseline — but `previous()` never looked for it. The exact shape this closes: snapshot taken
+  // (B0) -> re-pull (E1) -> a MISTAKEN second `--snapshot` refused (dest still B0) -> `--force` (dest
+  // becomes E1, B0 saved as dest.prev) -> the current export IS E1, so the primary snapshot is now the
+  // SAME export as the file on disk and gets filtered out below exactly like any other same-export
+  // baseline — leaving `.prev` (B0) as the only genuinely older copy, which used to go unmentioned and
+  // unused ("There is no OLDER export to compare against" while it sat right there).
+  if (fs.existsSync(snap + ".prev")) {
+    let assets = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")); } catch { /* no assets sidecar was kept */ }
+    try { found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); } catch { /* corrupt .prev — ignore rather than fail the whole diff */ }
+  }
   try {
     const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
@@ -368,10 +434,20 @@ function siblingFilesOf(f) {
   const base = path.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    // design-system/{tokens,styles.*,components.*,hygiene,design-system}.json — all 9 live flat in
-    // the same design-system/ directory (bridge/design-system-layout.js), so every sibling is just
-    // "the other names in this same dir".
-    for (const name of DS_FILE_NAMES) if (name !== base) out.push(path.relative(process.cwd(), path.join(dir, name)));
+    // 8 of the 9 design-system files (tokens/styles.*/components.*/hygiene) live flat in the
+    // design-system/ SUBDIRECTORY together — but the 9th, the MANIFEST (`design-system.json`), lives
+    // ONE LEVEL UP, at the export ROOT beside `design-system/` and `pages/`, not inside it (see
+    // bridge/design-system-layout.js's own header: "design-system.json stays [at the root]... The
+    // parts live in a design-system/ SUBDIRECTORY, not next to design-system.json"). Finding 320: this
+    // function used to look for EVERY sibling — including the manifest — inside `dir` (design-system/),
+    // so a snapshot of `tokens.json` always printed a spurious "design-system/design-system.json not
+    // found" for a file that both exists and was never at that path to begin with.
+    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
+    for (const name of DS_FILE_NAMES) {
+      if (name === base) continue;
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
+      out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
+    }
     return out;
   }
   // A screen export: pages/<Page>/<Screen>__<id>.json, with .vars.json / .assets.json siblings of the
@@ -419,6 +495,10 @@ function main(argv) {
     //     one definition of that set, so this can never drift from what a --design-system pull
     //     actually writes).
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
+    // Finding 322: a refusal used to exit 0 — indistinguishable, to a script, from every file being
+    // snapshotted successfully. sync-design's own step 2 is meant to run unattended before a re-pull;
+    // a refusal it can't see means the user finds out only later, when the diff is wrong.
+    let refused = 0;
     for (const f of files) {
       if (!fs.existsSync(f)) { console.error(`design-diff: ${f} not found — nothing to snapshot (first pull?)`); continue; }
       const dest = snapshotPath(f);
@@ -436,6 +516,7 @@ function main(argv) {
       if (fs.existsSync(dest)) { try { identical = Buffer.compare(fs.readFileSync(dest), fs.readFileSync(f)) === 0; } catch { /* treat as different */ } }
       if (fs.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change — refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        refused++;
         continue;
       }
       if (fs.existsSync(dest) && !identical && force) {
@@ -457,6 +538,7 @@ function main(argv) {
       } catch { /* not JSON we understand — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
+    if (refused) process.exitCode = 1; // exitCode, not exit(): let every already-printed line flush first
     return;
   }
   const take = (flag) => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
@@ -487,4 +569,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
