@@ -41,7 +41,7 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 
 ```
 node test/design-to-code.test.js       # expect: 292/292 checks passed, exit 0
-node test/audit.test.js                # expect: 96/96 checks passed, exit 0
+node test/audit.test.js                # expect: 101/101 checks passed, exit 0
 node test/verify-build.test.js         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
@@ -50,7 +50,7 @@ node test/plan-skeleton.test.js        # expect: 31/31 checks passed, exit 0 —
                                        # helpers (visibility, rootsOf) every skill and verify-build.js walk with
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.js          # expect: 56/56 checks passed, exit 0 — the JOIN between a screen and the
+node test/cross-check.test.js          # expect: 63/63 checks passed, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
@@ -365,7 +365,7 @@ next to it. Fixed to `.every()` (unitless only when *no* scope contradicts it); 
 | `cd figma-plugin && npm run build` | Rebuild `code.js` from `src/*.ts` |
 | `node test/design-to-code.test.js` | Offline design-to-code tooling test (tokens/validate/drift/bootstrap/get-component/tailwind) — expect `288/288` |
 | `node test/identity.test.js` | Token + component identity on livetest-3's real export (key, not name; re-keyed catalogs) — expect `48/48` |
-| `node test/cross-check.test.js` | Screen-vs-design-system join — expect `47/47` |
+| `node test/cross-check.test.js` | Screen-vs-design-system join — expect `63/63` |
 | `node test/verify-screen.test.js` | Per-node verification and its verdict — expect `44/44` |
 | `node test/bridge.test.js` | Offline bridge test (handshake auth + seed CLI + request-timeout + figma-pull arg parsing + shared write-out writer + daemon lifecycle/queueing/framing + snapshot freshness stamp + `--list-libraries` parsing/rendering
 and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`--client`/`--list-clients` parsing + generated-bundle/source parity + component detail split + snapshot shapes + the multi-client doctor note + the merging `variables.json`, the nested single-screen layout and the per-screen asset index) — expect `529/529` |

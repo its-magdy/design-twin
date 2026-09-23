@@ -300,7 +300,34 @@ var require_slice_sources = __commonJS({
       }
       return out;
     }
-    module2.exports = { sourcesOf };
+    function variablesContext(screenFiles, varsFile, fs2, path2, opts) {
+      const readJson = (f) => {
+        try {
+          return f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
+        } catch (_) {
+          return null;
+        }
+      };
+      const files = screenFiles || [];
+      const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
+      let variablesPath = varsFile || null;
+      if (!variablesPath && files.length) {
+        const exportRoot = path2.resolve(path2.dirname(files[0]), "..", "..");
+        const rootVars = path2.join(exportRoot, "variables.json");
+        const sibling = path2.join(path2.dirname(files[0]), "variables.json");
+        if (fs2.existsSync(rootVars)) variablesPath = rootVars;
+        else if (fs2.existsSync(sibling)) variablesPath = sibling;
+        else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
+      }
+      const variablesDoc = readJson(variablesPath);
+      let staleLegacy = null;
+      if (files.length) {
+        const legacy = path2.join(path2.resolve(path2.dirname(files[0]), "..", ".."), "..", "variables.json");
+        if (fs2.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
+      }
+      return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs2, path2) : null, staleLegacy };
+    }
+    module2.exports = { sourcesOf, variablesContext };
   }
 });
 
@@ -501,7 +528,8 @@ var require_cross_check = __commonJS({
           push(
             "blocker",
             "token-name-collision",
-            `'${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""}${c.alsoKnownAs ? ` and the design system's '${c.alsoKnownAs}'` : ""} share a name but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
+            // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+            `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
             { token: c.name, key: c.key, alsoKnownAs: c.alsoKnownAs, screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
           );
         }
@@ -598,7 +626,6 @@ var require_cross_check = __commonJS({
           }
           if (best && cands.length > 1) {
             coverage.ambiguousName++;
-            coverage.unmatched++;
             coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
           } else if (best && (best.score >= 0.5 || cands.length === 1)) {
             coverage.matchedByName++;
@@ -624,13 +651,33 @@ var require_cross_check = __commonJS({
         rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
         const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
         coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;
+        const proposedNames = new Set(rekeyed ? rekey.proposals.map((r) => r.name) : []);
+        const buckets = { localKey: 0, libraryKey: 0, proposed: 0, nameOnly: 0, ambiguous: 0, newWork: 0 };
+        for (const e of coverage.entries) {
+          const b = e.matchedBy === "key" ? e.scope === "local" ? "localKey" : "libraryKey" : proposedNames.has(e.setName) ? "proposed" : e.matchedBy === "name" ? "nameOnly" : e.ambiguous ? "ambiguous" : "newWork";
+          e.bucket = b;
+          buckets[b]++;
+        }
+        coverage.buckets = buckets;
+        const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + norm(i.setName)));
+        const hiddenOnly = /* @__PURE__ */ new Set();
+        const everyInstance = (n) => {
+          if (!n || typeof n !== "object") return;
+          if (n.type === "INSTANCE" && n.mainComponent) {
+            const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + norm(mc.setName || mc.name);
+            if (!visibleSets.has(id)) hiddenOnly.add(id);
+          }
+          for (const c of n.children || []) everyInstance(c);
+        };
+        for (const s of screens) for (const root of rootsOf2(s.doc)) everyInstance(root);
+        coverage.hiddenOnly = hiddenOnly.size;
         if (rekeyed) {
           const s = rekey.summary, props = rekey.proposals;
           const residual = rekey.rows.filter((r) => !r.match);
           push(
             "blocker",
             "catalog-rekeyed",
-            `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) have no catalog twin and stay new work` + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run \`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+            `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in components.local.json` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run \`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
             { rekey: s, proposals: props.length }
           );
         } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
@@ -650,7 +697,6 @@ var require_cross_check = __commonJS({
         } else {
           push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to components.local.json by key.`, {});
         }
-        const proposedNames = new Set(coverage.rekey && coverage.rekey.rekeyed ? rekey.proposals.map((r) => r.name) : []);
         const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
         if (named.length) {
           push(
@@ -903,14 +949,16 @@ var require_cross_check = __commonJS({
       if (c && c.distinct) {
         L.push("## Component coverage of THIS screen", "");
         L.push(`| | count |`, `|---|---|`);
-        L.push(`| instances on the screen | ${c.instances} |`);
-        L.push(`| distinct components | ${c.distinct} |`);
-        L.push(`| in **components.local.json** by key (verified) | ${c.matchedByLocalKey} (${c.localPct}%) |`);
-        L.push(`| in components.library.json by key (a shared third-party set) | ${c.matchedByKey - c.matchedByLocalKey} |`);
-        L.push(`| by name only (**unverified**) | ${c.matchedByName} |`);
-        L.push(`| name shared with several catalog entries \u2014 left unmatched | ${c.ambiguousName} |`);
-        L.push(`| no match at all \u2014 new work | ${c.unmatched} |`);
-        if (c.rekey) L.push(`| same NAME **and** prop signature as a catalog entry (re-keyed copy?) | ${c.rekey.proposed} of ${c.rekey.withCandidates} name twin(s) |`);
+        L.push(`| visible instances on the screen | ${c.instances} |`);
+        L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
+        const b = c.buckets || {};
+        L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
+        L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
+        if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry \u2014 proposed, confirm below | ${b.proposed || 0} |`);
+        L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
+        L.push(`| name shared with several catalog entries \u2014 left unmatched | ${b.ambiguous || 0} |`);
+        L.push(`| no match at all \u2014 new work | ${b.newWork || 0} |`);
+        if (c.hiddenOnly) L.push(`| *(not counted: components used only on hidden layers \u2014 not built)* | ${c.hiddenOnly} |`);
         L.push("");
       }
       if (res.componentProposals && res.componentProposals.length) {
@@ -926,7 +974,9 @@ var require_cross_check = __commonJS({
         }
         L.push("");
         if (res.componentResidual && res.componentResidual.length) {
-          L.push(`**Not in the catalog (${res.componentResidual.length}) \u2014 new work:** ` + res.componentResidual.map((r) => `\`${r.name}\``).join(", "), "");
+          const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
+          const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
+          L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` + (known.length ? `${known.length} are in (or named like an entry of) components.library.json \u2014 third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") + `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
         }
       }
       for (const sev of ["blocker", "warning", "info"]) {
@@ -978,27 +1028,17 @@ var require_cross_check = __commonJS({
         process.exit(2);
       }
       const maybe = (f) => f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
-      const screens = argv.map((f) => ({
-        doc: readJsonFile(f, "screen export"),
-        label: path2.basename(f, ".json"),
-        vars: maybe(f.replace(/\.json$/, ".vars.json"))
-      }));
+      const ctx = require_slice_sources().variablesContext(argv, varsFile, fs2, path2);
+      const screens = argv.map((f, i) => ({ doc: readJsonFile(f, "screen export"), label: path2.basename(f, ".json"), vars: ctx.own[i] }));
       const dsBase = dsDir || "design/design-system";
-      const exportRoot = path2.resolve(path2.dirname(argv[0]), "..", "..");
-      const exportRootVarsPath = path2.join(exportRoot, "variables.json");
-      const siblingVarsPath = path2.join(path2.dirname(argv[0]), "variables.json");
-      let variablesPath = varsFile;
-      if (!variablesPath && fs2.existsSync(exportRootVarsPath)) variablesPath = exportRootVarsPath;
-      if (!variablesPath && fs2.existsSync(siblingVarsPath)) variablesPath = siblingVarsPath;
-      const variablesDoc = maybe(variablesPath);
+      const { variablesPath, variablesDoc } = ctx;
       if (variablesPath) console.error(`variables: ${variablesPath}`);
-      const staleLegacyVars = path2.join(exportRoot, "..", "variables.json");
-      if (fs2.existsSync(staleLegacyVars) && path2.resolve(staleLegacyVars) !== path2.resolve(variablesPath || "")) {
-        console.error(`warn  ${staleLegacyVars} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
+      if (ctx.staleLegacy) {
+        console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
       }
       const res = crossCheck({
         screens,
-        sliceSources: variablesDoc ? require_slice_sources().sourcesOf(variablesDoc, variablesPath, fs2, path2) : null,
+        sliceSources: ctx.sliceSources,
         variables: variablesDoc,
         variablesPath,
         tokens: maybe(path2.join(dsBase, "tokens.json")),
@@ -1442,8 +1482,12 @@ var require_audit = __commonJS({
       if (opts.designSystem || opts.variables) {
         const { crossCheck } = require_cross_check();
         crossFile = crossCheck({
-          screens: docs.map((d, i) => ({ doc: d && d.doc !== void 0 ? d.doc : d, label: d && d.label || `input${i}` })),
+          // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
+          // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
+          // without them this gate raised another screen's `Space 4` blocker against Job Roles).
+          screens: docs.map((d, i) => ({ doc: d && d.doc !== void 0 ? d.doc : d, label: d && d.label || `input${i}`, vars: d && d.vars || null })),
           variables: opts.variables || null,
+          sliceSources: opts.sliceSources || null,
           tokens: opts.designSystem && opts.designSystem.tokens || null,
           components: opts.designSystem && opts.designSystem.components || opts.catalog || null,
           componentsLibrary: opts.designSystem && opts.designSystem.componentsLibrary || null,
@@ -1520,7 +1564,7 @@ var require_audit = __commonJS({
             );
           }
         }
-        const cfBlock = cf.findings.filter((f) => f.severity !== "info");
+        const cfBlock = cf.findings.filter((f) => f.severity !== "info" || f.code === "token-name-collision-elsewhere");
         if (cfBlock.length) {
           for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}`);
           L.push("");
@@ -1629,7 +1673,8 @@ var require_audit = __commonJS({
       }
       const { readJsonFile } = require_catalog_input();
       const read = (f, what) => readJsonFile(f, what);
-      const inputs = argv.map((f) => ({ doc: read(f, "screen export"), label: path2.basename(f, ".json") }));
+      const ctx = require_slice_sources().variablesContext(argv, varsFile, fs2, path2, { sliceFallback: true });
+      const inputs = argv.map((f, i) => ({ doc: read(f, "screen export"), label: path2.basename(f, ".json"), vars: ctx.own[i] }));
       const catalog = catalogFile ? read(catalogFile, "component catalog") : void 0;
       const maybe = (f) => f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
       const designSystem = dsDir ? {
@@ -1638,9 +1683,9 @@ var require_audit = __commonJS({
         componentsLibrary: maybe(path2.join(dsDir, "components.library.json")),
         stylesText: maybe(path2.join(dsDir, "styles.text.json"))
       } : void 0;
-      const exportRoot = path2.resolve(path2.dirname(argv[0]), "..", "..");
-      const variables = maybe(varsFile) || maybe(path2.join(exportRoot, "variables.json")) || maybe(argv[0].replace(/\.json$/, ".vars.json")) || maybe(path2.join(path2.dirname(argv[0]), "variables.json"));
-      const res = audit(inputs, { platform, catalog, designSystem, variables, grid: gridArg ? Number(gridArg) : void 0 });
+      const variables = ctx.variablesDoc;
+      if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
+      const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid: gridArg ? Number(gridArg) : void 0 });
       const md = jsonOnly ? "" : toMarkdown(res);
       const outBase = out || (argv[0] ? path2.join("design", "audit", path2.basename(argv[0], ".json")) : void 0);
       if (jsonOnly) {

@@ -399,7 +399,34 @@ var require_slice_sources = __commonJS({
       }
       return out;
     }
-    module2.exports = { sourcesOf };
+    function variablesContext(screenFiles, varsFile, fs, path, opts) {
+      const readJson = (f) => {
+        try {
+          return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+        } catch (_) {
+          return null;
+        }
+      };
+      const files = screenFiles || [];
+      const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
+      let variablesPath = varsFile || null;
+      if (!variablesPath && files.length) {
+        const exportRoot = path.resolve(path.dirname(files[0]), "..", "..");
+        const rootVars = path.join(exportRoot, "variables.json");
+        const sibling = path.join(path.dirname(files[0]), "variables.json");
+        if (fs.existsSync(rootVars)) variablesPath = rootVars;
+        else if (fs.existsSync(sibling)) variablesPath = sibling;
+        else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
+      }
+      const variablesDoc = readJson(variablesPath);
+      let staleLegacy = null;
+      if (files.length) {
+        const legacy = path.join(path.resolve(path.dirname(files[0]), "..", ".."), "..", "variables.json");
+        if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
+      }
+      return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs, path) : null, staleLegacy };
+    }
+    module2.exports = { sourcesOf, variablesContext };
   }
 });
 

@@ -300,7 +300,9 @@ function crossCheck(input) {
       push(
         "blocker",
         "token-name-collision",
-        `'${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""}${c.alsoKnownAs ? ` and the design system's '${c.alsoKnownAs}'` : ""} share a name but resolve DIFFERENTLY: ` +
+        // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+        `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ` +
+          `${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: ` +
           `screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` +
           (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " — no mode name is shared and the two value sets are disjoint. ") +
           `Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.` +
@@ -440,7 +442,6 @@ function crossCheck(input) {
       // is carried only as a suggestion.
       if (best && cands.length > 1) {
         coverage.ambiguousName++;
-        coverage.unmatched++;
         coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
       } else if (best && (best.score >= 0.5 || cands.length === 1)) {
         coverage.matchedByName++;
@@ -471,6 +472,38 @@ function crossCheck(input) {
     rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
     const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
     coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;
+
+    // ONE bucket per distinct visible component (livetest-3 #318: the table's rows summed to 62 on a
+    // 41-component screen, because an ambiguous name was counted as "left unmatched" AND as "new work",
+    // and names the re-key pass had proposed still sat in the old buckets). Order of precedence: key
+    // (local, then library) > confirmed-able proposal > unverified name twin > ambiguous name > new.
+    const proposedNames = new Set(rekeyed ? rekey.proposals.map((r) => r.name) : []);
+    const buckets = { localKey: 0, libraryKey: 0, proposed: 0, nameOnly: 0, ambiguous: 0, newWork: 0 };
+    for (const e of coverage.entries) {
+      const b = e.matchedBy === "key" ? (e.scope === "local" ? "localKey" : "libraryKey")
+        : proposedNames.has(e.setName) ? "proposed"
+        : e.matchedBy === "name" ? "nameOnly"
+        : e.ambiguous ? "ambiguous"
+        : "newWork";
+      e.bucket = b;
+      buckets[b]++;
+    }
+    coverage.buckets = buckets; // sums to coverage.distinct, by construction
+    // Components used ONLY on hidden layers: not built, so not in any bucket — but said, so the gap
+    // between "instances in the file" and "components to build" is explained rather than silent.
+    const visibleSets = new Set(instances.map((i) => i.setKey || i.key || "name:" + norm(i.setName)));
+    const hiddenOnly = new Set();
+    // (`walk` skips hidden layers, so this one count walks everything itself.)
+    const everyInstance = (n) => {
+      if (!n || typeof n !== "object") return;
+      if (n.type === "INSTANCE" && n.mainComponent) {
+        const mc = n.mainComponent, id = mc.setKey || mc.key || "name:" + norm(mc.setName || mc.name);
+        if (!visibleSets.has(id)) hiddenOnly.add(id);
+      }
+      for (const c of n.children || []) everyInstance(c);
+    };
+    for (const s of screens) for (const root of rootsOf(s.doc)) everyInstance(root);
+    coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyed) {
       const s = rekey.summary, props = rekey.proposals;
       const residual = rekey.rows.filter((r) => !r.match);
@@ -483,7 +516,10 @@ function crossCheck(input) {
           `component key), or the library was re-published. Proposed matches (confirm each before reuse — nothing is auto-accepted): ` +
           props.slice(0, 12).map((r) => `'${r.name}' → ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
           (props.length > 12 ? `, … (${props.length} in all — see componentProposals)` : "") + `. ` +
-          `${residual.length} name(s) have no catalog twin and stay new work` +
+          `${residual.length} name(s) are not in components.local.json` +
+          (buckets.libraryKey + buckets.nameOnly
+            ? ` — of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work`
+            : ` and stay new work`) +
           (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", …" : ""})` : "") + `. ` +
           `To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run ` +
           `\`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
@@ -524,7 +560,6 @@ function crossCheck(input) {
     }
     // ONE finding for the whole name-matched set. Emitting one per component produced 37 identical
     // paragraphs on the live run — a list nobody reads is the same as no list.
-    const proposedNames = new Set(coverage.rekey && coverage.rekey.rekeyed ? rekey.proposals.map((r) => r.name) : []);
     const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
     if (named.length) {
       push(
@@ -847,14 +882,16 @@ function toMarkdown(res) {
   if (c && c.distinct) {
     L.push("## Component coverage of THIS screen", "");
     L.push(`| | count |`, `|---|---|`);
-    L.push(`| instances on the screen | ${c.instances} |`);
-    L.push(`| distinct components | ${c.distinct} |`);
-    L.push(`| in **components.local.json** by key (verified) | ${c.matchedByLocalKey} (${c.localPct}%) |`);
-    L.push(`| in components.library.json by key (a shared third-party set) | ${c.matchedByKey - c.matchedByLocalKey} |`);
-    L.push(`| by name only (**unverified**) | ${c.matchedByName} |`);
-    L.push(`| name shared with several catalog entries — left unmatched | ${c.ambiguousName} |`);
-    L.push(`| no match at all — new work | ${c.unmatched} |`);
-    if (c.rekey) L.push(`| same NAME **and** prop signature as a catalog entry (re-keyed copy?) | ${c.rekey.proposed} of ${c.rekey.withCandidates} name twin(s) |`);
+    L.push(`| visible instances on the screen | ${c.instances} |`);
+    L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
+    const b = c.buckets || {};
+    L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
+    L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
+    if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry — proposed, confirm below | ${b.proposed || 0} |`);
+    L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
+    L.push(`| name shared with several catalog entries — left unmatched | ${b.ambiguous || 0} |`);
+    L.push(`| no match at all — new work | ${b.newWork || 0} |`);
+    if (c.hiddenOnly) L.push(`| *(not counted: components used only on hidden layers — not built)* | ${c.hiddenOnly} |`);
     L.push("");
   }
   if (res.componentProposals && res.componentProposals.length) {
@@ -867,7 +904,11 @@ function toMarkdown(res) {
     }
     L.push("");
     if (res.componentResidual && res.componentResidual.length) {
-      L.push(`**Not in the catalog (${res.componentResidual.length}) — new work:** ` + res.componentResidual.map((r) => `\`${r.name}\``).join(", "), "");
+      const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
+      const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
+      L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` +
+        (known.length ? `${known.length} are in (or named like an entry of) components.library.json — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
+        `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
@@ -914,36 +955,24 @@ if (require.main === module) {
   // Each screen's OWN variables: the raw slice every pull writes beside it as <Screen>.vars.json. The
   // token-collision check is about the variables THIS screen carries, not the merged union's
   // (livetest-3 #40), so it is read whenever it is there.
-  const screens = argv.map((f) => ({
-    doc: readJsonFile(f, "screen export"),
-    label: path.basename(f, ".json"),
-    vars: maybe(f.replace(/\.json$/, ".vars.json")),
-  }));
+  // The screen's own slice (<Screen>.vars.json) and the merged union are discovered by the SAME code
+  // audit.js uses (slice-sources.js variablesContext): the union is the export root's variables.json
+  // (P4 #38/#39), never a stale design/variables.json above design/export/ (P4 #14/#201), and the
+  // token-collision check reads each screen's own slice (livetest-3 #40/#311).
+  const ctx = require("./slice-sources.js").variablesContext(argv, varsFile, fs, path);
+  const screens = argv.map((f, i) => ({ doc: readJsonFile(f, "screen export"), label: path.basename(f, ".json"), vars: ctx.own[i] }));
   const dsBase = dsDir || "design/design-system";
-  // Auto-discover the merged variables.json the same way audit.js does (P4 #38/#39): a screen file
-  // lives at design/export/pages/<Page>/<Screen>.json, so the export root is two levels up. Prefer
-  // that root's variables.json (the merged union across every slice pulled so far) over the legacy
-  // sibling of the screen file, and NEVER walk further up to a stale `design/variables.json` left
-  // beside `design/export/` by an old parallel-layout pull (P4 #14/#201) — that file can disagree
-  // with the real one and picking it silently would be worse than not checking at all.
-  const exportRoot = path.resolve(path.dirname(argv[0]), "..", "..");
-  const exportRootVarsPath = path.join(exportRoot, "variables.json");
-  const siblingVarsPath = path.join(path.dirname(argv[0]), "variables.json");
-  let variablesPath = varsFile;
-  if (!variablesPath && fs.existsSync(exportRootVarsPath)) variablesPath = exportRootVarsPath;
-  if (!variablesPath && fs.existsSync(siblingVarsPath)) variablesPath = siblingVarsPath;
-  const variablesDoc = maybe(variablesPath);
+  const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
   // A stale legacy-layout `design/variables.json` next to `design/export/` (finding 14's fallout) is
   // never auto-read, but a user should be told it exists and was NOT the file used, since it can
   // carry a different, older set of slices than the one actually checked.
-  const staleLegacyVars = path.join(exportRoot, "..", "variables.json");
-  if (fs.existsSync(staleLegacyVars) && path.resolve(staleLegacyVars) !== path.resolve(variablesPath || "")) {
-    console.error(`warn  ${staleLegacyVars} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
+  if (ctx.staleLegacy) {
+    console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
   }
   const res = crossCheck({
     screens,
-    sliceSources: variablesDoc ? require("./slice-sources.js").sourcesOf(variablesDoc, variablesPath, fs, path) : null,
+    sliceSources: ctx.sliceSources,
     variables: variablesDoc,
     variablesPath,
     tokens: maybe(path.join(dsBase, "tokens.json")),

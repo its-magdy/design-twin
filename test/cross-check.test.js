@@ -358,4 +358,46 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     !withoutFlag.stdout.includes("no design/variables.json was given"));
 }
 
+
+// ---------- livetest-3 #318 / #326 on the REAL export (test/fixtures/livetest3/) ----------
+{
+  const fs = require("fs");
+  const path = require("path");
+  const { spawnSync } = require("child_process");
+  const FX = path.join(__dirname, "fixtures", "livetest3");
+  const run = (rel) => {
+    const r = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"), path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+    try { return JSON.parse(r.stdout); } catch (e) { return { coverage: {}, findings: [] }; }
+  };
+  // What the build sees: the distinct component sets of VISIBLE instances, and the sets used only on
+  // hidden layers — computed here from the fixture itself, not from the tool's own counters.
+  const sets = (rel) => {
+    const doc = JSON.parse(fs.readFileSync(path.join(FX, rel), "utf8"));
+    const vis = new Set(), all = new Set();
+    const w = (n, hid) => {
+      const h = hid || n.hidden === true || n.visible === false;
+      if (n.type === "INSTANCE" && n.mainComponent) { const k = n.mainComponent.setKey || n.mainComponent.key; all.add(k); if (!h) vis.add(k); }
+      for (const c of n.children || []) w(c, h);
+    };
+    for (const r of doc.nodes) w(r, false);
+    return { visible: vis.size, hiddenOnly: [...all].filter((k) => !vis.has(k)).length };
+  };
+  for (const [label, rel] of [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]]) {
+    const res = run(rel), truth = sets(rel);
+    const b = res.coverage.buckets || {};
+    const sum = Object.values(b).reduce((n, x) => n + x, 0);
+    ok(`[318] ${label}: every visible component set lands in exactly ONE bucket — the rows sum to the ${truth.visible} sets the screen really has`,
+      truth.visible > 0 && res.coverage.distinct === truth.visible && sum === truth.visible
+        && (res.coverage.entries || []).every((e) => typeof e.bucket === "string") && (res.coverage.entries || []).length === truth.visible);
+    ok(`[318] ${label}: sets used only on hidden layers are reported apart (${truth.hiddenOnly}), not mixed into the buckets`,
+      res.coverage.hiddenOnly === truth.hiddenOnly);
+    ok(`[318] ${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
+      (res.componentProposals || []).every((p) => !(res.coverage.entries || []).some((e) => e.setName === p.name && e.bucket !== "proposed")));
+  }
+  const cat = run("pages/In_progress/Create_Activity_Type__18411_84111.json");
+  const s4 = cat.findings.find((f) => f.code === "token-name-collision" && f.token === "Space 4");
+  ok("[326] an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
+    !!s4 && /^The screen's 'Space 4' \(key 64928e3a…\) and the design system's 'Space 4' share a name but resolve DIFFERENTLY/.test(s4.message));
+}
+
 report();

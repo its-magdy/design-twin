@@ -529,8 +529,12 @@ function audit(input, opts = {}) {
   if (opts.designSystem || opts.variables) {
     const { crossCheck } = require("./cross-check.js");
     crossFile = crossCheck({
-      screens: docs.map((d, i) => ({ doc: d && d.doc !== undefined ? d.doc : d, label: (d && d.label) || `input${i}` })),
+      // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
+      // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
+      // without them this gate raised another screen's `Space 4` blocker against Job Roles).
+      screens: docs.map((d, i) => ({ doc: d && d.doc !== undefined ? d.doc : d, label: (d && d.label) || `input${i}`, vars: (d && d.vars) || null })),
       variables: opts.variables || null,
+      sliceSources: opts.sliceSources || null,
       tokens: (opts.designSystem && opts.designSystem.tokens) || null,
       components: (opts.designSystem && opts.designSystem.components) || opts.catalog || null,
       componentsLibrary: (opts.designSystem && opts.designSystem.componentsLibrary) || null,
@@ -616,7 +620,9 @@ function toMarkdown(res) {
         );
       }
     }
-    const cfBlock = cf.findings.filter((f) => f.severity !== "info");
+    // The union's token collision that belongs to ANOTHER screen stays visible here as a note, so a
+    // reader does not "fix" this screen's correct value to match it (livetest-3 #40/#311).
+    const cfBlock = cf.findings.filter((f) => f.severity !== "info" || f.code === "token-name-collision-elsewhere");
     if (cfBlock.length) {
       for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}`);
       L.push("");
@@ -711,7 +717,10 @@ if (require.main === module) {
   if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); process.exit(2); }
   const { readJsonFile } = require("./catalog-input.js");
   const read = (f, what) => readJsonFile(f, what);
-  const inputs = argv.map((f) => ({ doc: read(f, "screen export"), label: path.basename(f, ".json") }));
+  // Variables discovery is shared with cross-check.js (slice-sources.js variablesContext): the union
+  // at the export root (or --variables), and each screen's own slice beside it.
+  const ctx = require("./slice-sources.js").variablesContext(argv, varsFile, fs, path, { sliceFallback: true });
+  const inputs = argv.map((f, i) => ({ doc: read(f, "screen export"), label: path.basename(f, ".json"), vars: ctx.own[i] }));
   const catalog = catalogFile ? read(catalogFile, "component catalog") : undefined;
   // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
   // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
@@ -724,15 +733,11 @@ if (require.main === module) {
         stylesText: maybe(path.join(dsDir, "styles.text.json")),
       }
     : undefined;
-  // The screen's own token slice sits beside the screen file in the pages/ tree; the merged union is
-  // at the export root. Prefer whatever the user named, then the union, then the slice.
-  const exportRoot = path.resolve(path.dirname(argv[0]), "..", "..");
-  const variables =
-    maybe(varsFile) ||
-    maybe(path.join(exportRoot, "variables.json")) ||
-    maybe(argv[0].replace(/\.json$/, ".vars.json")) ||
-    maybe(path.join(path.dirname(argv[0]), "variables.json"));
-  const res = audit(inputs, { platform, catalog, designSystem, variables, grid: gridArg ? Number(gridArg) : undefined });
+  // `variables` is the merged union (what the screen's collections are checked against); each input
+  // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
+  const variables = ctx.variablesDoc;
+  if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
+  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid: gridArg ? Number(gridArg) : undefined });
   const md = jsonOnly ? "" : toMarkdown(res);
   // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
   // skill invented one each time (`positions`/`job-roles`/`global-policies`/`System_Configurations`
