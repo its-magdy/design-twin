@@ -12,7 +12,7 @@
 // because snapshot-meta.js and design-to-code/drift-lint.js both read that stamp back off disk.
 const fs = require("fs");
 const path = require("path");
-const { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, safe } = require("./pages-layout.js");
+const { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, safe } = require("./pages-layout.js");
 const { buildDesignSystemLayout } = require("./design-system-layout.js");
 const { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } = require("./library-layout.js");
 const { mergeVariablesDoc } = require("./variables-merge.js");
@@ -252,12 +252,18 @@ function writeScreen(outDir, r, log) {
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that
   // reassembles `pages/<dir>/<base>.vars.json` from parts is right until the day one part changes.
   const root = (r.screen && r.screen.nodes && r.screen.nodes[0]) || {};
+  // title/texts: findings 16/17/70/90/120 — the visible title a user types is a TEXT node inside the
+  // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.js deriveTitle.
+  const title = deriveTitle(root);
+  const texts = collectTexts(root);
   const entry = {
     name: (r.screen && r.screen.screen) || r.screenName,
     id: paths.nodeId || root.id,
     type: root.type,
     page: paths.page,
     pageId: paths.pageId,
+    title,
+    texts,
     exportedAt: r.screen && r.screen.exportedAt,
     file: paths.screen,
     variables: r.variables ? paths.variables : undefined,
@@ -269,7 +275,7 @@ function writeScreen(outDir, r, log) {
   };
   const pageIndex = mergeScreenIndex(readJsonOr(path.join(dir, paths.index), null), Object.assign({}, entry, { page: paths.page, pageId: paths.pageId }));
   writeJson(dir, paths.index, pageIndex, true);
-  writeJson(dir, paths.rootIndex, mergeRootIndex(readJsonOr(path.join(dir, paths.rootIndex), null), paths, pageIndex.layers.length), true);
+  writeJson(dir, paths.rootIndex, mergeRootIndex(readJsonOr(path.join(dir, paths.rootIndex), null), paths, pageIndex.layers.length, entry), true);
   if (log) log(`indexed ${paths.screen} in ${paths.rootIndex} (page '${paths.page || "unfiled"}' now holds ${pageIndex.layers.length} screen(s))`);
 
   return {

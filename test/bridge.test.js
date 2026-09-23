@@ -914,8 +914,15 @@ async function disconnectErr(code, reason) {
     rootIndex.pageDirs.every((pd) => typeof pd.index === "string" && fs.existsSync(path.join(pagesDir, pd.index))));
   ok("[wp] and the pointer is relative to outDir, like each layer's `file`",
     rootIndex.pageDirs.every((pd) => !path.isAbsolute(pd.index) && pd.index.startsWith("pages/")));
-  ok("[wp] the root index carries the run manifest, not the layer bodies",
-    rootIndex.exportedAt === "t" && rootIndex.layers === undefined);
+  // P3 #16: the root index used to carry ONLY the run manifest + pageDirs counts, forcing a consumer
+  // one hop down to `pages/<Page>/index.json` to find a single screen by name/title. It now also
+  // carries the flattened per-screen rows (name/id/title/texts/file, no tree bytes) so the file every
+  // skill is told to read actually has what it promises.
+  ok("[wp] the root index carries the run manifest AND the flattened per-screen rows (no tree bytes)",
+    rootIndex.exportedAt === "t" && Array.isArray(rootIndex.layers) && rootIndex.layers.length === 3 &&
+    rootIndex.layers.map((l) => l.name).sort().join("|") === "A|B|C" &&
+    rootIndex.layers.every((l) => l.id && l.file) &&
+    JSON.stringify(rootIndex.layers).indexOf("\"children\"") === -1);
   ok("[wp] pages/ exists even for a zero-layer run", (() => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "figma-empty-"));
     pull.writePages(empty, { exportedAt: "t", index: [], layers: [] });
@@ -1111,6 +1118,33 @@ async function disconnectErr(code, reason) {
   const OUT = require("../bridge/write-out.js");
   const wdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-out-"));
 
+  // ---------- writeScreen: title/texts land in the index (P3 #16 #17 #70 #90 #120) ----------
+  // Real node tree from the livetest3 fixture (the `positions ` frame — layer name "positions ",
+  // visible title "Job Roles"), pruned to the fields deriveTitle/collectTexts read.
+  {
+    const fixtureScreen = JSON.parse(fs.readFileSync(
+      path.join(__dirname, "fixtures", "livetest3", "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
+    const screenResult = OUT.writeScreen(sdir, {
+      screenName: "positions ",
+      nodeId: "7314:87192",
+      page: "✅ Organization management ",
+      pageId: "5282:58823",
+      screen: { screen: "positions ", nodes: fixtureScreen.nodes, manifest: fixtureScreen.manifest, exportedAt: "2026-09-23T00:00:00.000Z" },
+    }, null);
+    const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8"));
+    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8"));
+    ok("[write-screen] the ROOT index row carries the visible title, not just the Figma layer name",
+      Array.isArray(rootIdx.layers) && rootIdx.layers.length === 1 &&
+      rootIdx.layers[0].name === "positions " && rootIdx.layers[0].title === "Job Roles");
+    ok("[write-screen] the PAGE index row carries the same title",
+      pageIdx.layers.length === 1 && pageIdx.layers[0].title === "Job Roles");
+    ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
+      Array.isArray(rootIdx.layers[0].texts) && rootIdx.layers[0].texts.length > 0 &&
+      new Set(rootIdx.layers[0].texts).size === rootIdx.layers[0].texts.length);
+    fs.rmSync(sdir, { recursive: true, force: true });
+  }
+
   // ---------- library-file export layout (--as-library) ----------
   // The library catalog must land in a tree that CANNOT collide with design-system/, because the two
   // describe different Figma files and answer different questions.
@@ -1224,13 +1258,17 @@ async function disconnectErr(code, reason) {
   ok("[write-out] it reports the asset count it actually wrote", full.wrote.assets === 2);
   ok("[write-out] and a layer-file count", full.wrote.layerFiles === 1);
   // The whole point of the writeToDisk path: the RESULT is an index, not the export.
-  // "no payload" means no serialized NODES — not the absence of the word "layers", which legitimately
-  // appears in pageDirs as a per-page COUNT. Assert on the things only a real node tree carries.
-  ok("[write-out] the returned index carries NO node payload",
+  // "no payload" means no serialized subtree (`children`) — not the absence of a layer's own
+  // name/type, which P3 #16 now deliberately puts in the index (`full.index.layers[].name/type`) so
+  // a consumer can resolve a screen from the index alone, without opening its node file.
+  ok("[write-out] the returned index carries NO node payload (no serialized subtree)",
     (() => {
       const s = JSON.stringify(full);
-      return !s.includes("\"children\"") && !s.includes("FRAME") && !s.includes("\"Hero\"");
+      return !s.includes("\"children\"");
     })());
+  ok("[write-out] but it DOES carry the layer's own name/type, so a screen resolves from the index alone",
+    full.index && Array.isArray(full.index.layers) &&
+    full.index.layers.some((l) => l.name === "Hero" && l.type === "FRAME"));
   ok("[write-out] the freshness stamp survives the write byte-for-byte",
     JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).exportedAt ===
       "2026-08-12T00:00:00.000Z");
