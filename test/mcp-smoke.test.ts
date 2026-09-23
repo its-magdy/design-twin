@@ -1,7 +1,7 @@
-// Behavioural smoke test for the MCP server: boot the REAL bridge/figma-mcp.mjs over stdio with the
+// Behavioural smoke test for the MCP server: boot the REAL bridge/src/figma-mcp.ts over stdio with the
 // SDK's own client, list its tools, and call the ones that need no Figma connection.
 //   node test/mcp-smoke.test.ts
-// bridge.test.ts checks the built .mjs by reading its SOURCE; nothing there would catch a tool whose
+// bridge.test.ts checks src/figma-mcp.ts by reading its SOURCE text; nothing there would catch a tool whose
 // schema fails at registration time, or a server that writes a log line to stdout and corrupts the
 // protocol stream. This does.
 import fs from "node:fs";
@@ -10,15 +10,28 @@ import path from "node:path";
 import { ok, report } from "./assert.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-// "ws" has no types of its own; see test/ws.d.ts for the ambient shim.
+// "ws" has no types of its own; see bridge/src/ws.d.ts for the ambient shim.
 import WebSocket from "ws";
+// Type-only: erased before Node runs this file, so the server module is NOT imported here (it is
+// booted as a subprocess below — importing it would start a real bridge + stdio transport).
+import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
+
+// Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
+// lazily (it cannot reference them: rootDir is bridge/src). Nothing else ties those local interfaces to
+// the real modules, so drift between them would only show at runtime, inside a tool call. The test
+// program sees both trees, so it checks here that the real modules still satisfy the server's view.
+type Assert<T extends true> = T;
+type _McpLayerConformance = [
+  Assert<typeof import("../design-to-code/get-component.ts") extends GetComponentModule ? true : false>,
+  Assert<typeof import("../design-to-code/drift-lint.ts") extends DriftLintModule ? true : false>,
+];
 
 const CWD = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-"));
 
 (async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [path.join(import.meta.dirname, "..", "bridge", "figma-mcp.mjs")],
+    args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],
     // A spare allowed port so a developer's live bridge on 8787 doesn't fail the run, and a fixed
     // token so booting never mints/saves one into the user's real config dir.
     env: { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "smoke-test-token", MAX_MCP_OUTPUT_TOKENS: "" },

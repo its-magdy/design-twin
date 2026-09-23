@@ -1,4 +1,4 @@
-// project-layout.js — the ONE definition of where a Design Twin project keeps things.
+// project-layout.ts — the ONE definition of where a Design Twin project keeps things.
 //
 // The layout used to be "everything under design/", which put two incompatible kinds of file in one
 // directory: what a pull WRITES and may overwrite without asking (pages/, design-system/, assets/,
@@ -28,24 +28,24 @@
 // findExportDir() recognises the old shape and every consumer keeps working, while doctor says which
 // layout it found so the difference is never a silent surprise.
 
-const fs = require("fs");
-const path = require("path");
+import fs from "node:fs";
+import path from "node:path";
 
-const DESIGN_DIR = "design";
-const EXPORT_SUBDIR = "export";
-const EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
-const TARGET_FILE = path.join(DESIGN_DIR, "target.json");
-const MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
-const PLAN_DIR = path.join(DESIGN_DIR, "plan");
-const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
-const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+export const DESIGN_DIR = "design";
+export const EXPORT_SUBDIR = "export";
+export const EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+export const TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+export const MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
+export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
 
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with
 // different fixes.
 const EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
 
-function looksLikeExportDir(dir) {
+export function looksLikeExportDir(dir: string): boolean {
   try {
     if (!fs.statSync(dir).isDirectory()) return false;
   } catch {
@@ -57,7 +57,12 @@ function looksLikeExportDir(dir) {
 // Where THIS project's export actually is. Prefers the current layout; falls back to the legacy one
 // only when that directory really holds an export, so a fresh `design/` with nothing but target.json
 // in it is reported as "no export yet" rather than as a legacy project.
-function findExportDir(cwd) {
+/** Where findExportDir found (or would put) the export. `parallelLegacy` only on the modern layout. */
+export type ExportDirInfo =
+  | { dir: string; layout: "export-subdir"; rel: string; parallelLegacy: boolean }
+  | { dir: string; layout: "legacy-flat" | "none"; rel: string; parallelLegacy?: undefined };
+
+export function findExportDir(cwd: string): ExportDirInfo {
   const modern = path.join(cwd, EXPORT_DIR);
   const legacy = path.join(cwd, DESIGN_DIR);
   const modernExists = looksLikeExportDir(modern);
@@ -74,7 +79,15 @@ function findExportDir(cwd) {
 
 // The component map moved from the repo root into design/. An existing project's root copy is still
 // the real one — finding it and saying so beats writing a second map beside it and linting the wrong one.
-function findMapFile(cwd) {
+export interface MapFileInfo {
+  file: string;
+  rel: string;
+  legacy: boolean;
+  /** Present (true) only when neither location holds a map; `file` is then where a new one goes. */
+  missing?: true;
+}
+
+export function findMapFile(cwd: string): MapFileInfo {
   const modern = path.join(cwd, MAP_FILE);
   if (fs.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
   const legacy = path.join(cwd, "codeconnect.local.json");
@@ -84,7 +97,7 @@ function findMapFile(cwd) {
 
 // Shipped into design/ by `dtwin init`, because the one thing this layout has to communicate is which
 // half of it a re-pull is allowed to destroy — and a comment in a source file cannot do that.
-const README = `# design/
+export const README = `# design/
 
 Two kinds of file live here, and the difference matters.
 
@@ -130,18 +143,3 @@ Commit both halves. If your .gitignore ignores \`design/\`, un-ignore this half 
 \`!design/target.json\`, \`!design/codeconnect.local.json\`, \`!design/plan/\` — or the work is lost
 with the next clone.
 `;
-
-module.exports = {
-  DESIGN_DIR,
-  EXPORT_SUBDIR,
-  EXPORT_DIR,
-  TARGET_FILE,
-  MAP_FILE,
-  PLAN_DIR,
-  AUDIT_DIR,
-  VERIFY_DIR,
-  README,
-  looksLikeExportDir,
-  findExportDir,
-  findMapFile,
-};

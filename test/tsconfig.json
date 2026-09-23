@@ -6,8 +6,8 @@
     "types": ["node"],
     "strict": true,
     "noEmit": true,
-    // Transitional: the tests import the still-CJS bridge/*.js and design-to-code/*.js, and TS 7
-    // strict rejects untyped JS imports (TS7016) without allowJs. Drop this after step 4.
+    // Transitional: every module the tests import is TypeScript now; what remains is the tests' own
+    // `any` (left over from when they imported untyped CommonJS). Dropped by the de-any pass.
     "allowJs": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts", "../design-to-code/**/*.ts"]
+  "include": ["./**/*.ts", "../design-to-code/**/*.ts", "../bridge/src/ws.d.ts"]
 }

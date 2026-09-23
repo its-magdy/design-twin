@@ -28,12 +28,6 @@ const SRC = path.join(import.meta.dirname, "..", "design-to-code");
 // The CLI entry points. kinds.ts / catalog-input.ts are libraries — they get inlined, not shipped.
 const ENTRIES = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
 
-// Inside an ESM bundle, a CommonJS module's `require("fs")` goes through esbuild's __require shim, which
-// throws "Dynamic require of "fs" is not supported" — this banner gives the bundle a real `require`.
-// It exists ONLY while bridge/*.js (inlined by drift-lint / design-diff / get-component) is CommonJS:
-// remove it in step 4 when the bridge becomes ESM.
-const REQUIRE_SHIM = 'import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);';
-
 // Rewrites `import.meta.main` to `false` in every design-to-code module except `entry` (see header).
 function inlinedCliGuard(entry) {
   return {
@@ -61,7 +55,7 @@ function build(outDir) {
       format: "esm",
       platform: "node",
       target: "node24",
-      banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.\n" + REQUIRE_SHIM },
+      banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.\n" },
       plugins: [inlinedCliGuard(entry)],
       logLevel: "silent",
     });

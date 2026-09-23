@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
+import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import type { ComponentsCatalog, TokensDoc } from "../design-to-code/types.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "design-to-code", "design-diff.ts");
@@ -114,18 +115,11 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
 // the one definition of that 9-file set), and a screen's .vars.json/.assets.json plus the shared
 // pages/index.json it is indexed under.
 console.log("CLI — --snapshot copies the sibling set (finding 206):");
-// Loaded here (rather than at the top of the file) with a lazy dynamic import so the site matches
-// where the original `require("../bridge/design-system-layout.js")` sat, inside the sync IIFE below —
-// hoisted one step out to module top-level await, immediately before the one check() that needs it.
-// DESIGN_SYSTEM_FILES is a nested object literal inside module.exports — Node's cjs-module-lexer
-// (used for ESM named-export detection of CJS modules) does not reliably surface it as a named
-// export, so read it off `.default` instead (which always carries the whole `module.exports`).
-const { DESIGN_SYSTEM_FILES } = ((await import("../bridge/design-system-layout.js")) as any).default;
 check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
   // Finding 320: the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
   // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
   // header comment) — not flat alongside them, which is what this fixture used to (wrongly) assume.
-  const names: any[] = Object.values(DESIGN_SYSTEM_FILES).filter((v: any) => typeof v === "string" && /\.json$/.test(v));
+  const names = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });

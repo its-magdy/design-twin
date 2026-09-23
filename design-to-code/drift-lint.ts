@@ -13,8 +13,8 @@
 // "#id" suffix stripped on BOTH sides. Returns { errors, warnings, summary }.
 
 import { TYPE_TO_KIND } from "./kinds.ts"; // shared vocab — kept in sync with map-bootstrap
-import { snapshotAge as snapshotAgeJs } from "../bridge/snapshot-meta.js"; // ONE definition of the freshness stamp
-import { errMsg } from "../bridge/errmsg.js"; // ONE thrown-value -> message coercion
+import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition of the freshness stamp
+import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./hidden.ts";
 import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
@@ -25,11 +25,6 @@ import type {
 } from "./types.ts";
 
 const stripSuffix = (k: string): string => String(k).split("#")[0]; // "Size#12:3" -> "Size"
-
-// snapshot-meta.js has no .d.ts (CJS until step 4); this is the shape its snapshotAge() returns,
-// declared here so the freshness code below is typed instead of inferred from JS.
-interface SnapshotAge { exportedAt?: string; ageMs?: number; problem?: string }
-const snapshotAge: (doc: unknown, now?: number) => SnapshotAge = snapshotAgeJs;
 
 /** What driftLint accepts as `opts`. */
 export interface DriftLintOptions { maxAgeMs?: number; now?: number }

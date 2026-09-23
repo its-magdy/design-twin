@@ -1,252 +1,47 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
-var __commonJS = (cb, mod) => function __require2() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
-  }
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 
-// bridge/errmsg.js
-var require_errmsg = __commonJS({
-  "bridge/errmsg.js"(exports, module) {
-    "use strict";
-    var errMsg2 = (e) => typeof e === "string" ? e : String(e && e.message || e);
-    module.exports = { errMsg: errMsg2 };
-  }
-});
-
-// bridge/project-layout.js
-var require_project_layout = __commonJS({
-  "bridge/project-layout.js"(exports, module) {
-    "use strict";
-    var fs2 = __require("fs");
-    var path = __require("path");
-    var DESIGN_DIR = "design";
-    var EXPORT_SUBDIR = "export";
-    var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
-    var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
-    var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
-    var PLAN_DIR = path.join(DESIGN_DIR, "plan");
-    var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
-    var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
-    var EXPORT_MARKERS = ["pages", "design-system", "design-system.json", "variables.json", "assets", "libraries"];
-    function looksLikeExportDir(dir) {
-      try {
-        if (!fs2.statSync(dir).isDirectory()) return false;
-      } catch {
-        return false;
-      }
-      return EXPORT_MARKERS.some((m) => fs2.existsSync(path.join(dir, m)));
-    }
-    function findExportDir(cwd) {
-      const modern = path.join(cwd, EXPORT_DIR);
-      const legacy = path.join(cwd, DESIGN_DIR);
-      const modernExists = looksLikeExportDir(modern);
-      const legacyExists = looksLikeExportDir(legacy);
-      if (modernExists) return { dir: modern, layout: "export-subdir", rel: EXPORT_DIR, parallelLegacy: legacyExists };
-      if (legacyExists) return { dir: legacy, layout: "legacy-flat", rel: DESIGN_DIR };
-      return { dir: modern, layout: "none", rel: EXPORT_DIR };
-    }
-    function findMapFile(cwd) {
-      const modern = path.join(cwd, MAP_FILE);
-      if (fs2.existsSync(modern)) return { file: modern, rel: MAP_FILE, legacy: false };
-      const legacy = path.join(cwd, "codeconnect.local.json");
-      if (fs2.existsSync(legacy)) return { file: legacy, rel: "codeconnect.local.json", legacy: true };
-      return { file: modern, rel: MAP_FILE, legacy: false, missing: true };
-    }
-    var README = `# design/
-
-Two kinds of file live here, and the difference matters.
-
-## design/export/ \u2014 dtwin owns this
-
-Everything \`dtwin pull\` writes lands under \`export/\` and nowhere else. It is a snapshot of Figma:
-delete the whole directory and re-pull and you lose nothing.
-
-    export/pages/<Page>/<Screen>__<node-id>.json   one exported screen
-    export/pages/<Page>/<Screen>__<node-id>.vars.json    the tokens THAT screen binds
-    export/pages/<Page>/<Screen>__<node-id>.assets.json  which assets it uses, with content hashes
-    export/pages/index.json                        every screen pulled, whatever the pull shape
-    export/design-system/                          tokens.json, styles.*.json, components.*.json
-    export/variables.json                          the union of every screen's slice (merged, never replaced)
-    export/assets/                                 shared and cumulative across screens
-
-## design/.sync/ \u2014 a working snapshot, not an export
-
-\`design-diff.js --snapshot <file>\` copies a file here BEFORE you re-pull it, so the sync-design skill
-can diff the old export against the new one afterwards. It is non-destructive by default (a snapshot
-that would replace an existing, DIFFERENT one is refused unless you pass \`--force\`, which keeps the
-old copy as \`<name>.prev\`) \u2014 see \`claude-plugin/skills/sync-design/SKILL.md\`. It is not part of the
-Figma-owned export above and not something a re-pull ever writes to; delete it any time, it only
-affects what the next diff compares against.
-
-## design/sync/ \u2014 where a diff report lands
-
-\`design-diff.js ... --out design/sync/<screen>.md\` writes its human-readable report here, per the
-sync-design skill's step 4. Also yours: it is evidence of what changed on a given sync, not something
-\`dtwin pull\` regenerates.
-
-## Everything else here \u2014 you own it
-
-These are decisions and evidence. They are not regenerable, and a re-pull never touches them.
-
-    target.json              which stack you are building for
-    codeconnect.local.json   Figma component key -> your code component. Hand-maintained.
-    plan/<Screen>.json       what build-screen decided, and why
-    audit/<Screen>.{md,json} the pre-build design review
-    verify/<Screen>.report.json  the measured per-node comparison behind any "pass"
-
-Commit both halves. If your .gitignore ignores \`design/\`, un-ignore this half \u2014
-\`!design/target.json\`, \`!design/codeconnect.local.json\`, \`!design/plan/\` \u2014 or the work is lost
-with the next clone.
-`;
-    module.exports = {
-      DESIGN_DIR,
-      EXPORT_SUBDIR,
-      EXPORT_DIR,
-      TARGET_FILE,
-      MAP_FILE,
-      PLAN_DIR,
-      AUDIT_DIR,
-      VERIFY_DIR,
-      README,
-      looksLikeExportDir,
-      findExportDir,
-      findMapFile
-    };
-  }
-});
-
-// bridge/snapshot-meta.js
-var require_snapshot_meta = __commonJS({
-  "bridge/snapshot-meta.js"(exports, module) {
-    "use strict";
-    var fs2 = __require("fs");
-    var path = __require("path");
-    var { errMsg: errMsg2 } = require_errmsg();
-    function snapshotAge2(doc, now) {
-      const exportedAt = doc && doc.exportedAt;
-      if (!exportedAt) return { exportedAt: void 0, ageMs: void 0, problem: "missing" };
-      const t = Date.parse(exportedAt);
-      if (Number.isNaN(t)) return { exportedAt, ageMs: void 0, problem: "unparseable" };
-      return { exportedAt, ageMs: (now || Date.now()) - t };
-    }
-    function looksLikeExport(doc) {
-      return !!doc && typeof doc === "object" && (Array.isArray(doc.nodes) || Array.isArray(doc.layers) || Array.isArray(doc.pageDirs) || Array.isArray(doc.components) || Array.isArray(doc.variables) || doc.files && typeof doc.files === "object");
-    }
-    function snapshotCandidates(dir) {
-      const out = [
-        { f: path.join(dir, "design-system.json"), named: true },
-        { f: path.join(dir, "pages", "index.json"), named: true }
-      ];
-      let entries = [];
-      try {
-        entries = fs2.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return out;
-      }
-      const rest = [];
-      for (const e of entries) {
-        if (!e.isFile() || !e.name.endsWith(".json") || e.name === "design-system.json") continue;
-        const f = path.join(dir, e.name);
-        try {
-          rest.push({ f, mtime: fs2.statSync(f).mtimeMs });
-        } catch {
-        }
-      }
-      rest.sort((a, b) => b.mtime - a.mtime);
-      return out.concat(rest.map((r) => ({ f: r.f, named: false })));
-    }
-    function readSnapshotInfo(outDir) {
-      const dir = outDir || process.env.FIGMA_EXPORT_DIR || require_project_layout().findExportDir(process.cwd()).dir;
-      const cands = snapshotCandidates(dir);
-      let file = null, doc = null, parseError = null, fallback = null;
-      for (const { f: cand, named } of cands) {
-        let raw;
-        try {
-          raw = fs2.readFileSync(cand, "utf8");
-        } catch {
-          continue;
-        }
-        let parsed;
-        try {
-          parsed = JSON.parse(raw);
-        } catch (e) {
-          if (named && parseError === null) parseError = { file: cand, error: path.basename(cand) + " is not valid JSON: " + errMsg2(e) };
-          continue;
-        }
-        if (!named && !looksLikeExport(parsed)) continue;
-        if (!parsed.exportedAt) {
-          if (fallback === null) fallback = { file: cand, doc: parsed };
-          continue;
-        }
-        file = cand;
-        doc = parsed;
-        break;
-      }
-      if (file === null && fallback !== null) {
-        file = fallback.file;
-        doc = fallback.doc;
-      }
-      if (file === null) return parseError;
-      const label = path.basename(file);
-      const sourceFile = doc && doc.file || (doc && typeof doc.screen === "string" ? doc.screen : void 0);
-      const { exportedAt, ageMs, problem } = snapshotAge2(doc);
-      const warning = problem === "missing" ? `no exportedAt stamp in ${label} \u2014 freshness unknown (re-export with the current plugin)` : problem === "unparseable" ? `exportedAt ('${exportedAt}') is not a parseable timestamp` : void 0;
-      return { file, exportedAt, ageMs, sourceFile, warning };
-    }
-    module.exports = { readSnapshotInfo, snapshotAge: snapshotAge2 };
-  }
-});
 
 // design-to-code/kinds.ts
 var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
 
-// design-to-code/drift-lint.ts
-var import_snapshot_meta = __toESM(require_snapshot_meta(), 1);
-var import_errmsg = __toESM(require_errmsg(), 1);
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+
+// bridge/src/project-layout.ts
+import path from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+
+// bridge/src/snapshot-meta.ts
+function field(doc, key) {
+  return doc && typeof doc === "object" && key in doc ? doc[key] : void 0;
+}
+var asText = (v) => v ? typeof v === "string" ? v : String(v) : void 0;
+function snapshotAge(doc, now) {
+  const exportedAt = asText(field(doc, "exportedAt"));
+  if (!exportedAt) return { exportedAt: void 0, ageMs: void 0, problem: "missing" };
+  const t = Date.parse(exportedAt);
+  if (Number.isNaN(t)) return { exportedAt, ageMs: void 0, problem: "unparseable" };
+  return { exportedAt, ageMs: (now || Date.now()) - t };
+}
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path, parent, depth) {
+  (function go(node, parentHidden, path2, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -476,7 +271,6 @@ function isJsonObject(x) {
 
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0];
-var snapshotAge = import_snapshot_meta.snapshotAge;
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
@@ -753,7 +547,7 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
         const live = await checkLiveFreshness(fileKey, token, catalog && catalog.exportedAt);
         if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog && catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
       } catch (e) {
-        console.error(`warn   [live-meta] could not verify against the live file: ${(0, import_errmsg.errMsg)(e)}`);
+        console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
       }
     }
     process.exit(res.errors.length || screenFail ? 1 : 0);

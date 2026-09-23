@@ -1,4 +1,4 @@
-// verbs.js — `dtwin <verb>` front door. A PURE argv → argv translation onto the flags figma-pull.js
+// verbs.ts — `dtwin <verb>` front door. A PURE argv → argv translation onto the flags figma-pull.ts
 // already parses, so there is one parser and one set of guards, and every existing `--flag`
 // invocation keeps working unchanged (clig.dev: subcommands to tame a large surface; never break the
 // old spelling silently).
@@ -11,31 +11,31 @@
 //   dtwin serve | stop | status      = --serve | --stop | --daemon-status
 //   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | --rotate-token | --forget-token
 //   dtwin help                       = --help
-//   dtwin doctor | init | mcp        → their own entry points (routed in figma-pull.js)
+//   dtwin doctor | init | mcp        → their own entry points (routed in figma-pull.ts)
 //
 // A verb is only recognised as the FIRST argument. `dtwin design` still means "pull into ./design":
 // an outDir that happens to be spelled like a verb is written `dtwin pull list` or `dtwin ./list`.
 
-class VerbError extends Error {}
+export class VerbError extends Error {}
 
-const LIST = { "": "--list", frames: "--list", pages: "--list-pages", libraries: "--list-libraries", libs: "--list-libraries", clients: "--list-clients" };
-const TOKEN = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
-const SIMPLE = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help" };
-const VERBS = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help"];
+const LIST: Record<string, string> = { "": "--list", frames: "--list", pages: "--list-pages", libraries: "--list-libraries", libs: "--list-libraries", clients: "--list-clients" };
+const TOKEN: Record<string, string> = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
+const SIMPLE: Record<string, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help" };
+export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help"];
 
 // Words people (and agents) reach for first that are NOT verbs. Left alone they were a positional
 // outDir: `dtwin export` created ./export and then waited for a plugin, looking exactly like a pull
 // that was working. Same opt-outs as a near-miss: a path, an existing folder, or `dtwin pull export`.
-const ALIASES = { export: "pull", get: "pull", fetch: "pull", download: "pull", sync: "pull", ls: "list", frames: "list", pages: "list pages", libraries: "list libraries", clients: "list clients",
+const ALIASES: Record<string, string> = { export: "pull", get: "pull", fetch: "pull", download: "pull", sync: "pull", ls: "list", frames: "list", pages: "list pages", libraries: "list libraries", clients: "list clients",
   check: "doctor", diagnose: "doctor", setup: "init", install: "init", connect: "doctor", start: "serve", daemon: "serve", kill: "stop", version: "--version", tokens: "token" };
 
-const isFlag = (a) => typeof a === "string" && a.startsWith("-");
+const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-");
 
 // Per-verb help. `dtwin screenshot --help` used to hit translate's "needs a node id" refusal, because
 // the verb's own argument check ran before the global --help handler (live finding 5) — a help probe
 // is the one thing that must never be answered with an error. Every verb with real sub-structure gets
 // a real answer here; the rest fall through to the full `dtwin --help`.
-const HELP = {
+export const HELP: Record<string, string> = {
   screenshot:
     "dtwin screenshot <id|figma-url> [outDir] [--scale N] [--client <file>]\n\n" +
     "  Render ONE node to a reference PNG and write it to <outDir>/assets/<id>_ref.png.\n" +
@@ -80,7 +80,7 @@ const HELP = {
     "  Run `dtwin --help` for the full flag reference (read options, timeouts, the daemon).",
 };
 
-function translate(argv, exists = () => false) {
+export function translate(argv: string[], exists: (p: string) => boolean = () => false): string[] {
   const [verb, ...rest] = argv;
   if (!verb || isFlag(verb)) return argv;
   if (verb === "pull") return rest;
@@ -107,7 +107,7 @@ function translate(argv, exists = () => false) {
   // Not a verb: a positional outDir, exactly as before — unless it is a near-miss of one. `dtwin whomai`
   // used to start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
   // a typo than a folder. A path (`./serv`), an existing folder (`exists`), or `dtwin pull serv` opts out.
-  if (VERBS.includes(verb)) return argv; // doctor | init | mcp: routed by figma-pull.js, not translated here
+  if (VERBS.includes(verb)) return argv; // doctor | init | mcp: routed by figma-pull.ts, not translated here
   const alias = ALIASES[verb.toLowerCase()];
   if (alias && !/[\\/.]/.test(verb) && !exists(verb))
     throw new VerbError(`unknown command \`${verb}\` — did you mean \`dtwin ${alias}\`? (to export into a folder named "${verb}": dtwin pull ${verb})`);
@@ -119,13 +119,13 @@ function translate(argv, exists = () => false) {
 
 // The verb whose help a given argv is asking for, or null. Exported so figma-pull can answer BEFORE
 // translate runs its per-verb argument checks.
-function verbHelp(argv) {
+export function verbHelp(argv: unknown): string | null {
   if (!Array.isArray(argv) || !argv.some((a) => a === "--help" || a === "-h")) return null;
-  const verb = argv[0];
-  return (verb && HELP[verb]) || null;
+  const verb: unknown = argv[0];
+  return (typeof verb === "string" && verb && HELP[verb]) || null;
 }
 
-function distance(a, b) {
+export function distance(a: string, b: string): number {
   const row = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
     let prev = row[0];
@@ -141,9 +141,9 @@ function distance(a, b) {
 
 // Two edits for the longer verbs. A short verb ("pull", "list", "stop", "mcp" …) is one edit from real
 // folder names ("dist" ↔ "list"), so there only a dropped or extra LAST letter counts ("lis", "lists").
-function nearestVerb(word) {
+function nearestVerb(word: string): string | null {
   const w = String(word).toLowerCase();
-  let best = null;
+  let best: { v: string; d: number } | null = null;
   for (const v of VERBS) {
     const d = distance(w, v);
     const ok = v.length >= 5 ? d <= (v.length >= 6 ? 2 : 1) : d === 1 && (w.startsWith(v) || v.startsWith(w));
@@ -151,5 +151,3 @@ function nearestVerb(word) {
   }
   return best && best.v;
 }
-
-module.exports = { translate, verbHelp, VerbError, VERBS, HELP, distance };

@@ -1,7 +1,7 @@
 // Where the bridge token LIVES between runs — the one place that knows the path, the precedence,
 // and the file's permissions.
 //
-// Before this file the token was env-var-or-nothing: `server-core.js` read FIGMA_BRIDGE_TOKEN and
+// Before this file the token was env-var-or-nothing: `server-core.ts` read FIGMA_BRIDGE_TOKEN and
 // otherwise minted a fresh random one PER RUN and printed it, so the plugin's saved token was wrong
 // on the very next `dtwin` and the user re-pasted forever. The fix is not a better banner, it's
 // persistence: generate once, store it, reuse it.
@@ -23,16 +23,46 @@
 // has open". The honest limit of the 0600 file, stated so it isn't a surprise: it stops OTHER users
 // on the machine, not another process running as YOU.
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const crypto = require("crypto");
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+
+/** Where the token in play came from. "ephemeral" = minted for this run only, never stored. */
+export type TokenSource = "token-file" | "env" | "file" | "ephemeral";
+
+/** What resolve() returns. `path` is the file the token lives in (null for env/ephemeral). */
+export interface ResolvedToken {
+  token: string;
+  source: TokenSource;
+  path: string | null;
+  /** true only on the run that minted AND stored a new token */
+  created: boolean;
+  /** why a minted token could not be stored (the result is then "ephemeral") */
+  persistError?: unknown;
+}
+
+export interface ResolveOptions {
+  tokenFile?: string | null;
+  persist?: boolean;
+}
+
+/** What --token-status prints: everything about the token except the token. */
+export interface TokenStatus {
+  path: string;
+  stored: boolean;
+  envSet: boolean;
+  activeSource: TokenSource;
+  fingerprint: string | null;
+  loosePerms: boolean;
+  shadowed: boolean;
+}
 
 const APP = "design-twin";
 const FILE = "bridge-token";
 
 // 24 bytes = 192 bits from the OS CSPRNG, hex-encoded. Matches what server-core minted before.
-const generate = () => crypto.randomBytes(24).toString("hex");
+export const generate = (): string => crypto.randomBytes(24).toString("hex");
 
 // Per-OS config directory.
 //
@@ -43,7 +73,7 @@ const generate = () => crypto.randomBytes(24).toString("hex");
 //
 // DESIGNTWIN_CONFIG_DIR overrides everything — the tests need a config dir that is not the real
 // user's, and a container/CI run may want one explicitly.
-function configDir() {
+export function configDir(): string {
   const override = process.env.DESIGNTWIN_CONFIG_DIR;
   if (override && path.isAbsolute(override)) return override;
 
@@ -59,17 +89,17 @@ function configDir() {
   return path.join(os.homedir(), ".config", APP);
 }
 
-const tokenPath = () => path.join(configDir(), FILE);
+export const tokenPath = (): string => path.join(configDir(), FILE);
 
 // A stable, non-secret way to say "the same token?" in logs, `--token-status`, and a 401 hint.
 // Truncated SHA-256, never the token itself — the whole point of persisting is to stop printing it.
-const fingerprint = (tok) => (tok ? crypto.createHash("sha256").update(String(tok)).digest("hex").slice(0, 8) : null);
+export const fingerprint = (tok: unknown): string | null => (tok ? crypto.createHash("sha256").update(String(tok)).digest("hex").slice(0, 8) : null);
 
 // Read one token from a path. Trims: a token written with `echo tok > file` carries a trailing
 // newline, which would otherwise fail the handshake with a "bad token" that looks nothing like the
 // whitespace bug it is. Returns null for missing/empty/unreadable rather than throwing — every
 // caller's next move is "fall through to the next source".
-function readFrom(file) {
+export function readFrom(file: string): string | null {
   try {
     const raw = fs.readFileSync(file, "utf8").trim();
     return raw || null;
@@ -81,7 +111,7 @@ function readFrom(file) {
 // Is the file readable by anyone but the owner? POSIX only: on Windows the mode bits are not
 // meaningful (%APPDATA% is already per-user by ACL), so reporting on them would be a warning the
 // user cannot act on.
-function loosePerms(file) {
+export function loosePerms(file: string): boolean {
   if (process.platform === "win32") return false;
   try {
     return (fs.statSync(file).mode & 0o077) !== 0;
@@ -97,7 +127,7 @@ function loosePerms(file) {
 //
 // mode is passed to writeFileSync AND re-applied with chmod because the open(2) mode is masked by
 // the process umask — a umask of 0 would otherwise leave it 0666. Belt and braces on a one-line cost.
-function write(token, file = tokenPath()) {
+export function write(token: string, file: string = tokenPath()): string {
   const dir = path.dirname(file);
   // 0700: the XDG spec asks for exactly this when creating a config dir that does not exist.
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -108,7 +138,7 @@ function write(token, file = tokenPath()) {
   return file;
 }
 
-function remove(file = tokenPath()) {
+export function remove(file: string = tokenPath()): boolean {
   try {
     fs.unlinkSync(file);
     return true;
@@ -129,11 +159,11 @@ function remove(file = tokenPath()) {
 //
 // `persist: false` lets a caller ask "what WOULD be used" without creating a file as a side effect —
 // which is what --token-status needs.
-function resolve({ tokenFile = null, persist = true } = {}) {
+export function resolve({ tokenFile = null, persist = true }: ResolveOptions = {}): ResolvedToken {
   if (tokenFile) {
     const tok = readFrom(tokenFile);
     if (!tok) {
-      const err = new Error(`--token-file ${tokenFile}: not readable, or empty.`);
+      const err: Error & { code?: string } = new Error(`--token-file ${tokenFile}: not readable, or empty.`);
       err.code = "TOKEN_FILE_UNREADABLE";
       throw err;
     }
@@ -161,7 +191,7 @@ function resolve({ tokenFile = null, persist = true } = {}) {
 }
 
 // What --token-status prints: everything about the token except the token.
-function status() {
+export function status(): TokenStatus {
   const file = tokenPath();
   const stored = readFrom(file);
   const envTok = (process.env.FIGMA_BRIDGE_TOKEN || "").trim();
@@ -186,5 +216,3 @@ function status() {
     shadowed: !!stored && !!envTok && stored !== envTok,
   };
 }
-
-module.exports = { configDir, tokenPath, resolve, write, remove, readFrom, generate, fingerprint, status, loosePerms };

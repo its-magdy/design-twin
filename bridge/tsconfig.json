@@ -1,17 +1,19 @@
 {
   "compilerOptions": {
-    // The MCP SDK is ESM-only, so this file is ESM (built to figma-mcp.mjs). nodenext gives the
-    // correct ESM resolution + requires the .js extension on SDK subpath imports.
-    "target": "es2022",
     "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "lib": ["es2022"],
-    "types": ["node"],
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "forceConsistentCasingInFileNames": true
+    "target": "es2024",                      // pinned; Node 24 runs it natively. TS7's default floats.
+    "lib": ["es2024"],
+    "types": ["node"],                       // TS7 default is [] — must be explicit
+    "rootDir": "src",                        // TS7 default is "." → would emit dist/src/*
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "erasableSyntaxOnly": true,              // reject enum / namespace / param properties before Node does
+    "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true, // "./x.ts" in source → "./x.js" in dist
+    "resolveJsonModule": true,               // figma-pull/init/doctor require("./package.json")
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

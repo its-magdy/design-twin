@@ -107,7 +107,7 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
 // ------------------------------------------------------------------ variables-merge.js (21)
 console.log("variables-merge.js — same name, different key, is a conflict:");
 {
-  const vm = await tryImport(path.join(SRC, "bridge", "variables-merge.js"));
+  const vm = await tryImport(path.join(SRC, "bridge", "src", "variables-merge.ts"));
   const merged = read("variables.json");
   let doc: any = null;
   for (const s of merged._slices) doc = vm.mergeVariablesDoc(doc, read(s.file.replace(/\.json$/, ".vars.json")), { screen: s.screen, file: s.file, at: s.at }).doc;

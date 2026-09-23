@@ -12,15 +12,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { assertNotManifest } from "./catalog-input.ts";
-import dsl from "../bridge/design-system-layout.js";
+import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
-
-// bridge/design-system-layout.d.ts declares only buildDesignSystemLayout, so the constant the CJS
-// module also exports (verified at runtime: DESIGN_SYSTEM_DIR === "design-system") is read off the
-// default import — which IS module.exports — through this local declaration. Two steps through
-// `unknown` because the .d.ts's namespace type and this interface do not overlap.
-interface DesignSystemLayoutConstants { DESIGN_SYSTEM_DIR: string }
-const { DESIGN_SYSTEM_DIR } = dsl as unknown as DesignSystemLayoutConstants;
 
 export type GetComponentResult =
   | { found: false }

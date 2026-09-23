@@ -7,9 +7,9 @@ import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
 import { isManifest } from "../design-to-code/catalog-input.ts";
 import { getComponent, findComponent, resolveVariantsFile } from "../design-to-code/get-component.ts";
-import { buildDesignSystemLayout } from "../bridge/design-system-layout.js";
+import { buildDesignSystemLayout } from "../bridge/src/design-system-layout.ts";
 import { check, report } from "./assert.ts";
-import type { CodeConnectMap, ComponentsCatalog, MapEntry, MapPropKind, EnumPropMap, TokensDoc } from "../design-to-code/types.ts";
+import type { CodeConnectMap, ComponentsCatalog, DesignSystemDoc, MapEntry, MapPropKind, EnumPropMap, TokensDoc } from "../design-to-code/types.ts";
 import type { GetComponentResult } from "../design-to-code/get-component.ts";
 import type { DtcgColor, DtcgDimension, DtcgLeaf, EmitResult, ResolverDoc } from "../design-to-code/tokens.ts";
 import fs from "node:fs";
@@ -734,6 +734,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
 
 // ---------- get-component.js: resolve a catalog entry -> its variantsFile detail -----------------
 (() => {
+  // Hand-built fixture: its variant/standalone `node`s omit `id` (IrNode requires it) — not needed here.
   const gcDs = {
     exportedAt: "2026-08-18T00:00:00.000Z", file: "Demo", colorProfile: "srgb",
     collections: [], variables: [], styles: { paint: [], text: [], effect: [], grid: [] }, hygiene: [],
@@ -747,7 +748,7 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
       { key: "ksolo", name: "IconButton", id: "9:7", type: "COMPONENT", page: "P", pageId: "1:0",
         node: { type: "COMPONENT", name: "IconButton", fills: [] } }, // standalone COMPONENT, not a variant in a set
     ],
-  };
+  } as unknown as DesignSystemDoc;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "get-component-"));
   const built = buildDesignSystemLayout(gcDs, "/");
   fs.mkdirSync(path.join(tmp, built.dir, "components"), { recursive: true });

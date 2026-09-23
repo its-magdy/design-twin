@@ -1,5 +1,5 @@
 // The ONE definition of how the design-system catalog is split across files — the sibling of
-// pages-layout.js, and it exists for the same two reasons.
+// pages-layout.ts, and it exists for the same two reasons.
 //
 // 1) SIZE. design-system.json used to be a single flat object holding every variable, every style,
 //    every component and a lint report. On a real design-system file that is the biggest document in
@@ -27,13 +27,13 @@
 //
 // design-system.json stays, slim: the stamp (`exportedAt`/`file`/`colorProfile`) plus a `files`
 // pointer map, so an existing consumer that opens design-system.json still finds its way. The stamp is
-// repeated into every split file on purpose — snapshot-meta.js and design-to-code/drift-lint.js read
-// `exportedAt` off whichever file they are handed, and design-to-code/tokens.js, map-bootstrap.js and
-// drift-lint.js are now pointed at tokens.json / components.local.json directly.
+// repeated into every split file on purpose — snapshot-meta.ts and design-to-code/drift-lint.ts read
+// `exportedAt` off whichever file they are handed, and design-to-code/tokens.ts, map-bootstrap.ts and
+// drift-lint.ts are now pointed at tokens.json / components.local.json directly.
 //
-// Kept dependency-free CJS for the same reason as pages-layout.js: the Node CLI requires it and
-// esbuild inlines it into the plugin bundle, so the disk writer and the browser-download writer build
-// the identical set of files.
+// Kept dependency-free (no Node imports, ES2019-safe) for the same reason as pages-layout.ts: the
+// Node CLI imports it and esbuild inlines it into the plugin bundle, so the disk writer and the
+// browser-download writer build the identical set of files.
 
 // The parts live in a design-system/ SUBDIRECTORY, not next to design-system.json, because two
 // of these names are already taken at the export root by files the user HAND-AUTHORS and cannot
@@ -41,7 +41,29 @@
 // (Figma component -> your code component). A generated tokens.json at the root would overwrite the
 // styling source of truth on every pull. The subdirectory keeps the taxonomy names AND that boundary:
 // design/ root = your config + screens, design/design-system/ = the regenerable catalog.
-const { safe } = require("./pages-layout.js"); // same filesystem-boundary sanitiser pages-layout.js uses for layer files
+import { safe } from "./pages-layout.ts"; // same filesystem-boundary sanitiser pages-layout.ts uses for layer files
+import type { PageLayoutFile } from "./pages-layout.ts";
+import type {
+  DesignSystemStamp, DesignSystemManifest, TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc,
+  HygieneDoc, CatalogVariant, CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles,
+  DesignSystemDoc,
+} from "./doc-types.ts";
+
+/** Every document the split writes, in `files` order: tokens, the four style files, the two
+ *  component catalogs, hygiene, any per-component detail files, and the slim manifest (last). */
+export type DesignSystemFileData =
+  | TokensDoc | PaintStylesDoc | TextStylesDoc | EffectStylesDoc | GridStylesDoc | ComponentsCatalog | HygieneDoc
+  | ComponentDetailFile | DesignSystemManifest;
+
+export interface DesignSystemLayout {
+  /** Every file to write, INCLUDING the slim manifest (last). */
+  files: Array<PageLayoutFile<DesignSystemFileData>>;
+  /** The slim manifest alone: stamp + `files` pointer map + `counts`. */
+  manifest: DesignSystemManifest;
+  counts: DesignSystemManifest["counts"];
+  /** The subdirectory the split parts live under ("design-system"). */
+  dir: string;
+}
 
 const DIR = "design-system";
 const COMPONENTS_DIR = "components"; // sibling subdir of design-system/, holds one detail file per COMPONENT_SET
@@ -59,23 +81,22 @@ const MANIFEST = "design-system.json";
 // library main). The task's other signal — "has id/page/pageId" — is the same partition seen from the
 // local side; `remote` is the flag the producer actually writes, so that is what we key on, and
 // anything without it is treated as local.
-function isLibraryEntry(c) {
+export function isLibraryEntry(c: { remote?: unknown } | null | undefined): boolean {
   return !!(c && c.remote === true);
 }
 
 /**
- * @param {any} ds     the plugin's designSystem doc
- * @param {string} sep path separator: "/" for real directories, "__" for flat download names — the
- *                     same single knob pages-layout.js has, and for the same reason (a browser
- *                     download cannot create directories).
- * @returns {{files: Array<{path: string, data: any}>, manifest: any, counts: any, dir: string}}
- *          `files` is every file to write INCLUDING the slim manifest (last).
+ * @param ds   the plugin's designSystem doc
+ * @param sep  path separator: "/" for real directories, "__" for flat download names — the
+ *             same single knob pages-layout.ts has, and for the same reason (a browser
+ *             download cannot create directories).
+ * @returns    `files` is every file to write INCLUDING the slim manifest (last).
  */
-function buildDesignSystemLayout(ds, sep) {
-  const d = ds || {};
-  const join = (name) => DIR + (sep || "/") + name;
+export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, sep: string): DesignSystemLayout {
+  const d: DesignSystemDoc = ds || {};
+  const join = (name: string): string => DIR + (sep || "/") + name;
   // The stamp every split file carries. Written through byte for byte — nothing here re-derives it.
-  const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
+  const stamp: DesignSystemStamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
   const components = Array.isArray(d.components) ? d.components : [];
   const rawLocal = components.filter((c) => !isLibraryEntry(c));
   const library = components.filter(isLibraryEntry);
@@ -83,11 +104,11 @@ function buildDesignSystemLayout(ds, sep) {
 
   // The heavy part of a COMPONENT_SET entry — variants[].node, a full serialized node tree per variant
   // (opt-in via runOpts.variantVisuals in components.ts) — is what makes components.local.json huge on
-  // a real design-system file. Neither drift-lint.js nor map-bootstrap.js ever reads `.node` (both key
+  // a real design-system file. Neither drift-lint.ts nor map-bootstrap.ts ever reads `.node` (both key
   // off name/id/key/type/props), so it is safe to split out unread. Everything else on the entry,
   // INCLUDING each variant's id/name/key/values, stays in the catalog byte for byte.
-  const usedNames = new Set();
-  const uniqueDetailName = (name, id) => {
+  const usedNames = new Set<string>();
+  const uniqueDetailName = (name: string | undefined, id: string | undefined): string => {
     const base = safe(name || "component") + "__" + safe(id);
     if (!usedNames.has(base)) { usedNames.add(base); return base; }
     let i = 2;
@@ -95,11 +116,11 @@ function buildDesignSystemLayout(ds, sep) {
     usedNames.add(base + "_" + i);
     return base + "_" + i;
   };
-  const componentFiles = [];
-  const local = rawLocal.map((c) => {
+  const componentFiles: Array<PageLayoutFile<ComponentDetailFile>> = [];
+  const local = rawLocal.map((c): CatalogComponent => {
     // A standalone COMPONENT (variantVisuals also walks these now, components.ts) carries its own
     // node tree directly on `.node` rather than under `.variants[].node` — same reason to split it out
-    // (unread by drift-lint.js/map-bootstrap.js, and it is the single biggest field on the entry), but
+    // (unread by drift-lint.ts/map-bootstrap.ts, and it is the single biggest field on the entry), but
     // mirrored as its own nodeFile pointer since there is no variants array to slim here.
     if (c.type === "COMPONENT" && c.node) {
       const { node, ...rest } = c;
@@ -114,8 +135,11 @@ function buildDesignSystemLayout(ds, sep) {
     if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
       return c; // no exported node trees (variantVisuals was off, or nothing serialized) -> no detail file, no pointer
     }
-    const slimVariants = c.variants.map((v) => {
-      const { node, ...rest } = v || {};
+    // Object.assign + delete is `const { node, ...rest } = v || {}` (same keys, same order) without
+    // destructuring a possibly-empty object.
+    const slimVariants = c.variants.map((v): CatalogVariant => {
+      const rest: CatalogVariant = Object.assign({}, v);
+      delete rest.node;
       return rest;
     });
     const detailName = uniqueDetailName(c.name, c.id);
@@ -126,13 +150,13 @@ function buildDesignSystemLayout(ds, sep) {
     });
     return { ...c, variants: slimVariants, variantsFile: detailPath };
   });
-  const styles = d.styles || {};
+  const styles: DesignSystemStyles = d.styles || {};
   const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
   const stylesText = Array.isArray(styles.text) ? styles.text : [];
   const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
   const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
 
-  const files = [
+  const files: Array<PageLayoutFile<DesignSystemFileData>> = [
     { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
     { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
     { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
@@ -144,7 +168,7 @@ function buildDesignSystemLayout(ds, sep) {
     ...componentFiles,
   ];
 
-  const counts = {
+  const counts: DesignSystemManifest["counts"] = {
     collections: (d.collections || []).length,
     variables: (d.variables || []).length,
     stylesPaint: stylesPaint.length,
@@ -159,7 +183,7 @@ function buildDesignSystemLayout(ds, sep) {
   // The pointer map carries the SAME relative paths the files actually landed under (separator and
   // all), so a consumer joins them against the export dir and needs to know nothing else — including
   // the download path, where the "directory" is really a "__" in the filename.
-  const manifest = {
+  const manifest: DesignSystemManifest = {
     ...stamp,
     files: {
       tokens: join(TOKENS),
@@ -187,12 +211,14 @@ function buildDesignSystemLayout(ds, sep) {
   return { files, manifest, counts, dir: DIR };
 }
 
-module.exports = {
-  buildDesignSystemLayout,
-  isLibraryEntry,
-  DESIGN_SYSTEM_DIR: DIR,
-  DESIGN_SYSTEM_FILES: {
-    TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
-    COMPONENTS_DIR, HYGIENE, MANIFEST,
-  },
+export const DESIGN_SYSTEM_DIR: string = DIR;
+
+/** Every file/dir name the split uses — the manifest's own name included (MANIFEST). */
+export interface DesignSystemFileNames {
+  TOKENS: string; STYLES_PAINT: string; STYLES_TEXT: string; STYLES_EFFECT: string; STYLES_GRID: string;
+  COMPONENTS_LOCAL: string; COMPONENTS_LIBRARY: string; COMPONENTS_DIR: string; HYGIENE: string; MANIFEST: string;
+}
+export const DESIGN_SYSTEM_FILES: DesignSystemFileNames = {
+  TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
+  COMPONENTS_DIR, HYGIENE, MANIFEST,
 };

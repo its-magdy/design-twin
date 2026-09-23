@@ -1,5 +1,5 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
+
 
 // design-to-code/resolve-screen.ts
 import fs from "node:fs";

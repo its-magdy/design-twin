@@ -1,4 +1,4 @@
-// write-out.js — the ONE place an export lands on disk.
+// write-out.ts — the ONE place an export lands on disk.
 //
 // Both read clients write through this module: the figma-pull CLI (which has always written to disk)
 // and the MCP export tools (which used to have no disk path at all — they stripped asset bytes to
@@ -9,18 +9,69 @@
 //
 // The freshness stamp (`exportedAt`/`file`) is stamped by the PLUGIN (collect.ts/components.ts).
 // Nothing here adds, strips or re-derives it — writeJson writes what it was handed, byte for byte,
-// because snapshot-meta.js and design-to-code/drift-lint.js both read that stamp back off disk.
-const fs = require("fs");
-const path = require("path");
-const { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, safe } = require("./pages-layout.js");
-const { buildDesignSystemLayout } = require("./design-system-layout.js");
-const { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } = require("./library-layout.js");
-const { mergeVariablesDoc } = require("./variables-merge.js");
-const { sha1Hex, normalizeForCompare } = require("./asset-compare.js");
+// because snapshot-meta.ts and design-to-code/drift-lint.ts both read that stamp back off disk.
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts } from "./pages-layout.ts";
+import type { ScreenPaths, ScreenIndexRow } from "./pages-layout.ts";
+import { buildDesignSystemLayout } from "./design-system-layout.ts";
+import type { DesignSystemLayout } from "./design-system-layout.ts";
+import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-layout.ts";
+import { mergeVariablesDoc } from "./variables-merge.ts";
+import { sha1Hex, normalizeForCompare } from "./asset-compare.ts";
+import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
+import type { DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, ScreenExport, VariablesDoc, LibraryCounts } from "./doc-types.ts";
+
+// ---- what the plugin hands this module (the `r` of every writer below)
+
+/** One exported asset (figma-plugin/src/state.ts Asset). `file` is the producer-owned name; writeAssets
+ *  rewrites it (and `text`/`base64`) in place to what actually landed on disk. */
+export interface ExportAsset {
+  id?: string;
+  name?: string;
+  format?: string;
+  file: string;
+  base64?: string | null;
+  text?: string | null;
+  kind?: string;
+  hash?: string;
+  from?: string[];
+}
+
+/**
+ * Any export result the plugin returns — the ONE shape writeAny dispatches on. Which fields are present
+ * depends on the command: a full/page pull (`designSystem` + `layersDoc` + `assets`), a design-system or
+ * library pull (`designSystem` only; a library's carries `source.role === "library"`), a single-screen
+ * pull (figma-plugin/src/collect.ts screenResult: `screenName` + `screen` + `variables` + `assets` + the
+ * page/node identity), or a screenshot (`id`/`name`/`type`/`reference` + `manifest` + `assets`).
+ * `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts (P4 #33), never by the plugin.
+ */
+export interface ExportResult {
+  designSystem?: DesignSystemDoc;
+  layersDoc?: LayersDoc;
+  assets?: ExportAsset[];
+  screenName?: string;
+  screen?: ScreenExport;
+  variables?: VariablesDoc;
+  page?: string;
+  pageId?: string;
+  nodeId?: string;
+  id?: string;
+  name?: string;
+  type?: string;
+  reference?: string;
+  manifest?: Manifest;
+  warnings?: string[];
+  sourceFile?: string;
+  sourceFileKey?: string;
+}
+
+export type Log = (m: string) => void;
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
-// next to the bridge's own source. FIGMA_EXPORT_DIR is the same env var snapshot-meta.js already
+// next to the bridge's own source. FIGMA_EXPORT_DIR is the same env var snapshot-meta.ts already
 // reads, so figma_status looks for the snapshot exactly where this wrote it.
 //
 // The default is design/EXPORT, not design/. design/ had become two kinds of file under one name:
@@ -29,8 +80,7 @@ const { sha1Hex, normalizeForCompare } = require("./asset-compare.js");
 // verify/). "Delete design/ and re-pull" is the obvious recovery move and it silently destroyed the
 // second kind. One subdirectory draws the line where it can be seen: everything dtwin writes is under
 // design/export/, and nothing else is.
-const { EXPORT_DIR: DEFAULT_OUT_DIR } = require("./project-layout.js");
-function resolveOutDir(outDir) {
+function resolveOutDir(outDir?: string | null): string {
   return path.resolve(process.cwd(), outDir || process.env.FIGMA_EXPORT_DIR || DEFAULT_OUT_DIR);
 }
 
@@ -42,7 +92,7 @@ function resolveOutDir(outDir) {
 // applied where the value is untrusted, not inside resolveOutDir, so the CLI keeps its freedom.
 // `what` names the ARGUMENT in the message: this guards exportDir and map too, and telling a model its
 // `outDir` is wrong when it never passed one sends it looking for the wrong thing.
-function assertInsideCwd(outDir, what = "outDir") {
+function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
   const dir = resolveOutDir(outDir);
   const root = path.resolve(process.cwd());
   if (dir !== root && !dir.startsWith(root + path.sep)) {
@@ -55,16 +105,16 @@ function assertInsideCwd(outDir, what = "outDir") {
 }
 
 // quiet: layer files are written by the hundred and get ONE summary line instead of one line each.
-function writeJson(dir, name, obj, quiet, log) {
+function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log): void {
   fs.writeFileSync(path.join(dir, name), JSON.stringify(obj, null, 2));
   if (!quiet && log) log("wrote " + path.join(dir, name));
 }
 
 // Materialise the shared pages/ layout as real nested directories. The layout itself — bucketing,
-// page-dir disambiguation, layer filenames, index shape, pageDirs — lives in pages-layout.js, which
+// page-dir disambiguation, layer filenames, index shape, pageDirs — lives in pages-layout.ts, which
 // the plugin's browser-download twin builds from too (with "__" instead of "/"), so the two writers
 // cannot drift. This function only creates directories and writes bytes.
-function writePages(dir, layersDoc, log) {
+function writePages(dir: string, layersDoc: LayersDoc | null | undefined, log?: Log): { meta: PagesRootIndex; layerFiles: number; pageDirs: number; rootIndex: string } {
   const pdir = path.join(dir, "pages");
   fs.mkdirSync(pdir, { recursive: true }); // guarantee pages/ exists even for a zero-layer run
   const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(layersDoc, "/");
@@ -77,14 +127,14 @@ function writePages(dir, layersDoc, log) {
 }
 
 // The design-system twin of writePages: the SPLIT (which keys land in which file, the local/library
-// component partition, the slim manifest) lives in design-system-layout.js, which the plugin's
+// component partition, the slim manifest) lives in design-system-layout.ts, which the plugin's
 // browser-download path builds from too, so the two writers cannot drift. This only writes bytes.
-function writeDesignSystem(dir, designSystem, log) {
+function writeDesignSystem(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log): DesignSystemLayout["counts"] {
   const built = buildDesignSystemLayout(designSystem, "/");
   fs.mkdirSync(path.join(dir, built.dir), { recursive: true });
   // COMPONENT_SET detail files land one level deeper, at manifest.files.componentsDir — only created
   // when at least one entry actually produced a detail file (variantVisuals opt-in).
-  // Present only when a detail file was actually produced (design-system-layout.js omits the pointer
+  // Present only when a detail file was actually produced (design-system-layout.ts omits the pointer
   // otherwise, so `files` never names a directory that does not exist).
   const componentsDir = built.manifest.files.componentsDir;
   if (componentsDir && built.files.some((f) => f.path.startsWith(componentsDir + "/"))) {
@@ -97,26 +147,26 @@ function writeDesignSystem(dir, designSystem, log) {
 
 // The library twin of writeDesignSystem. Writes into libraries/<slug>-<fileKey8>/ — a tree that by
 // construction never intersects design-system/ or pages/, so a library pull cannot overwrite the design
-// file's own catalog (they are separate Figma files answering separate questions; see library-layout.js).
+// file's own catalog (they are separate Figma files answering separate questions; see library-layout.ts).
 //
 // Re-export is idempotent — every file is rewritten in place with a fresh stamp — but writeJson only
 // ever WRITES, so a file a previous export produced and this one did not stays on disk, stale yet
 // carrying a believable old timestamp. Rather than delete files a read command did not create, we diff
 // this run's pointer map against the previous index and REPORT what is now orphaned. The user decides.
-function writeLibrary(dir, designSystem, log) {
+function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefined, log?: Log): { dir: string; counts: LibraryCounts; publish: Record<string, number> | undefined; orphans: string[] } {
   const built = buildLibraryLayout(designSystem, "/");
   const ldir = path.join(dir, built.dir);
 
-  let prevIndexDoc = null;
+  let prevIndexDoc: { files?: unknown } | null = null;
   try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")); } catch (e) {} // absent/corrupt = first export
 
   fs.mkdirSync(ldir, { recursive: true });
   for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
 
-  const orphans = [];
+  const orphans: string[] = [];
   if (prevIndexDoc && prevIndexDoc.files) {
     const now = new Set(built.files.map((f) => f.path));
-    for (const p of Object.values(prevIndexDoc.files)) {
+    for (const p of Object.values(prevIndexDoc.files as object)) {
       if (typeof p === "string" && !now.has(p) && fs.existsSync(path.join(dir, p))) orphans.push(p);
     }
   }
@@ -127,7 +177,7 @@ function writeLibrary(dir, designSystem, log) {
   // Merge, never overwrite: each library is its own plugin run in its own file, so exporting library B
   // must not erase library A's row.
   const rootIndex = path.join(dir, ROOT, INDEX);
-  let prevRoot = null;
+  let prevRoot: unknown = null;
   try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")); } catch (e) {}
   writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log);
 
@@ -157,9 +207,9 @@ const BUSY_SVG_PATHS = 400;
 // this on the same array, and the `entry.assets`/`root.reference` pointers in writeScreen) is mutated
 // in place to the name ACTUALLY written, so nothing downstream can point at a name this function
 // decided not to use.
-function readExistingDirCaseFold(adir) {
-  const map = new Map(); // lowercased basename -> real basename on disk
-  let names = [];
+function readExistingDirCaseFold(adir: string): Map<string, string> {
+  const map = new Map<string, string>(); // lowercased basename -> real basename on disk
+  let names: string[] = [];
   try { names = fs.readdirSync(adir); } catch (e) { /* doesn't exist yet */ }
   for (const n of names) map.set(n.toLowerCase(), n);
   return map;
@@ -177,12 +227,12 @@ function readExistingDirCaseFold(adir) {
 // exist ANYWHERE in the shared directory". Built once per writeAssets() call over the files ALREADY on
 // disk (sharedAssetHashes() does the identical scan for the duplicates report — same map, same
 // semantics, so a file this function reuses can never show up as a `duplicates` entry afterwards).
-function readExistingDirByContent(adir) {
-  const map = new Map(); // normalised sha1 -> real basename on disk
-  let names = [];
+function readExistingDirByContent(adir: string): Map<string, string> {
+  const map = new Map<string, string>(); // normalised sha1 -> real basename on disk
+  let names: string[] = [];
   try { names = fs.readdirSync(adir); } catch (e) { return map; }
   for (const name of names) {
-    let bytes;
+    let bytes: Buffer;
     try { bytes = fs.readFileSync(path.join(adir, name)); } catch (e) { continue; }
     const hash = sha1Hex(normalizeForCompare(name, bytes));
     if (!map.has(hash)) map.set(hash, name); // first (alphabetically-readdir'd) name wins ties
@@ -190,11 +240,11 @@ function readExistingDirByContent(adir) {
   return map;
 }
 
-function shortHashOf(a, bytes) {
+function shortHashOf(a: ExportAsset, bytes: Buffer): string {
   // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
   // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
   if (typeof a.hash === "string" && a.hash) return a.hash.replace(/[^a-z0-9]/gi, "").slice(0, 6);
-  return require("crypto").createHash("sha1").update(bytes).digest("hex").slice(0, 6);
+  return crypto.createHash("sha1").update(bytes).digest("hex").slice(0, 6);
 }
 
 // Reuse `existingName`'s bytes for `a`: point `a.file` at it, and replace `a.text`/`a.base64` with the
@@ -202,26 +252,26 @@ function shortHashOf(a, bytes) {
 // hashes what is really there — a normalised-equal-but-byte-different re-pull must never record a hash
 // for content that was never written (findings 23/104's "recorded hash matches nothing on disk", just
 // introduced by a naive fix instead of closed by one).
-function reuseExisting(a, dirPrefix, existingName, priorBytes) {
+function reuseExisting(a: ExportAsset, dirPrefix: string, existingName: string, priorBytes: Buffer): void {
   a.file = dirPrefix + "/" + existingName;
   if (a.text != null) a.text = priorBytes.toString("utf8");
   else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
 }
 
-function writeAssets(dir, assets, log, subdir) {
+function writeAssets(dir: string, assets: ExportAsset[] | null | undefined, log?: Log, subdir?: string): number {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
   const existing = readExistingDirCaseFold(adir); // lower -> real name already on disk
-  const claimed = new Map(); // lower -> real name this call has written/claimed so far (this batch)
+  const claimed = new Map<string, string>(); // lower -> real name this call has written/claimed so far (this batch)
   for (const [k, v] of existing) claimed.set(k, v);
   // normalised sha1 -> real name, seeded from disk and updated as THIS call writes new content, so two
   // assets in the SAME pull that happen to share content (not just two pulls) also collapse to one file.
   const byContent = readExistingDirByContent(adir);
-  const heavy = [];
+  const heavy: Array<{ file: string; node: string | undefined; bytes: number; paths: number }> = [];
   let n = 0;
   for (const a of assets) {
-    let bytes;
+    let bytes: Buffer;
     if (a.text != null) bytes = Buffer.from(a.text, "utf8");
     else if (a.base64 != null) bytes = Buffer.from(a.base64, "base64");
     else continue; // manifest-only entry (e.g. an asset the plugin skipped) — nothing to write
@@ -239,7 +289,7 @@ function writeAssets(dir, assets, log, subdir) {
     const contentHash = sha1Hex(normalizeForCompare(baseName, bytes));
     const byContentName = byContent.get(contentHash);
     if (byContentName !== undefined) {
-      let priorBytes = null;
+      let priorBytes: Buffer | null = null;
       try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch (e) { /* fall through as new */ }
       if (priorBytes) {
         reuseExisting(a, dirPrefix, byContentName, priorBytes);
@@ -306,7 +356,7 @@ function writeAssets(dir, assets, log, subdir) {
 // owned outside this file; not called from here so as not to reach into that function) to log
 // alongside its other per-screen output.
 const ASSETS_GEOMETRY_WARN_RATIO = 0.1; // 10%+ of nodes recovered as raw geometry is worth a line
-function assetsGeometryWarning(manifest) {
+function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined): string | null {
   const nodes = manifest && typeof manifest.nodes === "number" ? manifest.nodes : 0;
   const geo = manifest && typeof manifest.assetsGeometry === "number" ? manifest.assetsGeometry : 0;
   if (!nodes || !geo) return null;
@@ -327,7 +377,7 @@ function assetsGeometryWarning(manifest) {
 // directory, one name, no duplicate: shoot a node during discovery and the PNG is already in the
 // place build-screen reads, whether or not you go on to pull it.
 const REF_DIR = "assets";
-function writeScreenshot(outDir, r, log) {
+function writeScreenshot(outDir: string | null | undefined, r: ExportResult, log?: Log): { outDir: string; reference: string | undefined; wrote: { screenshot: true; assets: number; reference: string | undefined } } {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   const assets = writeAssets(dir, r.assets, log, REF_DIR);
@@ -335,14 +385,14 @@ function writeScreenshot(outDir, r, log) {
   // here from the file actually written is what keeps the message and the file in agreement.
   const first = (r.assets || []).find((a) => a && a.file);
   const reference = first ? REF_DIR + "/" + path.basename(first.file) : r.reference;
-  return { outDir: dir, reference, wrote: { screenshot: true, assets, reference } };
+  return { outDir: dir, reference, wrote: { screenshot: true as const, assets, reference } };
 }
 
 // The whole-export write, shared by the CLI's default path and the MCP export tools' writeToDisk
 // path. Returns the COMPACT INDEX — counts and paths, never node payloads — which is precisely what
 // an MCP tool should hand back in place of the export itself: the agent then Reads/Greps the files
 // at whatever granularity it actually needs, instead of paying for the whole tree in context.
-function writeExport(outDir, r, log) {
+function writeExport(outDir: string | null | undefined, r: ExportResult, log?: Log) {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   // A library catalog is routed by the PRODUCER's own flag (`source.role`), not by a CLI-side guess:
@@ -354,7 +404,7 @@ function writeExport(outDir, r, log) {
     return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans } };
   }
   const ds = r.designSystem ? writeDesignSystem(dir, r.designSystem, log) : null;
-  // P4 #33: figma-pull.js resolves which connected Figma file this pull talked to and stamps it as
+  // P4 #33: figma-pull.ts resolves which connected Figma file this pull talked to and stamps it as
   // `r.sourceFile`/`r.sourceFileKey` (the plugin itself has no reason to know its own bridge-side
   // connection id). Forward it onto layersDoc so buildPageLayout can carry it onto every per-page
   // layer file/index row — the same field writeScreen below stamps for a single-screen pull.
@@ -390,15 +440,15 @@ function writeExport(outDir, r, log) {
 // already on disk rather than being recomputed in one pass like buildPageLayout's.
 //
 // Asset filenames are still NOT sanitised here: the plugin owns them (see writeAssets).
-function writeScreen(outDir, r, log) {
+function writeScreen(outDir: string | null | undefined, r: ExportResult, log?: Log) {
   const dir = resolveOutDir(outDir);
   const paths = screenPaths(r, "/");
   fs.mkdirSync(path.join(dir, "pages", paths.dir), { recursive: true });
 
   // P4 #33: stamp which Figma file this pull actually talked to, straight onto the screen doc's own
-  // top level — the ONE thing doctor.js's exportSourceCounts() can read without opening a second file, and
+  // top level — the ONE thing doctor.ts's exportSourceCounts() can read without opening a second file, and
   // the reason a project pulled before this field existed is told apart from one whose source is
-  // simply unknown (undefined, never a guess). figma-pull.js resolves it; this is just where it lands.
+  // simply unknown (undefined, never a guess). figma-pull.ts resolves it; this is just where it lands.
   const screenDoc = r.sourceFile
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
@@ -414,14 +464,16 @@ function writeScreen(outDir, r, log) {
   // The entry a consumer reads instead of guessing filenames. Every sibling this pull produced is a
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that
   // reassembles `pages/<dir>/<base>.vars.json` from parts is right until the day one part changes.
-  const root = (r.screen && r.screen.nodes && r.screen.nodes[0]) || {};
+  const root: Partial<IrNode> = (r.screen && r.screen.nodes && r.screen.nodes[0]) || {};
   // title/texts: findings 16/17/70/90/120 — the visible title a user types is a TEXT node inside the
-  // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.js deriveTitle.
+  // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.ts deriveTitle.
   const title = deriveTitle(root);
   const texts = collectTexts(root);
-  const entry = {
-    name: (r.screen && r.screen.screen) || r.screenName,
-    id: paths.nodeId || root.id,
+  // ts-port: `name`/`id`/`type` can be undefined on a degenerate result (no screen label, no nodes) —
+  // JSON.stringify then drops them, exactly as before; the casts only name the row type it is written as.
+  const entry: ScreenIndexRow = {
+    name: ((r.screen && r.screen.screen) || r.screenName) as string,
+    id: (paths.nodeId || root.id) as string,
     type: root.type,
     page: paths.page,
     pageId: paths.pageId,
@@ -467,8 +519,8 @@ function writeScreen(outDir, r, log) {
 //
 // One colour throughout = thematic, safe to recolour. More than one = semantic, leave it alone. The
 // builder gets the answer per file instead of having to open each SVG.
-function svgPalette(text) {
-  const colors = new Set();
+function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; paths: number } {
+  const colors = new Set<string>();
   for (const m of String(text).matchAll(/(?:fill|stroke)\s*=\s*"([^"]+)"/g)) {
     const v = m[1].trim().toLowerCase();
     if (v === "none" || v === "transparent" || v === "currentcolor" || v.startsWith("url(")) continue;
@@ -478,7 +530,7 @@ function svgPalette(text) {
   return { colors: [...colors], monochrome: colors.size === 1, paths };
 }
 
-function readJsonOr(file, fallback) {
+function readJsonOr(file: string, fallback: unknown): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (e) {
@@ -493,7 +545,7 @@ function readJsonOr(file, fallback) {
 // This index answers it directly, and the content hash makes the duplication visible — the same
 // sidebar icon exported once per instance path shows up as several names under one hash, so a
 // consumer can import one file instead of five without diffing bytes itself.
-// Every file's NORMALISED content hash (bridge/svg-normalize.js), over the WHOLE shared assets/
+// Every file's NORMALISED content hash (bridge/src/svg-normalize.ts), over the WHOLE shared assets/
 // directory — not just this pull's own array. `assets/` is explicitly shared and cumulative (see
 // writeAssets' header), so a duplicate between this screen's icon and one a DIFFERENT screen's pull
 // wrote is exactly as real as one within this pull, and finding 27 is precisely that a per-pull-array
@@ -503,32 +555,45 @@ function readJsonOr(file, fallback) {
 // going forward (a re-pull of an unchanged icon now reuses the existing file), but files already on
 // disk from before that fix — or two independently-named layers that just happen to render the same
 // icon — still need catching, hence a real directory scan rather than trusting the write history.
-function sharedAssetHashes(assetsDir) {
-  const out = new Map(); // normalised hash -> ["assets/<file>", ...]
-  let names = [];
+function sharedAssetHashes(assetsDir: string): Map<string, string[]> {
+  const out = new Map<string, string[]>(); // normalised hash -> ["assets/<file>", ...]
+  let names: string[] = [];
   try { names = fs.readdirSync(assetsDir); } catch (e) { return out; }
   for (const name of names) {
-    let bytes;
+    let bytes: Buffer;
     try { bytes = fs.readFileSync(path.join(assetsDir, name)); } catch (e) { continue; }
     const hash = sha1Hex(normalizeForCompare(name, bytes));
-    if (!out.has(hash)) out.set(hash, []);
-    out.get(hash).push("assets/" + name);
+    let group = out.get(hash);
+    if (!group) { group = []; out.set(hash, group); }
+    group.push("assets/" + name);
   }
   return out;
 }
 
-function writeScreenAssets(dir, paths, assets) {
+/** One row of <Screen>.assets.json `files[]` / `reference[]`. The palette fields are present on SVGs only. */
+interface AssetIndexEntry {
+  file: string;
+  node: string | undefined;
+  bytes: number;
+  hash: string | null;
+  from?: string[];
+  colors?: string[];
+  monochrome?: boolean;
+  paths?: number;
+}
+
+function writeScreenAssets(dir: string, paths: ScreenPaths, assets: ExportAsset[] | null | undefined): { count: number; duplicates: number; totalBytes: number } | null {
   if (!Array.isArray(assets) || !assets.length) return null;
   const shared = sharedAssetHashes(path.join(dir, "assets"));
-  const files = [];
-  const reference = []; // the frame's own screenshot — see note below on why it's split out
-  const dupHashes = new Set();
+  const files: AssetIndexEntry[] = [];
+  const reference: AssetIndexEntry[] = []; // the frame's own screenshot — see note below on why it's split out
+  const dupHashes = new Set<string>();
   for (const a of assets) {
     if (!a || !a.file) continue;
     const bytes = a.text != null ? Buffer.from(a.text, "utf8") : a.base64 != null ? Buffer.from(a.base64, "base64") : null;
     const hash = bytes ? sha1Hex(bytes) : null; // exact bytes-on-disk hash (writeAssets keeps a.text/a.base64 in sync with disk on reuse)
     const file = "assets/" + path.basename(a.file);
-    const entry = { file, node: a.id, bytes: bytes ? bytes.length : 0, hash };
+    const entry: AssetIndexEntry = { file, node: a.id, bytes: bytes ? bytes.length : 0, hash };
     if (Array.isArray(a.from) && a.from.length > 1) entry.from = a.from; // one file, several nodes reached it
     if (a.text != null && /\.svg$/i.test(a.file)) Object.assign(entry, svgPalette(a.text));
     // The whole-frame reference PNG (a.kind === "reference", <id>_ref.png — see figma-plugin/src/assets.ts)
@@ -542,12 +607,13 @@ function writeScreenAssets(dir, paths, assets) {
     if (normHash && (shared.get(normHash) || []).length > 1) dupHashes.add(normHash);
   }
   const duplicates = [...dupHashes].map((hash) => {
-    const group = shared.get(hash);
+    const group = shared.get(hash) || []; // always present: dupHashes only holds hashes found in `shared`
     const first = files.find((f) => group.includes(f.file));
     return { hash, bytes: first ? first.bytes : undefined, files: group };
   });
   const monochrome = files.filter((f) => f.monochrome).map((f) => f.file);
-  const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || f.paths >= BUSY_SVG_PATHS).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths }));
+  // ts-port: `f.paths` is undefined on a non-SVG row, and `undefined >= n` is false — same as before.
+  const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || (f.paths !== undefined && f.paths >= BUSY_SVG_PATHS)).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths }));
   const doc = {
     screen: paths.base,
     count: files.length,
@@ -576,12 +642,12 @@ function writeScreenAssets(dir, paths, assets) {
 // variables.json is the ONE file two single-screen pulls share, and it used to be replaced wholesale
 // — so pulling screen B deleted screen A's tokens (live-test findings 35/64). It now accumulates:
 // the raw per-pull slice is kept verbatim under variables/<Screen>.json, and variables.json is the
-// union of every slice, keyed on each variable's Figma key. See variables-merge.js for the rules.
-function writeScreenVariables(dir, paths, slice, log) {
+// union of every slice, keyed on each variable's Figma key. See variables-merge.ts for the rules.
+function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesDoc, log?: Log): { total: number; fromThisScreen: number; added: number; conflicts: number; screens: number } {
   writeJson(dir, paths.variables, slice, true);
 
   const target = path.join(dir, "variables.json");
-  let prev = readJsonOr(target, null);
+  let prev: unknown = readJsonOr(target, null);
   const { doc, stats } = mergeVariablesDoc(prev, slice, { screen: paths.base, file: paths.screen });
   writeJson(dir, "variables.json", doc, true);
 
@@ -609,7 +675,7 @@ function writeScreenVariables(dir, paths, slice, log) {
 
 // Dispatch on the RESULT shape, so each export tool forwards whatever the plugin sent without
 // having to know which writer its own command implies.
-function writeAny(outDir, r, log) {
+function writeAny(outDir: string | null | undefined, r: ExportResult, log?: Log) {
   if (r && r.screen) return writeScreen(outDir, r, log);
   // A screenshot result has none of designSystem/layersDoc/screen, only id/name/type/reference/assets
   // — `reference` is the tell that distinguishes it from a real export.
@@ -620,9 +686,9 @@ function writeAny(outDir, r, log) {
 // How many characters an INLINE tool result may be before the MCP client truncates it. Claude Code caps
 // tool output at MAX_MCP_OUTPUT_TOKENS (default 25,000); ~4 characters per token, and 20% headroom
 // because that ratio is an estimate and indented JSON tokenizes worse than prose.
-function inlineLimitChars(env = process.env) {
+function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   const tokens = Number(env.MAX_MCP_OUTPUT_TOKENS);
   return Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8);
 }
 
-module.exports = { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };
+export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };

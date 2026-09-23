@@ -12,8 +12,8 @@
 import { errMsg } from "./util";
 // The pages/ layout is defined ONCE, in a dependency-free CJS module the Node CLI requires and
 // esbuild inlines here — see bridge/pages-layout.js.
-import { buildPageLayout } from "../../bridge/pages-layout.js";
-import { buildDesignSystemLayout } from "../../bridge/design-system-layout.js";
+import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
+import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
 import { releaseAssets, serializeRun } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren } from "./collect";

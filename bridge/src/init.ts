@@ -19,32 +19,67 @@
 //   dtwin init --mcp      # …and register the MCP server in ./.mcp.json
 //   dtwin init --dry-run  # say what it would do, write nothing
 
-const fs = require("fs");
-const path = require("path");
-const tokenStore = require("./token-store.js");
-const LAYOUT = require("./project-layout.js");
+import fs from "node:fs";
+import path from "node:path";
+import * as tokenStore from "./token-store.ts";
+import type { ResolvedToken } from "./token-store.ts";
+import * as LAYOUT from "./project-layout.ts";
+
+/** One .mcp.json server entry, as init writes it. */
+export interface McpEntry {
+  command: string;
+  args: string[];
+}
+
+/** The part of .mcp.json init reads and merges into; every other key is carried through untouched. */
+interface McpJson {
+  [key: string]: unknown;
+  mcpServers?: Record<string, unknown>;
+}
+
+/** One step of init's plan (see `plan`). `content`/`merge` only on "write"; `path` on everything but "note"/"token". */
+export interface InitAction {
+  kind: "skip" | "mkdir" | "write" | "note" | "token";
+  path?: string;
+  content?: string;
+  merge?: boolean;
+  note: string;
+}
+
+export interface PlanOptions {
+  mcp?: boolean;
+  mcpEntry?: McpEntry;
+  /** The resolved bridge token (token-store resolve()) — required; only its source/path/created are read. */
+  token?: Pick<ResolvedToken, "source" | "path" | "created">;
+}
 
 // The profiles build-screen ships. Named in target.json when detection finds nothing, so the user can
 // fill it in without going to look for the list.
 const PROFILES = ["web-tailwind", "web-css-modules", "react-native", "swiftui", "android-compose", "flutter"];
 
 // The key the MCP server is registered under in .mcp.json — matches the server's own name
-// (bridge/src/figma-mcp.mts), so its tools surface as mcp__designtwin__figma_status etc.
+// (bridge/src/figma-mcp.ts), so its tools surface as mcp__designtwin__figma_status etc.
 const MCP_KEY = "designtwin";
 
-// Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.mjs, or runs
-// `designtwin mcp` (the npx form). One rule for init (don't double-register) and doctor (report it).
-const isOurMcpEntry = (e) => !!e && Array.isArray(e.args) && (e.args.some((a) => /(^|[\\/])figma-mcp\.mjs$/.test(String(a))) || (e.args.includes("designtwin") && e.args.includes("mcp")));
+// Is this .mcp.json entry Design Twin's server, under ANY key? It points at figma-mcp.{ts,js} (a
+// checkout's bridge/src/figma-mcp.ts, an install's bridge/dist/figma-mcp.js — or the .mjs/.mts an
+// older init wrote), or runs `designtwin mcp` (the npx form). One rule for init (don't double-register)
+// and doctor (report it).
+const isOurMcpEntry = (e: unknown): boolean => {
+  // Untyped JSON from the user's .mcp.json: only an object can carry `args` (JSON has no other shape that does).
+  const args: unknown = e && typeof e === "object" ? (e as { args?: unknown }).args : undefined;
+  return !!e && Array.isArray(args) && (args.some((a) => /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
+};
 
 // Same detection order build-screen's step 0 documents — first match wins, most specific first.
-function detectProfile(cwd) {
-  const has = (f) => fs.existsSync(path.join(cwd, f));
-  const read = (f) => { try { return fs.readFileSync(path.join(cwd, f), "utf8"); } catch { return ""; } };
-  const ls = (() => { try { return fs.readdirSync(cwd); } catch { return []; } })();
-  let pkg = null;
+function detectProfile(cwd: string): { profile: string; because: string } | null {
+  const has = (f: string) => fs.existsSync(path.join(cwd, f));
+  const read = (f: string): string => { try { return fs.readFileSync(path.join(cwd, f), "utf8"); } catch { return ""; } };
+  const ls: string[] = (() => { try { return fs.readdirSync(cwd); } catch { return []; } })();
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   try { pkg = JSON.parse(read("package.json")); } catch { /* no/invalid package.json */ }
   if (pkg) {
-    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const deps: Record<string, string | undefined> = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
     if (deps["react-native"] || deps.expo) return { profile: "react-native", because: "react-native/expo in package.json" };
     if (deps.tailwindcss || deps["@tailwindcss/vite"] || deps["@tailwindcss/postcss"]) return { profile: "web-tailwind", because: "tailwindcss in package.json" };
   }
@@ -59,9 +94,9 @@ function detectProfile(cwd) {
 
 // Pure planner: what init WOULD do in `cwd`. Returns { actions:[{kind, path?, content?, note}], steps:[…] }.
 // Split from the writer so the test suite can assert the plan without touching a real HOME.
-function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
-  const actions = [];
-  const rel = (p) => path.relative(cwd, p) || ".";
+function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions = {}): InitAction[] {
+  const actions: InitAction[] = [];
+  const rel = (p: string) => path.relative(cwd, p) || ".";
 
   const designDir = path.join(cwd, LAYOUT.DESIGN_DIR);
   actions.push(fs.existsSync(designDir) ? { kind: "skip", path: rel(designDir), note: "exists" } : { kind: "mkdir", path: rel(designDir), note: "your decisions live here" });
@@ -107,7 +142,7 @@ function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
-    let doc = {};
+    let doc: McpJson = {};
     let bad = false;
     if (fs.existsSync(file)) { try { doc = JSON.parse(fs.readFileSync(file, "utf8")); } catch { bad = true; } }
     if (bad) actions.push({ kind: "skip", path: rel(file), note: "exists but is not valid JSON — fix it, then re-run with --mcp" });
@@ -129,20 +164,22 @@ function plan(cwd, { mcp = false, mcpEntry, token } = {}) {
     }
   }
 
-  actions.push({ kind: "token", note: token.created ? `bridge token created (${token.path})` : token.source === "env" ? "bridge token: using FIGMA_BRIDGE_TOKEN from the environment" : token.source === "ephemeral" ? "bridge token could NOT be saved (read-only config dir?) — it will change every run" : `bridge token already saved (${token.path})` });
+  // `token!`: a caller that passes none gets the same TypeError here that plain JS threw.
+  actions.push({ kind: "token", note: token!.created ? `bridge token created (${token!.path})` : token!.source === "env" ? "bridge token: using FIGMA_BRIDGE_TOKEN from the environment" : token!.source === "ephemeral" ? "bridge token could NOT be saved (read-only config dir?) — it will change every run" : `bridge token already saved (${token!.path})` });
   return actions;
 }
 
-function apply(cwd, actions, log) {
+function apply(cwd: string, actions: InitAction[], log: (m: string) => void): void {
   for (const a of actions) {
-    if (a.kind === "mkdir") fs.mkdirSync(path.join(cwd, a.path), { recursive: true });
-    if (a.kind === "write") { fs.mkdirSync(path.dirname(path.join(cwd, a.path)), { recursive: true }); fs.writeFileSync(path.join(cwd, a.path), a.content, { flag: a.merge ? "w" : "wx" }); }
+    // ts-port: every "mkdir"/"write" action plan() builds carries `path` (and "write" carries `content`).
+    if (a.kind === "mkdir") fs.mkdirSync(path.join(cwd, a.path as string), { recursive: true });
+    if (a.kind === "write") { fs.mkdirSync(path.dirname(path.join(cwd, a.path as string)), { recursive: true }); fs.writeFileSync(path.join(cwd, a.path as string), a.content as string, { flag: a.merge ? "w" : "wx" }); }
     const tag = a.kind === "write" ? "wrote " : a.kind === "mkdir" ? "created" : a.kind === "skip" ? "skipped" : a.kind === "note" ? "note   " : "token  ";
     log(`${tag} ${a.path ? a.path + " — " : ""}${a.note}`);
   }
 }
 
-function main(argv) {
+function main(argv: string[]): void {
   const known = ["--mcp", "--dry-run", "--help", "-h"];
   const bad = argv.filter((a) => !known.includes(a));
   if (bad.length) { console.error(`[dtwin init] error: unknown argument${bad.length > 1 ? "s" : ""}: ${bad.join(", ")}. Usage: dtwin init [--mcp] [--dry-run]`); process.exit(1); }
@@ -165,17 +202,21 @@ function main(argv) {
   }
   const dry = argv.includes("--dry-run");
   const cwd = process.cwd();
-  const log = (m) => console.error("[dtwin init] " + (dry ? "(dry run) " : "") + m);
+  const log = (m: string) => console.error("[dtwin init] " + (dry ? "(dry run) " : "") + m);
 
   const token = tokenStore.resolve({ persist: !dry });
   // Absolute path to THIS install's server: works for a repo clone and a global npm install alike,
-  // and needs no network at Claude Code start-up (unlike `npx -y designtwin mcp`).
-  const mcpEntry = { command: "node", args: [path.join(__dirname, "figma-mcp.mjs")] };
+  // and needs no network at Claude Code start-up (unlike `npx -y designtwin mcp`). The entry is the MCP
+  // server that sits beside THIS file, in the same form: bridge/src/figma-mcp.ts when init runs from a
+  // checkout's source, bridge/dist/figma-mcp.js when it runs from the built (npm-installed) package.
+  const mcpEntry: McpEntry = { command: "node", args: [path.join(import.meta.dirname, "figma-mcp" + path.extname(import.meta.filename))] };
   const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, token });
   if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${a.path ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
-  const manifest = path.join(__dirname, "..", "figma-plugin", "manifest.json");
+  // The plugin manifest of a repo checkout: bridge/src/ (or bridge/dist/) -> ../../figma-plugin/. An npm
+  // install has no figma-plugin/ beside it, so the step below falls back to naming the repo instead.
+  const manifest = path.join(import.meta.dirname, "..", "..", "figma-plugin", "manifest.json");
   // Step 3 is already done for anyone who reached init THROUGH the installed plugin's help skill —
   // which is the documented path. Claude Code records installed plugins under ~/.claude; when the
   // marker is there, saying "install the plugin" is noise at best and confusing at worst.
@@ -218,4 +259,4 @@ function main(argv) {
   );
 }
 
-module.exports = { detectProfile, plan, apply, main, isOurMcpEntry };
+export { detectProfile, plan, apply, main, isOurMcpEntry };

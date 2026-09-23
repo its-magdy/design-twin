@@ -1,5 +1,5 @@
 // Figma node-id parsing — the ONE place that knows what a node id looks like and how it hides in a
-// Figma URL. Both Node-side consumers (the MCP write/read server and the seed-components CLI) require
+// Figma URL. Both Node-side consumers (the MCP write/read server and the seed-components CLI) import
 // this instead of carrying their own regex pair, which had already drifted into disagreeing about
 // which ids are valid.
 //
@@ -9,15 +9,21 @@
 
 // The node-id token inside a URL, captured loosely and validated by normalizeNodeId. Matching loosely
 // matters: a regex that only accepted `[0-9]+-[0-9]+` silently skipped the other three forms.
-const ID = "[A-Za-z0-9%:;_-]+";
+export const ID = "[A-Za-z0-9%:;_-]+";
 const NODE_ID_RE = new RegExp("node-id=(" + ID + ")");
 
-function decode(s) {
+// URL is a global in Node, but NOT in the Figma plugin's ES2019 lib (no DOM types there), and this
+// module type-checks under both tsconfigs. A module-scoped ambient declaration of exactly the surface
+// used below — emits nothing, so at runtime it is the real global (in a realm without one, the
+// `new URL` throws and parseNodeId's catch falls through to the loose match, as it always did).
+declare const URL: new (input: string) => { searchParams: { get(name: string): string | null } };
+
+function decode(s: string): string {
   try { return decodeURIComponent(s); } catch (e) { return s; } // malformed escape — use it verbatim
 }
 
 // A raw node-id token -> the Plugin API's colon form ("1:2"), or undefined when it isn't an id.
-function normalizeNodeId(raw) {
+function normalizeNodeId(raw: unknown): string | undefined {
   if (!raw) return undefined;
   const s = decode(String(raw).trim()).replace(/-/g, ":");
   // "1:2", "I1:2;3:4" (nested instance path), or a bare numeric id.
@@ -26,7 +32,7 @@ function normalizeNodeId(raw) {
 
 // A full Figma URL, a `…node-id=…` fragment, or a bare id -> colon form, or undefined when there's
 // no id to be found (callers surface their own friendly hint).
-function parseNodeId(input) {
+export function parseNodeId(input: unknown): string | undefined {
   if (!input) return undefined;
   const s = String(input).trim();
   try {
@@ -44,11 +50,10 @@ function parseNodeId(input) {
 // parser — gets to be the authority on what resolves. Every front-end (plugin collector, CLI, MCP)
 // was spelling `parseNodeId(x) || x` itself, in three slightly different ways; that put half of this
 // module's contract back into three files, which is the exact drift it exists to prevent.
-function toNodeId(raw) {
+export function toNodeId(raw: unknown): string {
   return parseNodeId(raw) || (raw == null ? "" : String(raw));
 }
 
 // NODE_ID_RE/normalizeNodeId stay module-private: exporting them invited a consumer to re-derive
 // half the contract, which is the drift this file exists to prevent. ID is exported only because
-// seed-components.js composes it into its own source-scanning regexes.
-module.exports = { ID, parseNodeId, toNodeId };
+// seed-components.ts composes it into its own source-scanning regexes.

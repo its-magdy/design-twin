@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { check, report } from "./assert.ts";
 
-const MCP = path.join(import.meta.dirname, "..", "bridge", "figma-mcp.mjs");
+const MCP = path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
 const env = { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "s".repeat(40) };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn: () => any, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(100)) if (fn()) return true; return false; };

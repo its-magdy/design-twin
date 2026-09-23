@@ -20,12 +20,17 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Committed build artifacts must match their sources: rebuild all three, then fail on any diff.
-      # (claude-plugin/scripts/ is also checked byte-for-byte by test/verify-build.test.js.)
+      # Committed build artifacts must match their sources: rebuild, then fail on any diff.
+      # (claude-plugin/scripts/ is also checked byte-for-byte by test/verify-build.test.ts.)
+      # bridge/dist/ is built here too but is gitignored, so it is not part of the diff.
       - name: Committed build artifacts are in sync
         run: |
           npm run build
-          git diff --exit-code -- bridge/figma-mcp.mjs figma-plugin/code.js claude-plugin/scripts
+          git diff --exit-code -- figma-plugin/code.js claude-plugin/scripts
 
       - name: Test
         run: npm test
+
+      # The suites run the bridge from src/; smoke the tsc-emitted tree the npm package ships.
+      - name: Emitted bridge runs
+        run: npm run build --workspace bridge && node bridge/dist/figma-pull.js --help && node bridge/dist/figma-pull.js --version

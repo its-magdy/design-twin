@@ -8,10 +8,10 @@ import { Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
 // percent-encoding, no nested-instance paths). toNodeId is its LENIENT entry point: a shape node-id.js
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
-import { toNodeId } from "../../bridge/node-id.js";
+import { toNodeId } from "../../bridge/src/node-id.ts";
 import { assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
-import { ReadOptName } from "../../bridge/read-opts.js";
+import type { ReadOptName } from "../../bridge/src/read-opts.ts";
 import { serialize } from "./serialize";
 import { collectReference, devResources } from "./assets";
 import { simplifyFills } from "./paint";

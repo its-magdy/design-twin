@@ -1,5 +1,5 @@
 // The ONE definition of how a LIBRARY-file catalog is split across files — the sibling of
-// design-system-layout.js, deliberately reusing its filenames and its slim-manifest shape.
+// design-system-layout.ts, deliberately reusing its filenames and its slim-manifest shape.
 //
 // WHY A SECOND LAYOUT AT ALL. The two catalogs answer different questions and must not overwrite each
 // other:
@@ -21,12 +21,36 @@
 // hygiene and we fall back to the slug alone — a rename then forks the directory, which is why it is
 // warned about rather than silently absorbed.
 //
-// Kept dependency-free CJS for the same reason as its siblings: the Node CLI requires it and esbuild
-// inlines it into the plugin bundle, so the disk writer and the browser-download writer emit the
-// identical set of files.
+// Kept dependency-free (no Node imports, ES2019-safe) for the same reason as its siblings: the Node
+// CLI imports it and esbuild inlines it into the plugin bundle, so the disk writer and the
+// browser-download writer emit the identical set of files.
 
-const ROOT = "libraries";
-const INDEX = "index.json"; // per-directory self-description; also the name of the libraries/ index
+import type { PageLayoutFile } from "./pages-layout.ts";
+import type {
+  TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc, HygieneDoc, CatalogComponent,
+  ComponentsCatalog, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts, LibraryManifest,
+  LibrariesIndexRow, LibrariesIndex,
+} from "./doc-types.ts";
+
+/** Every document the library split writes, in `files` order (the manifest last). */
+export type LibraryFileData =
+  | (TokensDoc & LibraryStamp) | (PaintStylesDoc & LibraryStamp) | (TextStylesDoc & LibraryStamp) | (EffectStylesDoc & LibraryStamp)
+  | (GridStylesDoc & LibraryStamp) | (ComponentsCatalog & LibraryStamp) | (HygieneDoc & LibraryStamp) | LibraryManifest;
+
+export interface LibraryLayout {
+  /** Every file to write, INCLUDING the directory's own index.json (last). */
+  files: Array<PageLayoutFile<LibraryFileData>>;
+  /** The slim manifest alone: stamp + `source` + `files` pointer map + `counts` + `publish`. */
+  manifest: LibraryManifest;
+  counts: LibraryCounts;
+  /** The full relative directory the parts live under ("libraries/<slug>-<fileKey8>"). */
+  dir: string;
+  /** Just the leaf directory name — the identity a libraries/index.json row is keyed on. */
+  dirName: string;
+}
+
+export const ROOT = "libraries";
+export const INDEX = "index.json"; // per-directory self-description; also the name of the libraries/ index
 const TOKENS = "tokens.json";
 const STYLES_PAINT = "styles.paint.json";
 const STYLES_TEXT = "styles.text.json";
@@ -35,9 +59,9 @@ const STYLES_GRID = "styles.grid.json";
 const COMPONENTS = "components.json";
 const HYGIENE = "hygiene.json";
 
-// Filesystem-safe, stable, lowercase. Same spirit as pages-layout.js's `safe`, kept local so this
+// Filesystem-safe, stable, lowercase. Same spirit as pages-layout.ts's `safe`, kept local so this
 // module stays dependency-free.
-function slug(s) {
+function slug(s: unknown): string {
   return String(s || "library")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -46,32 +70,31 @@ function slug(s) {
 }
 
 /**
- * @param {any} ds     the plugin's designSystem doc, as produced by collectLibraryFile
- * @param {string} sep path separator: "/" for real directories, "__" for flat download names.
- * @returns {{files: Array<{path: string, data: any}>, manifest: any, counts: any, dir: string}}
- *          `files` is every file to write INCLUDING the directory's own index.json (last).
+ * @param ds   the plugin's designSystem doc, as produced by collectLibraryFile
+ * @param sep  path separator: "/" for real directories, "__" for flat download names.
+ * @returns    `files` is every file to write INCLUDING the directory's own index.json (last).
  */
-function buildLibraryLayout(ds, sep) {
-  const d = ds || {};
+export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: string): LibraryLayout {
+  const d: DesignSystemDoc = ds || {};
   const s = sep || "/";
-  const source = d.source || {};
-  const fileKey = source.fileKey ? String(source.fileKey) : "";
+  const source = d.source;
+  const fileKey = source && source.fileKey ? String(source.fileKey) : "";
   // Only the first 8 chars: enough to disambiguate two libraries, short enough to keep the path
   // readable. The FULL key is recorded in the index, so nothing depends on the truncation.
-  const dirName = slug(source.libraryName || d.file) + (fileKey ? "-" + fileKey.slice(0, 8) : "");
+  const dirName = slug((source && source.libraryName) || d.file) + (fileKey ? "-" + fileKey.slice(0, 8) : "");
   const dir = ROOT + s + dirName;
-  const join = (name) => dir + s + name;
+  const join = (name: string): string => dir + s + name;
 
   // The stamp every split file carries, plus `source`. `exportedAt`/`file` stay top-level and
-  // unmodified so snapshot-meta.js and design-to-code/drift-lint.js keep reading them off whichever file they
+  // unmodified so snapshot-meta.ts and design-to-code/drift-lint.ts keep reading them off whichever file they
   // are handed; `source` is additive and tells a consumer this is a library catalog, not a design
   // file's — a distinction that is otherwise invisible, because inside the library file every object
   // is local and `remote` is therefore false on all of them.
-  const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile, source: d.source };
+  const stamp: LibraryStamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile, source: d.source };
 
   const variables = Array.isArray(d.variables) ? d.variables : [];
   const collections = Array.isArray(d.collections) ? d.collections : [];
-  const styles = d.styles || {};
+  const styles: DesignSystemStyles = d.styles || {};
   const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
   const stylesText = Array.isArray(styles.text) ? styles.text : [];
   const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
@@ -79,10 +102,10 @@ function buildLibraryLayout(ds, sep) {
   const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
 
   // Inside a library file every component IS local, so there is no local/library partition to make
-  // (design-system-layout.js splits on `remote` because a design file's catalog genuinely mixes both).
+  // (design-system-layout.ts splits on `remote` because a design file's catalog genuinely mixes both).
   // A remote entry here would belong to a DIFFERENT library — that library's export to make, not this
   // one's — so it is dropped and reported rather than filed under this library's name.
-  const all = Array.isArray(d.components) ? d.components : [];
+  const all: CatalogComponent[] = Array.isArray(d.components) ? d.components : [];
   const components = all.filter((c) => !(c && c.remote === true));
   const foreign = all.length - components.length;
   const hyg = foreign
@@ -92,7 +115,7 @@ function buildLibraryLayout(ds, sep) {
       )
     : hygiene;
 
-  const files = [
+  const files: Array<PageLayoutFile<LibraryFileData>> = [
     { path: join(TOKENS), data: Object.assign({}, stamp, { collections, variables }) },
     { path: join(STYLES_PAINT), data: Object.assign({}, stamp, { styles: stylesPaint }) },
     { path: join(STYLES_TEXT), data: Object.assign({}, stamp, { styles: stylesText }) },
@@ -104,11 +127,11 @@ function buildLibraryLayout(ds, sep) {
 
   // Publish status is only meaningful in library mode, so summarise it where a human will see it: how
   // much of this library is actually live for consumers vs. sitting unpublished in the file.
-  const publishCounts = {};
+  const publishCounts: Record<string, number> = {};
   for (const c of components) if (c && c.publish) publishCounts[c.publish] = (publishCounts[c.publish] || 0) + 1;
   for (const v of variables) if (v && v.publish) publishCounts[v.publish] = (publishCounts[v.publish] || 0) + 1;
 
-  const counts = {
+  const counts: LibraryCounts = {
     collections: collections.length,
     variables: variables.length,
     stylesPaint: stylesPaint.length,
@@ -119,7 +142,7 @@ function buildLibraryLayout(ds, sep) {
     hygiene: hyg.length,
   };
 
-  const manifest = Object.assign({}, stamp, {
+  const manifest: LibraryManifest = Object.assign({}, stamp, {
     // Same pointer-map shape as design-system.json: relative paths exactly as written, separator and
     // all, so a consumer joins them against the export dir and needs to know nothing else.
     files: {
@@ -145,33 +168,39 @@ function buildLibraryLayout(ds, sep) {
  * the first one's row. Rows are keyed by directory name (fileKey-derived), so re-exporting the same
  * library replaces its own row and nothing else.
  *
- * @param {any} prev  the previously written index, or null/undefined on the first export
- * @param {any} built the return value of buildLibraryLayout
- * @returns {any} the index to write
+ * @param prev   the previously written index (untyped JSON read back from disk), or null/undefined
+ *               on the first export
+ * @param built  the return value of buildLibraryLayout
+ * @returns      the index to write
  */
-function mergeLibrariesIndex(prev, built) {
-  const rows = prev && Array.isArray(prev.libraries) ? prev.libraries.slice() : [];
+export function mergeLibrariesIndex(prev: unknown, built: LibraryLayout): LibrariesIndex {
+  const prevLibraries = prev && typeof prev === "object" && "libraries" in prev ? prev.libraries : undefined;
+  const rows: unknown[] = Array.isArray(prevLibraries) ? prevLibraries.slice() : [];
   const m = built.manifest;
-  const source = m.source || {};
-  const row = {
+  const source = m.source;
+  const row: LibrariesIndexRow = {
     dir: built.dirName,
-    libraryName: source.libraryName || m.file,
+    libraryName: (source && source.libraryName) || m.file,
     file: m.file,
-    fileKey: source.fileKey,
-    collectionKeys: source.collectionKeys,
+    fileKey: source && source.fileKey,
+    collectionKeys: source && source.collectionKeys,
     exportedAt: m.exportedAt,
     counts: m.counts,
     publish: m.publish,
     index: built.dirName + "/" + INDEX,
   };
-  const i = rows.findIndex((r) => r && r.dir === built.dirName);
+  const i = rows.findIndex((r) => dirOf(r) === built.dirName);
   if (i >= 0) rows[i] = row;
   else rows.push(row);
-  rows.sort((a, b) => String(a.dir).localeCompare(String(b.dir)));
+  rows.sort((a, b) => String(dirOf(a)).localeCompare(String(dirOf(b))));
   // No top-level `file`/`exportedAt` stamp here on purpose: this index spans SEVERAL Figma files, and
-  // `file` is contractually "which one file did this come from" (snapshot-meta.js reads it as
+  // `file` is contractually "which one file did this come from" (snapshot-meta.ts reads it as
   // sourceFile). Each row carries its own stamp instead, so per-library staleness stays visible.
   return { libraries: rows, generatedAt: new Date().toISOString() };
 }
 
-module.exports = { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX };
+// A previous row's `dir`, read the way plain JS reads `r.dir` (undefined for null/undefined, and for
+// anything without a `dir`) — rows on disk are untyped JSON.
+function dirOf(r: unknown): unknown {
+  return r !== null && typeof r === "object" && "dir" in r ? r.dir : undefined;
+}

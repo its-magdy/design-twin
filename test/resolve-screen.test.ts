@@ -27,13 +27,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { ok, report } from "./assert.ts";
-import * as pagesLayoutMod from "../bridge/pages-layout.js";
+import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult } from "../design-to-code/types.ts";
 
-// bridge/pages-layout.js is still untyped CJS in this step (ports in step 4); TS's allowJs-inferred
-// export analysis for it is too narrow for these calls, so destructure through `any` at the boundary.
-const { deriveTitle, collectTexts } = pagesLayoutMod as any;
 // ts-port: the union arms a few assertions read without a status check (they throw if the arm is wrong,
 // which is itself the failure signal — keep that, only tell the checker which arm is expected).
 type Resolved = Extract<ResolveScreenResult, { status: "resolved" }>;

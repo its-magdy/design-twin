@@ -13,41 +13,83 @@
 //     a PLUGIN client, so a probe would disturb routing for whoever owns that bridge (and a
 //     wrong-token probe spams its log). A held port is identified with a plain HTTP GET instead — a
 //     `ws` server answers 426 Upgrade Required.
-//   - server-core is required LAZILY and only once the port is known to be valid and free: it exits
-//     the process on a bad FIGMA_BRIDGE_PORT (at require time) and on EADDRINUSE (in createBridge).
-//     Those are findings for doctor to report, not ways for it to die.
+//   - server-core is imported LAZILY (probePlugin's `await import()`) and only once the port is known to
+//     be valid and free: it exits the process on a bad FIGMA_BRIDGE_PORT (at module load) and on
+//     EADDRINUSE (in createBridge). Those are findings for doctor to report, not ways for it to die.
+//     The one server-core helper doctor needs outside that probe, daemonRowStalenessNote, lives in the
+//     side-effect-free staleness.ts and is imported statically from there.
 //
 //   dtwin doctor            # human report; exit 1 only if a check is ✗
 //   dtwin doctor --wait 30  # wait longer for the plugin to connect (default 10s)
 //   dtwin doctor --json     # { ok, checks: [{ id, title, status, detail, next }] }
 
-const fs = require("fs");
-const net = require("net");
-const http = require("http");
-const path = require("path");
-const tokenStore = require("./token-store.js");
-const daemon = require("./daemon.js");
-const { readSnapshotInfo } = require("./snapshot-meta.js");
-const { errMsg } = require("./errmsg.js");
-const LAYOUT = require("./project-layout.js");
-const { isOurMcpEntry } = require("./init.js");
+import fs from "node:fs";
+import net from "node:net";
+import http from "node:http";
+import path from "node:path";
+import * as tokenStore from "./token-store.ts";
+import type { TokenStatus } from "./token-store.ts";
+import * as daemon from "./daemon.ts";
+import type { DaemonStatus } from "./daemon.ts";
+import { readSnapshotInfo } from "./snapshot-meta.ts";
+import type { SnapshotInfo, SnapshotParseError } from "./snapshot-meta.ts";
+import { errMsg } from "./errmsg.ts";
+import * as LAYOUT from "./project-layout.ts";
+import { isOurMcpEntry } from "./init.ts";
+import { daemonRowStalenessNote } from "./staleness.ts";
+import type { ClientRow, Bridge } from "./server-core.ts";
 
 // Mirrors server-core's ALLOWED_PORTS (the manifest's allowedDomains). Restated rather than imported
 // because requiring server-core with a bad FIGMA_BRIDGE_PORT exits the process — the very case this
-// list exists to diagnose. test/bridge.test.js asserts the two stay equal.
+// list exists to diagnose. test/bridge.test.ts asserts the two stay equal.
 const ALLOWED_PORTS = [8787, 8788, 8789];
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
 
-const ok = (id, title, detail) => ({ id, title, status: "ok", detail });
-const warn = (id, title, detail, next) => ({ id, title, status: "warn", detail, next });
-const fail = (id, title, detail, next) => ({ id, title, status: "fail", detail, next });
+/** One line of the report. `next` is the single next step (absent, or undefined, when there is none). */
+export interface Check {
+  id: string;
+  title: string;
+  status: "ok" | "warn" | "fail";
+  detail: string;
+  next?: string;
+}
+
+export interface Report {
+  ok: boolean;
+  checks: Check[];
+}
+
+/** A connected-client row as doctor reads it — from this process's own probe bridge, or relayed by a
+ *  daemon (possibly an older one whose rows lack newer fields). */
+type ClientRowLike = Partial<ClientRow>;
+
+/** probePort()'s answer. */
+export interface PortProbe {
+  free: boolean;
+  holder?: "websocket" | "http" | "unknown";
+  detail?: string;
+}
+
+/** probePlugin()'s answer, or `{ skipped }` when the probe could not run (see checkPlugin). */
+export interface PluginProbe {
+  skipped?: string;
+  next?: string;
+  clients?: ClientRowLike[];
+  badToken?: { at: number; fingerprint: string | null } | null;
+  expected?: string | null;
+  error?: string;
+}
+
+const ok = (id: string, title: string, detail: string): Check => ({ id, title, status: "ok", detail });
+const warn = (id: string, title: string, detail: string, next?: string): Check => ({ id, title, status: "warn", detail, next });
+const fail = (id: string, title: string, detail: string, next?: string): Check => ({ id, title, status: "fail", detail, next });
 
 // ---------------------------------------------------------------- pure checks
 
 // `range` is package.json's engines.node. Only the ">=N" shape this package uses is understood;
 // anything else is reported as unknown rather than guessed at.
-function checkNode(version, range) {
+function checkNode(version: string, range: string | null | undefined): Check {
   const m = /^>=\s*(\d+)/.exec(range || "");
   const major = Number(String(version).replace(/^v/, "").split(".")[0]);
   if (!m) return warn("node", "Node.js", `${version} (could not read the required version from package.json)`);
@@ -65,7 +107,7 @@ function checkNode(version, range) {
 // later command's socket auth is skipped — a bogus FIGMA_BRIDGE_TOKEN still shows "connected" there
 // (livetest-4 #328's exact repro: `list clients` works and `doctor` says ok:true with a bogus token).
 // Only a connection THIS process itself negotiated (no daemon in front) is real evidence either way.
-function checkToken(s, pluginCheck, viaDaemon) {
+function checkToken(s: TokenStatus, pluginCheck?: Check, viaDaemon?: boolean): Check {
   if (s.activeSource === "ephemeral") {
     return warn("token", "Bridge token", `none saved yet (${s.path} does not exist)`, "run `dtwin init` — or any pull: the first bridge start creates it and prints it once to paste into the plugin");
   }
@@ -86,7 +128,7 @@ function checkToken(s, pluginCheck, viaDaemon) {
   return ok("token", "Bridge token", `saved in ${s.path} (fingerprint ${s.fingerprint})`);
 }
 
-const fileNames = (clients) => (clients || []).map((c) => c.file || "(unidentified)").join(", ");
+const fileNames = (clients: ClientRowLike[] | null | undefined) => (clients || []).map((c) => c.file || "(unidentified)").join(", ");
 
 // One bridge serves several Figma files at once (one client per open plugin window). With more than
 // one connected, resolveClient() refuses any plugin-reaching command that doesn't say WHICH file —
@@ -96,27 +138,25 @@ const fileNames = (clients) => (clients || []).map((c) => c.file || "(unidentifi
 //
 // Finding 327: also surfaces a stale plugin bundle here — the ONE place doctor already reports which
 // files are connected, so a version mismatch is seen in the same breath rather than needing a second
-// command. `pluginStale` is computed server-side (server-core.js's `describe()`), so doctor doesn't
+// command. `pluginStale` is computed server-side (server-core.ts's `describe()`), so doctor doesn't
 // duplicate the version-compare logic; it just relays whichever client(s) are behind.
-function connectedDetail(clients, prefix) {
-  // Lazily required, same discipline as probePlugin()'s own `require("./server-core")` — this file's
-  // header rule is that server-core is never loaded until the port is already known to be valid,
-  // because requiring it eagerly can exit the process on a bad FIGMA_BRIDGE_PORT. connectedDetail is
-  // only ever called after that check has already passed (the `problem` branch in run() returns via
-  // checkPlugin({skipped}) without reaching here), so this stays safe.
-  const { daemonRowStalenessNote } = require("./server-core.js");
+function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: string): { detail: string; next?: string } {
+  // daemonRowStalenessNote comes from staleness.ts, NOT server-core: this file's header rule is that
+  // server-core is never loaded until the port is already known to be valid, because loading it can
+  // exit the process on a bad FIGMA_BRIDGE_PORT. staleness.ts has no such load-time effect, so it is a
+  // plain static import (it used to be a lazy require of server-core at this site).
   const detail = `${prefix}: ${fileNames(clients)}`;
-  const stale = (clients || []).map((c) => c.pluginStale).filter(Boolean);
+  const stale = (clients || []).map((c) => c.pluginStale).filter((n): n is string => Boolean(n));
   // A row with no `pluginVersion` KEY at all (not merely a `null` value) means it came from a
   // `dtwin serve` daemon whose own `describe()` predates plugin-version reporting — a SEPARATE
   // staleness, distinct from "this Figma plugin's bundle is old": reloading the plugin will not fix it,
-  // restarting the daemon will. `list clients`/`whoami` name it per-row (figma-pull.js); doctor folds
+  // restarting the daemon will. `list clients`/`whoami` name it per-row (figma-pull.ts); doctor folds
   // it into this same summary line so it's never a silent gap here either.
-  const daemonStale = [...new Set((clients || []).map(daemonRowStalenessNote).filter(Boolean))];
+  const daemonStale = [...new Set((clients || []).map(daemonRowStalenessNote).filter((n): n is string => Boolean(n)))];
   if ((clients || []).length < 2 && !stale.length && !daemonStale.length) return { detail };
-  const bits = [];
-  if ((clients || []).length >= 2) bits.push(`${detail} — ${clients.length} files, so commands must say which`);
-  const nexts = [];
+  const bits: string[] = [];
+  if ((clients || []).length >= 2) bits.push(`${detail} — ${clients!.length} files, so commands must say which`);
+  const nexts: string[] = [];
   if ((clients || []).length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
   if (stale.length) nexts.push(...new Set(stale));
   if (daemonStale.length) nexts.push(...daemonStale);
@@ -131,7 +171,7 @@ function connectedDetail(clients, prefix) {
 // an 8s pull and a 300s+ timeout (findings 202/213/220), and `--client c1` becomes reconnect-order
 // roulette (finding 209) instead of a stable id across a daemon's lifetime. That is a real cost, not a
 // cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
-function checkDaemon(st, port) {
+function checkDaemon(st: DaemonStatus | null | undefined, port: number): Check {
   if (!st) {
     return warn(
       "daemon", "Daemon",
@@ -144,7 +184,7 @@ function checkDaemon(st, port) {
 }
 
 // `raw` is FIGMA_BRIDGE_PORT. Returns { port } or { problem: <check> }.
-function resolvePort(raw) {
+function resolvePort(raw: string | undefined): { port: number; problem?: undefined } | { problem: Check; port?: undefined } {
   if (!raw) return { port: ALLOWED_PORTS[0] };
   const n = Number(raw);
   if (ALLOWED_PORTS.includes(n)) return { port: n };
@@ -152,7 +192,7 @@ function resolvePort(raw) {
 }
 
 // `probe` is probePort()'s result; `st` the daemon status for the same port.
-function checkPort(port, probe, st) {
+function checkPort(port: number, probe: PortProbe, st: DaemonStatus | null | undefined): Check {
   if (probe.free) return ok("port", "Port", `${port} is free`);
   if (st) return ok("port", "Port", `${port} is held by the dtwin daemon (pid ${st.pid}) — pulls route through it`);
   const others = ALLOWED_PORTS.filter((p) => p !== port).join(" or ");
@@ -163,7 +203,7 @@ function checkPort(port, probe, st) {
 }
 
 // `r` is probePlugin()'s result, or { skipped } when it could not run.
-function checkPlugin(r, waitSec) {
+function checkPlugin(r: PluginProbe, waitSec?: number): Check {
   const title = "Figma plugin";
   if (r.skipped) return warn("plugin", title, `not checked — ${r.skipped}`, r.next);
   if (r.clients && r.clients.length) {
@@ -172,7 +212,7 @@ function checkPlugin(r, waitSec) {
     // connected to several files at once is healthy, it just needs `--client`). Only staleness demotes
     // the status; an ambiguous-but-current multi-client connection stays `ok` exactly as before.
     const stale = r.clients.some((cl) => cl.pluginStale);
-    return { id: "plugin", title, status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
+    return { id: "plugin", title, status: stale ? "warn" as const : "ok" as const, detail: c.detail, ...(c.next ? { next: c.next } : {}) };
   }
   if (r.badToken) {
     return fail("plugin", title, `a plugin IS running, but with a different token (fingerprint ${r.badToken.fingerprint || "none — its token field is empty"} vs expected ${r.expected})`, "run `dtwin --show-token`, paste it into the plugin's \"Bridge token\" field, Save");
@@ -181,58 +221,64 @@ function checkPlugin(r, waitSec) {
   return fail("plugin", title, `no plugin connected within ${waitSec}s`, "in Figma DESKTOP open the file and run Plugins → Development → Design Twin (keep its window open); `--wait 30` waits longer");
 }
 
-const ageStr = (ms) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
+const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
 
 // P4 #33: the root pages/index.json's `layers[]` already carries every screen's `sourceFile` and
-// `exportedAt` (write-out.js stamps both; a screen pulled before that field existed simply has no
+// `exportedAt` (write-out.ts stamps both; a screen pulled before that field existed simply has no
 // `sourceFile`, which is told apart from a real value rather than defaulting to the design system's).
 // Reading it directly means this never has to guess by opening each screen file, or fall back to
 // whichever document snapshot-meta happened to pick first — the exact bug this replaces (finding 33:
 // "attributes the whole export to the wrong Figma file").
-function exportSourceCounts(exportDir, now) {
-  const screensByFile = new Map(); // file (or "" for unstamped) -> [{exportedAt}]
-  const note = (l) => { const key = l.sourceFile || ""; if (!screensByFile.has(key)) screensByFile.set(key, []); screensByFile.get(key).push(l.exportedAt); };
+// The fields read off pages/index.json and each page's index.json — untyped JSON from disk, read with
+// the same guards as before.
+interface IndexRowView { file?: string; sourceFile?: string; exportedAt?: string }
+interface IndexView { pageDirs?: Array<{ index: string }>; layers?: Array<IndexRowView | null> }
+
+function exportSourceCounts(exportDir: string, now: number): { parts: string[]; newestOverall: number | null } {
+  const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
+  const note = (l: IndexRowView) => { const key = l.sourceFile || ""; let ats = screensByFile.get(key); if (!ats) { ats = []; screensByFile.set(key, ats); } ats.push(l.exportedAt); };
   try {
-    const idx = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8"));
-    // The root `layers[]` only ever holds what write-out.js's writeScreen path has merged into it — a
+    const idx: IndexView = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8"));
+    // The root `layers[]` only ever holds what write-out.ts's writeScreen path has merged into it — a
     // whole-page pull's layers never backfill it (mergeRootIndex only appends the ONE entry its own
     // call passed). So the true, complete list is every PAGE's own index, keyed by `file` so a screen
     // present in BOTH (a single-screen re-pull of a frame the original page walk also wrote) counts
     // once — root wins that merge since it is the more recently written of the two.
-    const byFile = new Map();
+    const byFile = new Map<string, IndexRowView>();
     for (const p of idx.pageDirs || []) {
-      try { const pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
+      try { const pi: IndexView = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
     }
     for (const l of idx.layers || []) if (l && l.file) byFile.set(l.file, l);
     for (const l of byFile.values()) note(l);
   } catch { /* no page index — a design-system-only or as-yet-empty export */ }
-  let designSystem = null;
-  const maybe = (rel) => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return null; } };
+  let designSystem: { file: string; exportedAt: string | undefined } | null = null;
+  const maybe = (rel: string): { file?: string; exportedAt?: string } | null => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return null; } };
   const dsDoc = maybe("design-system.json") || maybe(path.join("design-system", "tokens.json"));
   if (dsDoc && dsDoc.file) designSystem = { file: dsDoc.file, exportedAt: dsDoc.exportedAt };
 
-  const parts = [];
-  let newestOverall = null;
-  const noteNewest = (iso) => { const t = Date.parse(iso); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
+  const parts: string[] = [];
+  let newestOverall: number | null = null;
+  // String(): Date.parse coerces its argument exactly so — an absent stamp parses as NaN, as before.
+  const noteNewest = (iso: string | undefined) => { const t = Date.parse(String(iso)); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
   for (const [file, ats] of screensByFile) {
     if (!file) continue;
-    const newest = ats.reduce((a, b) => (Date.parse(b) > Date.parse(a || 0) ? b : a), ats[0]);
+    const newest = ats.reduce((a, b) => (Date.parse(String(b)) > Date.parse(String(a || 0)) ? b : a), ats[0]);
     noteNewest(newest);
-    parts.push(`${ats.length} screen(s) from '${file}' (newest ${ageStr(now - Date.parse(newest))} ago)`);
+    parts.push(`${ats.length} screen(s) from '${file}' (newest ${ageStr(now - Date.parse(String(newest)))} ago)`);
   }
   const unstamped = (screensByFile.get("") || []).length;
   if (unstamped) parts.push(`${unstamped} screen(s) (source not recorded — pulled by an older bridge; re-pull to stamp it)`);
   if (designSystem) {
     noteNewest(designSystem.exportedAt);
-    parts.push(`design system from '${designSystem.file}' (${ageStr(now - Date.parse(designSystem.exportedAt))} ago)`);
+    parts.push(`design system from '${designSystem.file}' (${ageStr(now - Date.parse(String(designSystem.exportedAt)))} ago)`);
   }
   return { parts, newestOverall };
 }
 
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
 // project (to debug the connection), where all of this is legitimately absent.
-function checkProject(cwd, now = Date.now()) {
-  const out = [];
+function checkProject(cwd: string, now: number = Date.now()): Check[] {
+  const out: Check[] = [];
   const designDir = path.join(cwd, LAYOUT.DESIGN_DIR);
   if (!fs.existsSync(designDir)) {
     out.push(warn("project", "Project", `no design/ in ${cwd}`, "run `dtwin init` in the root of the project you are building (skip this if you are only testing the connection)"));
@@ -255,15 +301,16 @@ function checkProject(cwd, now = Date.now()) {
         "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
 
-    const snap = readSnapshotInfo(ex.dir);
+    // Either a SnapshotInfo or a SnapshotParseError; read through one optional view, as plain JS did.
+    const snap = readSnapshotInfo(ex.dir) as Partial<SnapshotInfo & SnapshotParseError> | null;
     // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
-    // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.js checks all three; naming only
+    // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.ts checks all three; naming only
     // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
     if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull --node <id>   (or --page <name> / --design-system)"));
     else if (snap.error) out.push(warn("export", "Export", snap.error, "re-run the pull"));
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
-      const ageMs = now - Date.parse(snap.exportedAt);
+      const ageMs = now - Date.parse(String(snap.exportedAt));
       // P4 #33: build the headline from the per-source counts (screens grouped by their OWN stamped
       // source file, plus the design system's), rather than the single file snapshot-meta happened to
       // pick — the exact bug that reported "exported 12h ago from 'Design System - NERA (Copy)'" on a
@@ -296,10 +343,11 @@ function checkProject(cwd, now = Date.now()) {
 
   const mcpFile = path.join(cwd, ".mcp.json");
   if (fs.existsSync(mcpFile)) {
-    let servers = null;
+    let servers: Record<string, unknown> | null = null;
     try { servers = JSON.parse(fs.readFileSync(mcpFile, "utf8")).mcpServers || {}; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
     if (servers) {
-      const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
+      const found = servers;
+      const mine = Object.keys(found).find((k) => isOurMcpEntry(found[k]));
       if (!mine) out.push(ok("mcp", "MCP registration", "not registered in .mcp.json (optional — `dtwin init --mcp` adds it)"));
       else if (mine === "designtwin") out.push(ok("mcp", "MCP registration", 'registered as "designtwin" in .mcp.json'));
       else out.push(warn("mcp", "MCP registration", `registered under the legacy key "${mine}" — it still works, but new setups use "designtwin" ("figma" collides with Figma's own MCP server)`, `rename the "${mine}" key in .mcp.json to "designtwin", then restart Claude Code`));
@@ -312,10 +360,10 @@ function checkProject(cwd, now = Date.now()) {
 
 // Is the port free, and if not, what kind of thing holds it? Binds exactly as the bridge does
 // (127.0.0.1), then lets go at once. Never opens a WebSocket — see the header.
-function probePort(port) {
-  return new Promise((resolve) => {
+function probePort(port: number): Promise<PortProbe> {
+  return new Promise<PortProbe>((resolve) => {
     const srv = net.createServer();
-    srv.once("error", (e) => {
+    srv.once("error", (e: NodeJS.ErrnoException) => {
       if (e.code !== "EADDRINUSE") return resolve({ free: false, holder: "unknown", detail: errMsg(e) });
       const req = http.get({ host: "127.0.0.1", port, path: "/", timeout: 1500 }, (res) => {
         res.resume();
@@ -331,22 +379,23 @@ function probePort(port) {
 // Open a real bridge on the (free) port and see whether a plugin shows up. The plugin retries every
 // 3s and may be walking three ports, hence the wait. The bridge's own stderr chatter is muted for the
 // duration: doctor reports the same facts itself, in one place. ALWAYS closes.
-async function probePlugin(port, waitMs) {
+async function probePlugin(port: number, waitMs: number): Promise<PluginProbe> {
   const realError = console.error;
   console.error = () => {};
-  let bridge = null;
+  let bridge: Bridge | null = null;
   try {
-    const core = require("./server-core");
+    const core = await import("./server-core.ts");
     bridge = core.createBridge(port);
     const start = Date.now();
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     // Only a refusal from THIS probe counts — authStats is module-wide.
     const refused = () => { const b = core.authStats().lastBadToken; return b && b.at >= start ? b : null; };
-    while (Date.now() - start < waitMs && !bridge.isConnected() && !refused()) await sleep(200);
-    if (bridge.isConnected()) {
+    const b = bridge;
+    while (Date.now() - start < waitMs && !b.isConnected() && !refused()) await sleep(200);
+    if (b.isConnected()) {
       // The file name arrives in a hello just after the socket opens — give it a moment.
-      for (let i = 0; i < 10 && bridge.listClients().some((c) => !c.identified); i++) await sleep(150);
-      return { clients: bridge.listClients() };
+      for (let i = 0; i < 10 && b.listClients().some((c) => !c.identified); i++) await sleep(150);
+      return { clients: b.listClients() };
     }
     return { clients: [], badToken: refused(), expected: core.authStats().expected };
   } catch (e) {
@@ -362,10 +411,22 @@ async function probePlugin(port, waitMs) {
 // `onCheck` sees each result the moment it is known, and `onWait` fires before the one slow step (the
 // plugin wait). Printing only at the end meant a caller with a short timeout — an agent shelling out —
 // got NOTHING, not even the instant Node/token answers, if the plugin wait outlived it.
-async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) {
-  const checks = [];
-  const add = (...cs) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
-  const engines = (() => { try { return require("./package.json").engines.node; } catch (e) { return null; } })();
+export interface RunOptions {
+  cwd?: string;
+  waitSec?: number;
+  onCheck?: (c: Check) => void;
+  onWait?: (sec: number) => void;
+}
+
+async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOptions = {}): Promise<Report> {
+  const checks: Check[] = [];
+  const add = (...cs: Check[]) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
+  // `engines!`: a package.json without `engines` throws here and reads as null, exactly as before.
+  const engines = (() => {
+    try {
+      return (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string; engines?: { node?: string } }).engines!.node;
+    } catch (e) { return null; }
+  })();
   add(checkNode(process.version, engines));
 
   const tok = tokenStore.status();
@@ -375,7 +436,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
   if (!tok.shadowed) add(checkToken(tok));
 
   const { port, problem } = resolvePort(process.env.FIGMA_BRIDGE_PORT);
-  let pluginCheck;
+  let pluginCheck: Check;
   let viaDaemon = false;
   if (problem) {
     add(problem);
@@ -394,8 +455,8 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
       // demotion is independent of, and composes with, the shadowed-token classification below (P4
       // #328), which reads `pluginCheck.status` to decide whether the token warning is real.
       pluginCheck = st.pluginConnected
-        ? (() => {
-            const { daemonRowStalenessNote } = require("./server-core.js"); // lazy — see connectedDetail's comment
+        ? ((): Check => {
+            // daemonRowStalenessNote: staleness.ts, not server-core — see connectedDetail's comment
             const c = connectedDetail(st.clients, "connected (through the daemon)");
             // Two independent kinds of stale, either one is a warn: a stale PLUGIN bundle (pluginStale,
             // set by an up-to-date daemon that saw a version-less/old `hello`), or the DAEMON itself
@@ -427,19 +488,19 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
   // tells an automated caller (or a human skimming --json) that everything was verified when in fact
   // it wasn't. Only a genuine "not checked" counts here — a warn about project state (stale export,
   // legacy layout, parallel layout, no map) is real advice and must not flip the roll-up.
-  const notChecked = (c) => c.status === "warn" && /not checked/i.test(c.detail || "");
+  const notChecked = (c: Check) => c.status === "warn" && /not checked/i.test(c.detail || "");
   return { ok: !checks.some((c) => c.status === "fail" || notChecked(c)), checks };
 }
 
-const MARK = { ok: "✓", warn: "!", fail: "✗" };
+const MARK: Record<Check["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
-const formatCheck = (c) => `${MARK[c.status]} ${c.title}: ${c.detail}` + (c.next ? `\n    → ${c.next}` : "");
-function verdict(report) {
-  const n = (s) => report.checks.filter((c) => c.status === s).length;
+const formatCheck = (c: Check) => `${MARK[c.status]} ${c.title}: ${c.detail}` + (c.next ? `\n    → ${c.next}` : "");
+function verdict(report: Report): string {
+  const n = (s: Check["status"]) => report.checks.filter((c) => c.status === s).length;
   return n("fail") ? `${n("fail")} problem(s) to fix${n("warn") ? `, ${n("warn")} note(s)` : ""}.` : n("warn") ? `No blocking problems; ${n("warn")} note(s) above.` : "All good.";
 }
 
-async function main(argv) {
+async function main(argv: string[]): Promise<void> {
   let waitSec = 10;
   let json = false;
   const usage = "Usage: dtwin doctor [--wait <seconds>] [--json]";
@@ -466,4 +527,4 @@ async function main(argv) {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-module.exports = { ALLOWED_PORTS, checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };
+export { ALLOWED_PORTS, checkNode, checkToken, checkDaemon, resolvePort, checkPort, checkPlugin, checkProject, probePort, probePlugin, run, main };

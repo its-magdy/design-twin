@@ -1,25 +1,61 @@
-// snapshot-meta.js — reads the freshness stamp a figma-pull export already left on disk.
+// snapshot-meta.ts — reads the freshness stamp a figma-pull export already left on disk.
 //
 // design-system.json's `exportedAt` (ISO timestamp) and `file` (figma.root.name) are stamped by the
 // PLUGIN itself (collect.ts/components.ts's buildDesignSystem()) — nothing here invents a new field,
-// it only reads what's already written. Kept as its own dependency-free CJS module (same pattern as
-// errmsg.js / node-id.js) so both the MCP entry (ESM, via createRequire) and the test suite (CJS) can
-// read it without importing figma-mcp.mts itself, which has top-level side effects (opens the bridge
-// WebSocket server, connects an MCP stdio transport) that would make it unsafe to require from a test.
+// it only reads what's already written. Kept as its own small module (same pattern as errmsg.ts /
+// node-id.ts) so both the MCP entry and the test suite can read it without importing figma-mcp.ts
+// itself, which has top-level side effects (opens the bridge WebSocket server, connects an MCP stdio
+// transport) that would make it unsafe to import from a test.
 //
 // Never throws: a missing/unreadable/malformed snapshot is reported as such, not silently treated as
 // "no snapshot" or crashed on — figma_status's whole point is to say what it knows, loudly.
-const fs = require("fs");
-const path = require("path");
-const { errMsg } = require("./errmsg.js");
+import fs from "node:fs";
+import path from "node:path";
+import { errMsg } from "./errmsg.ts";
+import { findExportDir } from "./project-layout.ts";
 
-// The ONE freshness rule, shared with design-to-code/drift-lint.js: given a parsed catalog, what is its
+/** What snapshotAge reports. `problem` is set only when there is no usable age. */
+export interface SnapshotAge {
+  exportedAt: string | undefined;
+  ageMs: number | undefined;
+  problem?: "missing" | "unparseable";
+}
+
+/** A readable, stamped (or best-available unstamped) export on disk. */
+export interface SnapshotInfo {
+  /** absolute path of the file the stamp was read from */
+  file: string;
+  exportedAt: string | undefined;
+  ageMs: number | undefined;
+  /** the Figma file name (`file`), or a screen doc's `screen` label */
+  sourceFile: string | undefined;
+  /** set when the stamp is missing or unparseable */
+  warning: string | undefined;
+}
+
+/** A named export file (design-system.json / pages/index.json) that exists but is not valid JSON. */
+export interface SnapshotParseError {
+  file: string;
+  error: string;
+}
+
+// A parsed JSON document's own field, read the way plain JS reads `doc && doc.x`: undefined for a
+// falsy doc and for anything that is not an object carrying the key.
+function field(doc: unknown, key: string): unknown {
+  return doc && typeof doc === "object" && key in doc ? (doc as Record<string, unknown>)[key] : undefined;
+}
+
+// A stamp is a string in every export this repo writes; a truthy non-string (hand-edited JSON) is
+// stringified rather than passed through, so the declared `string` holds.
+const asText = (v: unknown): string | undefined => (v ? (typeof v === "string" ? v : String(v)) : undefined);
+
+// The ONE freshness rule, shared with design-to-code/drift-lint.ts: given a parsed catalog, what is its
 // export timestamp and how old is it? Callers own the POLICY (max-age threshold, warning codes,
 // wording); this owns only "which field, and is it parseable". Two copies of the parse rule meant
 // figma_status and drift-lint could disagree about the same file on disk.
 // `problem` is "missing" (no stamp at all) or "unparseable" (stamp present, not a date).
-function snapshotAge(doc, now) {
-  const exportedAt = doc && doc.exportedAt;
+export function snapshotAge(doc: unknown, now?: number): SnapshotAge {
+  const exportedAt = asText(field(doc, "exportedAt"));
   if (!exportedAt) return { exportedAt: undefined, ageMs: undefined, problem: "missing" };
   const t = Date.parse(exportedAt);
   if (Number.isNaN(t)) return { exportedAt, ageMs: undefined, problem: "unparseable" };
@@ -38,10 +74,11 @@ function snapshotAge(doc, now) {
 // by being a .json that isn't on a blacklist: a real one carries `nodes[]` (a single-screen pull) or
 // `layers[]`/`pageDirs[]` (a page walk). A blacklist would need updating every time a new output
 // file is added; this does not.
-function looksLikeExport(doc) {
-  return !!doc && typeof doc === "object" &&
-    (Array.isArray(doc.nodes) || Array.isArray(doc.layers) || Array.isArray(doc.pageDirs) ||
-     Array.isArray(doc.components) || Array.isArray(doc.variables) || (doc.files && typeof doc.files === "object"));
+function looksLikeExport(doc: unknown): boolean {
+  if (!doc || typeof doc !== "object") return false;
+  const files = field(doc, "files");
+  return Array.isArray(field(doc, "nodes")) || Array.isArray(field(doc, "layers")) || Array.isArray(field(doc, "pageDirs")) ||
+     Array.isArray(field(doc, "components")) || Array.isArray(field(doc, "variables")) || (!!files && typeof files === "object");
 }
 
 // Which file carries the freshness stamp, in order of how much of the design it covers.
@@ -53,14 +90,16 @@ function looksLikeExport(doc) {
 // `named: true` means the filename alone identifies it as an export, so its shape is not second-
 // guessed (a hand-trimmed design-system.json is still a design-system.json). Only the DISCOVERED
 // files have to earn it via looksLikeExport.
-function snapshotCandidates(dir) {
-  const out = [{ f: path.join(dir, "design-system.json"), named: true },
+interface SnapshotCandidate { f: string; named: boolean }
+
+function snapshotCandidates(dir: string): SnapshotCandidate[] {
+  const out: SnapshotCandidate[] = [{ f: path.join(dir, "design-system.json"), named: true },
                { f: path.join(dir, "pages", "index.json"), named: true }];
   // Then any other top-level .json, newest first. Top level only — never a recursive walk, since this
   // runs on every figma_status/doctor call and design/assets/ can hold thousands of files.
-  let entries = [];
+  let entries: fs.Dirent[] = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
-  const rest = [];
+  const rest: Array<{ f: string; mtime: number }> = [];
   for (const e of entries) {
     if (!e.isFile() || !e.name.endsWith(".json") || e.name === "design-system.json") continue;
     const f = path.join(dir, e.name);
@@ -70,16 +109,17 @@ function snapshotCandidates(dir) {
   return out.concat(rest.map((r) => ({ f: r.f, named: false })));
 }
 
-function readSnapshotInfo(outDir) {
-  // Same resolution order as write-out.js's resolveOutDir, plus the legacy flat layout: a project
+export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseError | null {
+  // Same resolution order as write-out.ts's resolveOutDir, plus the legacy flat layout: a project
   // that exported before design/export/ existed must still report its snapshot, not "nothing yet".
-  const dir = outDir || process.env.FIGMA_EXPORT_DIR || require("./project-layout.js").findExportDir(process.cwd()).dir;
+  const dir = outDir || process.env.FIGMA_EXPORT_DIR || findExportDir(process.cwd()).dir;
   const cands = snapshotCandidates(dir);
-  let file = null, doc = null, parseError = null, fallback = null;
+  let file: string | null = null, doc: unknown = null, parseError: SnapshotParseError | null = null;
+  let fallback: { file: string; doc: unknown } | null = null;
   for (const { f: cand, named } of cands) {
-    let raw;
+    let raw: string;
     try { raw = fs.readFileSync(cand, "utf8"); } catch { continue; }
-    let parsed;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch (e) {
@@ -93,7 +133,7 @@ function readSnapshotInfo(outDir) {
     // forces this: a single-screen pull writes it alongside the screen doc, it is export-shaped
     // (variables[]), and it carries no exportedAt of its own — so picking purely by order would
     // report "freshness unknown" while a perfectly stamped screen doc sat right next to it.
-    if (!parsed.exportedAt) { if (fallback === null) fallback = { file: cand, doc: parsed }; continue; }
+    if (!field(parsed, "exportedAt")) { if (fallback === null) fallback = { file: cand, doc: parsed }; continue; }
     file = cand; doc = parsed; break;
   }
   if (file === null && fallback !== null) { file = fallback.file; doc = fallback.doc; }
@@ -101,7 +141,8 @@ function readSnapshotInfo(outDir) {
   const label = path.basename(file);
   // A screen doc has no `file` (that is a design-system field); its `screen` is the human label, so
   // fall back to it rather than reporting the source as unknown.
-  const sourceFile = (doc && doc.file) || (doc && typeof doc.screen === "string" ? doc.screen : undefined);
+  const screen = field(doc, "screen");
+  const sourceFile = asText(field(doc, "file")) || (typeof screen === "string" ? screen : undefined);
   const { exportedAt, ageMs, problem } = snapshotAge(doc);
   const warning =
     problem === "missing" ? `no exportedAt stamp in ${label} — freshness unknown (re-export with the current plugin)`
@@ -109,5 +150,3 @@ function readSnapshotInfo(outDir) {
     : undefined;
   return { file, exportedAt, ageMs, sourceFile, warning };
 }
-
-module.exports = { readSnapshotInfo, snapshotAge };

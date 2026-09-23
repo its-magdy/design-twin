@@ -4,7 +4,7 @@
 import { errMsg } from "./util";
 import { beginRun, endRun, RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
-import { readOptDefaults, ReadOptName } from "../../bridge/read-opts.js";
+import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
 export interface Asset {
   id: string;

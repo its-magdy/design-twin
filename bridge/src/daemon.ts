@@ -1,7 +1,7 @@
-// daemon.js — hold the bridge open across many CLI invocations.
+// daemon.ts — hold the bridge open across many CLI invocations.
 //
 // WHY this shape. A one-shot `figma-pull` pays a full plugin reconnect every run, and only one
-// process can hold port 8787 (server-core.js exits on EADDRINUSE), so back-to-back pulls are both
+// process can hold port 8787 (server-core.ts exits on EADDRINUSE), so back-to-back pulls are both
 // slow and mutually exclusive. The obvious fix — "a flag that opens the connection and leaves it
 // open" — does NOT work on its own: a long-running CLI has no way to receive further commands, so it
 // would occupy the port while being unreachable, blocking the MCP server and every other CLI call.
@@ -13,22 +13,79 @@
 //
 // A unix socket, not a second TCP port: it gets filesystem permissions for free (no verifyClient
 // equivalent to write), and it cannot be reached from a browser tab the way a loopback port can.
-const fs = require("fs");
-const net = require("net");
-const os = require("os");
-const path = require("path");
-const { errMsg } = require("./errmsg.js");
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { errMsg } from "./errmsg.ts";
+import type { ClientRow, ConnectionInfo, RequestArgs } from "./server-core.ts";
+
+// ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
+
+/** A request frame: a bridge command to forward, or one of the daemon's own `__ping`/`__status`/`__shutdown`. */
+export interface DaemonRequest {
+  cmd: string;
+  args?: RequestArgs;
+  timeoutMs?: number;
+  /** routing target, forwarded verbatim to the bridge (connId / fileKey / file-name substring) */
+  client?: string | null;
+  /** ms to wait for a plugin to connect before sending */
+  waitForConnection?: number;
+}
+
+/** A reply frame. */
+interface DaemonReply {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+/** `__status`'s result — what `dtwin --daemon-status`, doctor and `list clients` read. */
+export interface DaemonStatus {
+  daemon: true;
+  pid: number;
+  port: number;
+  pluginConnected: boolean;
+  clients: ClientRow[];
+  connection: ConnectionInfo | null;
+  idleMs: number | null;
+  idleForMs: number;
+}
+
+/** What serve() drives: the bridge shape (server-core's createBridge() result, or the test suite's fake). */
+export interface DaemonBridge {
+  port: number;
+  isConnected(): boolean;
+  waitForConnection(timeoutMs: number): Promise<void>;
+  request(cmd: string, args: RequestArgs | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
+  close(): void;
+  listClients?: () => ClientRow[];
+  connectionInfo?: () => ConnectionInfo;
+}
+
+export interface ServeOptions {
+  port?: number;
+  log?: (m: string) => void;
+  idleMin?: number;
+  signals?: boolean;
+}
+
+/** connect()'s answer when a daemon is live: its socket, and a request function bound to it. */
+export interface DaemonConnection {
+  sock: string;
+  request: (msg: DaemonRequest, timeoutMs?: number) => Promise<unknown>;
+}
 
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
 // socket. Under the user's own tmpdir, which is already 0700 on the platforms this runs on.
-function sockPath(port) {
+export function sockPath(port?: number): string {
   return path.join(os.tmpdir(), `designtwin-${port || process.env.FIGMA_BRIDGE_PORT || 8787}.sock`);
 }
 
 // Newline-delimited JSON. JSON.stringify escapes literal newlines, so a bare "\n" is an unambiguous
 // frame terminator even for a 24MB export — but the frame can arrive in many chunks, so callers must
 // buffer until they see one. Both sides use this to avoid two subtly different reassembly loops.
-function framer(onFrame) {
+export function framer(onFrame: (line: string) => void): (chunk: string) => void {
   let buf = "";
   return (chunk) => {
     buf += chunk;
@@ -48,7 +105,7 @@ function framer(onFrame) {
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
 // existing caller was written against.
-function serve(bridge, { port, log, idleMin, signals = true } = {}) {
+export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true }: ServeOptions = {}): Promise<{ sock: string; shutdown: () => void }> {
   const sock = sockPath(port);
   // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
   // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
@@ -69,7 +126,7 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
     let lastActivity = Date.now();
     let inFlight = 0;
     const touch = () => { lastActivity = Date.now(); };
-    let idleTimer = null;
+    let idleTimer: ReturnType<typeof setInterval> | null = null;
     if (idleMs) {
       // Checked on an interval rather than a rearmed timeout: one timer, and `inFlight` is consulted
       // at fire time instead of having to cancel/rearm around every request.
@@ -85,7 +142,7 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
       if (idleTimer.unref) idleTimer.unref();
     }
 
-    let queue = Promise.resolve();
+    let queue: Promise<void> = Promise.resolve();
     const server = net.createServer((conn) => {
       conn.setEncoding("utf8");
       // A client that dies mid-export must not take the daemon with it: the write below would emit
@@ -93,7 +150,7 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
       conn.on("error", () => {});
       conn.on("data", framer(async (line) => {
         touch(); // any client contact counts as activity, including the probe
-        let msg;
+        let msg: DaemonRequest;
         try { msg = JSON.parse(line); } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
         if (msg.cmd === "__ping") return reply(conn, { ok: true, result: { daemon: true, pid: process.pid, port: bridge.port } });
         if (msg.cmd === "__status") {
@@ -156,7 +213,7 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
     // leave the socket file behind for the next probe to trip over.
     else process.on("exit", () => { try { fs.unlinkSync(sock); } catch (e) {} });
 
-    return new Promise((resolve, reject) => {
+    return new Promise<{ sock: string; shutdown: () => void }>((resolve, reject) => {
       server.once("error", reject);
       server.listen(sock, () => {
         if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: dtwin --stop`);
@@ -166,7 +223,7 @@ function serve(bridge, { port, log, idleMin, signals = true } = {}) {
   });
 }
 
-function reply(conn, obj) {
+function reply(conn: net.Socket, obj: DaemonReply): void {
   try { conn.write(JSON.stringify(obj) + "\n"); } catch (e) { /* client went away mid-reply */ }
 }
 
@@ -174,11 +231,11 @@ function reply(conn, obj) {
 
 // Is there a LIVE daemon? A stale socket file (crashed daemon) answers ECONNREFUSED, and must read as
 // "no daemon" rather than hanging or erroring — otherwise one crash makes every later CLI run fail.
-function probe(sock, timeoutMs = 1500) {
-  return new Promise((resolve) => {
+export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    let c;
+    const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+    let c: net.Socket;
     try { c = net.createConnection(sock); } catch (e) { return finish(false); }
     const t = setTimeout(() => { try { c.destroy(); } catch (e) {} finish(false); }, timeoutMs);
     c.on("error", () => { clearTimeout(t); finish(false); });
@@ -191,12 +248,12 @@ function probe(sock, timeoutMs = 1500) {
 // One request through a running daemon. Rejects (rather than falling back) once connected: a daemon
 // that answered __ping and then failed is a real error the caller should see, not a reason to
 // silently open a second bridge that would then hit EADDRINUSE against the daemon itself.
-function request(sock, msg, timeoutMs) {
-  return new Promise((resolve, reject) => {
+function request(sock: string, msg: DaemonRequest, timeoutMs?: number): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
     let settled = false;
-    const done = (fn, v) => { if (!settled) { settled = true; try { c.end(); } catch (e) {} fn(v); } };
+    const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; try { c.end(); } catch (e) {} fn(v); } };
     // The daemon's own per-command budget still applies; this is the outer guard for a daemon that
     // stopped answering entirely. Generous by design — an --all-pages export legitimately runs long.
     const t = timeoutMs ? setTimeout(() => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s")), timeoutMs) : null;
@@ -204,7 +261,7 @@ function request(sock, msg, timeoutMs) {
     c.on("close", () => { if (t) clearTimeout(t); done(reject, new Error("daemon closed the connection before replying")); });
     c.on("data", framer((line) => {
       if (t) clearTimeout(t);
-      let r;
+      let r: DaemonReply;
       try { r = JSON.parse(line); } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
       if (r.ok) done(resolve, r.result);
       else done(reject, new Error(r.error));
@@ -215,22 +272,23 @@ function request(sock, msg, timeoutMs) {
 
 // The routing decision every CLI command makes: use the daemon if one is live, otherwise report that
 // there isn't one and let the caller open its own bridge exactly as before.
-async function connect(port) {
+export async function connect(port?: number): Promise<DaemonConnection | null> {
   const sock = sockPath(port);
   return (await probe(sock)) ? { sock, request: (msg, timeoutMs) => request(sock, msg, timeoutMs) } : null;
 }
 
-async function stop(port) {
+export async function stop(port?: number): Promise<boolean> {
   const sock = sockPath(port);
   if (!(await probe(sock))) return false;
   await request(sock, { cmd: "__shutdown" }, 5000);
   return true;
 }
 
-async function status(port) {
+export async function status(port?: number): Promise<DaemonStatus | null> {
   const sock = sockPath(port);
   if (!(await probe(sock))) return null;
-  return request(sock, { cmd: "__status" }, 5000);
+  // The daemon's own __status reply, taken as the shape above (a daemon from an OLDER bridge may omit
+  // newer row fields — see staleness.ts daemonRowStalenessNote).
+  return (await request(sock, { cmd: "__status" }, 5000)) as DaemonStatus;
 }
 
-module.exports = { sockPath, serve, connect, stop, status, probe, framer };

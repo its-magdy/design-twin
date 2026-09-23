@@ -8,7 +8,7 @@ export type Obj = Record<string, any>;
 // files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
 // already imports it), so re-export rather than keeping a byte-identical second copy that could
 // desynchronise asset paths from page/layer paths.
-export { safe } from "../../bridge/pages-layout.js";
+export { safe } from "../../bridge/src/pages-layout.ts";
 
 // The timestamp every emitted doc carries. One place to change the format for all of them.
 export const exportedAt = (): string => new Date().toISOString();
@@ -18,12 +18,12 @@ export const propName = (k: string): string => k.split("#")[0]; // strip Figma's
 
 // Thrown value -> message string. Same reasoning as `safe` above: one definition in a dependency-free
 // CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
-export { errMsg } from "../../bridge/errmsg.js";
+export { errMsg } from "../../bridge/src/errmsg.ts";
 
 // "Same SVG, modulo Figma's own export noise" — the ONE definition shared with bridge/write-out.js
 // (clobber-avoidance) and design-to-code/design-diff.js (the change diff), so all three agree on what
 // counts as a redraw. See bridge/svg-normalize.js for why 1 decimal place, not 2.
-export { normalizeSvgText } from "../../bridge/svg-normalize.js";
+export { normalizeSvgText } from "../../bridge/src/svg-normalize.ts";
 
 // The extractor's compaction rule: emit nothing rather than an empty object. One place to change it.
 export const nonEmpty = (o: Obj): Obj | undefined => (Object.keys(o).length ? o : undefined);

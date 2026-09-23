@@ -22,13 +22,14 @@ validated against them and exits rather than binding a port nothing could ever r
 > empty result, not an error. If `--list-libraries` / `figma_list_libraries` shows nothing, re-import
 > `figma-plugin/manifest.json` (Plugins → Development → Import plugin from manifest…) first.
 
-**Languages:** `figma-pull.js` (read CLI) and `server-core.js` (WS core) are plain CommonJS Node.
-`figma-mcp` is **TypeScript** (`src/figma-mcp.mts`) built to **`figma-mcp.mjs`** (ESM, required by the
-ESM-only MCP SDK). `figma-mcp.mjs` is committed, so it runs with **zero build**; only rebuild when you
-edit the source:
+**Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
+`server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
+Node ≥ 24 runs it directly with **zero build** (`node bridge/src/figma-pull.ts …`,
+`node bridge/src/figma-mcp.ts`). The npm package ships compiled JavaScript instead: `npm run build`
+emits `dist/` (gitignored; also run on `prepack`), and the package's `dtwin` bin is `dist/figma-pull.js`.
 ```
 npm run typecheck   # tsc --noEmit
-npm run build       # esbuild src/figma-mcp.mts -> figma-mcp.mjs
+npm run build       # tsc: src/*.ts -> dist/*.js (what the npm package ships)
 ```
 
 ### Bridge token (required)
@@ -582,8 +583,9 @@ Behaviour worth knowing:
 ## Write / interactive: figma-mcp (MCP over stdio)
 **Not registered in this repo** — there is no `.mcp.json` here on purpose, so the MCP never starts
 while you are working *on* the bridge. Register it in the project you are *building*: a `.mcp.json`
-there with an absolute path to this `figma-mcp.mjs`, under the key `designtwin` (`dtwin init --mcp`
-writes exactly that). Claude Code then launches it over stdio, and its tools surface as
+there with an absolute path to the server entry — `bridge/dist/figma-mcp.js` for an npm install,
+`bridge/src/figma-mcp.ts` for a repo checkout — under the key `designtwin` (`dtwin init --mcp` picks
+whichever one is running and writes exactly that). Claude Code then launches it over stdio, and its tools surface as
 `mcp__designtwin__<tool>` (e.g. `mcp__designtwin__figma_status`).
 No token needs to go in that `.mcp.json`: the MCP server reads the same per-user stored token the CLI
 does, so the one you already pasted into the plugin keeps working (set `FIGMA_BRIDGE_TOKEN` in the

@@ -12,19 +12,52 @@
 // is accumulated per-RUN, not per-layer — see state.ts) and a `pageDirs` pointer to each page's
 // directory + index file.
 //
-// TWO writers materialise this: bridge/figma-pull.js writes real nested directories, and the plugin's
+// TWO writers materialise this: bridge/src/figma-pull.ts writes real nested directories, and the plugin's
 // browser-download path (figma-plugin/src/main.ts) cannot — the HTML spec says user agents "should
 // ignore any directory or path information provided by ... any download attribute", so `pages/Foo/bar
 // .json` lands flat under a mangled name and every `file:` pointer with a slash was already dangling.
 // It encodes the same hierarchy in the FILENAME instead. That separator is the ONLY difference, so it
 // is the only knob here — everything else (bucketing, dir disambiguation, file naming, index shape,
 // pageDirs) is computed once, in this file, and each caller only writes bytes. Kept dependency-free
-// CJS so the Node CLI can require it and esbuild can inline it into the plugin bundle.
+// (no Node imports, ES2019-safe) so the Node CLI can import it and esbuild can inline it into the
+// plugin bundle — it type-checks under the plugin's tsconfig as well as the bridge's.
+
+import type { LayerFile, IndexRow, PageDirEntry, PageIndex, PagesRootIndex, LayersDoc } from "./doc-types.ts";
+
+/** One file a layout builder emits: where it lands (joined with the caller's separator — emit this
+ *  verbatim) and its contents as an object (the caller decides how to stringify it). */
+export interface PageLayoutFile<T> {
+  path: string;
+  data: T;
+}
+
+export interface PageLayout {
+  /**
+   * layersDoc minus layers/index, plus the computed `pageDirs` — one entry per page, carrying
+   * `{page, pageId?, dir, index, layers}`. Pages are bucketed by `pageId`; `page` is a display name
+   * and is NOT unique (Figma allows two pages of the same name), so `pageId` is the field to match
+   * on. It is absent on exports written before page ids were emitted. Becomes pages/index.json.
+   */
+  meta: PagesRootIndex;
+  layerFiles: Array<PageLayoutFile<LayerFile>>;
+  /** One per page: where its index.json lands, and what goes in it (`{page, pageId?, layers}`). */
+  indexFiles: Array<PageLayoutFile<PageIndex>>;
+  /** Path of the root pages index, joined with the caller's separator. */
+  rootIndex: string;
+}
+
+/** The fields the title/text walkers below read. Any IR node — or a partial one, or `{}` — fits. */
+export interface TextWalkNode {
+  name?: string;
+  type?: string;
+  text?: string;
+  children?: readonly TextWalkNode[];
+}
 
 // Filesystem-boundary sanitiser for names that become paths. Asset filenames are NOT derived here —
 // the plugin names each asset (assets.ts) and the node tree's `asset` path is built from that same
 // string, so re-deriving the convention could silently point every path at a missing file.
-function safe(id) {
+export function safe(id: unknown): string {
   return String(id).replace(/[^a-zA-Z0-9]/g, "_");
 }
 
@@ -37,7 +70,7 @@ function safe(id) {
 // "Global Policies" also appears as a `Sub titles` nav item on all three Organization-management
 // screens) — so the rule is: the first TEXT node inside a descendant literally named "Page Title",
 // and ONLY that; anywhere else and we would rather carry no title than a wrong one.
-function firstByName(node, name) {
+export function firstByName(node: TextWalkNode | null | undefined, name: string): TextWalkNode | null {
   if (!node || typeof node !== "object") return null;
   if (node.name === name) return node;
   for (const c of node.children || []) {
@@ -53,7 +86,7 @@ function firstByName(node, name) {
 // excluded rather than trusted as "the first text we found".
 const PLACEHOLDER_TEXT = new Set(["text", "label"]);
 
-function firstText(node) {
+export function firstText(node: TextWalkNode | null | undefined): string | null {
   if (!node || typeof node !== "object") return null;
   if (node.type === "TEXT" && typeof node.text === "string") {
     const t = node.text.trim();
@@ -71,7 +104,7 @@ function firstText(node) {
 // Title Side(FRAME) > Title(TEXT)`, sitting AFTER a `Breadcrumb`/back-link instance that comes first
 // in reading order but carries only nav chrome and unbound placeholder text). Preferring the node
 // literally named "Title" over "first TEXT in the subtree" is what keeps the breadcrumb from winning.
-function firstNamedText(node, name) {
+function firstNamedText(node: TextWalkNode | null | undefined, name: string): string | null {
   if (!node || typeof node !== "object") return null;
   if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
     return node.text;
@@ -88,7 +121,7 @@ function firstNamedText(node, name) {
 // in reading order (placeholder text excluded either way). If nothing yields a non-empty string,
 // return undefined — JSON.stringify drops an undefined value, so the row simply carries no `title`
 // (never a guessed/wrong one).
-function deriveTitle(root) {
+export function deriveTitle(root: TextWalkNode | null | undefined): string | undefined {
   const slot = firstByName(root, "Page Title");
   if (slot) {
     const named = firstNamedText(slot, "Title");
@@ -102,11 +135,11 @@ function deriveTitle(root) {
 
 // The first N distinct, non-empty text strings in the tree, in reading order — a coarse fingerprint
 // a text search (or a human eyeballing the index) can match against, independent of the layer name.
-function collectTexts(root, limit) {
+export function collectTexts(root: TextWalkNode | null | undefined, limit?: number): string[] {
   const n = limit || 8;
-  const seen = new Set();
-  const out = [];
-  (function walk(node) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  (function walk(node: TextWalkNode | null | undefined): void {
     if (!node || typeof node !== "object" || out.length >= n) return;
     if (node.type === "TEXT" && typeof node.text === "string") {
       const t = node.text.trim();
@@ -123,25 +156,33 @@ function collectTexts(root, limit) {
   return out;
 }
 
+// A page's build state: its identity, its directory, and the index rows collected for it.
+interface PageBucket {
+  page: string;
+  pageId?: string;
+  dir: string;
+  index: string;
+  entries: IndexRow[];
+}
+
 /**
- * @param {any} layersDoc  the collector's layersDoc ({layers, index, ...manifest fields})
- * @param {string} sep     path separator: "/" for real directories, "__" for flat download names
- * @returns {{meta: any, layerFiles: Array<{path: string, data: any}>,
- *            indexFiles: Array<{path: string, data: any}>, rootIndex: string}}
+ * @param layersDoc  the collector's layersDoc ({layers, index, ...manifest fields})
+ * @param sep        path separator: "/" for real directories, "__" for flat download names
  */
-function buildPageLayout(layersDoc, sep) {
-  const { layers, index, ...meta } = layersDoc || {};
-  const join = (...parts) => ["pages"].concat(parts).join(sep);
-  const byPage = new Map(); // page IDENTITY (id, or name pre-pageId) -> { dir, entries: [{...index[i], file}] }
-  const pages = [];
-  const layerFiles = [];
+export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: string): PageLayout {
+  const doc: LayersDoc = layersDoc || {};
+  const { layers, index, ...rest } = doc;
+  const join = (...parts: string[]): string => ["pages"].concat(parts).join(sep);
+  const byPage = new Map<string, PageBucket>(); // page IDENTITY (id, or name pre-pageId) -> { dir, entries: [{...index[i], file}] }
+  const pages: PageBucket[] = [];
+  const layerFiles: Array<PageLayoutFile<LayerFile>> = [];
   // safe() folds every non-alphanumeric to "_", so DISTINCT page names collide ("Design System" /
   // "Design/System" / "Design-System" all -> "Design_System"). Sharing a directory meant the second
   // page's index.json OVERWROTE the first's, leaving the first page's layer files on disk but absent
   // from every index — invisible to any agent following the manifest. Layer filenames already carry
   // an id suffix for exactly this reason; page dirs get the same.
-  const usedDirs = new Set();
-  const uniqueDir = (name) => {
+  const usedDirs = new Set<string>();
+  const uniqueDir = (name: string): string => {
     const base = safe(name) || "page";
     if (!usedDirs.has(base)) { usedDirs.add(base); return base; }
     let i = 2;
@@ -163,17 +204,17 @@ function buildPageLayout(layersDoc, sep) {
     if (!bucket) {
       // The DIRECTORY still comes from the name (dirs are for humans reading the tree); uniqueDir()
       // suffixes the duplicate, exactly as it already did for distinct names that fold alike.
-      bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
-      byPage.set(key, bucket);
+      const dir = uniqueDir(pageName);
       // `index` is a POINTER, like every layer entry's `file`, not something the consumer reassembles
       // from `dir` — a consumer rebuilding `pages/<dir>/index.json` would be right on exactly one of
       // the two layouts. Emitting the real relative path on both makes the rule uniform: open
       // `<outDir>/<index>` verbatim, whichever layout you were handed.
-      bucket.index = join(bucket.dir, "index.json");
+      bucket = { page: pageName, pageId: l.pageId, dir, index: join(dir, "index.json"), entries: [] };
+      byPage.set(key, bucket);
       pages.push(bucket);
     }
     const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
-    // P4 #33: layersDoc.sourceFile is stamped by write-out.js's writeExport (from what figma-pull.js
+    // P4 #33: layersDoc.sourceFile is stamped by write-out.ts's writeExport (from what figma-pull.ts
     // resolved the connected client to be) — carry it onto every per-layer file too, same field a
     // single-screen pull's writeScreen stamps, so doctor's exportSourceCounts() reads one field regardless
     // of which pull shape produced the screen.
@@ -192,15 +233,17 @@ function buildPageLayout(layersDoc, sep) {
   // difference between them would be the disambiguating "_2" on a directory name, which is a
   // filesystem artefact, not identity. Omitted (not null) on pre-pageId exports: JSON.stringify drops
   // an undefined value, so the field's ABSENCE means "this export predates page ids", not "no page".
-  meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+  const pageDirs: PageDirEntry[] = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
   // A consumer is told to read the ROOT index (extract/SKILL.md), not walk every pageDirs.index one
   // hop down (finding 16) — so the root carries the same per-screen rows the per-page index does,
-  // flattened across every page. Additive: pageDirs keeps its own shape/consumers (doctor.js et al).
-  meta.layers = pages.flatMap((b) => b.entries);
+  // flattened across every page. Additive: pageDirs keeps its own shape/consumers (doctor.ts et al).
+  // Object.assign onto the rest-copy (not a fresh literal) keeps the key order the JS wrote: the
+  // manifest fields first, then pageDirs, then layers.
+  const meta: PagesRootIndex = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });
   // The per-page index CONTENTS, not just its path — same reasoning as layerFiles. Both writers used
   // to spell `{ page, layers: entries }` out themselves, which put the one shape this module exists to
   // single-source back into two files; now they only stringify and write.
-  const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
+  const indexFiles: Array<PageLayoutFile<PageIndex>> = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
   // `pages`/`byPage` stay BUILD STATE, deliberately not returned: the same page list is already public
   // as meta.pageDirs (dir + index + layer count), and returning a second view of it invited each writer
   // to pick a different one — three shapes to keep in sync for one list. Writers mkdir from pageDirs.
@@ -225,16 +268,53 @@ function buildPageLayout(layersDoc, sep) {
 //
 // `id` in the filename is the frame's own node id, which is what makes two same-named frames
 // distinguishable — the same reason buildPageLayout suffixes its layer files.
-const NO_PAGE_DIR = "_unfiled";
+export const NO_PAGE_DIR = "_unfiled";
 
-function screenPaths(screenDoc, sep) {
-  const join = (...parts) => ["pages"].concat(parts).join(sep);
-  const page = screenDoc.page || (screenDoc.screen && screenDoc.screen.page);
-  const pageId = screenDoc.pageId || (screenDoc.screen && screenDoc.screen.pageId);
+/** Where a page/node identity can sit on the single-screen result screenPaths is handed. */
+interface ScreenIdentity {
+  page?: string;
+  pageId?: string;
+  nodeId?: string;
+}
+
+/**
+ * What screenPaths reads: the plugin's single-screen result (`{screenName, screen: ScreenExport, …}`,
+ * whose `screen` carries the page/node identity) or a bare screen doc carrying it at top level. On a
+ * ScreenExport itself `screen` is the human label string — which has no identity fields, exactly as
+ * `"label".page` is undefined in plain JS.
+ */
+export interface ScreenPathsInput extends ScreenIdentity {
+  screenName?: string;
+  screen?: string | ScreenIdentity;
+}
+
+/** Where ONE single-screen export's files land. The node id is part of the base name because a frame
+ *  NAME does not identify a frame — two frames called `Popup` on one page are two screens. */
+export interface ScreenPaths {
+  /** The page's display name, or null on an export written before page identity was emitted. */
+  page: string | null;
+  pageId: string | null;
+  nodeId: string | null;
+  /** The sanitised page directory under pages/ (`_unfiled` when the page is unknown). */
+  dir: string;
+  /** `<safeName>__<safeNodeId>` — the stem every sibling file below shares. */
+  base: string;
+  screen: string;
+  variables: string;
+  assets: string;
+  index: string;
+  rootIndex: string;
+}
+
+export function screenPaths(screenDoc: ScreenPathsInput, sep: string): ScreenPaths {
+  const join = (...parts: string[]): string => ["pages"].concat(parts).join(sep);
+  const inner = screenDoc.screen && typeof screenDoc.screen === "object" ? screenDoc.screen : undefined;
+  const page = screenDoc.page || (inner && inner.page);
+  const pageId = screenDoc.pageId || (inner && inner.pageId);
   // An export written before the plugin emitted page identity still has to land somewhere, and
   // somewhere PREDICTABLE — a bucket named for what it is beats inventing a page that was never read.
   const dir = page ? safe(page) : NO_PAGE_DIR;
-  const nodeId = screenDoc.nodeId || (screenDoc.screen && screenDoc.screen.nodeId);
+  const nodeId = screenDoc.nodeId || (inner && inner.nodeId);
   const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
   return {
     page: page || null,
@@ -253,9 +333,40 @@ function screenPaths(screenDoc, sep) {
 // Merge one screen's entry into a page index (or the root index's pageDirs), keyed on the FILE path —
 // which is unique per (page, name, node id) by construction, so re-pulling the same frame replaces its
 // row instead of appending a duplicate, and pulling a different frame with the same name adds one.
-function mergeScreenIndex(prev, entry) {
-  const base = prev && typeof prev === "object" ? prev : {};
-  const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+//
+// `prev` is whatever is on disk (read back as untyped JSON — possibly written by an older version, or
+// hand-edited), so it is narrowed, never trusted: rows already there are carried through as `unknown`.
+// Only the row THIS pull adds is typed.
+
+/** One single-screen row (write-out.ts writeScreen `entry`): an IndexRow whose page identity is
+ *  `null` on an unfiled screen (screenPaths' `page`/`pageId`), not absent. */
+export type ScreenIndexRow = Omit<IndexRow, "page" | "pageId"> & { page?: string | null; pageId?: string | null };
+
+/** A page's index.json after a merge: the typed identity, the carried-through rows, and any other
+ *  field the previous index held (kept verbatim). */
+export interface MergedPageIndex {
+  [field: string]: unknown;
+  page: string | null | undefined;
+  pageId: string | null | undefined;
+  layers: unknown[];
+}
+
+/** pages/index.json after a single-screen merge (see mergeRootIndex). */
+export interface MergedRootIndex {
+  [field: string]: unknown;
+  pageDirs: unknown[];
+  layers?: unknown[];
+}
+
+const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
+
+// Keeps a previous row unless it is the one being replaced — `l && l.file !== file` in plain JS
+// (a truthy non-object has no `.file`, so it is kept).
+const notFile = (file: string) => (l: unknown): boolean => (isRecord(l) ? l.file !== file : !!l);
+
+export function mergeScreenIndex(prev: unknown, entry: ScreenIndexRow): MergedPageIndex {
+  const base: Record<string, unknown> = isRecord(prev) ? prev : {};
+  const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notFile(entry.file)) : [];
   layers.push(entry);
   return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
 }
@@ -266,17 +377,17 @@ function mergeScreenIndex(prev, entry) {
 // `entry` is the SAME row shape a full-page pull puts in meta.layers (name, id, title, texts, file,
 // …) — so the root index looks identical to a consumer regardless of which pull shape produced it
 // (finding 16: the root is the ONE file every skill is told to read).
-function mergeRootIndex(prev, paths, layerCount, entry) {
-  const base = prev && typeof prev === "object" ? prev : {};
-  const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
+export function mergeRootIndex(prev: unknown, paths: ScreenPaths, layerCount: number, entry?: ScreenIndexRow): MergedRootIndex {
+  const base: Record<string, unknown> = isRecord(prev) ? prev : {};
+  const pageDirs: unknown[] = Array.isArray(base.pageDirs)
+    ? base.pageDirs.filter((p: unknown) => (isRecord(p) ? p.dir !== paths.dir : !!p))
+    : [];
   pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-  const result = Object.assign({}, base, { pageDirs });
+  const result: MergedRootIndex = Object.assign({}, base, { pageDirs });
   if (entry) {
-    const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
+    const layers: unknown[] = Array.isArray(base.layers) ? base.layers.filter(notFile(entry.file)) : [];
     layers.push(entry);
     result.layers = layers;
   }
   return result;
 }
-
-module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };

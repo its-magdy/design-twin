@@ -1,372 +1,6 @@
 #!/usr/bin/env node
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
-import { createRequire as __dtwinCreateRequire } from "node:module"; const require = __dtwinCreateRequire(import.meta.url);
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
-var __commonJS = (cb, mod) => function __require2() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
-  }
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 
-// bridge/svg-normalize.js
-var require_svg_normalize = __commonJS({
-  "bridge/svg-normalize.js"(exports, module) {
-    "use strict";
-    var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
-    function normalizeSvgText(svg) {
-      return svg.replace(NUM_RE, (m) => {
-        const n = Number(m);
-        if (!Number.isFinite(n)) return m;
-        const fixed = n.toFixed(1);
-        return fixed === "-0.0" ? "0.0" : fixed;
-      });
-    }
-    function isSvgName(fileName) {
-      return /\.svg$/i.test(String(fileName || ""));
-    }
-    module.exports = { normalizeSvgText, isSvgName };
-  }
-});
-
-// bridge/asset-compare.js
-var require_asset_compare = __commonJS({
-  "bridge/asset-compare.js"(exports, module) {
-    "use strict";
-    var { normalizeSvgText, isSvgName } = require_svg_normalize();
-    function normalizeForCompare2(fileName, content) {
-      const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
-      if (!isSvgName(fileName)) return buf;
-      return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
-    }
-    function sha1Hex2(buf) {
-      return __require("crypto").createHash("sha1").update(buf).digest("hex");
-    }
-    function sameAsset(fileName, a, b) {
-      return Buffer.compare(normalizeForCompare2(fileName, a), normalizeForCompare2(fileName, b)) === 0;
-    }
-    module.exports = { normalizeForCompare: normalizeForCompare2, sha1Hex: sha1Hex2, sameAsset };
-  }
-});
-
-// bridge/pages-layout.js
-var require_pages_layout = __commonJS({
-  "bridge/pages-layout.js"(exports, module) {
-    "use strict";
-    function safe(id) {
-      return String(id).replace(/[^a-zA-Z0-9]/g, "_");
-    }
-    function firstByName(node, name) {
-      if (!node || typeof node !== "object") return null;
-      if (node.name === name) return node;
-      for (const c of node.children || []) {
-        const found = firstByName(c, name);
-        if (found) return found;
-      }
-      return null;
-    }
-    var PLACEHOLDER_TEXT = /* @__PURE__ */ new Set(["text", "label"]);
-    function firstText(node) {
-      if (!node || typeof node !== "object") return null;
-      if (node.type === "TEXT" && typeof node.text === "string") {
-        const t = node.text.trim();
-        if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
-      }
-      for (const c of node.children || []) {
-        const found = firstText(c);
-        if (found) return found;
-      }
-      return null;
-    }
-    function firstNamedText(node, name) {
-      if (!node || typeof node !== "object") return null;
-      if (node.type === "TEXT" && node.name === name && typeof node.text === "string" && node.text.trim()) {
-        return node.text;
-      }
-      for (const c of node.children || []) {
-        const found = firstNamedText(c, name);
-        if (found) return found;
-      }
-      return null;
-    }
-    function deriveTitle(root) {
-      const slot = firstByName(root, "Page Title");
-      if (slot) {
-        const named = firstNamedText(slot, "Title");
-        if (named) return named;
-        const anyText = firstText(slot);
-        if (anyText) return anyText;
-      }
-      const fallback = firstText(root);
-      return fallback || void 0;
-    }
-    function collectTexts(root, limit) {
-      const n = limit || 8;
-      const seen = /* @__PURE__ */ new Set();
-      const out = [];
-      (function walk(node) {
-        if (!node || typeof node !== "object" || out.length >= n) return;
-        if (node.type === "TEXT" && typeof node.text === "string") {
-          const t = node.text.trim();
-          if (t && !seen.has(t)) {
-            seen.add(t);
-            out.push(t);
-          }
-        }
-        for (const c of node.children || []) {
-          if (out.length >= n) break;
-          walk(c);
-        }
-      })(root);
-      return out;
-    }
-    function buildPageLayout(layersDoc, sep) {
-      const { layers, index: index2, ...meta } = layersDoc || {};
-      const join = (...parts) => ["pages"].concat(parts).join(sep);
-      const byPage = /* @__PURE__ */ new Map();
-      const pages = [];
-      const layerFiles = [];
-      const usedDirs = /* @__PURE__ */ new Set();
-      const uniqueDir = (name) => {
-        const base = safe(name) || "page";
-        if (!usedDirs.has(base)) {
-          usedDirs.add(base);
-          return base;
-        }
-        let i = 2;
-        while (usedDirs.has(base + "_" + i)) i++;
-        usedDirs.add(base + "_" + i);
-        return base + "_" + i;
-      };
-      (layers || []).forEach((l, i) => {
-        const pageName = l.page || "(no page)";
-        const key = l.pageId || "name:" + pageName;
-        let bucket = byPage.get(key);
-        if (!bucket) {
-          bucket = { page: pageName, pageId: l.pageId, dir: uniqueDir(pageName), entries: [] };
-          byPage.set(key, bucket);
-          bucket.index = join(bucket.dir, "index.json");
-          pages.push(bucket);
-        }
-        const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
-        const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
-        layerFiles.push({
-          path: join(bucket.dir, base),
-          data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
-        });
-        const title = l.tree ? deriveTitle(l.tree) : void 0;
-        const texts = l.tree ? collectTexts(l.tree) : void 0;
-        bucket.entries.push({ ...(index2 || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
-      });
-      meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
-      meta.layers = pages.flatMap((b) => b.entries);
-      const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
-      return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
-    }
-    var NO_PAGE_DIR = "_unfiled";
-    function screenPaths(screenDoc, sep) {
-      const join = (...parts) => ["pages"].concat(parts).join(sep);
-      const page = screenDoc.page || screenDoc.screen && screenDoc.screen.page;
-      const pageId = screenDoc.pageId || screenDoc.screen && screenDoc.screen.pageId;
-      const dir = page ? safe(page) : NO_PAGE_DIR;
-      const nodeId = screenDoc.nodeId || screenDoc.screen && screenDoc.screen.nodeId;
-      const base = safe(screenDoc.screenName || "screen") + (nodeId ? "__" + safe(nodeId) : "");
-      return {
-        page: page || null,
-        pageId: pageId || null,
-        nodeId: nodeId || null,
-        dir,
-        base,
-        screen: join(dir, base + ".json"),
-        variables: join(dir, base + ".vars.json"),
-        assets: join(dir, base + ".assets.json"),
-        index: join(dir, "index.json"),
-        rootIndex: join("index.json")
-      };
-    }
-    function mergeScreenIndex(prev, entry) {
-      const base = prev && typeof prev === "object" ? prev : {};
-      const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-      layers.push(entry);
-      return Object.assign({}, base, { page: entry.page, pageId: entry.pageId, layers });
-    }
-    function mergeRootIndex(prev, paths, layerCount, entry) {
-      const base = prev && typeof prev === "object" ? prev : {};
-      const pageDirs = Array.isArray(base.pageDirs) ? base.pageDirs.filter((p) => p && p.dir !== paths.dir) : [];
-      pageDirs.push({ page: paths.page, pageId: paths.pageId, dir: paths.dir, index: paths.index, layers: layerCount });
-      const result = Object.assign({}, base, { pageDirs });
-      if (entry) {
-        const layers = Array.isArray(base.layers) ? base.layers.filter((l) => l && l.file !== entry.file) : [];
-        layers.push(entry);
-        result.layers = layers;
-      }
-      return result;
-    }
-    module.exports = { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTitle, collectTexts, firstByName, firstText, safe, NO_PAGE_DIR };
-  }
-});
-
-// bridge/design-system-layout.js
-var require_design_system_layout = __commonJS({
-  "bridge/design-system-layout.js"(exports, module) {
-    "use strict";
-    var { safe } = require_pages_layout();
-    var DIR = "design-system";
-    var COMPONENTS_DIR = "components";
-    var TOKENS = "tokens.json";
-    var STYLES_PAINT = "styles.paint.json";
-    var STYLES_TEXT = "styles.text.json";
-    var STYLES_EFFECT = "styles.effect.json";
-    var STYLES_GRID = "styles.grid.json";
-    var COMPONENTS_LOCAL = "components.local.json";
-    var COMPONENTS_LIBRARY = "components.library.json";
-    var HYGIENE = "hygiene.json";
-    var MANIFEST = "design-system.json";
-    function isLibraryEntry(c) {
-      return !!(c && c.remote === true);
-    }
-    function buildDesignSystemLayout(ds, sep) {
-      const d = ds || {};
-      const join = (name) => DIR + (sep || "/") + name;
-      const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
-      const components = Array.isArray(d.components) ? d.components : [];
-      const rawLocal = components.filter((c) => !isLibraryEntry(c));
-      const library = components.filter(isLibraryEntry);
-      const hygiene = Array.isArray(d.hygiene) ? d.hygiene : [];
-      const usedNames = /* @__PURE__ */ new Set();
-      const uniqueDetailName = (name, id) => {
-        const base = safe(name || "component") + "__" + safe(id);
-        if (!usedNames.has(base)) {
-          usedNames.add(base);
-          return base;
-        }
-        let i = 2;
-        while (usedNames.has(base + "_" + i)) i++;
-        usedNames.add(base + "_" + i);
-        return base + "_" + i;
-      };
-      const componentFiles = [];
-      const local = rawLocal.map((c) => {
-        if (c.type === "COMPONENT" && c.node) {
-          const { node, ...rest } = c;
-          const detailName2 = uniqueDetailName(c.name, c.id);
-          const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
-          componentFiles.push({
-            path: detailPath2,
-            data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
-          });
-          return { ...rest, nodeFile: detailPath2 };
-        }
-        if (c.type !== "COMPONENT_SET" || !Array.isArray(c.variants) || !c.variants.some((v) => v && v.node)) {
-          return c;
-        }
-        const slimVariants = c.variants.map((v) => {
-          const { node, ...rest } = v || {};
-          return rest;
-        });
-        const detailName = uniqueDetailName(c.name, c.id);
-        const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
-        componentFiles.push({
-          path: detailPath,
-          data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
-        });
-        return { ...c, variants: slimVariants, variantsFile: detailPath };
-      });
-      const styles = d.styles || {};
-      const stylesPaint = Array.isArray(styles.paint) ? styles.paint : [];
-      const stylesText = Array.isArray(styles.text) ? styles.text : [];
-      const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
-      const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
-      const files = [
-        { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
-        { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
-        { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
-        { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
-        { path: join(STYLES_GRID), data: { ...stamp, styles: stylesGrid } },
-        { path: join(COMPONENTS_LOCAL), data: { ...stamp, components: local } },
-        { path: join(COMPONENTS_LIBRARY), data: { ...stamp, components: library } },
-        { path: join(HYGIENE), data: { ...stamp, hygiene } },
-        ...componentFiles
-      ];
-      const counts = {
-        collections: (d.collections || []).length,
-        variables: (d.variables || []).length,
-        stylesPaint: stylesPaint.length,
-        stylesText: stylesText.length,
-        stylesEffect: stylesEffect.length,
-        stylesGrid: stylesGrid.length,
-        components: local.length,
-        libraryComponents: library.length,
-        hygiene: hygiene.length
-      };
-      const manifest = {
-        ...stamp,
-        files: {
-          tokens: join(TOKENS),
-          stylesPaint: join(STYLES_PAINT),
-          stylesText: join(STYLES_TEXT),
-          stylesEffect: join(STYLES_EFFECT),
-          stylesGrid: join(STYLES_GRID),
-          componentsLocal: join(COMPONENTS_LOCAL),
-          componentsLibrary: join(COMPONENTS_LIBRARY),
-          hygiene: join(HYGIENE)
-        },
-        counts
-      };
-      const detailPrefix = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/");
-      if (files.some((f) => String(f.path).startsWith(detailPrefix))) {
-        manifest.files.componentsDir = DIR + (sep || "/") + COMPONENTS_DIR;
-      }
-      files.push({ path: MANIFEST, data: manifest });
-      return { files, manifest, counts, dir: DIR };
-    }
-    module.exports = {
-      buildDesignSystemLayout,
-      isLibraryEntry,
-      DESIGN_SYSTEM_DIR: DIR,
-      DESIGN_SYSTEM_FILES: {
-        TOKENS,
-        STYLES_PAINT,
-        STYLES_TEXT,
-        STYLES_EFFECT,
-        STYLES_GRID,
-        COMPONENTS_LOCAL,
-        COMPONENTS_LIBRARY,
-        COMPONENTS_DIR,
-        HYGIENE,
-        MANIFEST
-      }
-    };
-  }
-});
 
 // design-to-code/design-diff.ts
 import fs2 from "node:fs";
@@ -395,9 +29,58 @@ function readJsonFile(file, what, hint) {
   }
 }
 
+// bridge/src/asset-compare.ts
+import crypto from "node:crypto";
+
+// bridge/src/svg-normalize.ts
+var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
+function normalizeSvgText(svg) {
+  return svg.replace(NUM_RE, (m) => {
+    const n = Number(m);
+    if (!Number.isFinite(n)) return m;
+    const fixed = n.toFixed(1);
+    return fixed === "-0.0" ? "0.0" : fixed;
+  });
+}
+function isSvgName(fileName) {
+  return /\.svg$/i.test(String(fileName || ""));
+}
+
+// bridge/src/asset-compare.ts
+function normalizeForCompare(fileName, content) {
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+  if (!isSvgName(fileName)) return buf;
+  return Buffer.from(normalizeSvgText(buf.toString("utf8")), "utf8");
+}
+function sha1Hex(buf) {
+  return crypto.createHash("sha1").update(buf).digest("hex");
+}
+
+// bridge/src/design-system-layout.ts
+var COMPONENTS_DIR = "components";
+var TOKENS = "tokens.json";
+var STYLES_PAINT = "styles.paint.json";
+var STYLES_TEXT = "styles.text.json";
+var STYLES_EFFECT = "styles.effect.json";
+var STYLES_GRID = "styles.grid.json";
+var COMPONENTS_LOCAL = "components.local.json";
+var COMPONENTS_LIBRARY = "components.library.json";
+var HYGIENE = "hygiene.json";
+var MANIFEST = "design-system.json";
+var DESIGN_SYSTEM_FILES = {
+  TOKENS,
+  STYLES_PAINT,
+  STYLES_TEXT,
+  STYLES_EFFECT,
+  STYLES_GRID,
+  COMPONENTS_LOCAL,
+  COMPONENTS_LIBRARY,
+  COMPONENTS_DIR,
+  HYGIENE,
+  MANIFEST
+};
+
 // design-to-code/design-diff.ts
-var import_asset_compare = __toESM(require_asset_compare(), 1);
-var import_design_system_layout = __toESM(require_design_system_layout(), 1);
 function bag(o) {
   const u = o;
   return u;
@@ -708,7 +391,7 @@ function snapshotPath(file, cwd = process.cwd()) {
   return path.join(cwd, "design", ".sync", flat);
 }
 function hashAssetBytes(fileName, buf) {
-  return (0, import_asset_compare.sha1Hex)((0, import_asset_compare.normalizeForCompare)(fileName, buf));
+  return sha1Hex(normalizeForCompare(fileName, buf));
 }
 function assetPaths(doc) {
   const out = /* @__PURE__ */ new Set();
@@ -798,7 +481,6 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} \u2014 used the newer one, so changes already applied are not listed again.`);
   return { ...useful[0], notes };
 }
-var { DESIGN_SYSTEM_FILES } = import_design_system_layout.default;
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
   const abs = path.resolve(f);

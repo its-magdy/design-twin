@@ -41,8 +41,8 @@ import type {
   StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
 import { readJsonFile } from "./catalog-input.ts";
-import { normalizeForCompare, sha1Hex } from "../bridge/asset-compare.js";
-import dsl from "../bridge/design-system-layout.js";
+import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
+import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
 // The generic key loops below compare WHATEVER a document or node carries, named field or not. The
 // interfaces in types.ts name SOME keys and have no string index, so those loops read through this:
@@ -390,7 +390,7 @@ function snapshotPath(file: string, cwd: string = process.cwd()): string {
 // Figma's SVG export is not bit-reproducible (findings 25/222): re-exporting the SAME icon with
 // NOTHING changed in the design comes back with different floating-point path coordinates, ≤0.002px
 // apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull.
-// `normalizeForCompare`/`sha1Hex` (bridge/asset-compare.js, built on bridge/svg-normalize.js) are the
+// `normalizeForCompare`/`sha1Hex` (bridge/src/asset-compare.ts, built on bridge/src/svg-normalize.ts) are the
 // SAME shared implementation figma-plugin/src/assets.ts's content-hash and bridge/write-out.js's
 // clobber-avoidance both use — one definition of "same SVG, modulo export noise", not three that could
 // silently disagree. See svg-normalize.js for why the tolerance is 1 decimal place (~0.1px), not 2:
@@ -502,13 +502,6 @@ function previous(file: string, against: string | undefined, cwd: string = proce
 // Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file
 // this returns that doesn't exist is simply skipped by the --snapshot loop (`fs.existsSync` check
 // already there), the same as a caller-requested file that isn't there yet.
-// bridge/design-system-layout.d.ts declares only buildDesignSystemLayout, and Node's CJS lexer does not
-// expose DESIGN_SYSTEM_FILES (a nested object literal) as a named export either — so it is read off the
-// default import (= module.exports) through this local declaration of what the module really carries
-// (verified at runtime: ten string file names, e.g. MANIFEST === "design-system.json"). Two steps
-// through `unknown` because the .d.ts's namespace type and this interface do not overlap.
-interface DesignSystemLayoutConstants { DESIGN_SYSTEM_FILES: Record<string, string> }
-const { DESIGN_SYSTEM_FILES } = dsl as unknown as DesignSystemLayoutConstants;
 const DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f: string): string[] {
   const abs = path.resolve(f);

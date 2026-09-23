@@ -17,6 +17,10 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "noEmit": true,
+    // The shared bridge modules are imported as ../../bridge/src/x.ts (esbuild inlines them; nothing
+    // here emits), and erasableSyntaxOnly keeps them Node-strippable for the bridge's own runtime.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
   "include": ["src", "figma-augment.d.ts"]
