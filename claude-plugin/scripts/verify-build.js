@@ -2979,50 +2979,69 @@ function locateReports(plan, planFile, cwd, exp) {
   }
   return out;
 }
-function computeStatus(plan, opts) {
-  const o = opts || {};
-  const cwd = o.cwd || (o.planFile ? rootOfPlan(o.planFile) : process.cwd());
-  const reasons = [];
-  const stored = String(plan && plan.status || "").trim().toLowerCase();
-  if (COMPUTED_STORED.has(stored)) reasons.push(`the stored "status": "${plan.status}" was written by an older hook and is ignored \u2014 status is computed`);
-  const life = lifecycleOf(plan);
-  if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? "retired by hand" : "paused on a question for the user"], reports: [] };
-  const hook = plan.verification && plan.verification.hook;
-  if (!hook || !hook.result) return { status: "pending", reasons: reasons.concat("the build-screen Stop hook has not checked this plan"), reports: [] };
-  if (hook.planHash && hook.planHash !== planHash(plan)) return { status: "pending", reasons: reasons.concat("the plan changed after the hook's last check"), reports: [] };
-  if (hook.result !== "pass") return { status: "blocked", reasons: reasons.concat(hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"]), reports: [] };
-  const ch = changedFiles(plan, cwd) || [];
-  if (ch.length) return { status: "stale", reasons: reasons.concat(`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`), reports: [] };
-  const exp = o.export === void 0 ? locateExport(plan, o.planFile, cwd) : o.export;
-  const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
+function reportVerdict(plan, cwd, exp, reports) {
   const mode = plan.verification && plan.verification.mode;
   if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: reasons.concat(`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`), reports };
-    return { status: "unverified", reasons: reasons.concat(`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`), reports };
+    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`] };
+    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`] };
   }
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: reasons.concat(legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers; its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`)), reports };
+  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) \u2014 it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
   const said = (r) => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: reasons.concat(failing.map(said)), reports };
+  if (failing.length) return { status: "failed", reasons: failing.map(said) };
   const notPass = reports.filter((r) => r.verdict !== "pass");
-  if (notPass.length) return { status: "unverified", reasons: reasons.concat(notPass.map(said)), reports };
+  if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
   const expSha = exp && exp.doc ? contentHash.exportContentSha256(exp.doc) : null;
   for (const r of reports) {
     if (!r.exportContentSha256) {
-      if (r.expectationChanged) return { status: "unverified", reasons: reasons.concat(`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`), reports };
-      return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run verify-screen.js --expect and --compare`), reports };
+      if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) \u2014 re-run --compare`] };
+      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) \u2014 re-run verify-screen.js --expect and --compare`] };
     }
-    if (!expSha) return { status: "unverified", reasons: reasons.concat(`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`), reports };
-    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: reasons.concat(`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`), reports };
+    if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 \u2014 give the plan its \`file\` header`] };
+    if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}\u2026 \u2192 ${expSha.slice(0, 12)}\u2026, timestamps ignored) \u2014 re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: reasons.concat(`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`), reports };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd);
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
-    if (differ.length) return { status: "unverified", reasons: reasons.concat(`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`), reports };
+    if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  return { status: "verified", reasons: reasons.concat(`hook passed; ${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`), reports };
+  return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` \u2014 at git ${head.slice(0, 12)}` : ""}`] };
+}
+function computeStatus(plan, opts) {
+  const o = opts || {};
+  const cwd = o.cwd || (o.planFile ? rootOfPlan(o.planFile) : process.cwd());
+  const notes = [];
+  const stored = String(plan && plan.status || "").trim().toLowerCase();
+  if (COMPUTED_STORED.has(stored)) notes.push(`the stored "status": "${plan.status}" was not confirmed by the current hook and is ignored \u2014 status is computed, never stored`);
+  const life = lifecycleOf(plan);
+  if (life !== "pending") return { status: life, reasons: [life === "abandoned" ? 'retired by hand ("status": "abandoned")' : 'paused on a question for the user ("status": "awaiting-user")'], reports: [] };
+  const exp = o.export === void 0 ? locateExport(plan, o.planFile, cwd) : o.export;
+  const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
+  const rv = reportVerdict(plan, cwd, exp, reports);
+  const hook = plan.verification && plan.verification.hook;
+  let hookState = null, hookWhy = [];
+  if (!hook || !hook.result) {
+    hookState = "pending";
+    hookWhy = ["the build-screen Stop hook has not checked this plan"];
+  } else if (hook.planHash && hook.planHash !== planHash(plan)) {
+    hookState = "pending";
+    hookWhy = ["the plan changed after the hook's last check"];
+  } else if (hook.result !== "pass") {
+    hookState = "blocked";
+    hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"];
+  } else {
+    const ch = changedFiles(plan, cwd) || [];
+    if (ch.length) {
+      hookState = "stale";
+      hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`];
+    }
+  }
+  const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
 }
 function ownPlans(open, input, all) {
   const file = input.agent_transcript_path || (input.agent_id ? null : input.transcript_path);
@@ -3050,8 +3069,17 @@ var USAGE = [
   "files[] (comments, prose strings and .svg/.json/non-source files are not scanned); and a visible",
   "design node with no anchor (itself or an ancestor) in anchors{}. Everything else is a warning (exit 0).",
   "Never writes plan.status: it records verification.hook {result, planHash, files:{path: sha256}}, and",
-  "--status computes pending | blocked | stale | failed | unverified | static-only | verified from that,",
-  "the file hashes, and design/verify/<\u2026>.report.json's verdict."
+  "--status computes the status from that, the file hashes, and design/verify/<\u2026>.report.json. First match wins:",
+  "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
+  "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
+  "  3. blocked      the Stop hook's last check blocked",
+  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  5. pending      the hook has not checked this version of the plan",
+  "  6. unverified | static-only | verified   what the report says: verified only for an @2 'pass' that",
+  "     measured this design and these files, by content hash (no report / a pre-@2 report / other",
+  '     design or code -> unverified). A stored "verified" is ignored.',
+  "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
+  "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
 function checkAndRecord(p, cwd, input) {
   const exp = locateExport(p.plan, p.file, cwd);
@@ -3108,7 +3136,7 @@ ${USAGE}`);
       return r.startsWith("..") ? f : r;
     };
     const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
-    if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
+    if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
     return 0;
