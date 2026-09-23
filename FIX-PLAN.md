@@ -135,3 +135,23 @@ editing, and the orchestrator routes it.
   `assetsGeometryWarning()` into `writeScreen` once it rebases onto a head that contains P3.
 - Live check on the main checkout, through the daemon: `--client "TeamSmart (Copy)"` resolved 10/10.
   The finding 216 race is the no-daemon path, which `waitForIdentified()` targets; re-check after P5.
+
+## Wave B log (orchestrator)
+
+- P5 needed a third round: `writeAssets` deduped by name only, so content already on disk under another
+  name was written again and then reported in its own `duplicates` (finding 24 alive). Now content is
+  checked against the shared `assets/` dir first; also fixed the SVG normaliser to handle scientific
+  notation (`2.09808e-05` vs `-0.000406265`), which was the real reason chevrons kept multiplying.
+  Verified live with three screens + a re-pull: 68 assets, 0 hash mismatches, 0 duplicate groups,
+  0 byte-identical pairs, no new files on re-pull. Merged at 72e1b72. Plugin-side half untested live
+  until the owner re-runs the plugin in Figma (the loaded bundle is still pre-fix).
+- P2a verified on the livetest export: `--expect` 186/51/6 with 0 hidden rows (was 272/112/28 with
+  83/61/22), deterministic; `--compare` headline names never-measured fields incl.
+  `borderRadius (probe sent 'radius')`, 0 high deltas on the real JR probe (was 2), coverage
+  186−78=108 consistent, `not-probed` state, `componentsAbsent` 0, audit no longer cites hidden
+  nodes. Report schema is now `verify-report@2`; `missingComponents` is gone. Also fixed the same
+  wrong `visible === false` predicate in `cross-check.js` (shared `hidden.js`). Merged at 70d6029.
+- The no-daemon live checks (Prompt 5 criteria 1–3) need the owner's `dtwin serve` stopped; the
+  orchestrator's sandbox refused to stop it. Left to the owner / Prompt 7 with exact commands.
+- P4 started before P2b finished (files barely overlap); its Stop-hook doc lines (99/133) are held
+  until P2b merges.
