@@ -2141,6 +2141,144 @@ async function disconnectErr(code, reason) {
   ok("[doctor-cli] unknown arguments are refused", runDoctor(["--nope"]).status === 1 && runDoctor(["--wait", "x"]).status === 1);
   ok("[doctor-cli] doctor --help exits 0", runDoctor(["--help"]).status === 0);
 
+  // ---------------------------------------------------------------- P5: figma-pull.js, mkdir (finding 13)
+  console.log("\nfigma-pull.js — mkdir moved after validation (finding 13):");
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mkdir-"));
+    // Two clients "connected" via the daemon status file so figma-pull refuses ambiguously — before
+    // ever touching outDir — is the exact shape finding 13 reproduces (`dtwin nonexistent` with two
+    // clients connected). We don't need a real daemon: --list-clients against no bridge at all also
+    // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
+    const r = spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
+      !fs.existsSync(path.join(dir, "nonexistent-outdir")));
+  }
+
+  // ---------------------------------------------------------------- P5: server-core waitForIdentified (finding 216)
+  console.log("\nserver-core — waitForIdentified (finding 216, --client name race):");
+  {
+    const port = nextPort++;
+    const b = core.createBridge(port);
+    await b.waitForIdentified(200); // no clients at all: resolves immediately, never hangs
+    ok("[identify] waitForIdentified with nobody connected resolves without hanging", true);
+    b.close();
+  }
+  {
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    // Not yet identified (no `hello` sent) — waitForIdentified must wait for it rather than return
+    // instantly, which is exactly the race finding 216 describes ("the plugin's identified message
+    // has not arrived yet").
+    const before = b.listClients()[0];
+    ok("[identify] freshly connected client starts unidentified", before && before.identified === false);
+    setTimeout(() => ws1.send(JSON.stringify({ type: "hello", instanceId: "i1", file: "App — Base" })), 60);
+    await b.waitForIdentified(2000);
+    const after = b.listClients()[0];
+    ok("[identify] waitForIdentified waits for the hello, then returns", after && after.identified === true && after.file === "App — Base");
+    ws1.close();
+    b.close();
+  }
+
+  // ---------------------------------------------------------------- P5: write-out.js asset clobbering (findings 23/104/124/125/28/30)
+  console.log("\nwrite-out.js — asset writes are refuse-or-version, never clobber (findings 23/104/124/125):");
+  const writeOut = require("../bridge/write-out.js");
+  {
+    // Two Figma layers named `angle-left` and `Angle-left` — different content, different screens'
+    // pulls, into the SAME shared assets/ dir. On a case-insensitive filesystem (macOS default) they
+    // are one path; the fix must never let the second call's fs.writeFileSync target write over the
+    // first's bytes (finding 124).
+    // The fixtures are stored as variant-a.svg/variant-b.svg — never AS "angle-left.svg"/"Angle-left.svg"
+    // on disk, because a case-insensitive filesystem (this repo's own dev machines included) collapses
+    // that pair into one file/one inode before the test even runs, which is finding 124 itself. The
+    // colliding names are only ever given to write-out.js as `a.file` — as REAL Figma exports arrive,
+    // never as files this test itself created.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-assets-"));
+    const svg1 = fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "case-collision", "variant-a.svg"), "utf8");
+    const svg2 = fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "case-collision", "variant-b.svg"), "utf8");
+    const a1 = { id: "n1", file: "assets/angle-left.svg", text: svg1, hash: "aaaaaaaa-1" };
+    const a2 = { id: "n2", file: "assets/Angle-left.svg", text: svg2, hash: "bbbbbbbb-1" };
+    writeOut.writeAssets(dir, [a1]);
+    writeOut.writeAssets(dir, [a2]); // simulates a second, later screen pull into the same shared dir
+    const onDisk = fs.readdirSync(path.join(dir, "assets"));
+    ok("[case-fold] both differently-cased, different-content assets survive as TWO files", onDisk.length === 2);
+    const read = (f) => fs.readFileSync(path.join(dir, f), "utf8");
+    ok("[case-fold] the FIRST file's bytes are untouched (never clobbered)", read(a1.file) === svg1);
+    ok("[case-fold] the SECOND asset got a distinct, non-colliding name (not the same as the first)",
+      a2.file.toLowerCase() !== a1.file.toLowerCase() && read(a2.file) === svg2);
+
+    // A re-pull that produces byte-IDENTICAL content under the same name is a no-op, not a rewrite or
+    // a new suffixed file — re-pulling an unchanged screen must not multiply files on disk.
+    const before = fs.statSync(path.join(dir, a1.file)).mtimeMs;
+    writeOut.writeAssets(dir, [{ id: "n1b", file: "assets/angle-left.svg", text: svg1, hash: "aaaaaaaa-1" }]);
+    ok("[case-fold] an identical re-pull reuses the existing file rather than duplicating it",
+      fs.readdirSync(path.join(dir, "assets")).length === 2);
+  }
+  {
+    // Finding 28: the whole-frame reference PNG must not inflate the screen's shippable asset totals.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-refasset-"));
+    fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
+    const icon = { id: "i1", file: "assets/icon.svg", text: "<svg></svg>", hash: "cccccccc-1" };
+    const ref = { id: "n1:ref", file: "assets/n1_ref.png", base64: Buffer.from("x".repeat(1000)).toString("base64"), hash: "dddddddd-1", kind: "reference" };
+    writeOut.writeAssets(dir, [icon, ref]);
+    const idx = writeOut.writeScreenAssets(dir, { base: "Screen", assets: "pages/P/Screen.assets.json" }, [icon, ref]);
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "Screen.assets.json"), "utf8"));
+    ok("[ref-asset] the reference PNG is not counted in `count`/`totalBytes`", doc.count === 1 && doc.totalBytes === icon.text.length);
+    ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
+  }
+  {
+    // Finding 30: a screen with a high `assetsGeometry` ratio should be flaggable at pull time.
+    ok("[geometry-warn] a 40% geometry-fallback ratio produces a warning",
+      typeof writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) === "string");
+    ok("[geometry-warn] a low ratio produces nothing",
+      writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) === null);
+  }
+
+  // ---------------------------------------------------------------- P5: design-diff.js asset-hash tolerance (findings 25/222)
+  console.log("\ndesign-diff.js — SVG re-export noise tolerance (findings 25/222), on the REAL arrow-down*.svg fixtures:");
+  {
+    const diffMod = require("../design-to-code/design-diff.js");
+    const dirFix = path.join(__dirname, "fixtures", "livetest3", "arrow-down");
+    const read = (f) => fs.readFileSync(path.join(dirFix, f), "utf8");
+    // Same setup redrawnAssets() actually runs: ONE node, ONE asset path, on-disk bytes that change
+    // between "prev" (a snapshot's recorded hash) and "now" (the current export's file). A real re-pull
+    // of an unchanged icon looks exactly like this — same node id, same asset path, only the SVG bytes
+    // differ because Figma's exporter re-rounded some coordinates.
+    const docFor = () => ({ exportedAt: "2026-01-01T00:00:00Z", tree: { id: "1:1", type: "FRAME", name: "root", asset: "assets/arrow-down.svg", children: [] } });
+    const setup = (nowContent) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-svgnorm-"));
+      fs.mkdirSync(path.join(root, "assets"));
+      const file = path.join(root, "screen.json");
+      fs.writeFileSync(path.join(root, "assets", "arrow-down.svg"), nowContent);
+      return { file, root };
+    };
+    // Build the "prev" hash from one variant's real bytes, then diff against the doc whose on-disk
+    // bytes are a DIFFERENT variant's — exactly redrawnAssets()'s contract.
+    const prevFor = (file, content) => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-svgnorm-prev-"));
+      const prevAssetPath = path.join(tmp, "assets"); fs.mkdirSync(prevAssetPath);
+      fs.writeFileSync(path.join(prevAssetPath, "arrow-down.svg"), content);
+      const { hashes } = diffMod.assetHashes(path.join(tmp, "screen.json"), docFor());
+      return { kind: "snapshot", assets: hashes };
+    };
+    const now3ea6be = setup(read("arrow-down-3ea6be.svg"));
+    // 3ea6be and ccfd6b are the SAME icon (finding 25's own example, ≤0.002px drift) — must NOT be
+    // reported as redrawn.
+    const prevSame = prevFor(now3ea6be.file, read("arrow-down-ccfd6b.svg"));
+    const redrawnSame = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevSame, now3ea6be.root);
+    ok("[svg-tolerance] two exports of the SAME icon (sub-0.002px drift) are NOT reported as redrawn",
+      redrawnSame.size === 0);
+    // 3ea6be (14x14, white, 1.5 stroke) vs 31f462 (16x16, #F6F6F6, 1.2 stroke) ARE genuinely different
+    // icons and must still be caught as a real redraw even after normalisation.
+    const prevDiff = prevFor(now3ea6be.file, read("arrow-down-31f462.svg"));
+    const redrawnDiff = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevDiff, now3ea6be.root);
+    ok("[svg-tolerance] two genuinely DIFFERENT icons are still reported as redrawn",
+      redrawnDiff.has("assets/arrow-down.svg"));
+    // The end-to-end case the acceptance criteria name directly: a byte-identical re-pull of the SAME
+    // file (no design change at all) reports zero changed assets.
+    const prevIdentical = prevFor(now3ea6be.file, read("arrow-down-3ea6be.svg"));
+    const redrawnIdentical = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevIdentical, now3ea6be.root);
+    ok("[svg-tolerance] a byte-identical re-pull reports zero redrawn assets", redrawnIdentical.size === 0);
+  }
+
   // ---------------------------------------------------------------- report
   report();
 })();
