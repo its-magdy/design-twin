@@ -190,4 +190,72 @@ ok("[round2] a query that hits only texts[] ('Units') is needs-confirmation, nev
 // title-less export) and is already asserted `needs-confirmation`, not `resolved` — this is finding
 // 70 exactly as the coordinator reproduced it against the real pre-fix export.
 
+console.log("\nresolve-screen — round 3: the empty-state sibling collision (finding 310):");
+
+// The real empty-state sibling of "Job Roles" — node 7314:83742, layer name `Job roles` (lowercase
+// r), visible title ALSO "Job Roles" — pulled live with this worktree's bridge
+// (`node bridge/figma-pull.js /tmp/p3-pull-310 --node 7314:83742 --client "TeamSmart (Copy)"`) and
+// pruned into test/fixtures/livetest3/pages-titled/__Organization_management_/Job_roles__7314_83742.json
+// the same way as the fixture's other pages-titled/ files. The row below is exactly what write-out.js
+// would index for it (name/title/texts/id/w/h/nodes/reference all copied from that real pull's own
+// pages/index.json output, reproduced in the P3 round-3 report).
+function fixtureWithEmptyStateSibling() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-310-"));
+  const pagesDir = path.join(tmp, "pages", "__Organization_management_");
+  fs.mkdirSync(pagesDir, { recursive: true });
+  const root = JSON.parse(fs.readFileSync(path.join(FIXTURE, "pages", "index.json"), "utf8"));
+  const sibling = JSON.parse(fs.readFileSync(
+    path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), "utf8"));
+  const { deriveTitle, collectTexts } = require("../bridge/pages-layout.js");
+  const siblingRoot = sibling.nodes[0];
+  root.layers = root.layers.concat([{
+    name: "Job roles",
+    id: "7314:83742",
+    type: "FRAME",
+    page: "✅ Organization management ",
+    pageId: "5282:58823",
+    title: deriveTitle(siblingRoot),
+    texts: collectTexts(siblingRoot),
+    file: "pages/__Organization_management_/Job_roles__7314_83742.json",
+    reference: "assets/7314_83742_ref.png",
+    nodes: 209,
+    w: 1440,
+    h: 1236,
+  }]);
+  fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify(root, null, 2));
+  return tmp;
+}
+const SIBLING_FIXTURE = fixtureWithEmptyStateSibling();
+
+ok("[round3] the sibling really is titled 'Job Roles' too (sanity check on the real pulled data)",
+  (() => {
+    const root = JSON.parse(fs.readFileSync(path.join(SIBLING_FIXTURE, "pages", "index.json"), "utf8"));
+    const sib = root.layers.find((l) => l.id === "7314:83742");
+    return sib && sib.name === "Job roles" && sib.title === "Job Roles";
+  })());
+
+ok("[round3] finding 310: 'Job Roles' with BOTH a layer-name hit (Job roles, case-insensitive) AND a title hit (positions ) STOPS as ambiguous, never resolves to either",
+  (() => {
+    const r = resolveScreen(SIBLING_FIXTURE, "Job Roles");
+    return r.status === "ambiguous" && r.candidates.length === 2 &&
+      r.candidates.some((c) => c.id === "7314:83742") && r.candidates.some((c) => c.id === "7314:87192");
+  })());
+
+ok("[round3] the candidate list says WHICH field each row matched on",
+  (() => {
+    const r = resolveScreen(SIBLING_FIXTURE, "Job Roles");
+    const empty = r.candidates.find((c) => c.id === "7314:83742");
+    const real = r.candidates.find((c) => c.id === "7314:87192");
+    return empty.matchedVia.includes("exact layer name") && real.matchedVia.includes("indexed title");
+  })());
+
+ok("[round3] lower/upper case of the layer name ('job roles') still joins the SAME union, still stops",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "job roles"); return r.status === "ambiguous" && r.candidates.length === 2; })());
+
+ok("[round3] a node id still wins alone even with the sibling present",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "7314:83742"); return r.status === "resolved" && r.stage === "node id" && r.row.id === "7314:83742"; })());
+
+ok("[round3] 'positions' (exact layer name only, no title collision on THIS query string) still resolves cleanly",
+  (() => { const r = resolveScreen(SIBLING_FIXTURE, "positions"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
+
 report();
