@@ -1,5 +1,5 @@
 {
-  "description": "Gates the designtwin:screen-builder subagent with the same plan check build-screen runs. Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the gate has to be registered here. The script exits immediately when design/plan/ has no pending plan.",
+  "description": "Gates the designtwin:screen-builder subagent with the same plan check build-screen runs. Claude Code ignores `hooks` in a plugin-shipped agent's frontmatter, so the gate has to be registered here. The script reads the hook JSON from stdin (only when stdin is not a terminal, never waiting on a silent pipe), exits immediately when design/plan/ has no open plan, blocks only on an unexplained colour literal or an unanchored visible design node, never writes plan.status, and stops itself at 60 s — the timeout below is the harness's backstop.",
   "hooks": {
     "SubagentStop": [
       {
@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js\"",
+            "timeout": 90
           }
         ]
       }
