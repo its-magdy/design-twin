@@ -216,4 +216,28 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   }
 })();
 
+// ---------- finding 172: self-inconsistent-geometry (padding + children cannot produce box.h) ----------
+// Real Job Roles table: header 20173:142077 (padding [16,32,16,32], row, tallest child box.h=24,
+// declared box.h=44 — 16+24+16=56) and row 20173:142081 (padding [16,24,16,24], row, tallest child
+// box.h=24, declared box.h=48 — 16+24+16=56). Both are contradictions the export makes about itself.
+(() => {
+  const fs = require("fs");
+  const FX = path.join(__dirname, "fixtures", "livetest3", "verify");
+  const doc = JSON.parse(fs.readFileSync(path.join(FX, "positions___7314_87192.json"), "utf8"));
+  const res = audit([{ doc, label: "positions___7314_87192" }], { platform: "web" });
+  const hits = res.findings.filter((f) => f.code === "self-inconsistent-geometry");
+  check("[172] table header (20173:142077) fires self-inconsistent-geometry", hits.some((f) => f.nodeId === "20173:142077"));
+  check("[172] table row (20173:142081) fires self-inconsistent-geometry", hits.some((f) => f.nodeId === "20173:142081"));
+  check("[172] the message names the stated box.h, the padding and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /16,32,16,32/.test(f.message) && /= 56/.test(f.message)));
+
+  // A consistent node (padding + tallest child really does equal box.h) must NOT fire.
+  const consistent = {
+    id: "root", name: "root", box: { w: 100, h: 100 },
+    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 56 }, layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
+      children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }],
+  };
+  const res2 = audit([{ doc: { nodes: [consistent] }, label: "consistent" }], { platform: "web" });
+  check("[172] a consistent node (16+24+16=56, declared 56) does not fire", !res2.findings.some((f) => f.code === "self-inconsistent-geometry"));
+})();
+
 report();

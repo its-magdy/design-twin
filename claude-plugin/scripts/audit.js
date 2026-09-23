@@ -1174,6 +1174,20 @@ function audit(input, opts = {}) {
     if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
       add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) \u2014 infer a flow layout and ask how it should resize`, node, here);
     }
+    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
+      const [padTop, , padBottom] = node.layout.padding;
+      const kids = node.children.filter((c) => c && c.box && typeof c.box.h === "number");
+      if (kids.length === node.children.length && kids.length) {
+        const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
+        const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
+        let expectedH = null;
+        if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
+        else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
+        if (expectedH !== null && Math.abs(expectedH - node.box.h) > 1) {
+          add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h}, but its own layout.padding [${node.layout.padding.join(",")}] plus its children's box.h cannot produce that: ${padTop}+${direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom)}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH });
+        }
+      }
+    }
     if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
       const label = `${node.name || ""} ${node.component || ""} ${node.mainComponent && node.mainComponent.setName || ""}`;
       if (CHROME_TOP.test(label) && node.box.h <= 64) add("warning", "fake-status-bar", `'${node.name}' looks like a drawn status bar \u2014 don't build it; apply the system safe-area/status-bar inset instead`, node, here);

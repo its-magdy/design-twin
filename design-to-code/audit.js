@@ -221,6 +221,25 @@ function audit(input, opts = {}) {
       add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) — infer a flow layout and ask how it should resize`, node, here);
     }
 
+    // finding 172: the export can state a box.h that its own layout.padding + children's box.h
+    // cannot produce (a real case: header padding [16,32,16,32] with a 24-high text child declares
+    // box.h=44, but 16+24+16=56). Whichever number a builder trusts, the other one lies — flag the
+    // contradiction instead of only reporting a build-vs-design delta later.
+    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
+      const [padTop, , padBottom] = node.layout.padding;
+      const kids = node.children.filter((c) => c && c.box && typeof c.box.h === "number");
+      if (kids.length === node.children.length && kids.length) {
+        const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
+        const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
+        let expectedH = null;
+        if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
+        else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
+        if (expectedH !== null && Math.abs(expectedH - node.box.h) > 1) {
+          add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h}, but its own layout.padding [${node.layout.padding.join(",")}] plus its children's box.h cannot produce that: ${padTop}+${direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom)}+${padBottom} = ${expectedH}. The export contradicts itself — decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH });
+        }
+      }
+    }
+
     // ---- system chrome drawn into a mobile frame (top-level-ish only)
     if (ancestors.length <= 2 && node.box && ctx.rootBox && platform !== "web") {
       const label = `${node.name || ""} ${node.component || ""} ${(node.mainComponent && node.mainComponent.setName) || ""}`;
