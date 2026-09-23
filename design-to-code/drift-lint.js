@@ -290,7 +290,21 @@ if (require.main === module) {
           ` · ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog` +
           ` · ${cov.instances} instance(s) total`
       );
-      if (cov.mapPct === 0) {
+      // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
+      // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
+      // pointing the user at "the wrong library".
+      const { visibleInstances, matchByNameAndSignature, isRekeyed } = require("./component-match.js");
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature([].concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
+      if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
+        screenFail = true;
+        console.error(
+          `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
+            `${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.\n` +
+            `       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.\n` +
+            `       Get the confirmation list with \`cross-check.js <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
+            `       confirm it (set "confirmed": true per entry), then \`map-bootstrap.js <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+        );
+      } else if (cov.mapPct === 0) {
         screenFail = true;
         console.error(
           `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.\n` +

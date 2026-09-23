@@ -231,6 +231,194 @@ var require_catalog_input = __commonJS({
   }
 });
 
+// design-to-code/component-match.js
+var require_component_match = __commonJS({
+  "design-to-code/component-match.js"(exports2, module2) {
+    function visibleInstances(doc, label) {
+      const out = [];
+      const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
+      const walk = (n) => {
+        if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
+        if (n.type === "INSTANCE" && n.mainComponent) {
+          const mc = n.mainComponent;
+          out.push({
+            screen: label,
+            nodeId: n.id,
+            layer: n.name,
+            name: mc.setName || mc.name || n.name,
+            key: mc.key,
+            setKey: mc.setKey,
+            remote: mc.remote === true,
+            variant: parseVariant(n.component) || parseVariant(mc.variant),
+            props: n.props && typeof n.props === "object" ? n.props : {}
+          });
+        }
+        for (const c of n.children || []) walk(c);
+      };
+      for (const r of roots) walk(r);
+      return out;
+    }
+    function parseVariant(s) {
+      if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
+      if (!s || typeof s !== "string" || !s.includes("=")) return null;
+      const out = {};
+      for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
+        const i = part.indexOf("=");
+        if (i < 0) continue;
+        out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+      }
+      return Object.keys(out).length ? out : null;
+    }
+    var baseProp = (p) => String(p).split("#")[0];
+    var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
+    function signature(inst, cand) {
+      const props = {};
+      for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
+      const reasons = [];
+      let score = 40, verified = true;
+      reasons.push("name matches catalog entry verbatim");
+      const variant = inst.variant;
+      if (variant) {
+        const axes = Object.keys(variant);
+        const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
+        if (known.length === axes.length) {
+          score += 25;
+          reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`);
+        } else {
+          verified = false;
+          score += known.length ? 10 : -15;
+          reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
+        }
+        const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
+        if (known.length && !bad.length) {
+          score += 25;
+          reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
+        } else if (bad.length) {
+          verified = false;
+          score -= 20;
+          reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`);
+        }
+      } else if (cand.type === "COMPONENT") {
+        score += 15;
+        reasons.push("instance has no variant string and the catalog entry is a plain COMPONENT");
+      } else {
+        verified = false;
+        reasons.push(`instance sets no variant but the catalog entry is a ${cand.type}`);
+      }
+      const own = Object.keys(inst.props || {}).filter((k) => !variant || !(baseProp(k) in variant));
+      if (own.length) {
+        const typed = own.filter((k) => {
+          const d = props[baseProp(k)], v = inst.props[k];
+          if (!d) return false;
+          if (typeof v === "boolean") return d.type === "BOOLEAN";
+          return d.type === "TEXT" || d.type === "INSTANCE_SWAP" || d.type === "VARIANT";
+        });
+        if (typed.length === own.length) {
+          score += 15;
+          reasons.push(`all ${own.length} non-variant prop name(s) exist on the definition`);
+        } else {
+          verified = false;
+          score += typed.length ? 5 : -10;
+          reasons.push(typed.length ? `${typed.length}/${own.length} non-variant prop names exist with a matching type` : "none of the instance prop names exist on this definition");
+        }
+      }
+      if (SHARED_PAGE.test(String(cand.page || ""))) {
+        score += 5;
+        reasons.push(`lives on a shared page (${cand.page})`);
+      }
+      return { verified, score, reasons };
+    }
+    var sigOf = (c) => JSON.stringify(Object.entries(c.props || {}).map(([k, v]) => [baseProp(k), v.type, v.options || null]).sort());
+    function matchByNameAndSignature(instances, catalog, library) {
+      const comps = catalog && catalog.components || [];
+      const byName = /* @__PURE__ */ new Map();
+      comps.forEach((c, i) => {
+        if (!byName.has(c.name)) byName.set(c.name, []);
+        byName.get(c.name).push(Object.assign({ _order: i }, c));
+      });
+      const catKeys = new Set(comps.map((c) => c.key).filter(Boolean));
+      const libKeys = new Set((library && library.components || []).map((c) => c.key).filter(Boolean));
+      const libNames = new Set((library && library.components || []).map((c) => c.name));
+      const groups = /* @__PURE__ */ new Map();
+      for (const inst of instances) {
+        if (!groups.has(inst.name)) groups.set(inst.name, []);
+        groups.get(inst.name).push(inst);
+      }
+      const rows = [];
+      for (const [name, list] of groups) {
+        const byKey = list.some((i) => catKeys.has(i.key) || catKeys.has(i.setKey));
+        const row = {
+          name,
+          instances: list.length,
+          nodeIds: list.map((i) => i.nodeId),
+          screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
+          instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter(Boolean))],
+          remote: list.every((i) => i.remote),
+          byKey,
+          match: null,
+          alternatives: [],
+          reasons: []
+        };
+        const cands = byName.get(name) || [];
+        if (!cands.length) {
+          const inLibrary = list.some((i) => libKeys.has(i.key) || libKeys.has(i.setKey));
+          row.reasons.push(`no catalog entry named ${JSON.stringify(name)}`);
+          row.reasons.push(inLibrary ? "its key IS in components.library.json \u2014 a third-party library both files consume, not the design system's own component" : libNames.has(name) ? "the name appears in components.library.json \u2014 a third-party library the design system consumes, not one of its own components" : "not a component of the exported design system (typically an external icon library) \u2014 expected, not a miss");
+          rows.push(row);
+          continue;
+        }
+        const scored = cands.map((c) => {
+          const per = list.map((i) => signature(i, c));
+          return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+        }).sort((a, b) => b.verified - a.verified || b.score - a.score || a.c._order - b.c._order);
+        const best = scored[0];
+        if (!best.verified) {
+          row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
+          rows.push(row);
+          continue;
+        }
+        const verifiedOnes = scored.filter((s) => s.verified);
+        const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
+        row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+        row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
+        row.reasons = best.reasons.slice();
+        if (ties.length) {
+          const identical = ties.every((t) => sigOf(t.c) === sigOf(best.c));
+          row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
+          row.tie = identical ? "duplicate-definitions" : "different-signatures";
+        } else if (scored.length > 1) {
+          row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+        }
+        row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+        row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
+        rows.push(row);
+      }
+      const proposals = rows.filter((r) => r.match && !r.byKey);
+      return {
+        rows,
+        proposals,
+        summary: {
+          instances: instances.length,
+          names: rows.length,
+          byKey: rows.filter((r) => r.byKey).length,
+          proposed: proposals.length,
+          proposedWithSignature: proposals.filter((r) => r.evidence === "name+signature").length,
+          withCandidates: rows.filter((r) => (byName.get(r.name) || []).length).length,
+          unmatched: rows.filter((r) => !r.match).length,
+          remote: instances.filter((i) => i.remote).length
+        }
+      };
+    }
+    var REKEY_MIN_PROPOSALS = 3;
+    var REKEY_MIN_SHARE = 0.5;
+    function isRekeyed(result) {
+      const s = result.summary;
+      return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
+    }
+    module2.exports = { visibleInstances, parseVariant, matchByNameAndSignature, isRekeyed, REKEY_MIN_PROPOSALS, REKEY_MIN_SHARE };
+  }
+});
+
 // design-to-code/drift-lint.js
 var { TYPE_TO_KIND } = require_kinds();
 var { snapshotAge } = require_snapshot_meta();
@@ -463,7 +651,17 @@ SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 not
         `
 SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the components on this screen are in your map \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total`
       );
-      if (cov.mapPct === 0) {
+      const { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature([].concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
+      if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
+        screenFail = true;
+        console.error(
+          `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
+       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.
+       Get the confirmation list with \`cross-check.js <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
+       confirm it (set "confirmed": true per entry), then \`map-bootstrap.js <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+        );
+      } else if (cov.mapPct === 0) {
         screenFail = true;
         console.error(
           `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.

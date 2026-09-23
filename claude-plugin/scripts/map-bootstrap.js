@@ -141,7 +141,7 @@ function bootstrap(catalog, existing) {
         }
       }
       if (!Object.keys(entry.props).length) delete entry.props;
-      out.components[id] = entry;
+      out.components[prevKey !== c.key && prevKey !== c.id ? prevKey : id] = entry;
     } else {
       out.components[id] = freshEntry(c);
     }
@@ -149,13 +149,60 @@ function bootstrap(catalog, existing) {
   for (const pk of Object.keys(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(prev[pk]);
   return out;
 }
-module.exports = { bootstrap };
+function bootstrapFromProposals(proposals, catalog, existing) {
+  const out = { version: 1, components: /* @__PURE__ */ Object.create(null) };
+  if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
+  const prev = existing && existing.components || {};
+  for (const pk of Object.keys(prev)) out.components[pk] = clone(prev[pk]);
+  const comps = catalog && catalog.components || [];
+  const report = { confirmed: 0, added: 0, kept: 0, skipped: [] };
+  for (const p of proposals || []) {
+    if (!p || p.confirmed !== true) continue;
+    report.confirmed++;
+    const want = p.catalog || {};
+    const c = comps.find((x) => want.key && x.key === want.key || want.id && x.id === want.id);
+    const mapKey = (p.instanceKeys || [])[0];
+    if (!c) {
+      report.skipped.push(`'${p.name}': catalog component ${want.id || want.key || "?"} is not in this catalog`);
+      continue;
+    }
+    if (!mapKey) {
+      report.skipped.push(`'${p.name}': the proposal carries no instance key to file it under`);
+      continue;
+    }
+    if (mapKey in out.components) {
+      report.kept++;
+      continue;
+    }
+    const entry = freshEntry(c);
+    out.components[mapKey] = entry;
+    report.added++;
+    for (const extra of (p.instanceKeys || []).slice(1)) report.skipped.push(`'${p.name}': also used under instance key ${extra} \u2014 filed once, under ${mapKey}`);
+  }
+  return { map: out, report };
+}
+function proposalsIn(doc) {
+  if (Array.isArray(doc)) return doc;
+  if (doc && Array.isArray(doc.componentProposals)) return doc.componentProposals;
+  if (doc && doc.crossFile && Array.isArray(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
+  return null;
+}
+module.exports = { bootstrap, bootstrapFromProposals, proposalsIn };
 if (require.main === module) {
   const fs = require("fs");
   const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require_catalog_input();
-  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>]";
+  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>]";
   const argv = process.argv.slice(2);
-  let outFile = null;
+  let outFile = null, proposalsFile = null;
+  const pi = argv.indexOf("--from-proposals");
+  if (pi !== -1) {
+    proposalsFile = argv[pi + 1];
+    if (!proposalsFile || proposalsFile.startsWith("--")) {
+      console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage);
+      process.exit(1);
+    }
+    argv.splice(pi, 2);
+  }
   const o = argv.indexOf("--out");
   if (o !== -1) {
     outFile = argv[o + 1];
@@ -180,6 +227,25 @@ ${usage}`);
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const existingFile = existingArg || outFile;
   const existing = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  if (proposalsFile) {
+    const doc = readJsonFile(proposalsFile, "proposals report");
+    const proposals = proposalsIn(doc);
+    if (!proposals) {
+      console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run cross-check.js with --out (or --json) and pass the JSON it wrote`);
+      process.exit(1);
+    }
+    const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
+    if (!report.confirmed) {
+      console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each entry they accept, and re-run. Nothing was written \u2014 proposals are never accepted automatically.`);
+      process.exit(1);
+    }
+    const out = JSON.stringify(map, null, 2) + "\n";
+    if (outFile) fs.writeFileSync(outFile, out);
+    else process.stdout.write(out);
+    for (const sk of report.skipped) console.error(`warn  ${sk}`);
+    console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
+    process.exit(0);
+  }
   const json = JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);

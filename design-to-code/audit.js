@@ -518,6 +518,15 @@ function toMarkdown(res) {
           (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
         ""
       );
+      // 0% by key is ALSO what a duplicated file looks like (livetest-3 #226): say which case this is.
+      if (c.rekey && c.rekey.rekeyed) {
+        L.push(
+          `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the ` +
+            `catalog also match it by prop signature. The proposed matches are listed under \`crossFile.componentProposals\` — confirm them with the ` +
+            `user, then \`map-bootstrap.js … --from-proposals\` stubs exactly those.`,
+          ""
+        );
+      }
     }
     const cfBlock = cf.findings.filter((f) => f.severity !== "info");
     if (cfBlock.length) {
