@@ -1185,8 +1185,14 @@ var require_audit = __commonJS({
             let expectedH = null;
             if (direction === "row") expectedH = padTop + padBottom + Math.max(...kids.map((c) => c.box.h));
             else if (direction === "column") expectedH = padTop + padBottom + kids.reduce((s, c) => s + c.box.h, 0) + gap * (kids.length - 1);
-            if (expectedH !== null && Math.abs(expectedH - node.box.h) > 1) {
-              add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h}, but its own layout.padding [${node.layout.padding.join(",")}] plus its children's box.h cannot produce that: ${padTop}+${direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom)}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH });
+            const heightMode = node.heightMode || "fixed";
+            const delta = expectedH === null ? 0 : expectedH - node.box.h;
+            const overflow = expectedH !== null && delta > 1;
+            const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1;
+            if (overflow || hugMismatch) {
+              const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
+              const why = heightMode === "hug" ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}` : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
+              add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) \u2014 ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });
             }
           }
         }
