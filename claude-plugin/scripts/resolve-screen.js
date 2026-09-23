@@ -45,41 +45,42 @@ function describe(row) {
     screenshot: row.id ? `dtwin screenshot ${row.id}` : null
   };
 }
+var fold = (s) => String(s || "").trim().toLowerCase();
 function resolveScreen(exportDir, query, opts) {
   const options = opts || {};
   const rows = allRows(exportDir);
   const q = String(query || "").trim();
+  const qFold = fold(q);
+  const noTitles = rows.length > 0 && !rows.some((r) => r.title);
   const stage = (name, matches) => ({ stage: name, matches });
-  const stages = [];
+  const exactStages = [];
   if (NODE_ID_RE.test(q)) {
-    stages.push(stage("node id", rows.filter((r) => r.id === q)));
+    exactStages.push(stage("node id", rows.filter((r) => r.id === q)));
   }
-  stages.push(stage("exact layer name", rows.filter((r) => r.name === q)));
-  stages.push(stage("indexed title", rows.filter((r) => r.title && r.title.toLowerCase() === q.toLowerCase())));
+  exactStages.push(stage("exact layer name", rows.filter((r) => fold(r.name) === qFold)));
+  exactStages.push(stage("indexed title", rows.filter((r) => r.title && fold(r.title) === qFold)));
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
   if (planHit.length) {
     const ids = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
-    stages.push(stage("plan screenName/route", rows.filter((r) => ids.has(r.id))));
+    exactStages.push(stage("plan screenName/route", rows.filter((r) => ids.has(r.id))));
   } else {
-    stages.push(stage("plan screenName/route", []));
+    exactStages.push(stage("plan screenName/route", []));
   }
-  const qLower = q.toLowerCase();
-  stages.push(
-    stage(
-      "text search",
-      rows.filter(
-        (r) => r.name && r.name.toLowerCase().includes(qLower) || r.title && r.title.toLowerCase().includes(qLower) || Array.isArray(r.texts) && r.texts.some((t) => t.toLowerCase().includes(qLower))
-      )
-    )
-  );
-  for (const s of stages) {
+  for (const s of exactStages) {
     if (s.matches.length === 1) return { status: "resolved", row: s.matches[0], stage: s.stage };
-    if (s.matches.length > 1) {
-      return { status: "ambiguous", stage: s.stage, candidates: s.matches.map(describe) };
-    }
+    if (s.matches.length > 1) return { status: "ambiguous", stage: s.stage, candidates: s.matches.map(describe) };
   }
-  return { status: "not-found", candidates: rows.map(describe) };
+  const textMatches = rows.filter(
+    (r) => r.name && fold(r.name).includes(qFold) || r.title && fold(r.title).includes(qFold) || Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold))
+  );
+  if (textMatches.length) {
+    return Object.assign(
+      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map(describe) },
+      noTitles ? { noTitles: true } : null
+    );
+  }
+  return Object.assign({ status: "not-found", candidates: rows.map(describe) }, noTitles ? { noTitles: true } : null);
 }
 module.exports = { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 if (require.main === module) {
@@ -88,6 +89,10 @@ if (require.main === module) {
     console.error("usage: node design-to-code/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]");
     process.exit(2);
   }
+  const NOTITLES_NOTE = "note   this export's index carries no titles (pulled before title indexing) \u2014 re-pull the screen (`dtwin pull --node <id>`) to enable lookup by title";
+  const listCandidates = (candidates) => {
+    for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+  };
   const res = resolveScreen(exportDir, query, { planDir });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
@@ -96,10 +101,17 @@ if (require.main === module) {
   }
   if (res.status === "ambiguous") {
     console.error(`error  '${query}' matches ${res.candidates.length} screens at the '${res.stage}' stage \u2014 pick one by node id:`);
-    for (const c of res.candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+    listCandidates(res.candidates);
+    process.exit(1);
+  }
+  if (res.status === "needs-confirmation") {
+    console.error(`error  '${query}' matched only by text search \u2014 confirm with the node id (never resolved automatically from a substring hit):`);
+    listCandidates(res.candidates);
+    if (res.noTitles) console.error(NOTITLES_NOTE);
     process.exit(1);
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
-  for (const c of res.candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+  listCandidates(res.candidates);
+  if (res.noTitles) console.error(NOTITLES_NOTE);
   process.exit(1);
 }

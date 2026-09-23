@@ -71,10 +71,13 @@ ok("[resolve] #70 'Job Roles' never resolves to 'Job Role Details' (20174:143363
 ok("[resolve] #120 'Global Policies' resolves to the ONE screen actually titled that (1359:21337), not the sidebar match on all three",
   (() => { const r = resolveScreen(FIXTURE, "Global Policies"); return r.status === "resolved" && r.row.id === "1359:21337"; })());
 
-ok("[resolve] #71/#150 an ambiguous partial name ('Job Role') STOPS and lists candidates rather than guessing",
+// Round 2: a text-search hit is NEVER auto-resolved, even the single-hit case (finding 70 verbatim
+// on the pre-title export) — it is always `needs-confirmation`, a candidate list to pick from by id.
+ok("[resolve] #71/#150 an ambiguous partial name ('Job Role') STOPS as needs-confirmation and lists candidates rather than guessing",
   (() => {
     const r = resolveScreen(FIXTURE, "Job Role");
-    return r.status === "ambiguous" && r.candidates.length >= 2 && r.candidates.some((c) => c.id === "20174:143363") && r.candidates.some((c) => c.id === "7314:87192");
+    return r.status === "needs-confirmation" && r.stage === "text search" && r.candidates.length >= 2 &&
+      r.candidates.some((c) => c.id === "20174:143363") && r.candidates.some((c) => c.id === "7314:87192");
   })());
 
 ok("[resolve] a name matching nothing STOPS and lists every known layer (never the nearest string)",
@@ -133,5 +136,58 @@ ok("[index] acceptance criterion 2: exactly one row's `title` is 'Job Roles', an
     const hits = root.layers.filter((l) => l.title === "Job Roles");
     return hits.length === 1 && hits[0].id === "7314:87192";
   })());
+
+console.log("\nresolve-screen — round 2: text search never auto-resolves, and a title-less export says so:");
+
+// LEGACY fixture: the real pre-title-indexing root+page index (test/fixtures/livetest3/pages-legacy/,
+// copied verbatim from /Users/mohamedomarwork/design-twin-livetest-3/design/export/pages/ — the
+// exact shape this fix closes over). resolveScreen reads <exportDir>/pages/index.json, so build a
+// throwaway exportDir whose pages/ IS this legacy content, rather than teaching the resolver a
+// second index location it will never see in a real project.
+const os = require("os");
+function legacyExportDir() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-legacy-"));
+  const pagesDir = path.join(tmp, "pages");
+  fs.mkdirSync(path.join(pagesDir, "__Organization_management_"), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURE, "pages-legacy", "index.json"), path.join(pagesDir, "index.json"));
+  fs.copyFileSync(
+    path.join(FIXTURE, "pages-legacy", "__Organization_management_", "index.json"),
+    path.join(pagesDir, "__Organization_management_", "index.json")
+  );
+  return tmp;
+}
+const LEGACY = legacyExportDir();
+
+ok("[legacy] the legacy index really has no titles at all (sanity check on the fixture itself)",
+  (() => { const root = JSON.parse(fs.readFileSync(path.join(LEGACY, "pages", "index.json"), "utf8")); return !root.layers; })());
+
+ok("[round2] 'Job Role' on the LEGACY (title-less) export does NOT resolve — needs-confirmation, exit-worthy, not a silent wrong answer",
+  (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
+
+ok("[round2] and the message says the export predates title indexing",
+  (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.noTitles === true; })());
+
+ok("[round2] a query matching NOTHING on the legacy export also flags noTitles",
+  (() => { const r = resolveScreen(LEGACY, "Totally Unknown"); return r.status === "not-found" && r.noTitles === true; })());
+
+ok("[round2] 'positions' (no trailing space, no case match needed) resolves at 'exact layer name', not text search",
+  (() => { const r = resolveScreen(FIXTURE, "positions"); return r.status === "resolved" && r.row.id === "7314:87192" && r.stage === "exact layer name"; })());
+
+ok("[round2] 'POSITIONS' (case-folded) also resolves at 'exact layer name'",
+  (() => { const r = resolveScreen(FIXTURE, "POSITIONS"); return r.status === "resolved" && r.row.id === "7314:87192" && r.stage === "exact layer name"; })());
+
+ok("[round2] 'Global Policies' on the NEW (titled) export resolves at 'indexed title', not text search",
+  (() => { const r = resolveScreen(FIXTURE, "Global Policies"); return r.status === "resolved" && r.row.id === "1359:21337" && r.stage === "indexed title"; })());
+
+ok("[round2] a query that hits only texts[] ('Units') is needs-confirmation, never resolved, and lists the hits",
+  (() => {
+    const r = resolveScreen(FIXTURE, "Units");
+    return r.status === "needs-confirmation" && r.stage === "text search" && r.candidates.length >= 1 &&
+      !r.noTitles; // this export DOES carry titles — only the legacy one should ever set noTitles
+  })());
+
+// "Job Role" above IS the single-substring-hit case (matches only "Job Role Details" on the legacy,
+// title-less export) and is already asserted `needs-confirmation`, not `resolved` — this is finding
+// 70 exactly as the coordinator reproduced it against the real pre-fix export.
 
 report();

@@ -11,18 +11,26 @@
 // Resolution order, each stage tried only if the previous one matched NOTHING:
 //   1. node id           — the query IS a Figma node id (e.g. "7314:87192"); ids are unique, this
 //                           either matches exactly one row or none exist for that id.
-//   2. exact layer name   — row.name === query, byte for byte (trailing spaces and all).
-//   3. indexed title      — row.title === query (case-insensitive): the text a user actually reads.
+//   2. exact layer name   — row.name === query, trimmed and compared case-insensitively (the layer
+//                           can be `positions ` with a trailing space; a user typing "positions"
+//                           still means it byte-for-byte, they just didn't type the space).
+//   3. indexed title      — row.title === query (trimmed, case-insensitive): the text a user reads.
 //   4. plan screenName/route — design/plan/*.json's schema'd header (screenName, nodeId, route),
 //                           resolved back to the row whose id === that plan's nodeId.
 //   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
 //                           row.texts (the first N deduped text strings on the frame).
 //
-// A stage that matches MORE THAN ONE row stops immediately — it does not fall through to a later,
-// looser stage, and it never picks the "closest" one. Zero matches at every stage also stops. Only a
-// stage that matches EXACTLY ONE row resolves. This is deliberate (finding 70): a fuzzy match found
-// "Job Role Details" for a query of "Job Roles" and produced a confident, wrong audit. Ambiguity and
-// absence get the same treatment — stop, list candidates, write nothing.
+// Stages 1–4 are EXACT (id, or trimmed/case-folded name/title/plan-header match) — a stage that
+// matches more than one row there stops immediately, and zero matches falls through to the next
+// stage. Only a stage that matches EXACTLY ONE row resolves.
+//
+// Stage 5 (text search) NEVER resolves, even on exactly one hit — round 2 of this fix: the
+// substring "Job Role" matches ONLY "Job Role Details" on the pre-title-indexing export, and a
+// single substring hit auto-resolving to it is finding 70 verbatim (a query for "Job Roles"
+// silently landing on a different screen with full confidence). A text-search hit is always
+// reported as `needs-confirmation` — a candidate list the caller must resolve by node id — never as
+// `resolved`. This is what "never take a near-match" / "do not make name matching fuzzy" means in
+// code: fuzziness may narrow the list, it may never pick from it.
 const fs = require("fs");
 const path = require("path");
 
@@ -82,52 +90,64 @@ function describe(row) {
   };
 }
 
-// Returns { status: "resolved", row, stage } | { status: "ambiguous"|"not-found", stage, candidates }.
+const fold = (s) => String(s || "").trim().toLowerCase();
+
+// Returns one of:
+//   { status: "resolved", row, stage }                          — exactly one EXACT-stage match.
+//   { status: "ambiguous", stage, candidates }                  — an exact stage matched >1 row.
+//   { status: "needs-confirmation", stage: "text search", candidates } — one or more text-search
+//     hits; never auto-picked, even when there is only one.
+//   { status: "not-found", candidates, noTitles? }               — nothing matched anywhere;
+//     `noTitles: true` when NOT ONE row in this export carries a `title` at all, meaning the export
+//     predates title indexing and a re-pull (not a smarter query) is the fix.
 // Never throws on a query that matches nothing or matches many — that is the expected, handled case.
 function resolveScreen(exportDir, query, opts) {
   const options = opts || {};
   const rows = allRows(exportDir);
   const q = String(query || "").trim();
+  const qFold = fold(q);
+  const noTitles = rows.length > 0 && !rows.some((r) => r.title);
 
   const stage = (name, matches) => ({ stage: name, matches });
 
-  const stages = [];
+  const exactStages = [];
 
   if (NODE_ID_RE.test(q)) {
-    stages.push(stage("node id", rows.filter((r) => r.id === q)));
+    exactStages.push(stage("node id", rows.filter((r) => r.id === q)));
   }
-  stages.push(stage("exact layer name", rows.filter((r) => r.name === q)));
-  stages.push(stage("indexed title", rows.filter((r) => r.title && r.title.toLowerCase() === q.toLowerCase())));
+  exactStages.push(stage("exact layer name", rows.filter((r) => fold(r.name) === qFold)));
+  exactStages.push(stage("indexed title", rows.filter((r) => r.title && fold(r.title) === qFold)));
 
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
   if (planHit.length) {
     const ids = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
-    stages.push(stage("plan screenName/route", rows.filter((r) => ids.has(r.id))));
+    exactStages.push(stage("plan screenName/route", rows.filter((r) => ids.has(r.id))));
   } else {
-    stages.push(stage("plan screenName/route", []));
+    exactStages.push(stage("plan screenName/route", []));
   }
 
-  const qLower = q.toLowerCase();
-  stages.push(
-    stage(
-      "text search",
-      rows.filter(
-        (r) =>
-          (r.name && r.name.toLowerCase().includes(qLower)) ||
-          (r.title && r.title.toLowerCase().includes(qLower)) ||
-          (Array.isArray(r.texts) && r.texts.some((t) => t.toLowerCase().includes(qLower)))
-      )
-    )
-  );
-
-  for (const s of stages) {
+  for (const s of exactStages) {
     if (s.matches.length === 1) return { status: "resolved", row: s.matches[0], stage: s.stage };
-    if (s.matches.length > 1) {
-      return { status: "ambiguous", stage: s.stage, candidates: s.matches.map(describe) };
-    }
+    if (s.matches.length > 1) return { status: "ambiguous", stage: s.stage, candidates: s.matches.map(describe) };
   }
-  return { status: "not-found", candidates: rows.map(describe) };
+
+  // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
+  // what closes finding 70 for real: the pre-fix version resolved a single substring hit outright.
+  const textMatches = rows.filter(
+    (r) =>
+      (r.name && fold(r.name).includes(qFold)) ||
+      (r.title && fold(r.title).includes(qFold)) ||
+      (Array.isArray(r.texts) && r.texts.some((t) => fold(t).includes(qFold)))
+  );
+  if (textMatches.length) {
+    return Object.assign(
+      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map(describe) },
+      noTitles ? { noTitles: true } : null
+    );
+  }
+
+  return Object.assign({ status: "not-found", candidates: rows.map(describe) }, noTitles ? { noTitles: true } : null);
 }
 
 module.exports = { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
@@ -139,6 +159,12 @@ if (require.main === module) {
     console.error("usage: node design-to-code/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]");
     process.exit(2);
   }
+  const NOTITLES_NOTE =
+    "note   this export's index carries no titles (pulled before title indexing) — re-pull the " +
+    "screen (`dtwin pull --node <id>`) to enable lookup by title";
+  const listCandidates = (candidates) => {
+    for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+  };
   const res = resolveScreen(exportDir, query, { planDir });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
@@ -147,10 +173,17 @@ if (require.main === module) {
   }
   if (res.status === "ambiguous") {
     console.error(`error  '${query}' matches ${res.candidates.length} screens at the '${res.stage}' stage — pick one by node id:`);
-    for (const c of res.candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+    listCandidates(res.candidates);
+    process.exit(1);
+  }
+  if (res.status === "needs-confirmation") {
+    console.error(`error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`);
+    listCandidates(res.candidates);
+    if (res.noTitles) console.error(NOTITLES_NOTE);
     process.exit(1);
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
-  for (const c of res.candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+  listCandidates(res.candidates);
+  if (res.noTitles) console.error(NOTITLES_NOTE);
   process.exit(1);
 }
