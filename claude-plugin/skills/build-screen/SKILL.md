@@ -54,10 +54,12 @@ its export directly in `design/` — every path below works either way, just dro
   the right one — a builder that checks only the root of a single-screen doc finds nothing and
   wrongly concludes there is no reference. A hand-exported PNG is the real fallback, for when the
   field is genuinely absent. **Always read it.**
-- **`…__<id>.vars.json`** beside the screen — exactly the tokens THAT screen binds.
+- **`…__<id>.vars.json`** beside the screen — the variables of every collection THAT screen
+  references (a superset of what its nodes bind; the node's own `tokens` say what is bound).
   **`design/export/variables.json`** — the union of every screen pulled so far. It **accumulates**:
-  a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Read
-  its `_conflicts` and `hygiene` before generating a theme.
+  a second pull merges into it rather than replacing it, so an earlier screen's tokens survive. Names
+  are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
+  `hygiene` before generating a theme from it.
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
   `duplicates` (byte-identical files), `monochrome` (safe to recolour) and `heavy` (too big to inline).
 - **`design/export/design-system/`** — tokens, styles and component catalogs. Written only by a
@@ -70,14 +72,20 @@ its export directly in `design/` — every path below works either way, just dro
   merges, never overwrites your edits). *(Older projects keep it at the repo root; `dtwin doctor`
   finds either. Prefer the `design/` location — it keeps every hand-owned file in one place.)*
 - **`design/tokens.dtcg.json`** (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <variables file> design/`)
-  plus **`design/tokens.json`** overrides — Figma value → your token. The input is
-  `design/export/design-system/tokens.json` after a `--design-system` pull, or
-  `design/export/variables.json` after single-screen pulls — pass whichever you have. On a native stack add `--native <profile>`
+  plus **`design/tokens.json`** overrides — Figma value → your token. Choose the input by what it
+  means, because the choice changes values: `design/export/design-system/tokens.json` when it exists
+  (the library's own definitions); else the screen's own `…__<id>.vars.json`; the merged
+  `design/export/variables.json` only when you need every screen at once. The union can hold two
+  variables with one name (livetest-3: `Space 4` = 24 and = 16); tokens.js then emits both, each
+  suffixed with its key, and warns — the screen's own `.vars.json` gives the plain name its real
+  value. On a native stack add `--native <profile>`
   (swiftui / android-compose / flutter / react-native): it also writes ONE token source file
   (`DesignTokens.swift` / `.kt`, `design_tokens.dart`, `designTokens.ts`) with every mode resolved, in
   the platform's own theming shape. On **Tailwind v4** add `--web tailwind` for the same deal on the
   web: `theme.css` with an `@theme` block whose variables sit under the namespaces Tailwind turns into
-  utilities, plus a `[data-theme="…"]` block per non-default mode.
+  utilities — inside a `figma-` sub-namespace (`--radius-figma-xl` → `rounded-figma-xl`,
+  `--spacing-figma-space-4` → `p-figma-space-4`, `--color-figma-…` → `bg-figma-…`), so Tailwind's own
+  `rounded-xl`/`p-4` keep their framework values — plus a `[data-theme="…"]` block per non-default mode.
 - **`design/audit/<screen>.json|md`** — the pre-build audit, if run. Read its `crossFile` section
   first: it answers whether this screen even comes from the design system sitting beside it.
 - **`design/target.json`** — which stack to emit. `dtwin init` always writes it; `profile: null` means
@@ -159,6 +167,22 @@ Copy this checklist into your notes and keep it updated:
      If the user would rather proceed, that is fine — but then every instance really is `verdict:"new"`,
      and the step-6 report says why.
 
+     **`catalog-rekeyed` is the other answer to 0% by key, and it means the opposite.** A duplicated
+     file re-mints every component key while names and prop signatures survive, and cross-check
+     then lists name + prop-signature matches in its JSON under `componentProposals` (write it with
+     `--out design/audit/<screen>.cross`), each `"confirmed": false`. Show the user the list — instance
+     name → catalog name and id, and the evidence (`name+signature`, or the weaker `name+no-props`)
+     — and let them accept entries. Set `"confirmed": true` on exactly those, then
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
+     --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json` stubs only
+     them, filed under the screen's own instance key so the lookup below finds them. Confirmed ones are
+     ports of the catalog (reuse its variant/prop matrix); the rest stay `verdict:"new"`. Do not accept
+     on the user's behalf: shared generic names (`Component 1`, `Header`) are exactly where a wrong
+     match hides.
+
+     Token collisions are judged against the screen's OWN variables (its `.vars.json`), so a
+     `token-name-collision` blocker is this screen's problem; a `token-name-collision-elsewhere` note
+     is another screen's, and this screen's value must not be "fixed" to match it.
      Note what the check does NOT say: a token *name* collision with a different value is a blocker
      (`(Space 3)` = 12 on the screen vs `Space 3` = 16 in the design system — slug them together and
      you silently get 16), while identical values under different keys are safe and are not reported.
@@ -179,7 +203,9 @@ Copy this checklist into your notes and keep it updated:
        warning. No map at all → **stop**: run
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
        --out design/codeconnect.local.json` and have the user confirm the stub entries before
-       continuing. After any hand edit, check its shape with
+       continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form above
+       instead: a full bootstrap files every stub under a catalog key the screen's instances never
+       carry, so it would map nothing on this screen. After any hand edit, check its shape with
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" design/codeconnect.local.json` — drift-lint
        assumes a well-formed map.
      - **The catalog does not exist** (the normal single-screen case). This is **not** a stop, and it
@@ -252,7 +278,9 @@ Copy this checklist into your notes and keep it updated:
      per screen — two screens built in separate sessions then disagree about what `color/primary` is
      called. Generate it once: `tokens.js … --native <profile>` on a native stack, `tokens.js …
      --web tailwind` on Tailwind v4 (`theme.css`, an `@theme` block — do not hand-write one from the
-     bound token names), or plain `tokens.css` for CSS Modules/vanilla CSS. Move the file into the
+     bound token names), or plain `tokens.css` for CSS Modules/vanilla CSS. Feed it the design
+     system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
+     whose repeated names come out key-suffixed (see *Where everything is*). Move the file into the
      app's source tree (ask where), list it in `files[]`, and have every screen import it; a project
      that already has a theme keeps it, and its names win. Do not fill a MISSING row with a token defined for a different role/surface just
      because it's close or already imported elsewhere — that's silent hardcoding by proxy and the bug
@@ -285,7 +313,7 @@ Copy this checklist into your notes and keep it updated:
    **Names come from Figma, not from you.** A token's `value` is what it resolves to in the one mode
    this screen was exported in. Its **name is what it actually is**, and that name is the designer's,
    carried in the export — use it. Derive the code identifier from it mechanically (`Schemes/On
-   Primary` → `on-primary` / `onPrimary` / `--color-schemes-on-primary`, per the profile) so anyone
+   Primary` → `on-primary` / `onPrimary` / `--color-figma-schemes-on-primary`, per the profile) so anyone
    can read the name in either direction and land on the same token. The same goes for component names
    (the Figma component / `figma.name` in `design/codeconnect.local.json`). Assets follow the same rule and
    now make it easy: an exported file is named after its own Figma layer (`icons/linear/arrow-down` →

@@ -68,6 +68,19 @@ Output
 - **v3** keeps tokens in `tailwind.config.*` under `theme.extend.{colors,spacing,fontSize,borderRadius}`.
 - Write `tokens.json`'s right-hand side to match whichever the project uses; don't create a
   `tailwind.config.js` in a v4 project just to hold tokens.
+- **An `@theme` variable REPLACES Tailwind's own of the same name.** `--radius-xl: 16px` makes every
+  `rounded-xl` in the project 16px instead of 12px; `--radius-l`/`--radius-s` mint `rounded-l`/
+  `rounded-s`, which Tailwind already defines as the left/start-corner shorthands. So the generated
+  `theme.css` (`tokens.js … --web tailwind`) puts every design token under a `figma-` sub-namespace:
+  Figma's `Border Radius/XL` is `--radius-figma-xl` → `rounded-figma-xl`, `Spacing/Space 4` is
+  `--spacing-figma-space-4` → `p-figma-space-4`/`gap-figma-space-4`, a colour `Primary/Primary` is
+  `--color-figma-primary-primary` → `bg-figma-primary-primary`, a font size is `text-figma-…`.
+  Use those for design values and leave the bare utilities (`rounded-xl`, `p-4`) with their framework
+  meaning. When you add a design token by hand, follow the same rule.
+- A generated name ending in `-<8 hex>` (`--spacing-figma-space-4-e26d506e`) means two Figma variables
+  share that name with different values; the suffix is the variable's key. Use the one whose key the
+  screen's own `.vars.json` carries — never the other because it looks shorter.
+- Figma's "fully rounded" corner (a literal 1e9) is emitted as `9999px`; `rounded-full` is equivalent.
 
 **Native controls, not rebuilt ones** — a Figma widget maps to the HTML element that already has the
 behaviour, keyboard handling and accessibility; style it, don't rebuild it from `div`s. Checkbox →
@@ -198,8 +211,10 @@ target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is 
 appears on a vector node whose SVG export failed. Render it inline as
 `<svg viewBox="0 0 w h"><path d="..." /></svg>` rather than an `<img>` — there is no asset file for it.
 
-**Tokens** — the right-hand value in `tokens.json` is a Tailwind class (e.g. `bg-primary`, `text-body`,
-`rounded-md`). Emit it in `className`. If no class exists, use arbitrary value `bg-[var(--color-primary)]`.
+**Tokens** — the right-hand value in `tokens.json` is a Tailwind class. With the generated theme that
+is the `figma-` utility (`bg-figma-primary-primary`, `text-figma-body`, `rounded-figma-md`); in a
+project with its own theme, its own names win (`bg-primary`). Emit it in `className`. If no class
+exists, use an arbitrary value over the variable, e.g. `bg-[var(--color-figma-primary-primary)]`.
 
 **Components** — import per `design/codeconnect.local.json`; pass Figma `props` through to component props (see
 **Component reuse** above before generating any markup for an instance's sublayer).

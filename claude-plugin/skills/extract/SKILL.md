@@ -169,9 +169,11 @@ questions.
 
 **`design/export/variables.json` accumulates — it is not per-pull state.** Each single-screen pull
 merges its slice in, keyed on each variable's Figma key, so pulling screen B no longer deletes screen
-A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json`. If two screens
-resolve one variable differently, the newest wins and the disagreement is recorded under `_conflicts`
-and in `hygiene` — read those before generating a theme.
+A's tokens. The raw per-pull slice is also kept verbatim as the screen's `.vars.json` (every variable
+in the collections that screen references — more than the ones its nodes actually bind). Names are
+not unique across the union: two different variables (two keys) can both be called `Space 4` with
+different values. Such a pair, and a variable two pulls resolve differently, is recorded under
+`_conflicts` and as a `CONFLICT` line in `hygiene` — read those before generating a theme.
 
 **Check the reference screenshot landed.** Every export renders one PNG per top-level frame and
 points at it from a `reference` field holding a path relative to the export dir
@@ -206,7 +208,20 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<
   --design-system design/export/design-system
 ```
 
-Run it after any pull that produced both, and report its blockers before offering to build.
+Run it after any pull that produced both, and report its blockers before offering to build. It reads
+the screen's own `.vars.json` beside it, so a token collision is reported against the screen that
+actually carries the colliding variable; a collision that belongs to another screen is only an
+`info` note naming that screen — do not "fix" this screen's value to match it.
+
+**`catalog-rekeyed` is not "wrong design system".** Duplicating a Figma file re-mints every component
+key, so a copied design system matches its screens 0% by key while names and prop signatures still
+agree. When that is what cross-check finds, it lists name + prop-signature matches under
+`componentProposals` in its JSON (`--out design/audit/<screen>.cross` writes it), every one
+`"confirmed": false`. Show the user that list — name, catalog id, evidence — and let them accept
+entries; set `"confirmed": true` on the accepted ones, then
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json --from-proposals design/audit/<screen>.cross.json`
+stubs exactly those, filed under the screen's own instance keys. Never confirm on the user's behalf:
+the confirmation is the only thing that separates a real match from two components that share a name.
 `/designtwin:audit-design` runs the same pass as part of its report; this is the standalone form for
 when you have only just pulled.
 
@@ -215,15 +230,25 @@ when you have only just pulled.
 "Get me the colors" is not finished when the raw variables land — nothing in the app can import
 those. Turn them into the stack's own theme file once, instead of re-mapping values on every screen.
 
-**The first argument is whichever variable file your pull produced**:
-`design/export/design-system/tokens.json` after a `--design-system` pull, or
-`design/export/variables.json` after single-screen pulls. Passing the one you don't have is the usual
-reason this command fails.
+**Choose the input by what the theme is for — the choice changes values, not just coverage:**
+
+1. `design/export/design-system/tokens.json` when you pulled the design system — it is the library's
+   own definition of every token, one variable per name.
+2. Otherwise, the screen's own `design/export/pages/<Page>/<Screen>__<id>.vars.json` — the variables
+   that screen's file references, so its names mean what that screen means.
+3. `design/export/variables.json` (the union of every pull) only when you need every screen's tokens
+   in one file, and then read its `_conflicts` first.
+
+Why not the union by default: names repeat across screens' libraries. livetest-3's union held two
+`Space 4` — 24 (the design system's) and 16 (one screen's local copy); a theme generated from the
+union cannot give both screens the plain `space-4`, so each is emitted under its key
+(`space-4-e26d506e`, `space-4-64928e3a`) and the screen that binds 24 must pick that one. Generated from
+that screen's own `.vars.json`, it is simply `space-4: 24px`.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json <css dir> --web tailwind
-node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/variables.json <theme dir> --native swiftui   # or compose | flutter | react-native
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json design/export/   # DTCG json + tokens.css + a tokens/ set dir
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json <css dir> --web tailwind
+node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/tokens.json <theme dir> --native swiftui   # or compose | flutter | react-native
 ```
 
 It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json` and a
@@ -233,15 +258,22 @@ it at a directory you are happy to have filled.
 Pick the output by stack. `tokens.css` is plain `:root` custom properties — right for CSS Modules or
 vanilla CSS, but **Tailwind generates no utilities from it**, so on Tailwind v4 use `--web tailwind`:
 it writes `theme.css` (`@import "tailwindcss"` + an `@theme` block) with each variable under the
-namespace that earns it a utility — `--color-*` → `bg-`/`text-`, `--spacing-*` → `p-`/`gap-`,
-`--radius-*` → `rounded-`, `--text-*` → `text-<size>` — and every non-default mode reassigning those
-properties in a `[data-theme="…"]` block. Import it as the app's entry CSS. Do not hand-write an
+namespace that earns it a utility, inside a `figma-` sub-namespace — `--color-figma-*` → `bg-figma-…`/
+`text-figma-…`, `--spacing-figma-*` → `p-figma-…`/`gap-figma-…`, `--radius-figma-*` → `rounded-figma-…`,
+`--text-figma-*` → `text-figma-<size>` — and every non-default mode reassigning those properties in a
+`[data-theme="…"]` block. The prefix is there because an `@theme` variable REPLACES Tailwind's own
+of the same name: Figma's `XL` radius as `--radius-xl: 16px` silently turned every `rounded-xl` (12px)
+in the project into 16px. So `rounded-xl` keeps Tailwind's meaning and the design's XL is
+`rounded-figma-xl`. Import it as the app's entry CSS. Do not hand-write an
 `@theme` block from bound token names: that is the per-screen re-mapping this step exists to stop.
 
-**Read the warnings it prints — one of them is lossy.** `duplicate token name 'X' — later definition
-wins` means two variables really do share a name and one has been dropped. Stop and find out which
-(they are usually from two different libraries); do not generate a theme over it. The others —
-a name sanitised for CSS, a resolver file renamed to avoid a collision — are informational.
+**Read the warnings it prints.** Nothing is dropped any more, but one warning changes names: `N
+different Figma variables share the name 'X' … resolve DIFFERENTLY` means both were emitted, each
+suffixed with the first 8 characters of its key, and the warning lists each key's values and the
+screens it came from. Pick the one the screen binds (by key, via the screen's `.vars.json`) — or
+regenerate from that screen's own `.vars.json`, where the plain name usually survives. `… resolve
+identically in every mode — emitted ONCE` and the rest — a name sanitised for CSS, a resolver file
+renamed to avoid a collision — are informational.
 
 The file is generated: say where it landed and how to wire it in (its header comment shows the one
 line), don't hand-edit it, and re-run it after the next token pull. Variables only — text styles and
