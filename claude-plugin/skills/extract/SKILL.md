@@ -159,8 +159,23 @@ obviously about failure:
   elsewhere), `styles.{paint,text,effect,grid}.json`, `hygiene.json`. No page walk, no assets.
 
 The filename carries the node id because frame names do not identify a frame: two `Popup`s on one
-page are two different screens, and a name ending in a space sanitises to a trailing `_`. Read `pages/index.json` rather than reconstructing filenames — it carries each screen's
-real name, page, node id, size and the paths to all three files.
+page are two different screens, and a name ending in a space sanitises to a trailing `_`. Read the
+**root** `design/export/pages/index.json` rather than reconstructing filenames or opening a page
+directory's own `index.json` one hop down — it carries a row per screen with the Figma layer `name`,
+the visible `title` (the text on the frame's own title slot, NOT a sidebar/nav label that repeats on
+every sibling screen), a `texts[]` fingerprint, `page`, `pageId`, `id`, `w`/`h` and the paths to all
+three sibling files.
+
+**Resolving a screen by the name a user types (not the layer name Figma gave it):** the visible title
+is very often NOT the Figma layer name — a layer named `positions ` (trailing space) can be the frame
+whose on-screen `<h1>` reads "Job Roles". Use the one shared procedure,
+`node design-to-code/resolve-screen.js <exportDir> "<name-or-id>" [planDir]` (installed at
+`${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js`), rather than re-deriving name matching here: it
+tries, in order, node id → exact layer name → indexed `title` → a plan's `screenName`/`route` → a
+text search over `name`/`title`/`texts[]`, and on the FIRST stage that matches zero or more than one
+screen it stops and prints every candidate (name, id, size, node count, `dtwin screenshot <id>`) —
+it never guesses the nearest match. Every other skill that resolves a screen by name calls this same
+script; do not re-implement the procedure.
 
 `--design-system` counts and `dtwin list libraries` counts legitimately differ: the export includes
 variables this file merely *references* from a published library, flagged `remote: true`, and

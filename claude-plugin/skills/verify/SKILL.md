@@ -51,10 +51,17 @@ Three things that trip up a literal reading of the old recipe:
   every step has one place to look; a null profile means nobody has decided, and the plan's own
   `target` field is then the better answer. Ask if neither has it.
 - **The export lives in the `pages/` tree**, at `design/export/pages/<Page>/<Screen>__<node-id>.json`
-  — reached through `pages/index.json`, never by guessing a filename. The reference PNG is
+  — reached through the root `pages/index.json`, never by guessing a filename. The reference PNG is
   `nodes[0].reference` (a single-screen pull puts the field on the node, not the root), a path
   relative to `design/export/`. Missing or stale → `/designtwin:extract` first; never compare against
   the PNG alone. A project from before the `export/` split has the same tree directly under `design/`.
+- **The user's name for the screen (e.g. "Job Roles") may not be the Figma layer name (e.g.
+  `positions `, trailing space, a different string entirely).** Resolve it with
+  `node design-to-code/resolve-screen.js <exportDir> "<name>"` — node id → exact layer name → the
+  index's `title` → a plan's `screenName`/`route` → text search — the same procedure every other
+  skill uses (see `extract/SKILL.md`). If it stops with zero or several candidates, print them and
+  ask; don't fall back to `design/plan/*` alone (a plan's free-text `screen` field is a human's
+  string, not a guaranteed resolver) and don't pick the nearest name.
 
 One more thing about the plan file so it does not surprise you: **build-screen's `Stop` hook writes
 it**, setting `status` as the building turn ends. If a build is finishing while you read, `status` can

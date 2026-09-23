@@ -44,10 +44,17 @@ it in step 1, don't read its files.
 decisions and evidence that a re-pull must never destroy. (A project created before that split has
 its export directly in `design/` — every path below works either way, just drop the `export/`.)
 
-- **The screen JSON** — `design/export/pages/index.json` → the page's `index` → the layer's `file`.
-  Screen files are `pages/<Page>/<Screen>__<node-id>.json`; the node id is in the name because a
-  frame name does not identify a frame (two `Popup`s on one page are two screens, and a name ending in a space
-  sanitises to a trailing `_`). Read the index; never reconstruct a filename.
+- **The screen JSON** — `design/export/pages/index.json` (the root — it now carries a row per
+  screen: `name`, `title`, `texts[]`, `page`, `pageId`, `id`, size and every sibling file's path) →
+  the layer's `file`. Screen files are `pages/<Page>/<Screen>__<node-id>.json`; the node id is in the
+  name because a frame name does not identify a frame (two `Popup`s on one page are two screens, and
+  a name ending in a space sanitises to a trailing `_`). Read the index; never reconstruct a filename.
+  **Resolving "build the Job Roles screen" when no layer is named that:** the Figma layer name and
+  the visible on-screen title are often different strings. Resolve with
+  `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name → indexed
+  `title` → plan `screenName`/`route` → text search over `name`/`title`/`texts[]`) rather than
+  guessing — it stops and lists candidates on zero or more than one match instead of picking the
+  nearest name. This is the one procedure every skill uses; see `extract/SKILL.md` for the full rule.
 - **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.
   `assets/<id>_ref.png`), held by the `reference` field: **`nodes[0].reference`** in a single-screen
   pull (the field sits on the node), or the **root `reference`** of a page-walk layer file. Look in
