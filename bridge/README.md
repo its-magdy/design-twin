@@ -97,8 +97,11 @@ It lays out the project as two halves, and the split is the point:
 ```
 design/
   export/                  <- dtwin writes ONLY here. rm -rf and re-pull loses nothing.
-    pages/<Page>/<Screen>__<node-id>.json    one screen, any pull shape
-    pages/index.json                          every screen pulled
+    pages/<Page>/<Screen>__<node-id>.json    one screen, any pull shape — carries `sourceFile` (the
+                                              connected Figma file this pull actually talked to; absent
+                                              on a screen pulled before this field existed, never
+                                              guessed from another file's export)
+    pages/index.json                          every screen pulled, each row also carrying `sourceFile`
     design-system/                            tokens, styles, component catalogs
     variables.json                            the union of every screen's tokens (merged, never replaced)
     assets/                                   named after the Figma layer, deduped by content

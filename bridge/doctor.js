@@ -135,31 +135,52 @@ function checkPlugin(r, waitSec) {
   return fail("plugin", title, `no plugin connected within ${waitSec}s`, "in Figma DESKTOP open the file and run Plugins → Development → Design Twin (keep its window open); `--wait 30` waits longer");
 }
 
-// Which Figma FILE each part of the export came from. `exportedAt`/`file` are stamped by the plugin on
-// every export document, so this is a read, not a guess — and it is the one line that would have told
-// a two-file project that its screens and its design system are not the same system.
-function exportSources(exportDir) {
-  const seen = new Map();
-  const add = (rel, what) => {
-    let doc;
-    try { doc = JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return; }
-    if (!doc || !doc.file) return;
-    if (!seen.has(doc.file)) seen.set(doc.file, { file: doc.file, what: [] });
-    seen.get(doc.file).what.push(what);
-  };
-  add("design-system.json", "design system");
-  add(path.join("design-system", "tokens.json"), "design system");
-  // Screens: one representative is enough to name the file, and reading every screen on a 20-screen
-  // project inside `doctor` would make a 0.08s command visibly slow.
+const ageStr = (ms) => { const h = ms / 3600000; return h < 1 ? `${Math.max(0, Math.round(ms / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`; };
+
+// P4 #33: the root pages/index.json's `layers[]` already carries every screen's `sourceFile` and
+// `exportedAt` (write-out.js stamps both; a screen pulled before that field existed simply has no
+// `sourceFile`, which is told apart from a real value rather than defaulting to the design system's).
+// Reading it directly means this never has to guess by opening each screen file, or fall back to
+// whichever document snapshot-meta happened to pick first — the exact bug this replaces (finding 33:
+// "attributes the whole export to the wrong Figma file").
+function exportSourceCounts(exportDir, now) {
+  const screensByFile = new Map(); // file (or "" for unstamped) -> [{exportedAt}]
+  const note = (l) => { const key = l.sourceFile || ""; if (!screensByFile.has(key)) screensByFile.set(key, []); screensByFile.get(key).push(l.exportedAt); };
   try {
     const idx = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8"));
-    for (const p of (idx.pageDirs || []).slice(0, 3)) {
-      let pi;
-      try { pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); } catch { continue; }
-      for (const l of (pi.layers || []).slice(0, 1)) add(l.file, "screens");
+    // The root `layers[]` only ever holds what write-out.js's writeScreen path has merged into it — a
+    // whole-page pull's layers never backfill it (mergeRootIndex only appends the ONE entry its own
+    // call passed). So the true, complete list is every PAGE's own index, keyed by `file` so a screen
+    // present in BOTH (a single-screen re-pull of a frame the original page walk also wrote) counts
+    // once — root wins that merge since it is the more recently written of the two.
+    const byFile = new Map();
+    for (const p of idx.pageDirs || []) {
+      try { const pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
     }
-  } catch { /* no page index — a design-system-only export */ }
-  return [...seen.values()].map((s) => ({ file: s.file, what: [...new Set(s.what)].join(" + ") }));
+    for (const l of idx.layers || []) if (l && l.file) byFile.set(l.file, l);
+    for (const l of byFile.values()) note(l);
+  } catch { /* no page index — a design-system-only or as-yet-empty export */ }
+  let designSystem = null;
+  const maybe = (rel) => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return null; } };
+  const dsDoc = maybe("design-system.json") || maybe(path.join("design-system", "tokens.json"));
+  if (dsDoc && dsDoc.file) designSystem = { file: dsDoc.file, exportedAt: dsDoc.exportedAt };
+
+  const parts = [];
+  let newestOverall = null;
+  const noteNewest = (iso) => { const t = Date.parse(iso); if (!Number.isNaN(t) && (newestOverall === null || t > newestOverall)) newestOverall = t; };
+  for (const [file, ats] of screensByFile) {
+    if (!file) continue;
+    const newest = ats.reduce((a, b) => (Date.parse(b) > Date.parse(a || 0) ? b : a), ats[0]);
+    noteNewest(newest);
+    parts.push(`${ats.length} screen(s) from '${file}' (newest ${ageStr(now - Date.parse(newest))} ago)`);
+  }
+  const unstamped = (screensByFile.get("") || []).length;
+  if (unstamped) parts.push(`${unstamped} screen(s) (source not recorded — pulled by an older bridge; re-pull to stamp it)`);
+  if (designSystem) {
+    noteNewest(designSystem.exportedAt);
+    parts.push(`design system from '${designSystem.file}' (${ageStr(now - Date.parse(designSystem.exportedAt))} ago)`);
+  }
+  return { parts, newestOverall };
 }
 
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
@@ -197,18 +218,23 @@ function checkProject(cwd, now = Date.now()) {
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
       const ageMs = now - Date.parse(snap.exportedAt);
-      const h = ageMs / 3600000;
-      const age = h < 1 ? `${Math.max(0, Math.round(ageMs / 60000))} min` : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)} days`;
-      const from = snap.sourceFile ? ` from '${snap.sourceFile}'` : "";
-      out.push(ageMs > STALE_MS ? warn("export", "Export", `exported ${age} ago${from} — the Figma file may have moved on`, "re-run the pull before building from it") : ok("export", "Export", `exported ${age} ago${from}`));
-
-      // The freshness line above describes ONE file — whichever snapshot-meta picked. On a project
-      // whose screens came from a different Figma file than its design system, that one line named
-      // the wrong file and nothing said so (live finding 48). List every source present instead.
-      const sources = exportSources(ex.dir);
-      if (sources.length > 1) {
-        out.push(warn("export", "Export sources", `this export mixes ${sources.length} Figma files: ${sources.map((s) => `'${s.file}' (${s.what})`).join(", ")}`,
-          "that is legitimate when a design system lives in its own file — but confirm the screens and the design system really are the same system: `/designtwin:audit-design <screen>` now runs the cross-file check that proves it"));
+      // P4 #33: build the headline from the per-source counts (screens grouped by their OWN stamped
+      // source file, plus the design system's), rather than the single file snapshot-meta happened to
+      // pick — the exact bug that reported "exported 12h ago from 'Design System - NERA (Copy)'" on a
+      // project with 5 TeamSmart screens and 1 NERA design system, attributing every screen to the
+      // wrong file. Falls back to the old single-file line when nothing has per-source data yet (an
+      // export entirely from before this field existed, or a bare design-system-only pull).
+      const counts = exportSourceCounts(ex.dir, now);
+      if (counts.parts.length) {
+        const detail = counts.parts.join(" + ");
+        const stale = counts.newestOverall !== null && now - counts.newestOverall > STALE_MS;
+        out.push(stale
+          ? warn("export", "Export", `${detail} — the Figma file may have moved on`, "re-run the pull before building from it")
+          : ok("export", "Export", detail));
+      } else {
+        const age = ageStr(ageMs);
+        const from = snap.sourceFile ? ` from '${snap.sourceFile}'` : "";
+        out.push(ageMs > STALE_MS ? warn("export", "Export", `exported ${age} ago${from} — the Figma file may have moved on`, "re-run the pull before building from it") : ok("export", "Export", `exported ${age} ago${from}`));
       }
     }
 

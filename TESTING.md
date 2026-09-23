@@ -40,23 +40,23 @@ The `design-to-code/` scripts (DTCG token emitter, map validator, drift-lint, bo
 `design-to-code/README.md`) are plain Node modules with their own offline suite:
 
 ```
-node test/design-to-code.test.js       # expect: 288/288 checks passed, exit 0
-node test/audit.test.js                # expect: 81/81 checks passed, exit 0
-node test/verify-build.test.js         # expect: 127/127 checks passed, exit 0 — the build-screen Stop-hook gate
+node test/design-to-code.test.js       # expect: 292/292 checks passed, exit 0
+node test/audit.test.js                # expect: 96/96 checks passed, exit 0
+node test/verify-build.test.js         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
                                        # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.js)
-node test/plan-skeleton.test.js        # expect: 28/28 checks passed, exit 0 — the shared plan shape/visibility
+node test/plan-skeleton.test.js        # expect: 31/31 checks passed, exit 0 — the shared plan shape/visibility
                                        # helpers (visibility, rootsOf) every skill and verify-build.js walk with
 node test/ui.test.js                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake
                                        # DOM + WebSocket: connection states, theming, the ids/ports it depends on
-node test/cross-check.test.js          # expect: 53/53 checks passed, exit 0 — the JOIN between a screen and the
+node test/cross-check.test.js          # expect: 56/56 checks passed, exit 0 — the JOIN between a screen and the
                                        # design system: a duplicated file that re-keys every collection, a catalog
                                        # covering 0% of the screen, token names that collide on different values,
                                        # a text style one capital letter apart, a 1e9 radius, contrast in a mode
                                        # that was derived rather than drawn, and auto-discovery of
                                        # design/export/variables.json (never a stale design/variables.json sibling)
-node test/verify-screen.test.js        # expect: 118/118 checks passed, exit 0 — the per-node comparison behind a
+node test/verify-screen.test.js        # expect: 120/120 checks passed, exit 0 — the per-node comparison behind a
                                        # "pass": the expectation emitted as data, the tolerance table, component
                                        # coverage, reactions/--interactions-driven checks, and the rule that an
                                        # unmeasured expectation is not a passed one
@@ -107,14 +107,16 @@ subprocess run with a fresh `DESIGNTWIN_CONFIG_DIR` — no token there, so the p
 and the run never binds a port, while proving doctor mints nothing.
 
 ```
-node test/bridge.test.js        # expect: 571/571 checks passed, exit 0
-# NOTE: run this with no dtwin daemon holding port 8787. A live daemon makes doctor's plugin
-# probe find it, and `[doctor-cli] with no token, the plugin probe is SKIPPED` (plus the P4 #203
-# assertion chained off the same doctor report) fail — 569/571.
-# NOTE: also run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases
-# spawn with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config
-# dir but do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
-# CI/ephemeral escape-hatch token) defeats the "no token there" setup and the same
+node test/bridge.test.js        # expect: 577/577 checks passed, exit 0 — deterministic whether or not
+                                 # a real dtwin daemon is running elsewhere on this machine: the two
+                                 # doctor-cli "not checked" assertions pin FIGMA_BRIDGE_PORT=8789 (one
+                                 # of the plugin manifest's other two allowed ports, see ALLOWED_PORTS
+                                 # in bridge/doctor.js) so they never race a daemon that only ever
+                                 # holds one port at a time.
+# NOTE: run this with FIGMA_BRIDGE_TOKEN unset in your shell. The doctor-cli subprocess cases spawn
+# with `{...process.env, DESIGNTWIN_CONFIG_DIR: <fresh temp dir>}` — they override the config dir but
+# do NOT clear an inherited FIGMA_BRIDGE_TOKEN, so a shell that already exports one (e.g. a
+# CI/ephemeral escape-hatch token) defeats the "no token there" setup and the
 # `[doctor-cli] with no token, the plugin probe is SKIPPED` case fails for a different reason.
 node --check bridge/server-core.js bridge/seed-components.js bridge/figma-pull.js bridge/write-out.js bridge/daemon.js bridge/token-store.js bridge/verbs.js bridge/doctor.js
 ```

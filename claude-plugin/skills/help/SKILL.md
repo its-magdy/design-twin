@@ -126,7 +126,7 @@ the most common way to conclude an export "failed" when it did exactly what was 
 
 | Pull | Writes (all under `design/export/`) |
 |---|---|
-| `dtwin pull --node <id>` (or a selection) | `pages/<Page>/<Screen>__<node-id>.json` (`exportedAt`, `screen`, `page`, `nodeId`, `nodes[]`, `manifest` — the reference PNG path is `nodes[0].reference`), plus `…__<id>.vars.json` (that screen's tokens) and `…__<id>.assets.json` (its assets, with content hashes) beside it, a row in `pages/index.json`, the merged `variables.json`, and `assets/` |
+| `dtwin pull --node <id>` (or a selection) | `pages/<Page>/<Screen>__<node-id>.json` (`exportedAt`, `screen`, `page`, `nodeId`, `nodes[]`, `manifest`, `sourceFile` — the connected Figma file this pull actually talked to, absent on a screen pulled before this field existed — the reference PNG path is `nodes[0].reference`), plus `…__<id>.vars.json` (that screen's tokens) and `…__<id>.assets.json` (its assets, with content hashes) beside it, a row in `pages/index.json` (also carrying `sourceFile`), the merged `variables.json`, and `assets/` |
 | `dtwin pull --page <id>` / `--all-pages` | the same `pages/` tree, one file per top-level layer (each with a ROOT `reference`), and `assets/` |
 | `dtwin pull --design-system` | `design-system.json` (slim pointer manifest) + `design-system/` (`tokens.json`, `components.local.json`, `components.library.json`, `styles.*.json`, `hygiene.json`). No page walk, no assets |
 | `dtwin screenshot <id>` | `assets/<id>_ref.png` — the same place a later `--node` pull of that frame writes its own reference, so there is never a second copy |

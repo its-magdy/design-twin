@@ -1181,6 +1181,44 @@ async function disconnectErr(code, reason) {
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 
+  // ---------- writeScreen: sourceFile stamp lands on the screen doc AND its index row (P4 #33) ----------
+  // figma-pull.js resolves which connected Figma file a pull actually talked to and stamps the RESULT
+  // as `r.sourceFile` (see resolveSourceFile()/stampSource() there); write-out.js's job is only to
+  // persist it. Before this fix, a screen JSON carried no field naming its own source at all, so
+  // doctor.js could only ever report whichever file design-system.json or the snapshot-meta pick
+  // happened to name — attributing every screen to the wrong Figma file when the design system lives
+  // in a different one.
+  {
+    const sdir2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-src-"));
+    OUT.writeScreen(sdir2, {
+      screenName: "positions ",
+      nodeId: "7314:87192",
+      page: "✅ Organization management ",
+      pageId: "5282:58823",
+      sourceFile: "TeamSmart (Copy)",
+      screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
+    }, null);
+    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8"));
+    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers[0].sourceFile === "TeamSmart (Copy)");
+    fs.rmSync(sdir2, { recursive: true, force: true });
+
+    // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
+    // is simply ABSENT, never a guessed or default value.
+    const sdir3 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-nosrc-"));
+    OUT.writeScreen(sdir3, {
+      screenName: "positions ",
+      nodeId: "7314:87192",
+      page: "✅ Organization management ",
+      pageId: "5282:58823",
+      screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
+    }, null);
+    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
+    fs.rmSync(sdir3, { recursive: true, force: true });
+  }
+
   // ---------- library-file export layout (--as-library) ----------
   // The library catalog must land in a tree that CANNOT collide with design-system/, because the two
   // describe different Figma files and answer different questions.
@@ -2149,6 +2187,42 @@ async function disconnectErr(code, reason) {
     ok("[doctor] no parallel tree, no layout warning", !byId(doctor.checkProject(cleanDir), "layout"));
   }
 
+  // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
+  // screens across two pages, none stamped (an older-bridge export), plus one design system. Before
+  // the fix this reported a single line naming only the design system's file for the WHOLE export
+  // ("exported 12.7h ago from 'Design System - NERA (Copy)'"); after, it counts screens separately
+  // from the design system and says plainly when a screen's source was never recorded.
+  {
+    const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
+    const at = new Date().toISOString();
+    fs.mkdirSync(path.join(dsDir3, "design", "export"), { recursive: true });
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NERA (Copy)" }));
+    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageA"), { recursive: true });
+    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageB"), { recursive: true });
+    // Root index has NO layers[] at all (the older-bridge shape) — only pageDirs, forcing the
+    // per-page-index fallback.
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "index.json"), JSON.stringify({
+      pageDirs: [
+        { page: "PageA", dir: "PageA", index: "pages/PageA/index.json", layers: 3 },
+        { page: "PageB", dir: "PageB", index: "pages/PageB/index.json", layers: 2 },
+      ],
+    }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageA", "index.json"), JSON.stringify({
+      layers: [{ name: "S1", file: "pages/PageA/S1.json", exportedAt: at }, { name: "S2", file: "pages/PageA/S2.json", exportedAt: at }, { name: "S3", file: "pages/PageA/S3.json", exportedAt: at }],
+    }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageB", "index.json"), JSON.stringify({
+      layers: [{ name: "S4", file: "pages/PageB/S4.json", exportedAt: at }, { name: "S5", file: "pages/PageB/S5.json", exportedAt: at }],
+    }));
+    const checks3 = doctor.checkProject(dsDir3);
+    const exp3 = byId(checks3, "export");
+    ok("[doctor] exportSourceCounts: 5 unstamped screens are counted and named as source-not-recorded",
+      exp3.status === "ok" && /5 screen\(s\) \(source not recorded — pulled by an older bridge; re-pull to stamp it\)/.test(exp3.detail));
+    ok("[doctor] exportSourceCounts: the design system is reported separately, by its own name",
+      /design system from 'Design System - NERA \(Copy\)'/.test(exp3.detail));
+    ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
+      !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
+  }
+
   // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be
   // false, not just when something outright failed.
   {
@@ -2204,7 +2278,14 @@ async function disconnectErr(code, reason) {
     if (!extraEnv.FIGMA_BRIDGE_PORT) delete env.FIGMA_BRIDGE_PORT;
     return spawnSync(process.execPath, [cli, "doctor", ...argv], { encoding: "utf8", env, cwd: projDir, timeout: 20000 });
   };
-  const docJson = runDoctor(["--json"]);
+  // These two assertions need the port to be genuinely free — no daemon, no plugin — which port 8787
+  // is NOT when a real dtwin daemon happens to be running on the developer's machine (a live daemon
+  // answers `daemon.status()` regardless of this subprocess's own empty token, which reports the
+  // plugin as connected instead of "not checked" and makes the test pass only by accident of the
+  // environment). 8788/8789 are the other two ports the plugin's manifest allows
+  // (bridge/doctor.js ALLOWED_PORTS) and are not bound by the daemon (which only ever holds one), so
+  // this is deterministic whether or not a daemon is running elsewhere.
+  const docJson = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "8789" });
   const docReport = (() => { try { return JSON.parse(docJson.stdout); } catch (e) { return { checks: [] }; } })();
   ok("[doctor-cli] --json prints one parseable report and nothing else on stdout", docReport.checks.length >= 6);
   ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));

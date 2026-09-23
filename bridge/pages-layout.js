@@ -173,15 +173,20 @@ function buildPageLayout(layersDoc, sep) {
       pages.push(bucket);
     }
     const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+    // P4 #33: layersDoc.sourceFile is stamped by write-out.js's writeExport (from what figma-pull.js
+    // resolved the connected client to be) — carry it onto every per-layer file too, same field a
+    // single-screen pull's writeScreen stamps, so doctor's exportSourceCounts() reads one field regardless
+    // of which pull shape produced the screen.
+    const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
     layerFiles.push({
       path: join(bucket.dir, base),
-      data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources },
+      data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources },
     });
     // title/texts come from THIS layer's own tree (findings 16/17/70/90/120) — computed here, once,
     // so both the per-page index and the root index (below) carry the same values for the same layer.
     const title = l.tree ? deriveTitle(l.tree) : undefined;
     const texts = l.tree ? collectTexts(l.tree) : undefined;
-    bucket.entries.push({ ...((index || [])[i]), title, texts, file: join(bucket.dir, base) });
+    bucket.entries.push({ ...((index || [])[i]), title, texts, ...src, file: join(bucket.dir, base) });
   });
   // `pageId` is what makes two same-named entries tellable apart by a consumer — without it the only
   // difference between them would be the disambiguating "_2" on a directory name, which is a

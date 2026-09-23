@@ -245,7 +245,11 @@ Copy this checklist into your notes and keep it updated:
      **is not optional and is not "by hand" if it's missing** — `${CLAUDE_PLUGIN_ROOT}/scripts/` ships
      with this plugin. `--gate` makes the process exit non-zero on any blocker; a non-zero exit **stops
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
-     final report — never a silent invention.
+     final report — never a silent invention. If `design/audit/<screen>.json` exists and is Blocked and
+     the user has decided to build past it, record that decision in the plan's
+     `auditGate: {auditFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
+     `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
+     blocker id is missing from `overridden` or `reason` is empty.
 
 2. **Map before coding.** **Generate** the plan — never hand-transcribe it (that is how hidden layers,
    mistyped token names and wrong values got into plans that then "passed"):
@@ -299,7 +303,9 @@ Copy this checklist into your notes and keep it updated:
      per screen — two screens built in separate sessions then disagree about what `color/primary` is
      called. Generate it once with `tokens.js …` — `--native <profile>` on a native
      stack, the `--web` target your web profile names, no flag for plain `tokens.css` — rather than
-     hand-writing a theme from the bound token names. Feed it the design
+     hand-writing a theme from the bound token names. `tokens.js … --web tailwind` writes only
+     `theme.css` to the given directory; the generic token set is not written there unless you pass
+     `--also-generic`. Feed it the design
      system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
      whose repeated names come out key-suffixed (see *Where everything is*). Move the file into the
      app's source tree (ask where), list it in `files[]`, and have every screen import it; a project

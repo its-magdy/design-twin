@@ -275,7 +275,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" design/export/design-system/token
 
 It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json` and a
 `tokens/` directory of per-collection/per-mode set files — around 20 files for a real system. Point
-it at a directory you are happy to have filled.
+it at a directory you are happy to have filled. With a `--web`/`--native` target, `tokens.js` writes
+only that target's file to the given directory by default — pass `--also-generic` if you also want the
+generic handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) written
+there, and keep that set under `design/`, not the app's source tree.
 
 Pick the output by stack; the build-screen profile for the stack says which flag and what the
 generated names look like. `tokens.css` (no flag) is plain `:root` custom properties for CSS

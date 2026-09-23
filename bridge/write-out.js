@@ -350,6 +350,14 @@ function writeExport(outDir, r, log) {
     return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans } };
   }
   const ds = r.designSystem ? writeDesignSystem(dir, r.designSystem, log) : null;
+  // P4 #33: figma-pull.js resolves which connected Figma file this pull talked to and stamps it as
+  // `r.sourceFile`/`r.sourceFileKey` (the plugin itself has no reason to know its own bridge-side
+  // connection id). Forward it onto layersDoc so buildPageLayout can carry it onto every per-page
+  // layer file/index row — the same field writeScreen below stamps for a single-screen pull.
+  if (r.layersDoc && r.sourceFile && r.layersDoc.sourceFile === undefined) {
+    r.layersDoc.sourceFile = r.sourceFile;
+    if (r.sourceFileKey) r.layersDoc.sourceFileKey = r.sourceFileKey;
+  }
   const pages = r.layersDoc ? writePages(dir, r.layersDoc, log) : null;
   const assets = writeAssets(dir, r.assets, log);
   return {
@@ -383,7 +391,14 @@ function writeScreen(outDir, r, log) {
   const paths = screenPaths(r, "/");
   fs.mkdirSync(path.join(dir, "pages", paths.dir), { recursive: true });
 
-  writeJson(dir, paths.screen, r.screen, false, log);
+  // P4 #33: stamp which Figma file this pull actually talked to, straight onto the screen doc's own
+  // top level — the ONE thing doctor.js's exportSourceCounts() can read without opening a second file, and
+  // the reason a project pulled before this field existed is told apart from one whose source is
+  // simply unknown (undefined, never a guess). figma-pull.js resolves it; this is just where it lands.
+  const screenDoc = r.sourceFile
+    ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
+    : r.screen;
+  writeJson(dir, paths.screen, screenDoc, false, log);
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
   const assets = writeAssets(dir, r.assets, log);
   const assetIndex = writeScreenAssets(dir, paths, r.assets);
@@ -409,6 +424,7 @@ function writeScreen(outDir, r, log) {
     title,
     texts,
     exportedAt: r.screen && r.screen.exportedAt,
+    sourceFile: r.sourceFile || undefined,
     file: paths.screen,
     variables: r.variables ? paths.variables : undefined,
     assets: assetIndex ? paths.assets : undefined,

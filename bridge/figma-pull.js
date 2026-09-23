@@ -1076,17 +1076,51 @@ async function main() {
   }
   console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
 
+  // P4 #33: the bridge already knows exactly which connected Figma file this pull talked to (the
+  // same `resolveClient()` matching --client goes through, server-side) — it is just never carried
+  // past the request. A screen export result has no field of its own naming its source file (unlike
+  // design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could only
+  // ever report whichever file's export happened to sort first, attributing every screen to it. Look
+  // the resolved client up the same way `--list-clients`/`whoami` already do and stamp it onto the
+  // result before it reaches write-out.js, which persists it onto the screen JSON and its index row.
+  async function resolveSourceFile() {
+    try {
+      const clients = bridge && typeof bridge.listClients === "function" ? bridge.listClients() : ((await daemon.status()) || {}).clients || [];
+      if (!clients.length) return null;
+      if (client) {
+        const t = String(client);
+        const byId = clients.find((c) => c.connId === t);
+        if (byId) return byId;
+        const byKey = clients.find((c) => c.fileKey && c.fileKey === t);
+        if (byKey) return byKey;
+        const byName = clients.filter((c) => c.file && c.file.toLowerCase().includes(t.toLowerCase()));
+        if (byName.length === 1) return byName[0];
+        return null; // ambiguous or no match — leave the screen unstamped rather than guess
+      }
+      return clients.length === 1 ? clients[0] : null;
+    } catch { return null; }
+  }
+  const stampSource = (r) => {
+    if (!r || typeof r !== "object") return r;
+    // Fire-and-forget-free: resolved synchronously enough (the export already completed) that the
+    // client list has not changed since the request went out.
+    return resolveSourceFile().then((src) => {
+      if (src && src.file) { r.sourceFile = src.file; if (src.fileKey) r.sourceFileKey = src.fileKey; }
+      return r;
+    });
+  };
+
   if (nodeId) {
     // Same writer the MCP figma_export_url tool uses (write-out.js's writeScreen), so a CLI --node
     // pull and an MCP pull of the same node land in identical shape.
-    const r = await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (selection) {
     // Same writer as --node above — routing both through write-out.js's writeScreen means a
     // selection pull and a --node pull can never drift into two slightly different write shapes
     // (this used to write variables.json unconditionally, where writeScreen correctly skips it
     // when the result carries none, and printed no summary).
-    const r = await send("exportSelection", { ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportSelection", { ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
@@ -1104,7 +1138,7 @@ async function main() {
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else {
-    const r = await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs));
     // Route through the SAME split writer the MCP export tools use (write-out.js's writeExport), so a
     // CLI pull and an MCP pull land in identical shape. The CLI used to write r.designSystem flat to
     // design-system.json here — undocumented drift from the split described in this file's own header
