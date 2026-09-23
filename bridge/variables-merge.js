@@ -30,10 +30,14 @@
 // now a `_conflicts` entry of kind "same-name", naming every key, its values and the screens whose
 // slice carries it, and a CONFLICT line in `hygiene` — the two places the skills tell a reader to look.
 
+// Finding 323: this used to say the per-pull slices are kept "under variables/" — a directory that
+// has never existed. bridge/pages-layout.js's own screenPaths() writes each slice BESIDE its screen,
+// as pages/<Page>/<Screen>__<id>.vars.json (see design/README.md's template), not into a
+// top-level variables/ directory. Point at the real thing instead of a plausible-sounding guess.
 const MERGE_NOTE =
   "Merged across single-screen pulls: this file is the UNION of every --node/--selection export " +
   "written into this directory, keyed on each variable's Figma key. Per-pull slices are kept verbatim " +
-  "under variables/. Delete this file to start over.";
+  "beside each screen, as pages/<Page>/<Screen>__<id>.vars.json. Delete this file to start over.";
 
 function varId(v) {
   if (v && typeof v.key === "string" && v.key) return "k:" + v.key;
