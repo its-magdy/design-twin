@@ -295,4 +295,43 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[grid] passing --grid explicitly turns gridAssumed off and reports no mismatch", withExplicit.gridAssumed === false && withExplicit.gridMismatch === null);
   check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(toMarkdown(withExplicit).split("\n")[2]));
 }
+
+// ---------- livetest-3 #311: the audit's gate judges token collisions on the screen's OWN slice ----------
+// audit.js embeds cross-check but used to feed it only the merged variables.json, so its --gate raised
+// Create Activity Type's `Space 4` (key 64928e3a…, 16) against Job Roles, whose own .vars.json carries
+// only the design system's 24 — 5 blockers where cross-check said 3. Real export: test/fixtures/livetest3/.
+{
+  const fs = require("fs"), os = require("os");
+  const { spawnSync } = require("child_process");
+  const FX = path.join(__dirname, "fixtures", "livetest3");
+  const D2C = path.join(__dirname, "..", "design-to-code");
+  const POS = path.join(FX, "pages/__Organization_management_/positions___7314_87192.json");
+  const CAT = path.join(FX, "pages/In_progress/Create_Activity_Type__18411_84111.json");
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "audit-311-"));
+  const runAudit = (f, tag) => {
+    const r = spawnSync(process.execPath, [path.join(D2C, "audit.js"), f, "--platform", "web", "--design-system", path.join(FX, "design-system"), "--out", path.join(out, tag), "--gate", "--grid", "4"], { encoding: "utf8" });
+    let json = { findings: [], crossFile: { findings: [] } };
+    try { json = JSON.parse(fs.readFileSync(path.join(out, tag + ".json"), "utf8")); } catch (e) { /* stays empty */ }
+    return { r, json, md: fs.existsSync(path.join(out, tag + ".md")) ? fs.readFileSync(path.join(out, tag + ".md"), "utf8") : "" };
+  };
+  const runCross = (f) => {
+    const r = spawnSync(process.execPath, [path.join(D2C, "cross-check.js"), f, "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
+    try { return JSON.parse(r.stdout); } catch (e) { return { findings: [] }; }
+  };
+  const blockerSet = (findings) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${f.token || ""}|${f.key || ""}`).sort();
+  const pos = runAudit(POS, "pos"), posCross = runCross(POS);
+  const collision = (res, token) => res.findings.filter((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === token);
+  check("[311] Job Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",
+    pos.json.findings.length > 0 && collision(pos.json, "Space 4").length === 0);
+  check("[311] Job Roles: the audit's cross-file blockers are exactly cross-check's, same code/token/key",
+    blockerSet(pos.json.findings.filter((f) => f.crossFile)).join() === blockerSet(posCross.findings).join() && blockerSet(posCross.findings).length > 0);
+  check("[311] and it no longer claims the screen's .vars.json 'was not available' while it sits beside the screen",
+    !pos.json.findings.some((f) => /was not available/.test(f.message)));
+  check("[311] the union's Space 4 ambiguity stays visible as the -elsewhere NOTE, naming the screen it belongs to",
+    /token-name-collision-elsewhere/.test(pos.md) && (pos.json.crossFile.findings || []).some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Activity_Type__18411_84111/.test(f.message)));
+  const cat = runAudit(CAT, "cat");
+  check("[311] Create Activity Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
+    collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
+}
+
 report();

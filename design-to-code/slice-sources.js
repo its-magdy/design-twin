@@ -39,4 +39,38 @@ function sourcesOf(doc, docPath, fs, path) {
   return out;
 }
 
-module.exports = { sourcesOf };
+// The variables context of a set of screen files — ONE implementation for cross-check.js and audit.js
+// (livetest-3 #311: the audit embedded cross-check but fed it only the merged union, so its build gate
+// raised Create Activity Type's `Space 4` blocker against Job Roles, while cross-check on the same
+// screen did not).
+//   own[i]        the screen's own slice, <Screen>.vars.json beside it (null if absent)
+//   variablesPath the file used as `variables`: --variables if given, else the export root's merged
+//                 variables.json (screen at design/export/pages/<Page>/<Screen>.json → two levels up),
+//                 else a legacy variables.json beside the screen; never a stale design/variables.json
+//                 above design/export/. With opts.sliceFallback, a lone screen's own slice stands in
+//                 when there is no union at all (collection provenance still has something to read).
+//   sliceSources  Map(key -> [screen]) for the union, for attributing its collisions
+//   staleLegacy   path of an ignored design/variables.json above design/export/, if one exists
+function variablesContext(screenFiles, varsFile, fs, path, opts) {
+  const readJson = (f) => { try { return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null; } catch (_) { return null; } };
+  const files = screenFiles || [];
+  const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
+  let variablesPath = varsFile || null;
+  if (!variablesPath && files.length) {
+    const exportRoot = path.resolve(path.dirname(files[0]), "..", "..");
+    const rootVars = path.join(exportRoot, "variables.json");
+    const sibling = path.join(path.dirname(files[0]), "variables.json");
+    if (fs.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs.existsSync(sibling)) variablesPath = sibling;
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
+  }
+  const variablesDoc = readJson(variablesPath);
+  let staleLegacy = null;
+  if (files.length) {
+    const legacy = path.join(path.resolve(path.dirname(files[0]), "..", ".."), "..", "variables.json");
+    if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
+  }
+  return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs, path) : null, staleLegacy };
+}
+
+module.exports = { sourcesOf, variablesContext };
