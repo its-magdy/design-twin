@@ -535,8 +535,10 @@ Copy this checklist into your notes and keep it updated:
    - **Status is computed, never stored.** The hook records its result and a hash of every file in
      `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed
-     file changed since, **and** the screen's `design/verify/<…>.report.json` says `pass` and is newer
-     than the code — else `failed`, `stale`, `unverified` (no report), `static-only`, `blocked` or
+     file changed since, **and** the screen's `design/verify/<…>.report.json` (schema @2, `--compare`
+     run from the project root) says `pass` and measured this design and these files — compared by
+     content hash, never by time, so a no-change re-pull or a `touch` changes nothing — else
+     `failed`, `stale`, `unverified` (no, old or out-of-date report), `static-only`, `blocked` or
      `pending`. Write `status` yourself only as `"abandoned"` (not to be finished) or `"awaiting-user"`
      when you end the turn to ask something the build is blocked on (MISSING token, audit blocker,
      map review; a step-1 pause creates `{screen, status:"awaiting-user", files:[]}`), and back to
