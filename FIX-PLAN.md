@@ -155,3 +155,10 @@ editing, and the orchestrator routes it.
   orchestrator's sandbox refused to stop it. Left to the owner / Prompt 7 with exact commands.
 - P4 started before P2b finished (files barely overlap); its Stop-hook doc lines (99/133) are held
   until P2b merges.
+- P2b verified on a copy of the livetest project: the hook no longer stores `status` (both plans lose
+  their stored `verified`); `verify-build.js --status` computes Job Roles → `failed` (from its fail
+  report) and Global Policies → `blocked` (3 unanchored visible nodes); no-stdin loop 20/20 under 2 s;
+  `plan-skeleton.js` for 7314:87192 → 45 tokens / 51 visible instances / 254 anchors / 0 hidden
+  anchors. Blocks on exactly two conditions; everything else warns. Merged at 2807c1b.
+- Wave C: P4 started before P2b landed (held its Stop-hook doc lines, released at 2807c1b); P6
+  started before P4 landed (holds its one-sentence additions to the P4-owned skill files).
