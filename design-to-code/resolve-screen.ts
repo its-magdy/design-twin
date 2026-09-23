@@ -41,7 +41,7 @@ import type { IndexRow, PageIndex, PagesRootIndex, Plan, ResolveScreenResult, Sc
 // Every file read here is one this repo's own writers produced (pages/index.json, a page's index.json,
 // design/plan/*.json), so it is read as the shape it was written in; anything unreadable is `fallback`.
 function readJsonOr<T>(file: string, fallback: T): T {
-  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return fallback; }
+  try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch (e) { return fallback; }
 }
 
 // A Figma node id looks like "1234:5678" (also seen with an "I" instance prefix and ";" chains, e.g.

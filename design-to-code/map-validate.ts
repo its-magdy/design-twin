@@ -152,7 +152,7 @@ export { validateMap, isCodeConnectMap };
 // CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
 if (import.meta.main) {
   const file = process.argv[2];
-  const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
+  const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
   if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }
   if (!file || file.startsWith("-")) { console.error((file ? `map-validate: unknown flag ${file}\n` : "") + USAGE); process.exit(1); }
   const res = validateMap(readJsonFile(file, "component map"));

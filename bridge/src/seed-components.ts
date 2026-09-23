@@ -92,7 +92,7 @@ function extractMappings(text: string): Mapping[] {
 }
 
 function loadJson(p: string): unknown {
-  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) { return undefined; }
+  try { return JSON.parse(fs.readFileSync(p, "utf8")) as unknown; } catch (e) { return undefined; }
 }
 
 // id -> component name, from an existing export (optional; only needed for Code Connect forms that
@@ -122,7 +122,7 @@ function loadIdToName(dir: string): Map<unknown, unknown> {
 }
 
 /** One components.json entry (hand-authored or seeded). */
-interface ComponentsEntry { component?: unknown; source?: unknown; nodeId?: unknown; import?: unknown; props?: unknown }
+export interface ComponentsEntry { component?: unknown; source?: unknown; nodeId?: unknown; import?: unknown; props?: unknown }
 
 function main(): void {
   const idToName = loadIdToName(outDir);

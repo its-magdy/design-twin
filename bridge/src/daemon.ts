@@ -151,7 +151,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       conn.on("data", framer(async (line) => {
         touch(); // any client contact counts as activity, including the probe
         let msg: DaemonRequest;
-        try { msg = JSON.parse(line); } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
+        try { msg = JSON.parse(line) as DaemonRequest; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
         if (msg.cmd === "__ping") return reply(conn, { ok: true, result: { daemon: true, pid: process.pid, port: bridge.port } });
         if (msg.cmd === "__status") {
           return reply(conn, {
@@ -262,7 +262,7 @@ function request(sock: string, msg: DaemonRequest, timeoutMs?: number): Promise<
     c.on("data", framer((line) => {
       if (t) clearTimeout(t);
       let r: DaemonReply;
-      try { r = JSON.parse(line); } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
+      try { r = JSON.parse(line) as DaemonReply; } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
       if (r.ok) done(resolve, r.result);
       else done(reject, new Error(r.error));
     }));

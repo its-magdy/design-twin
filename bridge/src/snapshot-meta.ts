@@ -121,7 +121,7 @@ export function readSnapshotInfo(outDir?: string): SnapshotInfo | SnapshotParseE
     try { raw = fs.readFileSync(cand, "utf8"); } catch { continue; }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(raw) as unknown;
     } catch (e) {
       // A corrupt export is worth reporting even though a later candidate might still be readable —
       // but only for a file we KNOW was meant to be an export. Remember it and keep looking.

@@ -71,7 +71,7 @@ export { getComponent, findComponent, resolveVariantsFile };
 if (import.meta.main) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
-    console.error("usage: node design-to-code/get-component.js <design-system/components.local.json> <key|id|name>");
+    console.error("usage: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>");
     process.exit(2);
   }
   try {

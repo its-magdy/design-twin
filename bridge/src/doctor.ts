@@ -252,7 +252,7 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
     for (const l of byFile.values()) note(l);
   } catch { /* no page index — a design-system-only or as-yet-empty export */ }
   let designSystem: { file: string; exportedAt: string | undefined } | null = null;
-  const maybe = (rel: string): { file?: string; exportedAt?: string } | null => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")); } catch { return null; } };
+  const maybe = (rel: string): { file?: string; exportedAt?: string } | null => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")) as { file?: string; exportedAt?: string }; } catch { return null; } };
   const dsDoc = maybe("design-system.json") || maybe(path.join("design-system", "tokens.json"));
   if (dsDoc && dsDoc.file) designSystem = { file: dsDoc.file, exportedAt: dsDoc.exportedAt };
 
@@ -344,7 +344,7 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
   const mcpFile = path.join(cwd, ".mcp.json");
   if (fs.existsSync(mcpFile)) {
     let servers: Record<string, unknown> | null = null;
-    try { servers = JSON.parse(fs.readFileSync(mcpFile, "utf8")).mcpServers || {}; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
+    try { servers = (JSON.parse(fs.readFileSync(mcpFile, "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers || {}; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
     if (servers) {
       const found = servers;
       const mine = Object.keys(found).find((k) => isOurMcpEntry(found[k]));

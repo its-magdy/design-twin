@@ -40,18 +40,13 @@ import type {
   EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
   StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
+import { bag } from "./types.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 
-// The generic key loops below compare WHATEVER a document or node carries, named field or not. The
-// interfaces in types.ts name SOME keys and have no string index, so those loops read through this:
-// every JS object is a string-keyed bag of unknowns. Two steps through `unknown` because an interface
-// and Record<string, unknown> do not overlap for a direct assertion.
-function bag(o: object): Record<string, unknown> {
-  const u: unknown = o;
-  return u as Record<string, unknown>;
-}
+// The generic key loops below compare WHATEVER a document or node carries, named field or not; they
+// read through types.ts `bag()` (the interfaces there name SOME keys and have no string index).
 
 const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
@@ -444,12 +439,12 @@ function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: str
 
 // See the header: drop a baseline that IS the current export, then the most recent one wins.
 function previous(file: string, against: string | undefined, cwd: string = process.cwd(), current: unknown = null): Baseline | null {
-  if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
+  if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")) as unknown, source: against, kind: "file", notes: [] };
   const found: Array<Omit<Baseline, "notes">> = [];
   const snap = snapshotPath(file, cwd);
   if (fs.existsSync(snap)) {
-    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")); } catch { /* older snapshot, or no assets */ }
-    found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
+    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")) as Record<string, string>; } catch { /* older snapshot, or no assets */ }
+    found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")) as unknown, source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
   // Finding 322: `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
   // (design-to-code/design-diff.ts's own --snapshot handler) specifically so it stays available as a
@@ -460,13 +455,13 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   // baseline — leaving `.prev` (B0) as the only genuinely older copy, which used to go unmentioned and
   // unused ("There is no OLDER export to compare against" while it sat right there).
   if (fs.existsSync(snap + ".prev")) {
-    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")); } catch { /* no assets sidecar was kept */ }
-    try { found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); } catch { /* corrupt .prev — ignore rather than fail the whole diff */ }
+    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")) as Record<string, string>; } catch { /* no assets sidecar was kept */ }
+    try { found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")) as unknown, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); } catch { /* corrupt .prev — ignore rather than fail the whole diff */ }
   }
   try {
     const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
-    found.push({ doc: JSON.parse(text), source: "git HEAD", kind: "git" });
+    found.push({ doc: JSON.parse(text) as unknown, source: "git HEAD", kind: "git" });
   } catch { /* not a repo, or not committed */ }
   if (!found.length) return null;
   // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged

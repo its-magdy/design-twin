@@ -52,7 +52,7 @@ function readJsonFile(file: string, what: string, hint?: string): unknown {
     process.exit(2);
   }
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw) as unknown;
   } catch (e) {
     const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
     console.error(`error  ${what}: '${file}' is not valid JSON — ${message || e}`);

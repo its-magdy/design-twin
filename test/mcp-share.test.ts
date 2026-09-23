@@ -4,21 +4,36 @@
 //   node test/mcp-share.test.ts
 import path from "node:path";
 import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { check, report } from "./assert.ts";
 
 const MCP = path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts");
 const env = { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "s".repeat(40) };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn: () => any, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(100)) if (fn()) return true; return false; };
+const until = async (fn: () => unknown, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(100)) if (fn()) return true; return false; };
 
-function start(): any {
-  const p: any = spawn(process.execPath, [MCP], { env, stdio: ["pipe", "pipe", "pipe"] });
-  p.err = ""; p.out = ""; p.code = undefined;
-  p.stderr.on("data", (d: any) => (p.err += d));
-  p.stdout.on("data", (d: any) => (p.out += d));
-  p.on("exit", (c: any) => (p.code = c));
-  p.send = (o: any) => p.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n");
-  p.reply = (id: any) => p.out.split("\n").find((l: string) => l.includes(`"id":${id}`));
+/** One MCP server subprocess, with its stdio accumulated and a raw JSON-RPC writer/reader on top. */
+interface McpProc {
+  proc: ChildProcessWithoutNullStreams;
+  err: string;
+  out: string;
+  /** exit code; undefined while running (null when killed by a signal) */
+  code: number | null | undefined;
+  send(o: { id?: number; method: string; params?: object }): void;
+  /** the raw reply line carrying this JSON-RPC id, if it has arrived */
+  reply(id: number): string | undefined;
+}
+
+function start(): McpProc {
+  const proc = spawn(process.execPath, [MCP], { env, stdio: ["pipe", "pipe", "pipe"] });
+  const p: McpProc = {
+    proc, err: "", out: "", code: undefined,
+    send: (o) => { proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n"); },
+    reply: (id) => p.out.split("\n").find((l) => l.includes(`"id":${id}`)),
+  };
+  proc.stderr.on("data", (d: Buffer) => (p.err += String(d)));
+  proc.stdout.on("data", (d: Buffer) => (p.out += String(d)));
+  proc.on("exit", (c) => (p.code = c));
   return p;
 }
 
@@ -32,13 +47,13 @@ function start(): any {
   await until(() => b.reply(1));
   b.send({ method: "notifications/initialized" });
   b.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
-  check("a tool call through the shared bridge answers", await until(() => b.reply(2)) && /Nothing connected/.test(b.reply(2)));
-  a.kill();
-  await until(() => a.code !== undefined || a.killed);
+  check("a tool call through the shared bridge answers", await until(() => b.reply(2)) && /Nothing connected/.test(b.reply(2) ?? ""));
+  a.proc.kill();
+  await until(() => a.code !== undefined || a.proc.killed);
   await wait(500);
   b.send({ id: 3, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
-  check("when the first session ends, the second takes the bridge over", await until(() => b.reply(3)) && !/"isError":true/.test(b.reply(3)) && /Bridge|daemon listening/.test(b.err.split("Sharing")[1] || ""));
-  b.kill();
+  check("when the first session ends, the second takes the bridge over", await until(() => b.reply(3)) && !/"isError":true/.test(b.reply(3) ?? "") && /Bridge|daemon listening/.test(b.err.split("Sharing")[1] || ""));
+  b.proc.kill();
   await wait(200);
   report();
 })();

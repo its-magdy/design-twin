@@ -10,17 +10,26 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import type { AddressInfo } from "node:net";
 // "ws" has no types of its own; see bridge/src/ws.d.ts for the ambient shim.
 import WebSocket from "ws";
+import type { ClientOptions, RawData } from "ws";
 import { ok, report } from "./assert.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
-import type { DesignSystemDoc, IrNode } from "../bridge/src/doc-types.ts";
+import type {
+  ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
+  HygieneDoc, IrNode, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
+  TextStylesDoc, TokensDoc,
+} from "../bridge/src/doc-types.ts";
+import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
+import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { ExportResult } from "../bridge/src/write-out.ts";
-import type { ClientRow } from "../bridge/src/server-core.ts";
+import type { ClientRow, RequestArgs } from "../bridge/src/server-core.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonStatus } from "../bridge/src/daemon.ts";
-import type { Check, PluginProbe } from "../bridge/src/doctor.ts";
+import type { Check, PluginProbe, Report } from "../bridge/src/doctor.ts";
+import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 
 // A fixed token so verifyClient's comparisons are deterministic. server-core reads this at require
 // time, so it must be set BEFORE the module is loaded.
@@ -30,13 +39,25 @@ process.env.FIGMA_BRIDGE_TOKEN = TOKEN;
 // load time — so this stays a dynamic import at the exact point the env var is set (R4).
 const core = await import("../bridge/src/server-core.ts");
 
+// A caught/rejected value as the Error every bridge path throws. A non-Error is wrapped rather than
+// cast, so a check reading `.message` still sees a string (and stays truthy, like the raw value).
+const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+// The one bridge -> plugin frame the fake plugins below read: `{ id, cmd, args }` (not exported by server-core).
+interface CommandFrame { id: string; cmd: string; args?: RequestArgs }
+// design/target.json as bridge/src/init.ts writes it (built inline there, no exported type): the fields read below.
+interface TargetJson { profile: string | null; note?: string }
+// .mcp.json as the assertions below read it (init.ts's McpJson is not exported; entries are foreign-or-ours JSON).
+interface McpJsonView { mcpServers: Record<string, { command?: string; args?: string[]; url?: string }> }
+// <Screen>.assets.json — write-out.ts writeScreenAssets builds it inline (no exported doc type); rows are its AssetIndexEntry.
+interface ScreenAssetsDoc { count: number; totalBytes: number; duplicates: unknown[]; monochrome: string[]; note: string; reference?: AssetIndexEntry[]; files: AssetIndexEntry[] }
+
 // ---------------------------------------------------------------- server-core: auth
 // verifyClient(info, done) calls done(true) to accept, or done(false, code, msg) to reject.
-function verify({ token, origin, host }: { token?: string; origin?: string; host?: string }): any {
+function verify({ token, origin, host }: { token?: string; origin?: string; host?: string }): { accepted?: boolean; code?: number } {
   const url = token === undefined ? "/" : "/?token=" + encodeURIComponent(token);
   const info = { origin, req: { url, headers: { host: host === undefined ? "127.0.0.1:8787" : host } } };
-  let result: any;
-  core.verifyClient(info, (accepted: any, code: any) => { result = { accepted, code }; });
+  const result: { accepted?: boolean; code?: number } = {};
+  core.verifyClient(info, (accepted, code) => { result.accepted = accepted; result.code = code; });
   return result;
 }
 
@@ -60,7 +81,7 @@ ok("[auth] safeEqual is length-safe", core.safeEqual("abc", "abcdef") === false 
 // ---------------------------------------------------------------- seed-components CLI
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "seed-test-"));
 const seed = path.join(import.meta.dirname, "..", "bridge", "src", "seed-components.ts");
-function runSeed(name: string, files: Record<string, string>, existingMap?: any, designFiles?: any) {
+function runSeed(name: string, files: Record<string, string>, existingMap?: object | null, designFiles?: Record<string, unknown>) {
   const root = path.join(tmp, name);
   const design = path.join(root, "design");
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -76,7 +97,7 @@ function runSeed(name: string, files: Record<string, string>, existingMap?: any,
   }
   execFileSync(process.execPath, [seed, root, design], { stdio: "pipe" });
   const out = path.join(design, "components.json");
-  return fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) : null;
+  return fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, "utf8")) as Record<string, ComponentsEntry> : null;
 }
 const tpl = (comp: string, id: string, src: string) => `// url=https://figma.com/design/x?node-id=${id}\n// component=${comp}\n// source=${src}\n`;
 
@@ -86,7 +107,7 @@ const forms = runSeed("forms", {
   "b.figma.tsx": tpl("ColonEnc", "3%3A4", "b.tsx"),
   "c.figma.tsx": tpl("ColonRaw", "5:6", "c.tsx"),
   "d.figma.tsx": tpl("Nested", "I7-8;9-10", "d.tsx"),
-});
+})!; // non-null: seeding these templates always writes components.json
 ok("[id-dash] node-id=1-2 -> 1:2", forms.DashForm && forms.DashForm.nodeId === "1:2");
 ok("[id-encoded] node-id=3%3A4 -> 3:4", forms.ColonEnc && forms.ColonEnc.nodeId === "3:4");
 ok("[id-colon] node-id=5:6 -> 5:6", forms.ColonRaw && forms.ColonRaw.nodeId === "5:6");
@@ -100,13 +121,13 @@ const poisoned = runSeed(
   "poison",
   { "a.figma.tsx": tpl("__proto__", "1-2", "evil.tsx"), "z.figma.tsx": tpl("Widget", "5-5", "widget.tsx") },
   { Widget: { component: "Widget", import: "@/ui", props: {} } }
-);
+)!; // non-null: the merge always writes components.json
 ok("[sec-seed-proto-kept] '__proto__' entry is a real own key, not dropped",
   Object.prototype.hasOwnProperty.call(poisoned, "__proto__") && poisoned["__proto__"].source === "evil.tsx");
 ok("[sec-seed-no-starve] unrelated entry still backfilled after a '__proto__' entry",
   poisoned.Widget.source === "widget.tsx" && poisoned.Widget.nodeId === "5:5");
 ok("[sec-seed-no-pollute] Object.prototype was not mutated",
-  ({} as any).source === undefined && ({} as any).nodeId === undefined);
+  ({} as Record<string, unknown>).source === undefined && ({} as Record<string, unknown>).nodeId === undefined);
 ok("[seed-preserves-human-fields] hand-authored import survives the merge", poisoned.Widget.import === "@/ui");
 
 console.log("\nseed-components — node-id -> name via the split catalog:");
@@ -168,8 +189,8 @@ async function connectedBridge() {
 // of the run) — lives here once.
 async function disconnectErr(code: number, reason: string) {
   const { bridge, client } = await connectedBridge();
-  let err: any;
-  const inflight = bridge.request("exportFull", {}, 20000).catch((e: any) => { err = e; });
+  let err: Error | undefined;
+  const inflight = bridge.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
   await new Promise((r) => setTimeout(r, 60)); // let the request register before the close lands
   client.close(code, reason);
   await inflight;
@@ -180,8 +201,8 @@ async function disconnectErr(code: number, reason: string) {
 (async () => {
   const { bridge, client } = await connectedBridge();
 
-  let err: any;
-  try { await bridge.request("exportFull", {}, 1100); } catch (e: any) { err = e; } // client never answers
+  let err: Error | undefined;
+  try { await bridge.request("exportFull", {}, 1100); } catch (e) { err = asErr(e); } // client never answers
   client.close();
   bridge.close();
 
@@ -227,12 +248,12 @@ async function disconnectErr(code: number, reason: string) {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port);
-    const closed = (url: string, opts: any) => new Promise<any>((res) => {
+    const closed = (url: string, opts: ClientOptions) => new Promise<{ opened: boolean; http?: number; code?: number; clients?: number }>((res) => {
       const c = new WebSocket(url, opts);
       let opened = false;
       c.on("open", () => { opened = true; c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
-      c.on("unexpected-response", (_req: any, r: any) => res({ opened, http: r.statusCode }));
-      c.on("close", (code: any) => res({ opened, code, clients: bridge.listClients().length }));
+      c.on("unexpected-response", (_req, r) => res({ opened, http: r.statusCode }));
+      c.on("close", (code) => res({ opened, code, clients: bridge.listClients().length }));
       c.on("error", () => {});
     });
     const plugin = await closed(`ws://127.0.0.1:${port}/?token=wrong`, { origin: "null" });
@@ -259,15 +280,15 @@ async function disconnectErr(code: number, reason: string) {
   {
     const port = nextPort++;
     const bridge = core.createBridge(port);
-    const open = () => new Promise<any>((res, rej) => {
+    const open = () => new Promise<WebSocket>((res, rej) => {
       const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null" });
       c.on("open", () => res(c));
       c.on("error", rej);
     });
     // A client that identifies itself the way the plugin UI does, then answers whatever it is asked.
-    const identify = (c: any, hello: any) => c.send(JSON.stringify({ type: "hello", ...hello }));
-    const autoReply = (c: any, result: any) => c.on("message", (b: any) => {
-      const m = JSON.parse(b.toString());
+    const identify = (c: WebSocket, hello: Record<string, unknown>) => c.send(JSON.stringify({ type: "hello", ...hello }));
+    const autoReply = (c: WebSocket, result: Record<string, unknown>) => c.on("message", (b: RawData) => {
+      const m = JSON.parse(b.toString()) as CommandFrame;
       if (m && m.id) c.send(JSON.stringify({ id: m.id, ok: true, result: { ...result, cmd: m.cmd } }));
     });
 
@@ -294,7 +315,7 @@ async function disconnectErr(code: number, reason: string) {
     const two = bridge.listClients();
     ok("[multi] BOTH files stay connected — no takeover", two.length === 2);
     ok("[multi] neither is displaced (both ids present)",
-      two.some((c: any) => c.connId === "c1") && two.some((c: any) => c.connId === "c2"));
+      two.some((c) => c.connId === "c1") && two.some((c) => c.connId === "c2"));
     ok("[multi] takeovers stays 0 now that connections coexist", bridge.connectionInfo().takeovers === 0);
     ok("[multi] connectionInfo reports the client count", bridge.connectionInfo().clientsConnected === 2);
 
@@ -306,15 +327,15 @@ async function disconnectErr(code: number, reason: string) {
 
     // Ambiguity must REFUSE, not guess. Silently picking one would export the wrong file and look
     // entirely successful — the adb "more than one device" call.
-    let ambErr: any;
-    try { await bridge.request("ping", {}, 5000); } catch (e: any) { ambErr = e; }
+    let ambErr: Error | undefined;
+    try { await bridge.request("ping", {}, 5000); } catch (e) { ambErr = asErr(e); }
     ok("[multi] an unaddressed request with two files connected is REFUSED", !!ambErr);
     ok("[multi] the refusal lists both files so the caller can choose",
       !!ambErr && /App — Base/.test(ambErr.message) && /NERA Library/.test(ambErr.message));
     ok("[multi] and names the flags that fix it", !!ambErr && /--client/.test(ambErr.message));
 
-    let missErr: any;
-    try { await bridge.request("ping", {}, 5000, "nope"); } catch (e: any) { missErr = e; }
+    let missErr: Error | undefined;
+    try { await bridge.request("ping", {}, 5000, "nope"); } catch (e) { missErr = asErr(e); }
     ok("[multi] an unmatched target is refused and lists what IS connected",
       !!missErr && /no connected Figma file matches/.test(missErr.message) && /c1/.test(missErr.message));
 
@@ -322,8 +343,8 @@ async function disconnectErr(code: number, reason: string) {
     const dupA = await open();
     identify(dupA, { instanceId: "fig-d", file: "Untitled", fileKey: null, page: "Page 1" });
     await new Promise((r) => setTimeout(r, 60));
-    let dupErr: any;
-    try { await bridge.request("ping", {}, 5000, "e"); } catch (e: any) { dupErr = e; }
+    let dupErr: Error | undefined;
+    try { await bridge.request("ping", {}, 5000, "e"); } catch (e) { dupErr = asErr(e); }
     ok("[multi] an ambiguous name match is refused, not resolved to the first",
       !!dupErr && /matches \d+ connected files/.test(dupErr.message));
     dupA.close();
@@ -335,8 +356,8 @@ async function disconnectErr(code: number, reason: string) {
     const slow = await open(); // connects but never answers
     await new Promise((r) => setTimeout(r, 60));
     const slowId = bridge.listClients().find((c) => !c.identified)?.connId;
-    let slowErr: any;
-    const slowReq = bridge.request("exportFull", {}, 20000, slowId).catch((e: any) => { slowErr = e; });
+    let slowErr: Error | undefined;
+    const slowReq = bridge.request("exportFull", {}, 20000, slowId).catch((e: unknown) => { slowErr = asErr(e); });
     const liveReq = bridge.request<{ who: string }>("ping", {}, 5000, "c1"); // base file, still healthy
     await new Promise((r) => setTimeout(r, 60));
     slow.close(1001, "");
@@ -344,7 +365,7 @@ async function disconnectErr(code: number, reason: string) {
     const liveRes = await liveReq;
     ok("[multi] a closing client fails ITS OWN in-flight request", !!slowErr);
     ok("[multi] and does NOT abort another file's in-flight request", liveRes.who === "base");
-    ok("[multi] the closed client leaves the registry", !bridge.listClients().some((c: any) => c.connId === slowId));
+    ok("[multi] the closed client leaves the registry", !bridge.listClients().some((c) => c.connId === slowId));
     ok("[multi] while the others remain", bridge.listClients().length === 2);
 
     // A re-announced hello (what the plugin sends after Figma restarts its runtime) must UPDATE the
@@ -369,7 +390,7 @@ async function disconnectErr(code: number, reason: string) {
   // Kept as a dynamic import at this exact spot (not hoisted): the enclosing scope is this async IIFE.
   const pull = await import("../bridge/src/figma-pull.ts");
   const parse = (argv: string[]) => pull.parseArgs(argv);
-  const usage = (argv: string[]) => { try { parse(argv); return null; } catch (e: any) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + (e as Error).message; } };
+  const usage = (argv: string[]) => { try { parse(argv); return null; } catch (e) { return e instanceof pull.UsageError ? e.message : "WRONG ERROR: " + (e as Error).message; } };
   // Anti-drift: --node and --selection must both write through write-out.js's shared writeScreen
   // helper, not an ad hoc trio of writeJson/writeAssets calls each branch could quietly reinvent.
   const pullSrc = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
@@ -448,7 +469,7 @@ async function disconnectErr(code: number, reason: string) {
     ok("[init] fresh project: creates design/ + target.json, no .mcp.json unless asked", (() => {
       const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
       init.apply(d, init.plan(d, { token: tok }), () => {});
-      return JSON.parse(fs.readFileSync(path.join(d, "design/target.json"), "utf8")).profile === "web-tailwind" && !fs.existsSync(path.join(d, ".mcp.json"));
+      return (JSON.parse(fs.readFileSync(path.join(d, "design/target.json"), "utf8")) as TargetJson).profile === "web-tailwind" && !fs.existsSync(path.join(d, ".mcp.json"));
     })());
     ok("[init] never overwrites an existing target.json", (() => {
       const d = mk({ "design/target.json": '{"profile":"mine"}', "package.json": "{}" });
@@ -458,31 +479,31 @@ async function disconnectErr(code: number, reason: string) {
     ok("[init] --mcp MERGES into an existing .mcp.json and keeps other servers", (() => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"other":{"command":"x"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
-      const m = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")).mcpServers;
-      return m.other.command === "x" && m.designtwin.args[0] === "/abs/figma-mcp.mjs";
+      const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
+      return m.other.command === "x" && m.designtwin.args![0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp registers as \"designtwin\" BESIDE Figma's own \"figma\" server, never in its place", (() => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"figma":{"type":"http","url":"https://mcp.figma.com/mcp"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
-      const m = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")).mcpServers;
-      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args[0] === "/abs/figma-mcp.mjs";
+      const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
+      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args![0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
       const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
       const d = mk({ ".mcp.json": before });
       const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
       init.apply(d, plan, () => {});
-      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a: any) => a.kind === "skip" && /already registered as "figma"/.test(a.note));
+      return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before && plan.some((a) => a.kind === "skip" && /already registered as "figma"/.test(a.note));
     })());
     ok("[init] --mcp leaves a foreign designtwin entry, and an invalid .mcp.json, untouched", (() => {
       const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
       init.apply(a, init.plan(a, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
-      return JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")).mcpServers.designtwin.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
+      return (JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
     ok("[init] warns when .gitignore would swallow the hand-authored maps, and names the narrower pattern",
     (() => {
-      const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a: any) => a.kind === "note");
+      const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
       return !!note && /NOT regenerable/.test(note.note) && /design\/export\//.test(note.note);
     })());
   // The layout split, asserted where it is decided: dtwin writes only under design/export/, and
@@ -506,14 +527,14 @@ async function disconnectErr(code: number, reason: string) {
     (() => {
       const d = mk({});
       init.apply(d, init.plan(d, { token: tok }), () => {});
-      const t = JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8"));
-      return t.profile === null && /build-screen asks/.test(t.note);
+      const t = JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8")) as TargetJson;
+      return t.profile === null && /build-screen asks/.test(t.note ?? "");
     })());
   ok("[init] and it still records a DETECTED stack rather than null",
     (() => {
       const d = mk({ "package.json": JSON.stringify({ dependencies: { tailwindcss: "^4" } }) });
       init.apply(d, init.plan(d, { token: tok }), () => {});
-      return JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8")).profile === "web-tailwind";
+      return (JSON.parse(fs.readFileSync(path.join(d, "design", "target.json"), "utf8")) as TargetJson).profile === "web-tailwind";
     })());
     ok("[init] CLI: --dry-run writes nothing, prints the remaining steps, exits 0; junk args exit 1", (() => {
       const d = mk({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' });
@@ -950,7 +971,7 @@ async function disconnectErr(code: number, reason: string) {
   console.log("\nfigma-pull — writePages layout:");
   // The pages/ layout is read back a dozen times below; one reader so a layout change (e.g. the index
   // filename) is one edit, not twelve.
-  const readJson = (...p: string[]) => JSON.parse(fs.readFileSync(path.join(...p), "utf8"));
+  const readJson = <T,>(...p: string[]): T => JSON.parse(fs.readFileSync(path.join(...p), "utf8")) as T;
   const pagesDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-pages-"));
   pull.writePages(pagesDir, {
     exportedAt: "t",
@@ -961,24 +982,24 @@ async function disconnectErr(code: number, reason: string) {
       { name: "C", id: "3:3", page: "Screens", pageId: "0:3", tree: {} as unknown as IrNode },
     ],
   });
-  const rootIndex = readJson(pagesDir, "pages", "index.json");
+  const rootIndex = readJson<PagesRootIndex>(pagesDir, "pages", "index.json");
   ok("[wp] every page gets its own directory, even when names fold alike",
-    new Set(rootIndex.pageDirs.map((p: any) => p.dir)).size === 3);
+    new Set(rootIndex.pageDirs.map((p) => p.dir)).size === 3);
   ok("[wp] each page's own name is preserved (only the DIRECTORY is disambiguated)",
-    rootIndex.pageDirs.map((p: any) => p.page).join("|") === "Design System|Design/System|Screens");
+    rootIndex.pageDirs.map((p) => p.page).join("|") === "Design System|Design/System|Screens");
   // The real regression: no layer may exist on disk yet be absent from its page index.
   ok("[wp] no layer is orphaned — every layer file is listed in its page's index", (() => {
     let listed = 0;
     for (const pd of rootIndex.pageDirs) {
-      const idx = readJson(pagesDir, "pages", pd.dir, "index.json");
+      const idx = readJson<PageIndex>(pagesDir, "pages", pd.dir, "index.json");
       if (idx.layers.length !== pd.layers) return false;
       for (const l of idx.layers) { if (!fs.existsSync(path.join(pagesDir, l.file))) return false; listed++; }
     }
     return listed === 3;
   })());
   ok("[wp] each page index reports the page it actually describes", (() => {
-    const seen = rootIndex.pageDirs.map((pd: any) =>
-      readJson(pagesDir, "pages", pd.dir, "index.json").page);
+    const seen = rootIndex.pageDirs.map((pd) =>
+      readJson<PageIndex>(pagesDir, "pages", pd.dir, "index.json").page);
     return seen.join("|") === "Design System|Design/System|Screens";
   })());
   // Each pageDirs entry POINTS at its index file, exactly as each layer entry points at its own file.
@@ -986,17 +1007,17 @@ async function disconnectErr(code: number, reason: string) {
   // browser-download twin, where the HTML spec forces the same file to land flat as
   // "pages__<dir>__index.json" — so the pointer, not the convention, is the contract.
   ok("[wp] every page index is addressable by a pointer, not by convention",
-    rootIndex.pageDirs.every((pd: any) => typeof pd.index === "string" && fs.existsSync(path.join(pagesDir, pd.index))));
+    rootIndex.pageDirs.every((pd) => typeof pd.index === "string" && fs.existsSync(path.join(pagesDir, pd.index))));
   ok("[wp] and the pointer is relative to outDir, like each layer's `file`",
-    rootIndex.pageDirs.every((pd: any) => !path.isAbsolute(pd.index) && pd.index.startsWith("pages/")));
+    rootIndex.pageDirs.every((pd) => !path.isAbsolute(pd.index) && pd.index.startsWith("pages/")));
   // P3 #16: the root index used to carry ONLY the run manifest + pageDirs counts, forcing a consumer
   // one hop down to `pages/<Page>/index.json` to find a single screen by name/title. It now also
   // carries the flattened per-screen rows (name/id/title/texts/file, no tree bytes) so the file every
   // skill is told to read actually has what it promises.
   ok("[wp] the root index carries the run manifest AND the flattened per-screen rows (no tree bytes)",
     rootIndex.exportedAt === "t" && Array.isArray(rootIndex.layers) && rootIndex.layers.length === 3 &&
-    rootIndex.layers.map((l: any) => l.name).sort().join("|") === "A|B|C" &&
-    rootIndex.layers.every((l: any) => l.id && l.file) &&
+    rootIndex.layers.map((l) => l.name).sort().join("|") === "A|B|C" &&
+    rootIndex.layers.every((l) => l.id && l.file) &&
     JSON.stringify(rootIndex.layers).indexOf("\"children\"") === -1);
   ok("[wp] pages/ exists even for a zero-layer run", (() => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "figma-empty-"));
@@ -1004,7 +1025,7 @@ async function disconnectErr(code: number, reason: string) {
     return fs.existsSync(path.join(empty, "pages"));
   })());
   ok("[wp] each page dir carries the page ID, so two entries are tellable apart by more than a dir name",
-    rootIndex.pageDirs.map((p: any) => p.pageId).join("|") === "0:1|0:2|0:3");
+    rootIndex.pageDirs.map((p) => p.pageId).join("|") === "0:1|0:2|0:3");
   fs.rmSync(pagesDir, { recursive: true, force: true });
 
   // The name-keyed bug's OTHER half: `uniqueDir()` only fixed page names that DIFFER but fold to the
@@ -1021,14 +1042,14 @@ async function disconnectErr(code: number, reason: string) {
       { name: "B", id: "2:2", page: "Screens", pageId: "0:9", tree: {} as unknown as IrNode }, // SAME name, different page
     ],
   });
-  const dupIndex = readJson(dupDir, "pages", "index.json");
+  const dupIndex = readJson<PagesRootIndex>(dupDir, "pages", "index.json");
   ok("[wp] two DISTINCT pages sharing a name stay two pages", dupIndex.pageDirs.length === 2);
-  ok("[wp] and get separate directories", new Set(dupIndex.pageDirs.map((p: any) => p.dir)).size === 2);
+  ok("[wp] and get separate directories", new Set(dupIndex.pageDirs.map((p) => p.dir)).size === 2);
   ok("[wp] each keeping the real (identical) page name, disambiguated only by id",
-    dupIndex.pageDirs.every((p: any) => p.page === "Screens") &&
-    dupIndex.pageDirs.map((p: any) => p.pageId).join("|") === "0:1|0:9");
-  ok("[wp] and one layer each, not both in one bucket", (() => dupIndex.pageDirs.every((pd: any) => {
-    const idx = readJson(dupDir, "pages", pd.dir, "index.json");
+    dupIndex.pageDirs.every((p) => p.page === "Screens") &&
+    dupIndex.pageDirs.map((p) => p.pageId).join("|") === "0:1|0:9");
+  ok("[wp] and one layer each, not both in one bucket", (() => dupIndex.pageDirs.every((pd) => {
+    const idx = readJson<PageIndex>(dupDir, "pages", pd.dir, "index.json");
     return pd.layers === 1 && idx.layers.length === 1 && idx.pageId === pd.pageId;
   }))());
   fs.rmSync(dupDir, { recursive: true, force: true });
@@ -1040,7 +1061,7 @@ async function disconnectErr(code: number, reason: string) {
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }],
     layers: [{ name: "A", id: "1:1", page: "Screens", tree: {} as unknown as IrNode }, { name: "B", id: "2:2", page: "Screens", tree: {} as unknown as IrNode }],
   });
-  const oldIndex = readJson(oldDir, "pages", "index.json");
+  const oldIndex = readJson<PagesRootIndex>(oldDir, "pages", "index.json");
   ok("[wp] a pre-pageId export still groups by name (one bucket) rather than splitting per layer",
     oldIndex.pageDirs.length === 1 && oldIndex.pageDirs[0].layers === 2);
   ok("[wp] and OMITS pageId rather than emitting a null — absence means 'export predates page ids'",
@@ -1079,7 +1100,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[exit] the WHOLE payload reaches a pipe — stdout is not truncated",
     drained.stdout.length === intended + 1); // +1 for console.log's newline
   ok("[exit] and the delivered payload is still parseable JSON",
-    (() => { try { return JSON.parse(drained.stdout).pages.length === 4000; } catch { return false; } })());
+    (() => { try { return (JSON.parse(drained.stdout) as { pages: unknown[] }).pages.length === 4000; } catch { return false; } })());
   fs.rmSync(exitDir, { recursive: true, force: true });
 
   // ---------------------------------------------------------------- staleness stamp: write-through + figma_status
@@ -1094,7 +1115,7 @@ async function disconnectErr(code: number, reason: string) {
   const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-stamp-"));
   const stampedAt = new Date(Date.now() - 5 * 3600000).toISOString(); // 5h old
   pull.writeJson(stampDir, "design-system.json", { exportedAt: stampedAt, file: "My Design File", components: [] }, true);
-  const stamped = JSON.parse(fs.readFileSync(path.join(stampDir, "design-system.json"), "utf8"));
+  const stamped = JSON.parse(fs.readFileSync(path.join(stampDir, "design-system.json"), "utf8")) as DesignSystemStamp;
   ok("[stamp] figma-pull writes design-system.json's exportedAt through unchanged", stamped.exportedAt === stampedAt);
   ok("[stamp] and the file name too", stamped.file === "My Design File");
 
@@ -1212,7 +1233,7 @@ async function disconnectErr(code: number, reason: string) {
   // visible title "Job Roles"), pruned to the fields deriveTitle/collectTexts read.
   {
     const fixtureScreen = JSON.parse(fs.readFileSync(
-      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+      path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
     const screenResult = OUT.writeScreen(sdir, {
       screenName: "positions ",
@@ -1221,16 +1242,16 @@ async function disconnectErr(code: number, reason: string) {
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: fixtureScreen.nodes, manifest: fixtureScreen.manifest, exportedAt: "2026-09-23T00:00:00.000Z" },
     }, undefined);
-    const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8"));
-    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8"));
+    const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8")) as PagesRootIndex;
+    const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8")) as PageIndex;
     ok("[write-screen] the ROOT index row carries the visible title, not just the Figma layer name",
       Array.isArray(rootIdx.layers) && rootIdx.layers.length === 1 &&
       rootIdx.layers[0].name === "positions " && rootIdx.layers[0].title === "Job Roles");
     ok("[write-screen] the PAGE index row carries the same title",
       pageIdx.layers.length === 1 && pageIdx.layers[0].title === "Job Roles");
     ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
-      Array.isArray(rootIdx.layers[0].texts) && rootIdx.layers[0].texts.length > 0 &&
-      new Set(rootIdx.layers[0].texts).size === rootIdx.layers[0].texts.length);
+      Array.isArray(rootIdx.layers![0].texts) && rootIdx.layers![0].texts.length > 0 &&
+      new Set(rootIdx.layers![0].texts).size === rootIdx.layers![0].texts.length);
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 
@@ -1251,10 +1272,10 @@ async function disconnectErr(code: number, reason: string) {
       sourceFile: "TeamSmart (Copy)",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     } as unknown as ExportResult, undefined);
-    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
-    const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8"));
+    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
+    const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
     ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
-    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers[0].sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers![0].sourceFile === "TeamSmart (Copy)");
     fs.rmSync(sdir2, { recursive: true, force: true });
 
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
@@ -1267,7 +1288,7 @@ async function disconnectErr(code: number, reason: string) {
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
     } as unknown as ExportResult, undefined);
-    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
     fs.rmSync(sdir3, { recursive: true, force: true });
   }
@@ -1297,52 +1318,55 @@ async function disconnectErr(code: number, reason: string) {
     ok("[lib-layout] directory identity uses fileKey, which survives a rename", /-ABCDEFGH$/.test(res.wrote.library ?? ""));
     ok("[lib-layout] never writes into design-system/", !fs.existsSync(path.join(base, "design-system")));
     ok("[lib-layout] tokens.json exists", fs.existsSync(path.join(base, "libraries", dirName, "tokens.json")));
-    const tok = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "tokens.json"), "utf8"));
+    const tok = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "tokens.json"), "utf8")) as TokensDoc;
     // The shape contract: a top-level `variables` array is what keeps design-to-code/catalog-input.ts from
     // rejecting this as the slim manifest, and what lets design-to-code/tokens.ts run on it unchanged.
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
     ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
-    ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source.role === "library");
+    ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source!.role === "library");
 
-    const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8"));
+    const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8")) as ComponentsCatalog;
     ok("[lib-layout] a component from ANOTHER library is not claimed by this one", comps.components.length === 1 && comps.components[0].name === "Button");
-    const hyg = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "hygiene.json"), "utf8"));
-    ok("[lib-layout] and the drop is reported, not silent", hyg.hygiene.some((h: any) => /ANOTHER library were dropped/.test(h)));
+    const hyg = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "hygiene.json"), "utf8")) as HygieneDoc;
+    ok("[lib-layout] and the drop is reported, not silent", hyg.hygiene.some((h) => /ANOTHER library were dropped/.test(h)));
 
-    const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8"));
+    const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8")) as LibraryManifest;
     ok("[lib-layout] the directory self-describes via index.json", idx.files && idx.files.tokens && idx.counts.variables === 1);
     ok("[lib-layout] index summarises publish status", idx.publish && idx.publish.current >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
 
-    const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
+    type LibrariesIndexView = LibrariesIndex & { libraries: LibrariesIndexRow[] };
+    const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
     ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0].libraryName === "NERA");
     // A second library must not erase the first: each is a separate plugin run in a separate file.
-    const second = JSON.parse(JSON.stringify(libDoc));
-    second.file = "Icons"; second.source.libraryName = "Icons"; second.source.fileKey = "ZZZZZZZZ999";
+    const second = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
+    second.file = "Icons"; second.source!.libraryName = "Icons"; second.source!.fileKey = "ZZZZZZZZ999";
     OUT.writeExport(path.join(ldir, "design"), { designSystem: second }, () => {});
-    const root2 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    const root2 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
     ok("[lib-layout] a second library is ADDED, not substituted", root2.libraries.length === 2);
     // Re-exporting the SAME library replaces its own row only.
     OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
-    const root3 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8"));
+    const root3 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
     ok("[lib-layout] re-exporting the same library does not duplicate its row", root3.libraries.length === 2);
 
     // Orphan reporting: a file the previous export produced and this one did not is REPORTED, never
     // deleted — a read command must not remove files it did not create.
     const stale = path.join(base, "libraries", dirName, "styles.text.json");
     ok("[lib-layout] a previously written split file is still on disk", fs.existsSync(stale));
-    let logged: any[] = [];
-    const shrunk = JSON.parse(JSON.stringify(libDoc));
+    let logged: string[] = [];
+    const shrunk = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
     // Simulate a build that no longer emits text styles by rewriting the index to claim an extra file.
     const idxPath = path.join(base, "libraries", dirName, "index.json");
-    const idxDoc = JSON.parse(fs.readFileSync(idxPath, "utf8"));
+    // de-any: the test plants an EXTRA pointer (`ghost`) that LibraryManifest["files"] does not name, so files is widened here.
+    const idxDoc = JSON.parse(fs.readFileSync(idxPath, "utf8")) as LibraryManifest & { files: Record<string, string> };
     idxDoc.files.ghost = "libraries/" + dirName + "/ghost.json";
     fs.writeFileSync(idxPath, JSON.stringify(idxDoc));
     fs.writeFileSync(path.join(base, "libraries", dirName, "ghost.json"), "{}");
-    const res2: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: shrunk }, (m: any) => logged.push(m));
+    const res2: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: shrunk }, (m) => logged.push(m));
     ok("[lib-layout] an orphaned file is reported", (res2.wrote.orphans ?? []).some((o) => /ghost\.json$/.test(o)));
     ok("[lib-layout] and it is NOT deleted", fs.existsSync(path.join(base, "libraries", dirName, "ghost.json")));
-    ok("[lib-layout] the orphan warning reaches the user", logged.some((m: any) => /STALE:/.test(m)));
+    ok("[lib-layout] the orphan warning reaches the user", logged.some((m) => /STALE:/.test(m)));
   }
 
 
@@ -1396,9 +1420,9 @@ async function disconnectErr(code: number, reason: string) {
     })());
   ok("[write-out] but it DOES carry the layer's own name/type, so a screen resolves from the index alone",
     full.index && Array.isArray(full.index.layers) &&
-    full.index.layers.some((l: any) => l.name === "Hero" && l.type === "FRAME"));
+    full.index.layers.some((l) => l.name === "Hero" && l.type === "FRAME"));
   ok("[write-out] the freshness stamp survives the write byte-for-byte",
-    JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).exportedAt ===
+    (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).exportedAt ===
       "2026-08-12T00:00:00.000Z");
 
   // --- the design-system split (bridge/design-system-layout.js) -------------------------------
@@ -1407,57 +1431,59 @@ async function disconnectErr(code: number, reason: string) {
   // components are not nodes in this file at all.
   // The eight parts land in design-system/ — design/tokens.json and design/components.json at the
   // export ROOT are the user's hand-authored, non-regenerable config maps and must not be clobbered.
-  const readDS = (n: string) => JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", n), "utf8"));
+  const readDS = <T,>(n: string): T => JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", n), "utf8")) as T;
   ok("[ds-split] tokens.json carries the collections + variables, and nothing else's payload",
-    (() => { const t = readDS("tokens.json");
-      return t.collections.length === 1 && t.variables.length === 1 && !t.styles && !t.components; })());
+    // de-any: styles/components are asserted ABSENT from tokens.json — they are not fields of TokensDoc, so they are named here.
+    (() => { const t = readDS<TokensDoc & { styles?: unknown; components?: unknown }>("tokens.json");
+      return t.collections!.length === 1 && t.variables!.length === 1 && !t.styles && !t.components; })());
   ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid",
-    (() => { const p = readDS("styles.paint.json").styles, t = readDS("styles.text.json").styles,
-        e = readDS("styles.effect.json").styles, g = readDS("styles.grid.json").styles;
+    (() => { const p = readDS<PaintStylesDoc>("styles.paint.json").styles, t = readDS<TextStylesDoc>("styles.text.json").styles,
+        e = readDS<EffectStylesDoc>("styles.effect.json").styles, g = readDS<GridStylesDoc>("styles.grid.json").styles;
       return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g); })());
   ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
-    (() => { const c = readDS("components.local.json").components;
+    (() => { const c = readDS<ComponentsCatalog>("components.local.json").components;
       return c.length === 3 && c[0].key === "k1" && !!c[0].id && !!c[0].pageId; })());
 
   // --- component detail split (variants[].node stripped into design-system/components/) --------
   ok("[component-split] the COMPONENT_SET with exported node trees gets a variantsFile pointer",
-    (() => { const c = readDS("components.local.json").components.find((x: any) => x.key === "k3");
-      return !!c.variantsFile && c.variantsFile === "design-system/components/Badge__2_9.json"; })());
+    (() => { const c = readDS<ComponentsCatalog>("components.local.json").components.find((x) => x.key === "k3");
+      return !!c && !!c.variantsFile && c.variantsFile === "design-system/components/Badge__2_9.json"; })());
   ok("[component-split] its variants in the catalog keep id/name/key/values but lose .node",
-    (() => { const c = readDS("components.local.json").components.find((x: any) => x.key === "k3");
-      return c.variants.length === 2 && c.variants[0].id === "2:10" && c.variants[0].values.Size === "Small" && !("node" in c.variants[0]); })());
+    (() => { const c = readDS<ComponentsCatalog>("components.local.json").components.find((x) => x.key === "k3");
+      const v = c?.variants; return !!v && v.length === 2 && v[0].id === "2:10" && v[0].values?.Size === "Small" && !("node" in v[0]); })());
   ok("[component-split] a COMPONENT_SET with no exported node trees gets NO pointer (absence = not exported)",
-    (() => { const c = readDS("components.local.json").components.find((x: any) => x.key === "k4");
-      return !("variantsFile" in c) && c.variants.length === 1; })());
+    (() => { const c = readDS<ComponentsCatalog>("components.local.json").components.find((x) => x.key === "k4");
+      return !!c && !("variantsFile" in c) && c.variants?.length === 1; })());
   ok("[component-split] the detail file carries the full node trees + stamp + set identity",
-    (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8"));
-      return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants.length === 2 &&
-        d.variants[0].node.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
+    (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8")) as ComponentDetailFile;
+      return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants!.length === 2 &&
+        d.variants![0].node!.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
   ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
-    JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).files.componentsDir === "design-system/components");
+    (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).files.componentsDir === "design-system/components");
   // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
   // key: a tool walking `files` verbatim got ENOENT on one entry of nine (live finding 27).
   ok("[component-split] and omits componentsDir entirely when no detail file was produced",
     (() => {
       const d2 = path.join(wdir, "nodetail");
       OUT.writeExport(d2, { designSystem: { exportedAt: "2026-08-12T00:00:00.000Z", file: "F", components: [{ name: "Button", key: "k1", type: "COMPONENT" }] } });
-      const m = JSON.parse(fs.readFileSync(path.join(d2, "design-system.json"), "utf8"));
+      const m = JSON.parse(fs.readFileSync(path.join(d2, "design-system.json"), "utf8")) as DesignSystemManifest;
       return m.files.componentsDir === undefined && !fs.existsSync(path.join(d2, "design-system", "components"));
     })());
   ok("[ds-split] components.library.json holds only remote:true entries — inferred from instances, not nodes here",
-    (() => { const c = readDS("components.library.json").components;
+    (() => { const c = readDS<ComponentsCatalog>("components.library.json").components;
       return c.length === 1 && c[0].key === "k2" && c[0].remote === true && c[0].id === undefined; })());
-  ok("[ds-split] hygiene.json is the lint report on its own", readDS("hygiene.json").hygiene.length === 1);
+  ok("[ds-split] hygiene.json is the lint report on its own", readDS<HygieneDoc>("hygiene.json").hygiene.length === 1);
   ok("[ds-split] every split file repeats the freshness stamp, so drift-lint/figma_status work off any of them",
     ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json",
      "components.local.json", "components.library.json", "hygiene.json"]
-      .every((n) => readDS(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS(n).file === "Demo"));
+      .every((n) => readDS<DesignSystemStamp>(n).exportedAt === "2026-08-12T00:00:00.000Z" && readDS<DesignSystemStamp>(n).file === "Demo"));
   ok("[ds-split] design-system.json is now a slim manifest: stamp + pointers, no bulk data",
-    (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8"));
+    // de-any: variables/components/styles are asserted ABSENT from the slim manifest — not fields of DesignSystemManifest.
+    (() => { const m = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest & { variables?: unknown; components?: unknown; styles?: unknown };
       return m.file === "Demo" && m.colorProfile === "srgb" && m.files.tokens === "design-system/tokens.json" &&
         m.files.componentsLibrary === "design-system/components.library.json" && !m.variables && !m.components && !m.styles; })());
   ok("[ds-split] the manifest counts local and library components, and each style bucket, separately",
-    (() => { const c = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")).counts;
+    (() => { const c = (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).counts;
       return c.variables === 1 && c.components === 3 && c.libraryComponents === 1 && c.hygiene === 1 &&
         c.stylesPaint === 1 && c.stylesText === 0 && c.stylesEffect === 0 && c.stylesGrid === 0; })());
 
@@ -1513,7 +1539,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[write-out] two frames with the SAME name land in two files, not one",
     fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20170_132666.json")) &&
     fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20173_142455.json")));
-  const pageIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8"));
+  const pageIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")) as PageIndex;
   ok("[write-out] the page index accumulates every screen pulled into it", pageIdx.layers.length === 3);
   ok("[write-out] and keeps the page's real name beside the sanitised dir", pageIdx.page === "Flows" && pageIdx.pageId === "0:3");
   ok("[write-out] re-pulling one screen REPLACES its row rather than appending a duplicate",
@@ -1522,9 +1548,9 @@ async function disconnectErr(code: number, reason: string) {
         screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20173:142455",
         screen: { id: "20173:142455", nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
       } as unknown as ExportResult);
-      return JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")).layers.length === 3;
+      return (JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")) as PageIndex).layers.length === 3;
     })());
-  const rootIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "index.json"), "utf8"));
+  const rootIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "index.json"), "utf8")) as PagesRootIndex;
   ok("[write-out] the root pages/index.json points at the page dir with a live layer count",
     rootIdx.pageDirs.length === 1 && rootIdx.pageDirs[0].layers === 3 && rootIdx.pageDirs[0].index === "pages/Flows/index.json");
   // An export written before the plugin emitted page identity still has to land somewhere predictable.
@@ -1543,7 +1569,7 @@ async function disconnectErr(code: number, reason: string) {
       { id: "c", file: "I7_8_9.svg", text: "<svg><path d='M1 1'/></svg>" },
     ],
   } as unknown as ExportResult);
-  const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8"));
+  const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8")) as ScreenAssetsDoc;
   ok("[write-out] the asset index lists every asset this screen references", aIdx.files.length === 3);
   // P5 round 3 (findings 24/25/27): writeAssets now dedups by CONTENT before ever writing a file, so
   // two byte-identical entries under two DIFFERENT names ("I1_2_3.svg"/"I4_5_6.svg") collapse to ONE
@@ -1564,13 +1590,13 @@ async function disconnectErr(code: number, reason: string) {
       { id: "g2", file: "trash.svg", text: '<svg><path fill="#FF6767" d="M0 0"/><path fill="none" stroke="#ffffff" d="M1 1"/></svg>' },
     ],
   } as unknown as ExportResult);
-  const gIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Glyphs__6_6.assets.json"), "utf8"));
+  const gIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Glyphs__6_6.assets.json"), "utf8")) as ScreenAssetsDoc;
   ok("[write-out] a single-coloured glyph is marked monochrome — safe to swap for currentColor",
     gIdx.monochrome.length === 1 && gIdx.monochrome[0] === "assets/arrow-down.svg");
   ok("[write-out] a two-coloured glyph is NOT, because its colour may be semantic",
-    gIdx.files.find((f: any) => f.file === "assets/trash.svg").monochrome === false);
+    gIdx.files.find((f) => f.file === "assets/trash.svg")!.monochrome === false);
   ok("[write-out] and fill=\"none\" is not counted as a colour",
-    gIdx.files.find((f: any) => f.file === "assets/trash.svg").colors.length === 2);
+    gIdx.files.find((f) => f.file === "assets/trash.svg")!.colors!.length === 2);
   ok("[write-out] the index says outright not to edit an exported asset in place", /re-pull will overwrite/.test(gIdx.note));
 
   // ------------------------------------------------ variables.json MERGES across single-screen pulls
@@ -1578,7 +1604,7 @@ async function disconnectErr(code: number, reason: string) {
   // screen B silently deleted screen A's tokens and A's theme stopped resolving — with no warning,
   // because the screen JSON carries raw hex beside every binding (live-test findings 35/64).
   const vdir = path.join(wdir, "vars");
-  const V = (name: string, key: string, values: any, collection?: string) => ({ name, key, collection: collection || "Sem", type: "COLOR", values });
+  const V = (name: string, key: string, values: Record<string, string>, collection?: string) => ({ name, key, collection: collection || "Sem", type: "COLOR", values });
   OUT.writeAny(vdir, {
     screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { id: "1:1", nodes: [] }, assets: [],
     variables: {
@@ -1595,8 +1621,8 @@ async function disconnectErr(code: number, reason: string) {
       hygiene: ["two"],
     },
   } as unknown as ExportResult);
-  const merged = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
-  const byName = (n: string) => merged.variables.filter((v: any) => v.name === n);
+  const merged = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
+  const byName = (n: string) => merged.variables.filter((v) => v.name === n);
   ok("[write-out/vars] the earlier screen's tokens SURVIVE the next pull",
     byName("Text/Main").length === 1);
   ok("[write-out/vars] the new screen's tokens are added", byName("Border/Soft").length === 1);
@@ -1604,16 +1630,16 @@ async function disconnectErr(code: number, reason: string) {
   ok("[write-out/vars] the union is 3, not the last slice's 2", merged.variables.length === 3);
   ok("[write-out/vars] collections union by key too", merged.collections.length === 2);
   ok("[write-out/vars] and a collection's modes union across slices",
-    (() => { const c = merged.collections.find((c: any) => c.key === "ck1"); return c.modes.includes("Dark") && c.modes.includes("Light"); })());
+    (() => { const c = merged.collections.find((c) => c.key === "ck1"); return !!c && c.modes.includes("Dark") && c.modes.includes("Light"); })());
   ok("[write-out/vars] hygiene lines from both slices are kept, deduped",
     merged.hygiene.includes("one") && merged.hygiene.includes("two"));
   ok("[write-out/vars] provenance records BOTH contributing screens",
-    merged._slices.length === 2 && merged._slices.map((s: any) => s.screen).join(",") === "Job_roles__1_1,Filter__2_2");
-  ok("[write-out/vars] the note says the file accumulates", /UNION/.test(merged._note));
+    merged._slices.length === 2 && merged._slices.map((s) => s.screen).join(",") === "Job_roles__1_1,Filter__2_2");
+  ok("[write-out/vars] the note says the file accumulates", /UNION/.test(merged._note ?? ""));
   ok("[write-out/vars] each pull's raw slice is kept verbatim beside its screen",
     fs.existsSync(path.join(vdir, "pages", "P", "Job_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
   ok("[write-out/vars] a slice file holds ONLY that screen's variables",
-    JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")).variables.length === 2);
+    (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables!.length === 2);
 
   // A token that resolves differently in two screens is a REAL disagreement between two libraries
   // (finding 69) — the newest wins, but it is recorded rather than silently applied.
@@ -1621,19 +1647,19 @@ async function disconnectErr(code: number, reason: string) {
     screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
     variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] },
   } as unknown as ExportResult);
-  const merged2 = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
+  const merged2 = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
   ok("[write-out/vars] a value conflict is reported, not swallowed",
-    conf.wrote.variablesMerge?.conflicts === 1 && merged2._conflicts.length === 1);
+    conf.wrote.variablesMerge?.conflicts === 1 && merged2._conflicts?.length === 1);
   ok("[write-out/vars] the conflicting token keeps the NEWEST value",
-    merged2.variables.find((v: any) => v.key === "k2").values.Dark === "#999");
+    merged2.variables.find((v) => v.key === "k2")?.values.Dark === "#999");
   ok("[write-out/vars] and the conflict is spelled out in hygiene, where a reader will see it",
-    merged2.hygiene.some((h: any) => /CONFLICT: 'Bg\/Page'/.test(h)));
+    merged2.hygiene.some((h) => /CONFLICT: 'Bg\/Page'/.test(h)));
   ok("[write-out/vars] re-pulling the SAME screen replaces its slice entry rather than appending",
     (() => {
       OUT.writeAny(vdir, { screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
         variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] } } as unknown as ExportResult);
-      const m = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8"));
-      return m._slices.length === 3 && m._slices.filter((s: any) => s.screen === "Popup__3_3").length === 1;
+      const m = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
+      return m._slices.length === 3 && m._slices.filter((s) => s.screen === "Popup__3_3").length === 1;
     })());
 
   // ------------------------------------------------------------- reference PNGs land in ONE place
@@ -1665,12 +1691,12 @@ async function disconnectErr(code: number, reason: string) {
   // outDir on the MCP side is a MODEL-supplied argument, and path.resolve honours "../.." and
   // absolute paths — so without this an export could be written anywhere the process can write.
   // Confined to the server's cwd, which is also exactly what the option's description promises.
-  const escapes = (p: string) => { try { OUT.assertInsideCwd(p); return false; } catch (e: any) { return /must stay inside/.test(e.message); } };
+  const escapes = (p: string) => { try { OUT.assertInsideCwd(p); return false; } catch (e) { return /must stay inside/.test(asErr(e).message); } };
   ok("[write-out] a relative outDir is accepted", !escapes("design") && !escapes("src/design"));
   ok("[write-out] '..' traversal out of the project is refused", escapes("../../../../tmp/pwned"));
   ok("[write-out] an absolute path outside the project is refused", escapes("/tmp/pwned"));
   ok("[write-out] the refusal names the offending path and the fix",
-    (() => { try { OUT.assertInsideCwd("/tmp/pwned"); return false; } catch (e: any) { return /\/tmp\/pwned/.test(e.message) && /relative path/.test(e.message); } })());
+    (() => { try { OUT.assertInsideCwd("/tmp/pwned"); return false; } catch (e) { return /\/tmp\/pwned/.test(asErr(e).message) && /relative path/.test(asErr(e).message); } })());
   ok("[write-out] the cwd itself is allowed", !escapes("."));
   fs.rmSync(wdir, { recursive: true, force: true });
 
@@ -1688,7 +1714,7 @@ async function disconnectErr(code: number, reason: string) {
   const daemon = await import("../bridge/src/daemon.ts");
   const D_PORT = 19787; // not 8787: a test must never contend with a real bridge the user is running
 
-  const calls: any[] = [];
+  const calls: string[] = [];
   const fakeBridge = {
     port: D_PORT,
     isConnected: () => true,
@@ -1700,11 +1726,11 @@ async function disconnectErr(code: number, reason: string) {
     ] as unknown as ClientRow[], // hand-built: rows omit pluginVersion/pluginStale
     close: () => calls.push("close"),
     waitForConnection: async () => {},
-    request: async (cmd: any, args: any, timeoutMs: any, client: any) => {
+    request: async (cmd: string, args: RequestArgs | undefined, _timeoutMs: number | undefined, client: string | null | undefined) => {
       if (client) calls.push("client:" + client);
       calls.push(cmd);
       if (cmd === "boom") throw new Error("plugin exploded");
-      return { echo: cmd, big: "x".repeat((args && args.n) || 0) };
+      return { echo: cmd, big: "x".repeat((args && typeof args.n === "number" && args.n) || 0) };
     },
   };
 
@@ -1725,23 +1751,23 @@ async function disconnectErr(code: number, reason: string) {
     dstat?.pid === process.pid && dstat.port === D_PORT && dstat.pluginConnected === true);
 
   // Starting a second daemon must REFUSE, not silently steal the socket out from under the first.
-  let dblErr = null;
-  try { await daemon.serve(fakeBridge, { port: D_PORT }); } catch (e: any) { dblErr = e; }
+  let dblErr: Error | undefined;
+  try { await daemon.serve(fakeBridge, { port: D_PORT }); } catch (e) { dblErr = asErr(e); }
   ok("[daemon] a second --serve is refused rather than stealing the live socket",
     !!dblErr && /already running/.test(dblErr.message));
   ok("[daemon] and the refusal names the way out", !!dblErr && /--stop/.test(dblErr.message));
 
   const dcli = await daemon.connect(D_PORT);
   ok("[daemon] a request round-trips", ((await dcli!.request({ cmd: "listPages", timeoutMs: 5000 }, 5000)) as { echo: string }).echo === "listPages");
-  let dReqErr = null;
-  try { await dcli!.request({ cmd: "boom", timeoutMs: 5000 }, 5000); } catch (e: any) { dReqErr = e; }
+  let dReqErr: Error | undefined;
+  try { await dcli!.request({ cmd: "boom", timeoutMs: 5000 }, 5000); } catch (e) { dReqErr = asErr(e); }
   ok("[daemon] a plugin-side failure propagates to the client as an error, not a silent empty result",
     !!dReqErr && /plugin exploded/.test(dReqErr.message));
 
   // Requests are SERIALIZED. The plugin is single-threaded and its heavy commands mutate shared
   // per-run state, so concurrent exports interleave badly — the daemon must behave like a sequence of
   // one-shot runs, which is what every existing caller was written against.
-  const order: any[] = [];
+  const order: string[] = [];
   await Promise.all(["q1", "q2", "q3"].map((c) => dcli!.request({ cmd: c, timeoutMs: 5000 }, 5000).then(() => order.push(c))));
   ok("[daemon] concurrent client requests run ONE at a time, in arrival order", order.join(",") === "q1,q2,q3");
 
@@ -1777,7 +1803,7 @@ async function disconnectErr(code: number, reason: string) {
 
   // parseArgs owns the daemon flags — a daemon command takes the whole invocation, so combining it
   // with a pull must be refused rather than silently starting a daemon and dropping the export.
-  const parseThrows = (args: string[]) => { try { pull.parseArgs(args); return null; } catch (e: any) { return e.message; } };
+  const parseThrows = (args: string[]) => { try { pull.parseArgs(args); return null; } catch (e) { return asErr(e).message; } };
   ok("[daemon] --serve is refused alongside an export scope",
     /cannot be combined with --all-pages/.test(parseThrows(["--serve", "--all-pages"]) || ""));
   ok("[daemon] --stop is refused alongside a read option",
@@ -1798,7 +1824,7 @@ async function disconnectErr(code: number, reason: string) {
   // Every case points DESIGNTWIN_CONFIG_DIR at a temp dir: the suite must never read, write or delete
   // the developer's real ~/.config/design-twin/bridge-token.
   const store = await import("../bridge/src/token-store.ts");
-  const withStore = (fn: any, { env = {}, dir = null }: { env?: Record<string, string>; dir?: string | null } = {}) => {
+  const withStore = <T,>(fn: (d: string) => T, { env = {}, dir = null }: { env?: Record<string, string>; dir?: string | null } = {}) => {
     const saved = { ...process.env };
     const d = dir || fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-token-"));
     process.env.DESIGNTWIN_CONFIG_DIR = d;
@@ -1862,7 +1888,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[token] an unreadable --token-file is a clear error, not a silent fallback",
     withStore((d: string) => {
       try { store.resolve({ tokenFile: path.join(d, "nope") }); return false; }
-      catch (e: any) { return e.code === "TOKEN_FILE_UNREADABLE"; }
+      catch (e) { return e instanceof Error && "code" in e && e.code === "TOKEN_FILE_UNREADABLE"; }
     }));
   ok("[token] an EMPTY token file is treated as absent, not as an empty token",
     withStore((d: string) => {
@@ -2024,7 +2050,7 @@ async function disconnectErr(code: number, reason: string) {
   const statusFresh = runCli(["--token-status"]);
   ok("[token-cli] --token-status exits 0 with nothing saved", statusFresh.status === 0);
   ok("[token-cli] and reports no saved token rather than inventing one",
-    JSON.parse(statusFresh.stdout).stored === false);
+    (JSON.parse(statusFresh.stdout) as TokenStatus).stored === false);
   ok("[token-cli] and did NOT create the file as a side effect of asking",
     !fs.existsSync(path.join(cliDir, "bridge-token")));
 
@@ -2044,13 +2070,13 @@ async function disconnectErr(code: number, reason: string) {
   ok("[token-cli] --show-token prints the saved token, not a new one", shown.stdout.trim() === rotatedTok);
   ok("[token-cli] and prints it alone on stdout so `| pbcopy` works", shown.stdout.trim().split("\n").length === 1);
 
-  const statusSaved = JSON.parse(runCli(["--token-status"]).stdout);
+  const statusSaved = JSON.parse(runCli(["--token-status"]).stdout) as TokenStatus;
   ok("[token-cli] --token-status now reports it as stored", statusSaved.stored === true);
   ok("[token-cli] and never prints the token itself",
     !runCli(["--token-status"]).stdout.includes(rotatedTok));
   ok("[token-cli] and reports the saved token as the active source", statusSaved.activeSource === "file");
 
-  const shadowed = JSON.parse(runCli(["--token-status"], { FIGMA_BRIDGE_TOKEN: "env-wins" }).stdout);
+  const shadowed = JSON.parse(runCli(["--token-status"], { FIGMA_BRIDGE_TOKEN: "env-wins" }).stdout) as TokenStatus;
   ok("[token-cli] with the env var set, status reports env as the winner", shadowed.activeSource === "env");
   ok("[token-cli] and flags that the saved token is being shadowed", shadowed.shadowed === true);
   ok("[token-cli] --rotate-token warns when the env var would override the rotation",
@@ -2122,12 +2148,12 @@ async function disconnectErr(code: number, reason: string) {
   ok("[verbs] token [status|show|rotate|forget]",
     tr("token") === "--token-status" && tr("token", "status") === "--token-status" && tr("token", "show") === "--show-token"
     && tr("token", "rotate") === "--rotate-token" && tr("token", "forget") === "--forget-token");
-  const verbErr = (...a: string[]) => { try { translate(a); return null; } catch (e: any) { return e; } };
+  const verbErr = (...a: string[]) => { try { translate(a); return null; } catch (e) { return asErr(e); } };
   ok("[verbs] an unknown sub-noun is a VerbError that names the valid ones",
-    verbErr("list", "bogus") instanceof VerbError && /pages\|libraries\|clients/.test(verbErr("list", "bogus").message)
+    verbErr("list", "bogus") instanceof VerbError && /pages\|libraries\|clients/.test(verbErr("list", "bogus")?.message ?? "")
     && verbErr("token", "bogus") instanceof VerbError);
   ok("[verbs] a near-miss of a verb is a VerbError with a suggestion, not a pull into ./whomai",
-    verbErr("whomai") instanceof VerbError && /dtwin whoami/.test(verbErr("whomai").message) && /dtwin pull whomai/.test(verbErr("whomai").message)
+    verbErr("whomai") instanceof VerbError && /dtwin whoami/.test(verbErr("whomai")?.message ?? "") && /dtwin pull whomai/.test(verbErr("whomai")?.message ?? "")
     && verbErr("serv") instanceof VerbError && verbErr("lists") instanceof VerbError && verbErr("docter") instanceof VerbError);
   ok("[verbs] ordinary folder names, paths and existing folders are never mistaken for a typo",
     ["design", "out", "dist", "app", "build", "src", "figma", "./serv", "exports/list2"].every((d) => tr(d) === d)
@@ -2152,7 +2178,7 @@ async function disconnectErr(code: number, reason: string) {
 
 
   ok("[verbs] a word people reach for that is NOT a verb (`export`, `ls`, `check`) is refused with the real verb — it used to become an outDir and wait for a plugin",
-    ["export", "ls", "check"].every((w) => { try { translate([w]); return false; } catch (e: any) { return e instanceof VerbError && /did you mean `dtwin (pull|list|doctor)`/.test(e.message); } })
+    ["export", "ls", "check"].every((w) => { try { translate([w]); return false; } catch (e) { return e instanceof VerbError && /did you mean `dtwin (pull|list|doctor)`/.test(e.message); } })
     && tr("pull", "export") === "export" && translate(["export"], () => true).join(" ") === "export" && tr("./export") === "./export");
   {
     const t0 = Date.now();
@@ -2223,9 +2249,10 @@ async function disconnectErr(code: number, reason: string) {
   })();
 
   const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-"));
-  const byId = (checks: any[], id: string) => checks.find((c: any) => c.id === id);
+  // A missing check throws here (as the untyped `.status` on undefined did), naming which one.
+  const byId = (checks: Check[], id: string): Check => { const c = checks.find((x) => x.id === id); if (!c) throw new Error("no '" + id + "' check"); return c; };
   ok("[doctor] project: an empty directory is a note (never a failure) pointing at init",
-    byId(doctor.checkProject(projDir), "project").status === "warn" && !doctor.checkProject(projDir).some((c: any) => c.status === "fail"));
+    byId(doctor.checkProject(projDir), "project").status === "warn" && !doctor.checkProject(projDir).some((c) => c.status === "fail"));
   fs.mkdirSync(path.join(projDir, "design"));
   fs.writeFileSync(path.join(projDir, "design", "target.json"), "{}");
   const exportedAt = Date.parse("2026-01-01T00:00:00Z");
@@ -2237,7 +2264,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[doctor] project: an export past 24h is flagged stale", byId(doctor.checkProject(projDir, exportedAt + 3 * 86400000), "export").status === "warn");
   ok("[doctor] project: no codeconnect.local.json is a note", byId(fresh, "map").status === "warn");
   ok("[doctor] project: a legacy `figma` MCP key pointing at figma-mcp.mjs still works, and is told about `designtwin`",
-    byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next));
+    byId(fresh, "mcp").status === "warn" && /designtwin/.test(byId(fresh, "mcp").next ?? ""));
   fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
 
@@ -2258,13 +2285,13 @@ async function disconnectErr(code: number, reason: string) {
       layout && layout.status === "warn" && /BOTH layouts/.test(layout.detail) && /design\/pages/.test(layout.detail));
     ok("[doctor] parallel layout: says which one it is actually reading", /design\/export/.test(layout.detail));
     ok("[doctor] parallel layout: the fix points at `dtwin pull --node`, and calls out `dtwin pull design ...` as the trap to avoid, never as the recommended fix",
-      /never `dtwin pull design/.test(layout.next) && /dtwin pull --node/.test(layout.next));
+      /never `dtwin pull design/.test(layout.next ?? "") && /dtwin pull --node/.test(layout.next ?? ""));
 
     // No parallel tree, no warning:
     const cleanDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-clean-"));
     fs.mkdirSync(path.join(cleanDir, "design", "export"), { recursive: true });
     fs.writeFileSync(path.join(cleanDir, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: new Date().toISOString(), file: "Real File" }));
-    ok("[doctor] no parallel tree, no layout warning", !byId(doctor.checkProject(cleanDir), "layout"));
+    ok("[doctor] no parallel tree, no layout warning", !doctor.checkProject(cleanDir).find((c) => c.id === "layout"));
   }
 
   // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
@@ -2309,7 +2336,7 @@ async function disconnectErr(code: number, reason: string) {
     const okChecks = [{ id: "a", status: "ok" }, { id: "b", status: "ok" }];
     const notCheckedWarn = [{ id: "a", status: "ok" }, { id: "plugin", status: "warn", detail: "not checked — port 8787 is held by something else" }];
     const ordinaryWarn = [{ id: "a", status: "ok" }, { id: "export", status: "warn", detail: "exported 3 days ago — the Figma file may have moved on" }];
-    const runOk = (checks: any[]) => !checks.some((c: any) => c.status === "fail" || (c.status === "warn" && /not checked/i.test(c.detail || "")));
+    const runOk = (checks: Array<{ status: string; detail?: string }>) => !checks.some((c) => c.status === "fail" || (c.status === "warn" && /not checked/i.test(c.detail || "")));
     ok("[doctor] ok roll-up: all-ok is true", runOk(okChecks) === true);
     ok("[doctor] ok roll-up: a plain warn (advice about project state) stays true", runOk(ordinaryWarn) === true);
     ok("[doctor] ok roll-up: a 'not checked' warn makes it false, even with zero fails", runOk(notCheckedWarn) === false);
@@ -2318,9 +2345,9 @@ async function disconnectErr(code: number, reason: string) {
   console.log("\ndoctor — probes (real sockets, spare ports):");
   const httpSrv = http.createServer((q, s) => s.end("hi"));
   await new Promise<void>((r) => httpSrv.listen(0, "127.0.0.1", r));
-  const httpProbe = await doctor.probePort((httpSrv.address() as any).port);
+  const httpProbe = await doctor.probePort((httpSrv.address() as AddressInfo).port);
   ok("[doctor] probePort: a plain HTTP server is identified as not-a-bridge", httpProbe.free === false && httpProbe.holder === "http");
-  const freed = (httpSrv.address() as any).port;
+  const freed = (httpSrv.address() as AddressInfo).port;
   await new Promise<void>((r) => httpSrv.close(() => r()));
   ok("[doctor] probePort: a free port is free, and the probe leaves nothing listening",
     (await doctor.probePort(freed)).free === true && (await doctor.probePort(freed)).free === true);
@@ -2366,7 +2393,7 @@ async function disconnectErr(code: number, reason: string) {
   // (bridge/doctor.js ALLOWED_PORTS) and are not bound by the daemon (which only ever holds one), so
   // this is deterministic whether or not a daemon is running elsewhere.
   const docJson = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "8789" });
-  const docReport = (() => { try { return JSON.parse(docJson.stdout); } catch (e: any) { return { checks: [] }; } })();
+  const docReport = ((): Partial<Report> & { checks: Check[] } => { try { return JSON.parse(docJson.stdout) as Report; } catch { return { checks: [] }; } })();
   ok("[doctor-cli] --json prints one parseable report and nothing else on stdout", docReport.checks.length >= 6);
   ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));
   ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
@@ -2378,7 +2405,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Node\.js:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
   const badPort = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "9999" });
   ok("[doctor-cli] a bad FIGMA_BRIDGE_PORT is a reported ✗ (exit 1), not a crash inside server-core",
-    badPort.status === 1 && byId(JSON.parse(badPort.stdout).checks, "port").status === "fail" && !badPort.stderr.includes("[bridge]"));
+    badPort.status === 1 && byId((JSON.parse(badPort.stdout) as Report).checks, "port").status === "fail" && !badPort.stderr.includes("[bridge]"));
   ok("[doctor-cli] unknown arguments are refused", runDoctor(["--nope"]).status === 1 && runDoctor(["--wait", "x"]).status === 1);
   ok("[doctor-cli] doctor --help exits 0", runDoctor(["--help"]).status === 0);
 
@@ -2497,8 +2524,8 @@ async function disconnectErr(code: number, reason: string) {
       // Mirrors the daemon branch of doctor.run() directly (that branch requires server-core lazily
       // the same way connectedDetail does), using a client shaped exactly like an old daemon's own
       // describe() output — no pluginVersion/pluginStale keys at all.
-      const oldDaemonClients = [{ connId: "c1", file: "TeamSmart (Copy)", identified: true }];
-      const stale = oldDaemonClients.some((cl: any) => cl.pluginStale || core.daemonRowStalenessNote(cl));
+      const oldDaemonClients: Partial<ClientRow>[] = [{ connId: "c1", file: "TeamSmart (Copy)", identified: true }];
+      const stale = oldDaemonClients.some((cl) => cl.pluginStale || core.daemonRowStalenessNote(cl));
       return stale === true;
     })());
 
@@ -2512,9 +2539,9 @@ async function disconnectErr(code: number, reason: string) {
     ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-1", file: "Silent File" }));
     await b.waitForIdentified(1000);
     const start = Date.now();
-    let err = null;
+    let err: Error | undefined;
     try { await b.request("exportNode", { nodeId: "7314:87192" }, 60000, undefined, 300); }
-    catch (e: any) { err = e; }
+    catch (e) { err = asErr(e); }
     const elapsed = Date.now() - start;
     ok("[stall] a client that never answers and never reports progress is aborted by the STALL timeout, not the full one",
       !!err && elapsed < 5000 && /dtwin serve/.test(err.message) && /7314:87192/.test(err.message));
@@ -2530,10 +2557,10 @@ async function disconnectErr(code: number, reason: string) {
     await b.waitForIdentified(1000);
     // stallMs=300, but a progress frame every 100ms — the request must survive well past 300ms of
     // WALL-CLOCK time without the stall timer firing, because activity never actually goes quiet.
-    const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch (e: any) {} }, 100);
+    const ticker = setInterval(() => { try { ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); } catch {} }, 100);
     const req = b.request("exportFull", {}, 5000, undefined, 300);
     let rejectedWithStall = false;
-    req.catch((e: any) => { if (e && /no response from the Figma plugin/.test(e.message)) rejectedWithStall = true; });
+    req.catch((e: unknown) => { if (e instanceof Error && /no response from the Figma plugin/.test(e.message)) rejectedWithStall = true; });
     await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
     clearInterval(ticker);
     ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
@@ -2606,12 +2633,12 @@ async function disconnectErr(code: number, reason: string) {
     // there is only ever one file, so there is nothing for the duplicates scan to find.
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
     const idx = writeOut.writeScreenAssets(dir, { base: "S", assets: "pages/P/S.assets.json" } as unknown as ScreenPaths, [a1, a2]);
-    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8"));
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[content-dedup] `duplicates` is empty — the writer no longer creates the duplicate it used to report",
       doc.duplicates.length === 0);
     const diskHash = crypto.createHash("sha1").update(fs.readFileSync(path.join(dir, "assets", "Ellipse_2327.svg"))).digest("hex");
     ok("[content-dedup] both manifest rows carry the hash of the ONE file on disk",
-      doc.files.every((f: any) => f.hash === diskHash));
+      doc.files.every((f) => f.hash === diskHash));
   }
   {
     // The drifted arrow-down pair (real fixture, ≤0.002px apart) handed to writeAssets under two
@@ -2661,7 +2688,7 @@ async function disconnectErr(code: number, reason: string) {
     const ref = { id: "n1:ref", file: "assets/n1_ref.png", base64: Buffer.from("x".repeat(1000)).toString("base64"), hash: "dddddddd-1", kind: "reference" };
     writeOut.writeAssets(dir, [icon, ref]);
     const idx = writeOut.writeScreenAssets(dir, { base: "Screen", assets: "pages/P/Screen.assets.json" } as unknown as ScreenPaths, [icon, ref]);
-    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "Screen.assets.json"), "utf8"));
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "Screen.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[ref-asset] the reference PNG is not counted in `count`/`totalBytes`", doc.count === 1 && doc.totalBytes === icon.text.length);
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
   }
@@ -2685,10 +2712,10 @@ async function disconnectErr(code: number, reason: string) {
         manifest: { nodes: 100, assetsGeometry: 40 },
       },
     } as unknown as ExportResult; // hand-built: the manifest carries only what the warning reads
-    const lines: any[] = [];
-    writeOut.writeScreen(dir, r, (m: any) => lines.push(m));
+    const lines: string[] = [];
+    writeOut.writeScreen(dir, r, (m) => lines.push(m));
     ok("[geometry-warn] writeScreen() logs the geometry-fallback warning at pull time",
-      lines.some((l: any) => /assetsGeometry|fell back to raw geometry/.test(l)));
+      lines.some((l) => /assetsGeometry|fell back to raw geometry/.test(l)));
   }
 
   // ---------------------------------------------------------------- P5: design-diff.js asset-hash tolerance (findings 25/222)
@@ -2702,7 +2729,7 @@ async function disconnectErr(code: number, reason: string) {
     // of an unchanged icon looks exactly like this — same node id, same asset path, only the SVG bytes
     // differ because Figma's exporter re-rounded some coordinates.
     const docFor = () => ({ exportedAt: "2026-01-01T00:00:00Z", tree: { id: "1:1", type: "FRAME", name: "root", asset: "assets/arrow-down.svg", children: [] } });
-    const setup = (nowContent: any) => {
+    const setup = (nowContent: string) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-svgnorm-"));
       fs.mkdirSync(path.join(root, "assets"));
       const file = path.join(root, "screen.json");
@@ -2711,7 +2738,7 @@ async function disconnectErr(code: number, reason: string) {
     };
     // Build the "prev" hash from one variant's real bytes, then diff against the doc whose on-disk
     // bytes are a DIFFERENT variant's — exactly redrawnAssets()'s contract.
-    const prevFor = (file: string, content: any) => {
+    const prevFor = (file: string, content: string) => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-svgnorm-prev-"));
       const prevAssetPath = path.join(tmp, "assets"); fs.mkdirSync(prevAssetPath);
       fs.writeFileSync(path.join(prevAssetPath, "arrow-down.svg"), content);

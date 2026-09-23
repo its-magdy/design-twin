@@ -13,24 +13,30 @@ import { crossCheck, toMarkdown } from "../design-to-code/cross-check.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { ok, report } from "./assert.ts";
 import type { CrossCheckScreen } from "../design-to-code/cross-check.ts";
-import type { CodeConnectMap, ComponentsCatalog, IrNode, ScreenDoc, TokensDoc } from "../design-to-code/types.ts";
+import type {
+  CodeConnectMap, ComponentPropValues, ComponentsCatalog, CoverageBucket, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode,
+  CrossCheckReport, IrNode, ScreenDoc, TokensDoc,
+} from "../design-to-code/types.ts";
 
-const has = (res: any, code: any) => res.findings.some((f: any) => f.code === code);
-const get = (res: any, code: any) => res.findings.find((f: any) => f.code === code);
-const sev = (res: any, code: any) => (get(res, code) || {}).severity;
+type Findings = { findings: CrossCheckFinding[] };
+const has = (res: Findings, code: CrossCheckFindingCode) => res.findings.some((f) => f.code === code);
+// Every caller reads a property straight off the finding (a missing one throws, as the JS did); `sev`
+// is the one read that tolerates absence.
+const get = (res: Findings, code: CrossCheckFindingCode) => res.findings.find((f) => f.code === code)!;
+const sev = (res: Findings, code: CrossCheckFindingCode) => res.findings.find((f) => f.code === code)?.severity;
 // ts-port: the `pairs` extra a derived-mode-contrast finding carries (Finding's extras are `unknown`).
-type ContrastPair = { fg: string; bg: string; nodes: string[]; sample: string };
+type ContrastPair = { fg: string; bg: string; ratio: number; nodes: string[]; sample: string };
 
 // ---------------------------------------------------------------- fixtures
-const instance = (id: any, setKey: any, setName: any, props?: any) => ({
+const instance = (id: string, setKey: string, setName: string, props?: ComponentPropValues) => ({
   type: "INSTANCE", id, name: setName, props: props || {},
   mainComponent: { name: setName, key: setKey + "-v", setKey, setName },
 });
-const text = (id: any, family: any, style?: any, token?: any) => ({
+const text = (id: string, family: string, style?: string | null, token?: string) => ({
   type: "TEXT", id, font: { family, size: 14 }, styles: style ? { text: style } : undefined,
   tokens: token ? { fills: token } : undefined,
 });
-const screen = (label: any, children?: any) => ({
+const screen = (label: string, children?: unknown[]) => ({
   doc: { exportedAt: "2026-09-22T00:00:00Z", screen: label, nodes: [{ type: "FRAME", id: "1:1", resolvedModes: { Sem: "Dark" }, children }] },
   label,
 }) as unknown as CrossCheckScreen; // ts-port: hand-built fixture
@@ -155,7 +161,7 @@ console.log("cross-check — does the catalog cover the screen:");
   ok("[coverage] a unique name + prop overlap is offered as an unverified lead", res.coverage!.matchedByName === 1);
   ok("[coverage] the lead is reported ONCE for the whole set, not once per component",
     res.findings.filter((f) => f.code === "name-matched-components").length === 1);
-  ok("[coverage] and every lead carries verified:false", get(res, "name-matched-components").components.every((c: any) => c.verified === false));
+  ok("[coverage] and every lead carries verified:false", (get(res, "name-matched-components").components as Array<{ verified?: boolean }>).every((c) => c.verified === false));
   ok("[coverage] an AMBIGUOUS name is left unmatched, not guessed",
     res.coverage!.ambiguousName === 1 && has(res, "ambiguous-component-name"));
   ok("[coverage] the ambiguous warning says how many candidates there were",
@@ -191,7 +197,7 @@ console.log("cross-check — sentinel values and missing modes:");
   const res = crossCheck({ screens: [screen("S", [])], tokens: DS_TOKENS, variables: DS_TOKENS });
   ok("[sentinel] a radius of 1e9 is reported as a sentinel, not a measurement", has(res, "sentinel-token-value"));
   ok("[sentinel] it is reported ONCE even though both inputs carry the same variable",
-    get(res, "sentinel-token-value").tokens.length === 1);
+    (get(res, "sentinel-token-value").tokens as unknown[]).length === 1);
   ok("[sentinel] and it names each platform's real idiom instead of a number",
     /9999px or 50%/.test(get(res, "sentinel-token-value").message) && /infinity/.test(get(res, "sentinel-token-value").message));
 }
@@ -226,7 +232,7 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   ok("[contrast] it names the mode that was never drawn, not the one that was",
     get(res, "derived-mode-contrast").mode === "Light");
   ok("[contrast] and reports the actual ratio, not a verdict",
-    get(res, "derived-mode-contrast").pairs[0].ratio < 4.5 && get(res, "derived-mode-contrast").pairs[0].ratio > 1);
+    (get(res, "derived-mode-contrast").pairs as ContrastPair[])[0].ratio < 4.5 && (get(res, "derived-mode-contrast").pairs as ContrastPair[])[0].ratio > 1);
   ok("[contrast] the fix it asks for is a designer answer or a real frame, never an invented override",
     /Do not invent an override/.test(get(res, "derived-mode-contrast").message));
 }
@@ -288,7 +294,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // coverage line keeps its numbers (it is map/catalog coverage by key) but must say how many of those
 // instances — and which whole sets — will never be built, and that it is NOT a build-coverage number.
 {
-  const gp = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), "utf8"));
+  const gp = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), "utf8")) as ScreenDoc;
   const cov = screenCoverage({ components: {} } as unknown as CodeConnectMap, { components: [] }, [gp]); // ts-port: hand-built fixture
   ok("[drift-lint wording] instances are still counted in full (87), with the 45 on hidden layers named", cov.instances === 87 && cov.hiddenInstances === 45);
   ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
@@ -308,14 +314,14 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // derived-mode contrast check graded hidden text.
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
-  const jr = JSON.parse(fs.readFileSync(path.join(FXL, "verify", "positions___7314_87192.json"), "utf8"));
-  const hidden = new Set();
-  (function w(n: any, h: any) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
-  const citesHidden = (f: any) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
-  const rd = (p: any) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8"));
+  const jr = JSON.parse(fs.readFileSync(path.join(FXL, "verify", "positions___7314_87192.json"), "utf8")) as ScreenDoc;
+  const hidden = new Set<string | undefined>();
+  (function w(n: { id?: string; hidden?: boolean; children?: IrNode[] }, h: boolean) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
+  const citesHidden = (f: unknown) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
+  const rd = <T,>(p: string) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8")) as T;
   const tokRes = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }],
-    variables: rd("pages/__Organization_management_/positions___7314_87192.vars.json"), tokens: rd("design-system/tokens.json"),
-    components: rd("design-system/components.local.json"), componentsLibrary: rd("design-system/components.library.json") });
+    variables: rd<TokensDoc>("pages/__Organization_management_/positions___7314_87192.vars.json"), tokens: rd<TokensDoc>("design-system/tokens.json"),
+    components: rd<ComponentsCatalog>("design-system/components.local.json"), componentsLibrary: rd<ComponentsCatalog>("design-system/components.library.json") });
   ok("[hidden] token findings on the real Job Roles export cite no hidden node", tokRes.findings.length > 0 && !tokRes.findings.some(citesHidden));
   // Derived-mode contrast. The export was rendered in 'Semantic Variables 01' = Dark (root.resolvedModes);
   // a 'Dim' mode (rendered nowhere — note 'Light' IS rendered, by the 'Default' collection) is declared
@@ -331,8 +337,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   } as unknown as TokensDoc; // ts-port: hand-built fixture
   const c = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }], variables: vars });
   const dm = c.findings.find((f) => f.code === "derived-mode-contrast");
-  ok("[hidden] derived-mode contrast still fires on VISIBLE text (the check is not dead)", !!dm && (dm.pairs as ContrastPair[]).some((p: any) => p.fg === "Text/Main Titles"));
-  ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !(dm.pairs as ContrastPair[]).some((p: any) => p.fg === "Text/Description") && !citesHidden(dm));
+  ok("[hidden] derived-mode contrast still fires on VISIBLE text (the check is not dead)", !!dm && (dm.pairs as ContrastPair[]).some((p) => p.fg === "Text/Main Titles"));
+  ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !(dm.pairs as ContrastPair[]).some((p) => p.fg === "Text/Description") && !citesHidden(dm));
 }
 
 // ---------------------------------------------------------------- CLI: auto-discovery of variables.json (P4 #38/#39/#138) ----------
@@ -350,8 +356,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   const withFlag = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"),
     screen, "--design-system", dsDir, "--variables", path.join(FXL, "variables.json"), "--json"], { encoding: "utf8" });
   ok("[cli-autodiscover] no --variables prints which path it auto-discovered", withoutFlag.stderr.includes(path.join(FXL, "variables.json")));
-  const resNoFlag = JSON.parse(withoutFlag.stdout);
-  const resFlag = JSON.parse(withFlag.stdout);
+  const resNoFlag = JSON.parse(withoutFlag.stdout) as CrossCheckReport;
+  const resFlag = JSON.parse(withFlag.stdout) as CrossCheckReport;
   ok("[cli-autodiscover] auto-discovery reports the SAME blocker count as passing --variables explicitly",
     resNoFlag.summary.blockers === resFlag.summary.blockers && resNoFlag.summary.warnings === resFlag.summary.warnings);
   ok("[cli-autodiscover] the stale-wording bug is gone: never says 'no design/variables.json was given' while one exists",
@@ -362,37 +368,39 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
 // ---------- livetest-3 #318 / #326 on the REAL export (test/fixtures/livetest3/) ----------
 {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
-  const run = (rel: any) => {
+  // What the CLI's --json prints (a CrossCheckReport), or the empty stand-in when it printed nothing parseable.
+  type CliReport = Pick<CrossCheckReport, "findings" | "componentProposals"> & { coverage: Partial<CrossCheckCoverage> | null };
+  const run = (rel: string): CliReport => {
     const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.join(FX, rel), "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
-    try { return JSON.parse(r.stdout); } catch (e) { return { coverage: {}, findings: [] }; }
+    try { return JSON.parse(r.stdout) as CrossCheckReport; } catch (e) { return { coverage: {}, findings: [] }; }
   };
   // What the build sees: the distinct component sets of VISIBLE instances, and the sets used only on
   // hidden layers — computed here from the fixture itself, not from the tool's own counters.
-  const sets = (rel: any) => {
-    const doc = JSON.parse(fs.readFileSync(path.join(FX, rel), "utf8"));
-    const vis = new Set(), all = new Set();
-    const w = (n: any, hid: any) => {
+  const sets = (rel: string) => {
+    const doc = JSON.parse(fs.readFileSync(path.join(FX, rel), "utf8")) as ScreenDoc;
+    const vis = new Set<string | undefined>(), all = new Set<string | undefined>();
+    const w = (n: IrNode, hid: boolean) => {
       const h = hid || n.hidden === true || n.visible === false;
       if (n.type === "INSTANCE" && n.mainComponent) { const k = n.mainComponent.setKey || n.mainComponent.key; all.add(k); if (!h) vis.add(k); }
       for (const c of n.children || []) w(c, h);
     };
-    for (const r of doc.nodes) w(r, false);
+    for (const r of doc.nodes!) w(r, false);
     return { visible: vis.size, hiddenOnly: [...all].filter((k) => !vis.has(k)).length };
   };
   for (const [label, rel] of [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]]) {
     const res = run(rel), truth = sets(rel);
-    const b = res.coverage!.buckets || {};
-    const sum = Object.values(b).reduce((n: any, x: any) => n + x, 0);
+    const b: Partial<Record<CoverageBucket, number>> = res.coverage!.buckets || {};
+    const sum = Object.values(b).reduce((n: number, x: number) => n + x, 0);
     ok(`[318] ${label}: every visible component set lands in exactly ONE bucket — the rows sum to the ${truth.visible} sets the screen really has`,
       truth.visible > 0 && res.coverage!.distinct === truth.visible && sum === truth.visible
-        && (res.coverage!.entries || []).every((e: any) => typeof e.bucket === "string") && (res.coverage!.entries || []).length === truth.visible);
+        && (res.coverage!.entries || []).every((e) => typeof e.bucket === "string") && (res.coverage!.entries || []).length === truth.visible);
     ok(`[318] ${label}: sets used only on hidden layers are reported apart (${truth.hiddenOnly}), not mixed into the buckets`,
       res.coverage!.hiddenOnly === truth.hiddenOnly);
     ok(`[318] ${label}: no name is both a proposal and "new work" or an ambiguous leftover`,
-      (res.componentProposals || []).every((p: any) => !(res.coverage!.entries || []).some((e: any) => e.setName === p.name && e.bucket !== "proposed")));
+      (res.componentProposals || []).every((p) => !(res.coverage!.entries || []).some((e) => e.setName === p.name && e.bucket !== "proposed")));
   }
   const cat = run("pages/In_progress/Create_Activity_Type__18411_84111.json");
-  const s4 = cat.findings.find((f: any) => f.code === "token-name-collision" && f.token === "Space 4");
+  const s4 = cat.findings.find((f) => f.code === "token-name-collision" && f.token === "Space 4");
   ok("[326] an identical-name collision names BOTH subjects: \"The screen's 'Space 4' (key …) and the design system's 'Space 4' share a name\"",
     !!s4 && /^The screen's 'Space 4' \(key 64928e3a…\) and the design system's 'Space 4' share a name but resolve DIFFERENTLY/.test(s4.message));
 }

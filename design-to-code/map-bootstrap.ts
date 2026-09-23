@@ -19,7 +19,7 @@ import { TYPE_TO_KIND as KIND } from "./kinds.ts"; // shared vocab — kept in s
 import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { visibleInstances } from "./component-match.ts";
 
-const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o));
+const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
 
 // Split an arbitrary name into alphanumeric words (drops "/", punctuation, whitespace).
 const words = (name: string | null | undefined): string[] => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -176,7 +176,7 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
 if (import.meta.main) {
-  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
+  const usage = "usage: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   const pi = argv.indexOf("--from-proposals");

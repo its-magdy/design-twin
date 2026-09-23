@@ -6,39 +6,44 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import { checkPlan, computeStatus, colorLiterals, arbitraryPx, hex6, colorKey, isStale, validatePlanHeader, anchorCoverage, moduleImported, importsOf,
   scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import { blockerIds } from "../design-to-code/audit.ts";
 import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/content-hash.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.js";
-import type { PlanFile, ReportRef } from "../design-to-code/verify-build.ts";
-import type { Plan } from "../design-to-code/types.ts";
+import type { CheckPlanResult, PlanFile, ReportRef } from "../design-to-code/verify-build.ts";
+import type {
+  AuditReport, CodeConnectMap, MapEntry, Plan, PlanComputedStatus, PlanHookRecord, ScreenDoc, ScreenExport, VerifyExpectation, VerifyReport, VerifyReportV2,
+} from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
 const HOOK = path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts");
 
 // A throwaway consumer project: files + a plan, returns its root.
-function project(files: any, plan: any, map?: any) {
+function project(files: Record<string, string>, plan: unknown, map?: unknown) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-verify-"));
   for (const [rel, body] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-    fs.writeFileSync(path.join(root, rel), body as any);
+    fs.writeFileSync(path.join(root, rel), body);
   }
   fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
   fs.writeFileSync(path.join(root, "design", "plan", "login.json"), JSON.stringify(plan));
   if (map) fs.writeFileSync(path.join(root, "codeconnect.local.json"), JSON.stringify(map));
   return root;
 }
-const runHook = (root: any, stdin?: any) => spawnSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }), encoding: "utf8" });
-const planOf = (root: any) => JSON.parse(fs.readFileSync(path.join(root, "design", "plan", "login.json"), "utf8"));
+const runHook = (root: string, stdin?: object) => spawnSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }), encoding: "utf8" });
+const planOf = (root: string) => JSON.parse(fs.readFileSync(path.join(root, "design", "plan", "login.json"), "utf8")) as Plan;
+// One row of `verify-build --status --json` (the CLI prints {plan, status, why, reasons, reports}).
+interface StatusRow { plan: string; status: PlanComputedStatus; why: string | null; reasons: string[]; reports: Array<{ file: string; verdict: string | null; matchedBy: string }> }
 // checkPlan returns { blocking, warnings }. `problems` is both, minus the two warnings every hand-made
 // test plan triggers (no plan header, no export to check anchors against) — tests about those say so.
 const AMBIENT = /plan header is missing|could not find this plan's screen export/;
-const split = (files: any, plan: any, map?: any) => { const root = project(files, plan, map); return checkPlan({ plan } as unknown as PlanFile, root); }; // ts-port: hand-built fixture
-const problems = (files: any, plan: any, map?: any) => { const r = split(files, plan, map); return [...r.blocking, ...r.warnings.filter((w: any) => !AMBIENT.test(w))]; };
-const blocks = (files: any, plan: any, map?: any) => split(files, plan, map).blocking;
-const has = (list: any, re: any) => list.some((m: any) => re.test(m));
-const statusOf = (root: any) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
+const split = (files: Record<string, string>, plan: unknown, map?: unknown) => { const root = project(files, plan, map); return checkPlan({ plan } as unknown as PlanFile, root); }; // ts-port: hand-built fixture
+const problems = (files: Record<string, string>, plan: unknown, map?: unknown) => { const r = split(files, plan, map); return [...r.blocking, ...r.warnings.filter((w) => !AMBIENT.test(w))]; };
+const blocks = (files: Record<string, string>, plan: unknown, map?: unknown) => split(files, plan, map).blocking;
+const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
+const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC = { mode: "static-only", reason: "no dev server in package.json" };
 const brand = { value: "#5B5FC7", kind: "color", codeToken: "brand-600", verdict: "exact" };
@@ -79,7 +84,7 @@ check("arbitraryPx reads [Npx] and [Nrem] as px", (() => { const d = arbitraryPx
 // font-size utility on a border-radius, which the gate would then have passed.
 check("[kind] an arbitrary value remembers which utility it was on", (() => {
   const d = arbitraryPx("rounded-[20px] text-[20px]");
-  const u = (d.get(20) || []).map((e: any) => e.utility).sort();
+  const u = (d.get(20) || []).map((e) => e.utility).sort();
   return u.length === 2 && u[0] === "rounded" && u[1] === "text";
 })());
 check("[kind] a radius literal is NOT reported against a fontSize token of the same number", (() => {
@@ -186,7 +191,7 @@ check("[no-token] a REAL token is still enforced — the sentinel list is not a 
 // other's roles (Schemes/On Surface ended up called `on-primary`, while the real Schemes/On Primary
 // was called `on-surface`).
 (() => {
-  const row = (figmaName: any, value: any, codeToken: any) => ({ figmaName, value, kind: "color", codeToken, verdict: "exact" });
+  const row = (figmaName: string, value: string, codeToken: string) => ({ figmaName, value, kind: "color", codeToken, verdict: "exact" });
   const merged = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
     row("Schemes/On Primary", "#ffffff", "text-on-surface"),
     row("Schemes/On Surface", "#ffffff", "text-on-surface"),
@@ -249,7 +254,7 @@ check("rendered with a real artifact + deltas + coverage + a11y is clean", probl
 check("static-only needs a reason", has(problems({}, { verification: { mode: "static-only" } }), /no `reason`/));
 
 console.log("hook process (exit codes; status is computed, never written):");
-const hookOf = (root: any) => (planOf(root).verification || {}).hook || {};
+const hookOf = (root: string): Partial<PlanHookRecord> => planOf(root).verification?.hook || {};
 check("failing plan → exit 2, itemised stderr, `status` untouched, hook result recorded as blocked", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const r = runHook(root);
@@ -309,8 +314,8 @@ check("fan-out: an agent is judged on the plan ITS transcript mentions, not a si
   const unscoped = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: none }).status; // no evidence → all plans → blocked
   fs.writeFileSync(sibling, JSON.stringify(SIBLING)); // forget the unscoped run's record
   const r = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: mine });
-  const sib = JSON.parse(fs.readFileSync(sibling, "utf8"));
-  return unscoped === 2 && r.status === 0 && hookOf(root).result === "pass" && sib.status === "pending" && !sib.verification.hook;
+  const sib = JSON.parse(fs.readFileSync(sibling, "utf8")) as Plan;
+  return unscoped === 2 && r.status === 0 && hookOf(root).result === "pass" && sib.status === "pending" && !sib.verification!.hook;
 })());
 check("fan-out: the session transcript is never used to scope a SUBAGENT's stop", (() => {
   const root = project({ "a.tsx": "text-brand-600", "b.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
@@ -351,7 +356,7 @@ check("stop_hook_active short-circuits (no re-entrant block)", (() => {
   return runHook(root, { cwd: root, stop_hook_active: true }).status === 0;
 })());
 
-const age = (root: any, hours: any) => { const t = new Date(Date.now() - hours * 3600 * 1000); fs.utimesSync(path.join(root, "design", "plan", "login.json"), t, t); };
+const age = (root: string, hours: number) => { const t = new Date(Date.now() - hours * 3600 * 1000); fs.utimesSync(path.join(root, "design", "plan", "login.json"), t, t); };
 check("a pending plan untouched for >12h is a leftover — skipped, not blocking, not closed", (() => {
   const root = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   age(root, 13);
@@ -374,9 +379,9 @@ check("DTWIN_PLAN_STALE_HOURS=0 disables the cutoff", (() => {
 // live run, pruned by its build.js (nothing hand-written).
 const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "plan");
 const JR = "positions___7314_87192", GP = "System_Configurations__1359_21337";
-const fxPlan = (s: any) => JSON.parse(fs.readFileSync(path.join(FX, "plan", s + ".json"), "utf8"));
+const fxPlan = (s: string) => JSON.parse(fs.readFileSync(path.join(FX, "plan", s + ".json"), "utf8")) as Plan;
 // A consumer project laid out exactly like the live one: design/{export,plan,verify}, app/.
-function liveProject(plans: any) {
+function liveProject(plans: Record<string, unknown>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-live-"));
   fs.cpSync(path.join(FX, "export"), path.join(root, "design", "export"), { recursive: true });
   fs.cpSync(path.join(FX, "verify"), path.join(root, "design", "verify"), { recursive: true });
@@ -385,11 +390,11 @@ function liveProject(plans: any) {
   for (const [name, plan] of Object.entries(plans)) fs.writeFileSync(path.join(root, "design", "plan", name + ".json"), JSON.stringify(plan, null, 2));
   return root;
 }
-const checkLive = (root: any, name: any) => {
+const checkLive = (root: string, name: string) => {
   const file = path.join(root, "design", "plan", name + ".json");
-  return checkPlan({ plan: JSON.parse(fs.readFileSync(file, "utf8")), file }, root);
+  return checkPlan({ plan: JSON.parse(fs.readFileSync(file, "utf8")) as Plan, file }, root);
 };
-const colourBlocks = (r: any) => r.blocking.filter((m: any) => /raw colour/.test(m));
+const colourBlocks = (r: CheckPlanResult) => r.blocking.filter((m) => /raw colour/.test(m));
 
 console.log("P2b [100] a hex in a comment or a provenance note is not a literal:");
 {
@@ -420,7 +425,7 @@ console.log("P2b [132] exported SVG artwork is not code:");
   // Global Policies resolves #d4d4d4 to two tokens; calendar-2.svg's baked-in stroke is #D4D4D4.
   // Before: two blocks for a file the skill forbids editing, cured only by allowedLiterals padding.
   const plan = Object.assign(fxPlan(GP), { status: "pending", files: ["app/src/assets/calendar-2.svg"],
-    allowedLiterals: fxPlan(GP).allowedLiterals.filter((a: any) => !(a.file && /\.svg$/.test(a.file))) });
+    allowedLiterals: fxPlan(GP).allowedLiterals!.filter((a) => !(a.file && /\.svg$/.test(a.file))) });
   const root = liveProject({ [GP]: plan });
   check("[132] the real calendar-2.svg (stroke=\"#D4D4D4\") in files[] raises no colour block, with no allowedLiterals entry for it",
     /#D4D4D4/i.test(fs.readFileSync(path.join(root, "app/src/assets/calendar-2.svg"), "utf8")) && colourBlocks(checkLive(root, GP)).length === 0);
@@ -448,22 +453,22 @@ console.log("P2b [131] a reused component resolves by module path, not by substr
     "../../../components/SquareButton": "app/src/components/SquareButton.tsx", "../../../components/DataTable": "app/src/components/DataTable.tsx",
     "../../../components/Icon": "app/src/components/Icon.tsx", "../../../components/Modal": "app/src/components/Modal.tsx" };
   let rewritten = 0;
-  for (const c of plan.components) if (repo[c.mapModule]) { c.mapModule = repo[c.mapModule]; rewritten++; }
+  for (const c of plan.components!) if (c.mapModule && repo[c.mapModule]) { c.mapModule = repo[c.mapModule]; rewritten++; }
   plan.files = ["app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx"];
   const root = liveProject({ [GP]: plan });
   const r = checkLive(root, GP);
   check(`[131] the live Global Policies plan with ${rewritten} honest repo-path mapModules: no import warning, and nothing about components blocks`,
-    rewritten === 6 && !r.warnings.some((w: any) => /imports that module/.test(w)) && !r.blocking.some((b: any) => /component/.test(b)));
-  plan.components[2].mapModule = "app/src/components/Tooltip.tsx";
+    rewritten === 6 && !r.warnings.some((w) => /imports that module/.test(w)) && !r.blocking.some((b) => /component/.test(b)));
+  plan.components![2].mapModule = "app/src/components/Tooltip.tsx";
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(plan));
   const r2 = checkLive(root, GP);
-  check("[131] a genuinely un-imported reuse is a WARNING, not a block", r2.warnings.some((w: any) => /Tooltip/.test(w)) && !r2.blocking.some((b: any) => /Tooltip/.test(b)));
+  check("[131] a genuinely un-imported reuse is a WARNING, not a block", r2.warnings.some((w) => /Tooltip/.test(w)) && !r2.blocking.some((b) => /Tooltip/.test(b)));
 }
 
 console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden ones never count:");
 {
   const S = path.join(FX, "export/pages/__Organization_management_", JR + ".json");
-  const doc = JSON.parse(fs.readFileSync(S, "utf8"));
+  const doc = JSON.parse(fs.readFileSync(S, "utf8")) as ScreenDoc;
   const cov0 = anchorCoverage({ anchors: {} }, doc);
   check("[anchors] with no anchors, all 254 visible nodes are unmapped — reported as ONE subtree (the frame)", cov0.visible === 254 && cov0.unmappedNodes === 254 && cov0.unmapped.length === 1 && cov0.unmapped[0].id === "7314:87192");
   const cov1 = anchorCoverage({ anchors: { "7314:87192": { mapModule: "app/src/features/job-roles/screens/JobRolesScreen.tsx" } } }, doc);
@@ -477,10 +482,10 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
   // Global Policies: the frame draws its footer twice; the plan anchors one and never mentions 1359:21457.
   const root = liveProject({ [GP]: Object.assign(fxPlan(GP), { status: "pending" }) });
   const r = checkLive(root, GP);
-  const b = r.blocking.filter((m: any) => /no anchor in the plan/.test(m));
+  const b = r.blocking.filter((m) => /no anchor in the plan/.test(m));
   check("[anchors] the live Global Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(b[0]) && /^3 visible/.test(b[0]));
   const fixed = fxPlan(GP);
-  fixed.anchors["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
+  fixed.anchors!["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));
   check("[anchors] …and `{omitted: \"<why>\"}` on it clears the block", checkLive(root, GP).blocking.length === 0);
 }
@@ -488,13 +493,13 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
 console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither comes out `verified`:");
 {
   const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
-  const planFile = (s: any) => path.join(root, "design/plan", s + ".json");
-  const st = (s: any) => computeStatus(JSON.parse(fs.readFileSync(planFile(s), "utf8")), { cwd: root, planFile: planFile(s) });
+  const planFile = (s: string) => path.join(root, "design/plan", s + ".json");
+  const st = (s: string) => computeStatus(JSON.parse(fs.readFileSync(planFile(s), "utf8")) as Plan, { cwd: root, planFile: planFile(s) });
   const before = [st(JR), st(GP)];
   check("[155] before the hook runs, the stored \"verified\" is ignored — computed status is pending, and says why",
     fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0])));
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
-  const after = { jr: JSON.parse(fs.readFileSync(planFile(JR), "utf8")), gp: JSON.parse(fs.readFileSync(planFile(GP), "utf8")) };
+  const after = { jr: JSON.parse(fs.readFileSync(planFile(JR), "utf8")) as Plan, gp: JSON.parse(fs.readFileSync(planFile(GP), "utf8")) as Plan };
   check("[155] the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
   const jr = st(JR), gp = st(GP);
   check(`[155/316] Job Roles: not verified — its report (JobRoles.report.json, schema @1) is flagged as predating @2, and its false "31 component(s) … never built" is NOT repeated (got ${jr.status})`,
@@ -502,12 +507,12 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
     && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0].matchedBy === "layer name");
   check(`[189] Global Policies: not verified either (got ${gp.status} — its hook run blocked on the unanchored footer)`, gp.status !== "verified" && gp.status === "blocked");
   const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
-  const rows = JSON.parse(cli.stdout);
-  check("[155] `verify-build.js --status --json` reports the same, and writes nothing", cli.status === 0 && rows.length === 2 && rows.every((x: any) => x.status !== "verified")
+  const rows = JSON.parse(cli.stdout) as StatusRow[];
+  check("[155] `verify-build.js --status --json` reports the same, and writes nothing", cli.status === 0 && rows.length === 2 && rows.every((x) => x.status !== "verified")
     && fs.readFileSync(planFile(JR), "utf8") === JSON.stringify(after.jr, null, 2) + "\n");
   // make GP pass its hook: status must STILL not be verified, because its report says fail
-  const gpFixed = JSON.parse(fs.readFileSync(planFile(GP), "utf8"));
-  gpFixed.anchors["1359:21457"] = { omitted: "duplicate footer" };
+  const gpFixed = JSON.parse(fs.readFileSync(planFile(GP), "utf8")) as Plan;
+  gpFixed.anchors!["1359:21457"] = { omitted: "duplicate footer" };
   fs.writeFileSync(planFile(GP), JSON.stringify(gpFixed, null, 2));
   spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const gp2 = st(GP);
@@ -523,12 +528,12 @@ console.log("P2b [156] the verification block is checked against itself; [196] d
   const root = liveProject({ [JR]: Object.assign(fxPlan(JR), { status: "pending" }), [GP]: Object.assign(fxPlan(GP), { status: "pending" }) });
   const jr = checkLive(root, JR);
   check("[156] the live Job Roles plan: a11y.violations 0 beside coverage.notChecked 'axe/a11y automated scan' is flagged as a contradiction",
-    jr.warnings.some((w: any) => /contradicts itself: `a11y` records 0 violation/.test(w) && /axe\/a11y automated scan/.test(w)));
-  check("[156] a report that fails beside a plan claiming pass is flagged", verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [{ rel: "design/verify/x.report.json", verdict: "fail" }] as unknown as ReportRef[]).some((w: any) => /cannot overrule/.test(w))); // ts-port: hand-built fixture
+    jr.warnings.some((w) => /contradicts itself: `a11y` records 0 violation/.test(w) && /axe\/a11y automated scan/.test(w)));
+  check("[156] a report that fails beside a plan claiming pass is flagged", verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [{ rel: "design/verify/x.report.json", verdict: "fail" }] as unknown as ReportRef[]).some((w) => /cannot overrule/.test(w))); // ts-port: hand-built fixture
   check("[156] a consistent block raises nothing", verificationContradictions({ verification: { a11y: { tool: "axe", violations: 0 }, coverage: { rendered: ["default"], notChecked: [{ what: "rtl" }] } } }, []).length === 0);
   const gp = checkLive(root, GP);
   check("[196] the live Global Policies plan: its 7 prose-only deviations are flagged as missing nodeId/field/designed/built",
-    gp.warnings.some((w: any) => /^7 deviation\(s\) are missing fields/.test(w) && /duplicateFooter/.test(w)));
+    gp.warnings.some((w) => /^7 deviation\(s\) are missing fields/.test(w) && /duplicateFooter/.test(w)));
   check("[196] a calibrated deviation {nodeId, field, designed, built, reason} passes",
     deviationWarnings({ deviations: [{ nodeId: "18580:60861", field: "x", designed: 1296.81, built: 1315.75, reason: "status chips aligned to their header" }] }).length === 0);
 }
@@ -546,23 +551,23 @@ console.log("P2b end to end — plan-skeleton.js writes the plan, the hook check
     g.status === 0 && r1.status === 2 && /254 visible design node\(s\) have no anchor/.test(r1.stderr) && /7314:87192 'positions'/.test(r1.stderr) && !/raw colour/.test(r1.stderr));
   check("…its header is complete except the route, and its unfilled token rows are ONE warning, not 33",
     /plan header is missing `route`/.test(r1.stderr) && (r1.stderr.match(/have no token and no recorded decision/g) || []).length === 1 && /33 token row\(s\)/.test(r1.stderr));
-  const p = JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8"));
-  p.anchors["7314:87192"].mapModule = "app/src/layout/Header.tsx";
+  const p = JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8")) as Plan;
+  p.anchors!["7314:87192"].mapModule = "app/src/layout/Header.tsx";
   p.files = ["app/src/layout/Header.tsx"];
   p.route = "/job-roles";
   fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
   const r2 = hook();
-  const st = computeStatus(JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8")), { cwd: root, planFile: path.join(root, planRel) });
+  const st = computeStatus(JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8")) as Plan, { cwd: root, planFile: path.join(root, planRel) });
   check(`one anchor on the frame + files[] → the hook passes (exit ${r2.status}); status is computed from the live JobRoles report — @1, so unverified: ${st.status}`,
     r2.status === 0 && st.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1/.test(st.reasons.join(" ")));
 }
 
 console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a changed expectation invalidates the report:");
 {
-  const sha = (t: any) => crypto.createHash("sha256").update(t).digest("hex");
+  const sha = (t: string) => crypto.createHash("sha256").update(t).digest("hex");
   // A plan that passes its hook; its report is then swapped between @2 shapes (field names as
   // verify-screen.js --compare writes them since P2a: verdict pass|fail|incomplete, headline, inputs).
-  const setup = (report: any, expectation: any) => {
+  const setup = (report: unknown, expectation: string | undefined) => {
     const root = project({ "a.tsx": "" }, { status: "pending", nodeId: "7314:87192", files: ["a.tsx"], verification: { mode: "rendered", artifacts: ["a.tsx"], deltas: [] } });
     const past = new Date(Date.now() - 60000);
     fs.utimesSync(path.join(root, "a.tsx"), past, past);
@@ -573,7 +578,7 @@ console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a cha
     return computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
   };
   const EXP = JSON.stringify({ schema: "designtwin/verify-expectation@2", frame: { nodeId: "7314:87192", name: "positions " }, hidden: { ids: [] } });
-  const v2 = (verdict: any, extra?: any) => Object.assign({ schema: "designtwin/verify-report@2", screen: "positions ", verdict, headline: `${verdict.toUpperCase()} — nodes measured 180/189`, why: [], inputs: { expectationSha256: sha(EXP) }, summary: { componentsAbsent: 0 } }, extra);
+  const v2 = (verdict: string, extra?: object) => Object.assign({ schema: "designtwin/verify-report@2", screen: "positions ", verdict, headline: `${verdict.toUpperCase()} — nodes measured 180/189`, why: [], inputs: { expectationSha256: sha(EXP) }, summary: { componentsAbsent: 0 } }, extra);
   const inc = setup(v2("incomplete"), EXP);
   check(`an @2 report found through its expectation's frame.nodeId; verdict "incomplete" → unverified, quoting the headline (got ${inc.status})`,
     inc.status === "unverified" && inc.reports[0].matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
@@ -592,13 +597,13 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   const before = path.join(FX, "repull", "before.json"), after = path.join(FX, "repull", "after.json");
   const rawB = fs.readFileSync(before, "utf8"), rawA = fs.readFileSync(after, "utf8");
   check("[314] the real no-change re-pull pair: the files differ (exportedAt), the export content hash does not",
-    rawB !== rawA && exportContentSha256(JSON.parse(rawB)) === exportContentSha256(JSON.parse(rawA)));
+    rawB !== rawA && exportContentSha256(JSON.parse(rawB) as ScreenExport) === exportContentSha256(JSON.parse(rawA) as ScreenExport));
   check("[314] …while a real design edit (one layer renamed) does change it", (() => {
-    const d = JSON.parse(rawA); d.nodes[0].children[0].name += " (edited)";
-    return exportContentSha256(d) !== exportContentSha256(JSON.parse(rawA));
+    const d = JSON.parse(rawA) as ScreenExport; d.nodes[0].children![0].name += " (edited)";
+    return exportContentSha256(d) !== exportContentSha256(JSON.parse(rawA) as ScreenExport);
   })());
   check("[314] `_slices[].at` (variables-merge provenance) is stripped too, the rest of a slice is not", (() => {
-    const v = (at: any, n: any) => ({ _slices: [{ file: "a", at, n }], exportedAt: at });
+    const v = (at: string, n: number) => ({ _slices: [{ file: "a", at, n }], exportedAt: at });
     return exportContentSha256(v("t1", 1)) === exportContentSha256(v("t2", 1)) && exportContentSha256(v("t1", 1)) !== exportContentSha256(v("t1", 2));
   })());
 
@@ -613,20 +618,20 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   fs.writeFileSync(planFile, JSON.stringify({ status: "pending", screenName: "Job Roles", nodeId: "7314:87192", route: "/job-roles", file: `${E}/${JR}.json`,
     files: ["app/src/layout/Header.tsx"], anchors: { "7314:87192": { mapModule: "app/src/layout/Header.tsx" } },
     verification: { mode: "rendered", artifacts: ["app/src/layout/Header.tsx"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }, null, 2));
-  const vs = (args: any) => spawnSync(process.execPath, [VS, ...args], { cwd: root, encoding: "utf8" });
+  const vs = (args: string[]) => spawnSync(process.execPath, [VS, ...args], { cwd: root, encoding: "utf8" });
   const hook = () => spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
-  const st = () => computeStatus(JSON.parse(fs.readFileSync(planFile, "utf8")), { cwd: root, planFile });
+  const st = () => computeStatus(JSON.parse(fs.readFileSync(planFile, "utf8")) as Plan, { cwd: root, planFile });
   const x = vs(["--expect", `${E}/${JR}.json`]);
   fs.writeFileSync(path.join(root, "design/verify/m.json"), JSON.stringify({ measuredAt: "2026-09-23T00:00:00Z", renderer: "test", nodes: [] }));
   const c = vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
   const repFile = path.join(root, "design/verify", JR + ".report.json");
-  const rep = JSON.parse(fs.readFileSync(repFile, "utf8"));
-  const expectation = JSON.parse(fs.readFileSync(path.join(root, "design/verify", JR + ".expected.json"), "utf8"));
+  const rep = JSON.parse(fs.readFileSync(repFile, "utf8")) as VerifyReportV2;
+  const expectation = JSON.parse(fs.readFileSync(path.join(root, "design/verify", JR + ".expected.json"), "utf8")) as VerifyExpectation;
   check("[314] --expect records the export's content hash in the expectation (exportContentSha256)",
-    x.status === 0 && expectation.exportContentSha256 === exportContentSha256(JSON.parse(rawB)));
+    x.status === 0 && expectation.exportContentSha256 === exportContentSha256(JSON.parse(rawB) as ScreenExport));
   check("[317] --compare records WHAT it measured: the export content hash, and the plan's files[] hashed exactly as the Stop hook hashes them",
-    rep.inputs.exportContentSha256 === expectation.exportContentSha256 && rep.inputs.code.plan === `design/plan/${JR}.json`
-    && JSON.stringify(rep.inputs.code.files) === JSON.stringify(hashFiles(["app/src/layout/Header.tsx"], root)) && "gitHead" in rep.inputs.code);
+    rep.inputs!.exportContentSha256 === expectation.exportContentSha256 && rep.inputs!.code!.plan === `design/plan/${JR}.json`
+    && JSON.stringify(rep.inputs!.code!.files) === JSON.stringify(hashFiles(["app/src/layout/Header.tsx"], root)) && "gitHead" in rep.inputs!.code!);
   // The report above is real; its verdict is set to "pass" to stand for a passing render (the probe
   // here measured nothing). Every other field is what --compare wrote.
   rep.verdict = "pass";
@@ -646,7 +651,7 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   check(`[314] a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}; before: unverified)`,
     /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
   // a real design change
-  const edited = JSON.parse(rawA); edited.nodes[0].children[0].name += " (edited)";
+  const edited = JSON.parse(rawA) as ScreenExport; edited.nodes[0].children![0].name += " (edited)";
   fs.writeFileSync(exportFile, JSON.stringify(edited));
   const s3 = st();
   check(`[314] a real design change → unverified, naming the content hash change (got ${s3.status})`, s3.status === "unverified" && /the design changed since/.test(s3.reasons.join(" ")));
@@ -679,20 +684,20 @@ console.log("P2b follow-up — --status on the untouched live plan: precedence, 
   // original schema-@1 JobRoles.report.json saying fail.
   const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
   const cli = spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" });
-  const row = JSON.parse(cli.stdout)[0];
+  const row = (JSON.parse(cli.stdout) as StatusRow[])[0];
   check(`the untouched Job Roles plan → pending, with a why naming the ignored stored status, the unrun hook, and the @1 report and its verdict (got ${row.status}; why ${row.why === null ? "null" : "set"})`,
     cli.status === 0 && row.status === "pending" && typeof row.why === "string"
     && /stored "status": "verified" was not confirmed/.test(row.why) && /Stop hook has not checked this plan/.test(row.why)
     && /JobRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\)/.test(row.why) && /Regenerate it/.test(row.why)
     && !/never built|31 component/.test(row.why));
-  const all = JSON.parse(spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" }).stdout);
-  check("every non-verified row of --status --json carries a non-empty why", all.length === 2 && all.every((r: any) => r.status === "verified" || (typeof r.why === "string" && r.why.length > 0)));
+  const all = JSON.parse(spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" }).stdout) as StatusRow[];
+  check("every non-verified row of --status --json carries a non-empty why", all.length === 2 && all.every((r) => r.status === "verified" || (typeof r.why === "string" && r.why.length > 0)));
   // precedence 2 over 5: an @2 report that FAILS is reported as failed even though the hook never ran
-  const rep = JSON.parse(fs.readFileSync(path.join(root, "design/verify/JobRoles.report.json"), "utf8"));
+  const rep = JSON.parse(fs.readFileSync(path.join(root, "design/verify/JobRoles.report.json"), "utf8")) as VerifyReport;
   fs.writeFileSync(path.join(root, "design/verify/JobRoles.report.json"), JSON.stringify(Object.assign(rep, { schema: "designtwin/verify-report@2", headline: "FAIL — nodes measured 76/186" })));
-  const r2 = JSON.parse(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout)[0];
+  const r2 = (JSON.parse(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout) as StatusRow[])[0];
   check(`precedence: a failing @2 report is "failed" even before the hook has run, and why still says the hook has not (got ${r2.status})`,
-    r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why) && /hook: the build-screen Stop hook has not checked/.test(r2.why));
+    r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why ?? "") && /hook: the build-screen Stop hook has not checked/.test(r2.why ?? ""));
   check("--help documents the precedence", /First match wins/.test(spawnSync(process.execPath, [HOOK, "--help"], { encoding: "utf8" }).stdout));
 }
 
@@ -702,41 +707,44 @@ const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
 const catalogFile = path.join(bootDir, "components.local.json");
 const mapFile = path.join(bootDir, "codeconnect.local.json");
 fs.writeFileSync(catalogFile, JSON.stringify({ components: [{ type: "COMPONENT", key: "k-btn", id: "1:2", name: "Button", props: {} }] }));
+// de-any: the merge check below hand-sets status "confirmed", which is not a MapStatus (active|deprecated|needs-review) —
+// the map is read with status widened to string so that write (and its read-back) type-checks unchanged.
+type MapView = Omit<CodeConnectMap, "components"> & { components: Record<string, Omit<MapEntry, "status"> & { status?: string }> };
 check("--out writes the map file and keeps stdout clean", (() => {
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
-  return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && JSON.parse(fs.readFileSync(mapFile, "utf8")).components["k-btn"].status === "needs-review";
+  return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && (JSON.parse(fs.readFileSync(mapFile, "utf8")) as CodeConnectMap).components["k-btn"].status === "needs-review";
 })());
 check("re-running --out MERGES into the existing map — hand edits survive", (() => {
-  const map = JSON.parse(fs.readFileSync(mapFile, "utf8"));
+  const map = JSON.parse(fs.readFileSync(mapFile, "utf8")) as MapView;
   map.components["k-btn"].code.module = "@/ui/Button";
   map.components["k-btn"].status = "confirmed";
   fs.writeFileSync(mapFile, JSON.stringify(map));
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
-  const after = JSON.parse(fs.readFileSync(mapFile, "utf8")).components["k-btn"];
+  const after = (JSON.parse(fs.readFileSync(mapFile, "utf8")) as MapView).components["k-btn"];
   return r.status === 0 && after.code.module === "@/ui/Button" && after.status === "confirmed" && /merged/.test(r.stderr);
 })());
 check("without --out it still prints to stdout (back-compat)", (() => {
   const r = spawnSync(process.execPath, [BOOT, catalogFile], { encoding: "utf8" });
-  return r.status === 0 && JSON.parse(r.stdout).components["k-btn"];
+  return r.status === 0 && (JSON.parse(r.stdout) as CodeConnectMap).components["k-btn"];
 })());
 check("an unknown option is refused, not swallowed as a file path", spawnSync(process.execPath, [BOOT, catalogFile, "--output", mapFile], { encoding: "utf8" }).status === 1);
 
 console.log("claude-plugin/scripts bundles:");
 const SCRIPTS = path.join(import.meta.dirname, "..", "claude-plugin", "scripts");
-check("every entry is a committed REAL file (a symlink out of the plugin dir is not installed)", ENTRIES.every((n: any) => {
+check("every entry is a committed REAL file (a symlink out of the plugin dir is not installed)", ENTRIES.every((n) => {
   const p = path.join(SCRIPTS, n + ".js");
   return fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink();
 }));
-check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n: any) =>
+check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n) =>
   !/(require\(|from )["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
 {
   const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton"];
-  const walk = (d: any): any[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
-  const bare: any[] = [];
+  const bare: string[] = [];
   for (const f of [...walk(path.join(SCRIPTS, "..", "skills")), ...walk(path.join(SCRIPTS, "..", "agents"))]) {
     const text = fs.readFileSync(f, "utf8");
     for (const m of text.matchAll(/scripts\/([a-z-]+)\.js"(\s*)(\S)/g))
@@ -747,7 +755,7 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 build(tmp).then(async () => {
-  const stale = ENTRIES.filter((n: any) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
+  const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
   check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.js)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
@@ -778,9 +786,9 @@ build(tmp).then(async () => {
   })());
 
   // Findings 99/133 (§2.9 d/e): stdin is read only when it is not a terminal, never waited on forever.
-  const timed = (args: any, opts: any, feed?: any) => new Promise<any>((resolve) => {
+  const timed = (args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv }, feed?: (stdin: Writable) => unknown) => new Promise<{ code: number | null; ms: number; stderr: string }>((resolve) => {
     const t0 = Date.now();
-    const c = spawn(process.execPath, [HOOK, ...args], Object.assign({ stdio: ["pipe", "pipe", "pipe"] }, opts));
+    const c = spawn(process.execPath, [HOOK, ...args], { stdio: ["pipe", "pipe", "pipe"], ...opts });
     let err = "";
     c.stderr.on("data", (d) => { err += d; });
     if (feed) feed(c.stdin);
@@ -790,13 +798,13 @@ build(tmp).then(async () => {
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-empty-"));
   const silent = await timed([], { cwd: empty }); // an open pipe that never writes and never closes
   check(`[133] an attached pipe that never delivers a payload does not hang: exit ${silent.code} in ${silent.ms} ms (< 2000)`, silent.code === 0 && silent.ms < 2000);
-  const cut = await timed([], { cwd: empty, env: Object.assign({}, process.env, { DTWIN_HOOK_TIMEOUT_MS: "1500" }) }, (s: any) => s.write("{"));
+  const cut = await timed([], { cwd: empty, env: Object.assign({}, process.env, { DTWIN_HOOK_TIMEOUT_MS: "1500" }) }, (s) => s.write("{"));
   check(`[§2.9e] a payload with no end-of-file is cut off by the hard timeout, naming what it waited on (exit ${cut.code}, ${cut.ms} ms)`,
     cut.code === 1 && /timed out after 2 s waiting for the hook payload on stdin/.test(cut.stderr) && cut.ms < 5000);
   const posRoot = project({ "a.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   const pos = await timed([path.join(posRoot, "design", "plan", "login.json")], {});
   check(`[99] a plan path as an argument is checked without touching stdin (exit ${pos.code} in ${pos.ms} ms)`, pos.code === 2 && pos.ms < 2000 && /brand-600/.test(pos.stderr));
-  const hooks = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "claude-plugin", "hooks", "hooks.json"), "utf8"));
+  const hooks = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "claude-plugin", "hooks", "hooks.json"), "utf8")) as { hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout: number }> }>> };
   const h = hooks.hooks.SubagentStop[0].hooks[0];
   check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js and gives it longer than its own 60 s cut-off",
     /scripts\/verify-build\.js"?$/.test(h.command) && h.timeout > 60);
@@ -806,7 +814,7 @@ build(tmp).then(async () => {
   // livetest-3 run). auditGateWarnings is a WARNING only — this file blocks on exactly two things
   // (a raw colour, an unanchored node) — never a `blocking` entry.
   {
-    const auditDoc = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest3", "plan", "audit", "System_Configurations.json"), "utf8"));
+    const auditDoc = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest3", "plan", "audit", "System_Configurations.json"), "utf8")) as AuditReport;
     const ids = blockerIds(auditDoc);
     check("[P6-136] the real System_Configurations audit has 5 blocker ids", ids.length === 5 && ids[0] === "catalog-covers-nothing#0");
     const mkCwd = () => {
@@ -820,14 +828,14 @@ build(tmp).then(async () => {
       const plan = { screenName: "System Configurations" };
       const w = auditGateWarnings(plan, cwd, null);
       check("[P6-136] a Blocked audit with no auditGate at all on the plan WARNS, naming the file and every blocker id",
-        w.length === 1 && /System_Configurations\.json/.test(w[0]) && ids.every((id: any) => w[0].includes(id)));
+        w.length === 1 && /System_Configurations\.json/.test(w[0]) && ids.every((id) => w[0].includes(id)));
     }
     {
       const cwd = mkCwd();
       const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: [ids[0], ids[1]], reason: "provenance issues, not build issues" } } as unknown as Plan; // ts-port: hand-built fixture
       const w = auditGateWarnings(plan, cwd, null);
       check("[P6-136] an auditGate that overrides only 2 of 5 blockers WARNS about the 3 not covered",
-        w.length === 1 && ids.slice(2).every((id: any) => w[0].includes(id)) && !w[0].includes(ids[0]));
+        w.length === 1 && ids.slice(2).every((id) => w[0].includes(id)) && !w[0].includes(ids[0]));
     }
     {
       const cwd = mkCwd();

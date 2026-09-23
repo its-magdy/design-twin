@@ -7,6 +7,12 @@ import fs2 from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
+// design-to-code/types.ts
+function bag(o) {
+  const u = o;
+  return u;
+}
+
 // design-to-code/catalog-input.ts
 import fs from "node:fs";
 function readJsonFile(file, what, hint) {
@@ -81,10 +87,6 @@ var DESIGN_SYSTEM_FILES = {
 };
 
 // design-to-code/design-diff.ts
-function bag(o) {
-  const u = o;
-  return u;
-}
 var CATEGORY = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
   typography: ["font", "textTokens", "missingFont"],

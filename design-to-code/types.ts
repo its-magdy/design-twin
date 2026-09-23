@@ -1,6 +1,7 @@
 // types.ts — the shared shapes of every JSON document the design-to-code layer reads or writes.
 //
-// Types only (plus two one-line JSON type guards at the bottom). Nothing here runs at import time.
+// Types only (plus two one-line JSON type guards and the `bag()` field reader at the bottom). Nothing
+// here runs at import time.
 //
 // The PRODUCER-side shapes (raw JSON, the IR node tree, the documents a pull writes, the design-system
 // split files) live in bridge/src/doc-types.ts and are re-exported below, unchanged, so every
@@ -87,19 +88,24 @@ export interface MapValidationResult { ok: boolean; errors: Array<{ path: string
 
 // ================================================================ component-match.js
 
-export interface VisibleInstance {
-  screen: string;
+/** What matchByNameAndSignature() reads per instance: plan-skeleton's rows (keys `null`, no screen label) or visibleInstances()' output. */
+export interface MatchInstance {
+  /** the screen label; absent when the caller matches one screen and lists no screens (plan-skeleton) */
+  screen?: string;
   nodeId: string;
   /** the layer name */
   layer: string;
   /** setName || main name || layer name */
   name: string;
-  key?: string;
-  setKey?: string;
+  /** absent (visibleInstances) or null (plan-skeleton's rows) when the export has no key */
+  key?: string | null;
+  setKey?: string | null;
   remote: boolean;
   variant: Record<string, string> | null;
   props: ComponentPropValues;
 }
+/** component-match.js visibleInstances(): always labelled; a missing key is absent, never null. */
+export interface VisibleInstance extends MatchInstance { screen: string; key?: string; setKey?: string }
 export interface MatchTarget { id?: string; key?: string; name: string; type: "COMPONENT" | "COMPONENT_SET"; page?: string }
 export interface MatchAlternative { id?: string; key?: string; page?: string; score: number }
 export type MatchEvidence = "name+signature" | "name+no-props";
@@ -187,8 +193,9 @@ export interface CrossCheckCoverage {
   buckets?: Record<CoverageBucket, number>;
   hiddenOnly?: number;
 }
-export interface CrossCheckInputs { screens?: string[]; variables?: boolean; tokens?: boolean; components?: boolean; stylesText?: boolean }
-/** cross-check.js crossCheck(). audit.js embeds the same shape (or a stub with coverage:null) under `crossFile`. */
+/** Which inputs crossCheck() was given. `screens` = the screen LABELS (file stems), not paths. */
+export interface CrossCheckInputs { screens: string[]; variables: boolean; tokens: boolean; components: boolean; stylesText: boolean }
+/** cross-check.js crossCheck(). audit.js embeds the same shape (or a stub — see AuditCrossFile) under `crossFile`. */
 export interface CrossCheckReport {
   summary: SeverityCounts;
   coverage: CrossCheckCoverage | null;
@@ -198,6 +205,8 @@ export interface CrossCheckReport {
   notChecked: string[];
   inputs: CrossCheckInputs;
 }
+/** audit.js report.crossFile: the cross-check report, or — no design system given — a stub with coverage:null and `inputs: {}`. */
+export type AuditCrossFile = CrossCheckReport | (Omit<CrossCheckReport, "inputs"> & { inputs: Partial<CrossCheckInputs> });
 
 export type ControlKind = "button" | "input" | "toggle" | "tab" | "link";
 export type ControlState = "hover" | "pressed" | "focus" | "disabled" | "error" | "selected" | "loading";
@@ -209,7 +218,7 @@ export type ScreenStateKey = "loading" | "empty" | "error";
 export interface AuditReport {
   platform: AuditPlatform;
   platformAssumed: boolean;
-  crossFile: CrossCheckReport | null;
+  crossFile: AuditCrossFile | null;
   grid: number;
   gridAssumed?: boolean;
   gridMismatch?: number | null;
@@ -410,6 +419,8 @@ export interface VerifySpec {
   frameId?: string;
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean }
+/** A root frame as an expectation lists it (no position). */
+export type VerifyRootFrame = Omit<VerifyFrame, "x" | "y">;
 export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues }
 export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string }
 export interface NotComparable { nodeId: string; name: string; field: string; value: JsonValue; why: string }
@@ -420,8 +431,9 @@ export interface VerifyExpectation {
   exportedAt?: string;
   exportContentSha256?: string;
   reference?: string | null;
-  frame: Omit<VerifyFrame, "x" | "y">;
-  frames?: Array<Omit<VerifyFrame, "x" | "y">>;
+  /** `{}` when the export had no roots */
+  frame: Partial<VerifyRootFrame>;
+  frames?: Array<Partial<VerifyRootFrame>>;
   coordinates?: string;
   note?: string;
   measuredKeys?: Record<string, string>;
@@ -553,6 +565,36 @@ export interface VerifyReport {
   /** read by verify-build.js locateReports (a report written under a nickname) */
   nodeId?: string;
 }
+type VerifyCoverage = NonNullable<VerifyReport["coverage"]>;
+/** report.coverage as compare() writes it (schema @2): every counter present. */
+export interface VerifyCoverageV2 extends VerifyCoverage {
+  nodesNotMeasured: number; nodesMatchedByComponentPath: number; fieldsNotMeasured: number;
+  fieldsNeverMeasured: NonNullable<VerifyCoverage["fieldsNeverMeasured"]>; valuesNotComparable: number; valuesUnverifiable: number;
+  hiddenLayersSkipped: VerifyCoverage["hiddenLayersSkipped"] | undefined; instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
+  interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
+}
+/**
+ * What verify-screen.js compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's
+ * on-disk check when it ran, else the probe's own list passed through as-is (the one field wider than VerifyReport's).
+ */
+export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
+  artifacts: Array<string | ArtifactCheck | { path?: string }>;
+  verdict: VerifyVerdict;
+  headline: string;
+  why: string[];
+  coverage: VerifyCoverageV2;
+  summary: NonNullable<VerifyReport["summary"]>;
+  deltas: VerifyDelta[];
+  componentsAbsent: NonNullable<VerifyReport["componentsAbsent"]>;
+  untaggedInstanceSets: NonNullable<VerifyReport["untaggedInstanceSets"]>;
+  interactions: VerifyInteractionResult[];
+  notMeasured: NonNullable<VerifyReport["notMeasured"]>;
+  fieldsNotMeasured: NonNullable<VerifyReport["fieldsNotMeasured"]>;
+  unverifiable: NonNullable<VerifyReport["unverifiable"]>;
+  notComparable: NotComparable[];
+  probe: NonNullable<VerifyReport["probe"]>;
+  limits: string[];
+}
 
 // ================================================================ design-diff.js
 
@@ -615,4 +657,14 @@ export function isJsonObject(x: unknown): x is JsonObject {
 /** A parsed JSON array. */
 export function isJsonArray(x: unknown): x is JsonValue[] {
   return Array.isArray(x);
+}
+/**
+ * Read any object as a string-keyed bag of unknowns — for the generic key loops (design-diff, tests) that
+ * compare WHATEVER a document or node carries, named field or not. The interfaces here deliberately have
+ * no string index; this is the one place that reads past them. Two steps through `unknown` because an
+ * interface and Record<string, unknown> do not overlap for a direct assertion.
+ */
+export function bag(o: object): Record<string, unknown> {
+  const u: unknown = o;
+  return u as Record<string, unknown>;
 }

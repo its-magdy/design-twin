@@ -220,7 +220,7 @@ function proposalsIn(doc) {
   return null;
 }
 if (import.meta.main) {
-  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
+  const usage = "usage: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
   let outFile = null, proposalsFile = null, screenFile = null;
   const pi = argv.indexOf("--from-proposals");

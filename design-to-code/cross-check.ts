@@ -916,7 +916,7 @@ function walkWithBg(node: IrNode | null | undefined, bgToken: string | null, fn:
 
 function toMarkdown(res: CrossCheckReport): string {
   const L: string[] = [];
-  L.push(`# Cross-file check — ${res.inputs.screens!.join(", ") || "(no screens)"}`, "");
+  L.push(`# Cross-file check — ${res.inputs.screens.join(", ") || "(no screens)"}`, "");
   L.push(
     `**${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info. ` +
       `Every check here is a JOIN between the screen and the design system — none of it is visible from either file alone.`,
@@ -987,7 +987,7 @@ if (import.meta.main) {
   const out = take("--out");
   const jsonOnly = strip("--json"), gate = strip("--gate");
   const USAGE =
-    "usage: node design-to-code/cross-check.js <screen.json>... [--design-system design/design-system] " +
+    "usage: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system] " +
     "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = argv.filter((a) => a.startsWith("-"));
@@ -997,7 +997,7 @@ if (import.meta.main) {
   // has a screen and nothing else, and SAYS which checks it could not do (notChecked) rather than
   // dying on a missing design system.
   // Each is a design-system split file this repo's own writer produced, parsed as the shape it was written in.
-  const maybe = <T,>(f: string | undefined): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
+  const maybe = <T,>(f: string | undefined): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) as T : null);
   // Each screen's OWN variables: the raw slice every pull writes beside it as <Screen>.vars.json. The
   // token-collision check is about the variables THIS screen carries, not the merged union's
   // (livetest-3 #40), so it is read whenever it is there.

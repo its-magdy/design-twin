@@ -12,6 +12,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 // "ws" has no types of its own; see bridge/src/ws.d.ts for the ambient shim.
 import WebSocket from "ws";
+import type { RawData } from "ws";
+import type { RequestArgs } from "../bridge/src/server-core.ts";
+import type { ScreenExport } from "../bridge/src/doc-types.ts";
 // Type-only: erased before Node runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
 import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
@@ -25,6 +28,22 @@ type _McpLayerConformance = [
   Assert<typeof import("../design-to-code/get-component.ts") extends GetComponentModule ? true : false>,
   Assert<typeof import("../design-to-code/drift-lint.ts") extends DriftLintModule ? true : false>,
 ];
+
+// A tools/call JSON-RPC reply as the SDK client hands it back: a CallToolResult, or the legacy
+// `{ toolResult }` compatibility shape (never sent by this server, so reading it fails the check).
+type JsonRpcReply = Awaited<ReturnType<Client["callTool"]>>;
+/** The text of a reply's first content block — throws (like the untyped `r.content[0].text` did) when there is none. */
+function firstText(r: JsonRpcReply): string {
+  const c = "content" in r && Array.isArray(r.content) ? r.content[0] : undefined;
+  if (!c || c.type !== "text") throw new Error("tool reply has no text content");
+  return c.text;
+}
+// The one bridge -> plugin frame this fake plugin reads: `{ id, cmd, args }` (server-core does not export it).
+interface CommandFrame { id: string; cmd: string; args?: RequestArgs }
+// figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
+interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }> }
+// The compact result exportResult() returns once an export is written to disk: only its note is read.
+interface WrittenExport { note: string }
 
 const CWD = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-"));
 
@@ -47,43 +66,44 @@ const CWD = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-"));
     const names = tools.map((t) => t.name);
     ok("lists the full tool surface (15)", tools.length === 15 && ["figma_status", "figma_export_url", "figma_screenshot", "figma_write", "design_drift_lint"].every((n) => names.includes(n)));
     ok("every tool has a description and an object input schema", tools.every((t) => t.description && t.inputSchema && t.inputSchema.type === "object"));
-    const write = tools.find((t) => t.name === "figma_write") as any;
-    ok("figma_write is the ONLY non-read-only tool, and is marked destructive", write.annotations.destructiveHint === true && write.annotations.readOnlyHint === false
+    const write = tools.find((t) => t.name === "figma_write");
+    if (!write) throw new Error("figma_write is not listed");
+    ok("figma_write is the ONLY non-read-only tool, and is marked destructive", write.annotations?.destructiveHint === true && write.annotations.readOnlyHint === false
       && tools.filter((t) => !(t.annotations && t.annotations.readOnlyHint)).map((t) => t.name).join() === "figma_write");
-    ok("figma_write exposes dryRun", !!write.inputSchema.properties.dryRun);
+    ok("figma_write exposes dryRun", !!write.inputSchema.properties?.dryRun);
 
-    const dry: any = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }, { op: "setFill", nodeId: "1:2", color: "#ff0000" }, { op: "setText", nodeId: "1:3" }] } });
-    const preview = JSON.parse(dry.content[0].text);
+    const dry = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }, { op: "setFill", nodeId: "1:2", color: "#ff0000" }, { op: "setText", nodeId: "1:3" }] } });
+    const preview = JSON.parse(firstText(dry)) as WritePreview;
     ok("dryRun previews without a plugin connected, and applies nothing", !dry.isError && preview.dryRun === true && preview.applied === false);
-    ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1].target === "1:2" && /missing text/.test(preview.steps[2].invalid));
+    ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1].target === "1:2" && /missing text/.test(preview.steps[2].invalid ?? ""));
 
-    const bad: any = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: any) => ({ isError: true, thrown: String(e && e.message) }));
+    const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);
 
-    const status: any = await client.callTool({ name: "figma_status", arguments: {} });
-    ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(status.content[0].text); return true; } catch { return false; } })());
+    const status = await client.callTool({ name: "figma_status", arguments: {} });
+    ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(firstText(status)) as unknown; return true; } catch { return false; } })());
 
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
     const plugin = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });
     let kids = 3;
-    plugin.on("message", (raw: any) => {
-      const m = JSON.parse(raw);
+    plugin.on("message", (raw: RawData) => {
+      const m = JSON.parse(String(raw)) as CommandFrame;
       if (m.cmd !== "exportSelection") return;
       const children = Array.from({ length: kids }, (_, i) => ({ id: "9:" + i, name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
       plugin.send(JSON.stringify({ id: m.id, ok: true, result: { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }], assets: [] } }));
     });
-    const small: any = await client.callTool({ name: "figma_export_selection", arguments: {} });
-    ok("a small export still comes back INLINE", !small.isError && JSON.parse(small.content[0].text).nodes[0].children.length === 3);
+    const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
+    ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenExport).nodes[0].children!.length === 3);
     kids = 1500; // ~200 KB of indented JSON — far past the 25k-token default
-    const big: any = await client.callTool({ name: "figma_export_selection", arguments: {} });
-    const idx = JSON.parse(big.content[0].text);
-    ok("an export past the client's output cap is written to disk on its own, and the result says why", !big.isError && big.content[0].text.length < 8000 && /WITHOUT being asked/.test(idx.note) && /k tokens/.test(idx.note) && fs.existsSync(path.join(CWD, "design")));
-    const refused: any = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false } });
-    ok("…and an explicit writeToDisk:false is an error with the size, never a truncated result", refused.isError === true && /writeToDisk:false was passed/.test(refused.content[0].text));
+    const big = await client.callTool({ name: "figma_export_selection", arguments: {} });
+    const idx = JSON.parse(firstText(big)) as WrittenExport;
+    ok("an export past the client's output cap is written to disk on its own, and the result says why", !big.isError && firstText(big).length < 8000 && /WITHOUT being asked/.test(idx.note) && /k tokens/.test(idx.note) && fs.existsSync(path.join(CWD, "design")));
+    const refused = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false } });
+    ok("…and an explicit writeToDisk:false is an error with the size, never a truncated result", refused.isError === true && /writeToDisk:false was passed/.test(firstText(refused)));
     plugin.close();
-  } catch (e: any) {
-    ok("MCP smoke run completed without throwing — " + (e && e.message), false);
+  } catch (e) {
+    ok("MCP smoke run completed without throwing — " + (e instanceof Error ? e.message : e), false);
   } finally {
     await client.close().catch(() => {});
   }

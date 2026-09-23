@@ -123,7 +123,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       name,
       instances: list.length,
       nodeIds: list.map((i) => i.nodeId),
-      screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
+      screens: [...new Set(list.map((i) => i.screen).filter((s) => !!s))],
       instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k) => !!k))],
       remote: list.every((i) => i.remote),
       byKey,
@@ -960,7 +960,7 @@ if (import.meta.main) {
   const varsFile = take("--variables");
   const out = take("--out");
   const jsonOnly = strip("--json"), gate = strip("--gate");
-  const USAGE = "usage: node design-to-code/cross-check.js <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
+  const USAGE = "usage: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     process.exit(0);

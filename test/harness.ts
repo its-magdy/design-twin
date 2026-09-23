@@ -6,11 +6,175 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { ok, report } from "./assert.ts";
+import type {
+  IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc,
+  Paint, Effect, VariableValue, RadiusCorners, JsonValue,
+} from "../bridge/src/doc-types.ts";
+import type { ExportResult, ExportAsset } from "../bridge/src/write-out.ts";
+import type { LibrariesReply } from "../bridge/src/figma-pull.ts";
+import type { ReadOptName } from "../bridge/src/read-opts.ts";
+
+// ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
+// are plain objects; the types below name only what the harness itself builds or reads back. (The real
+// Plugin API typings are not visible to test/tsconfig.json — `types: ["node"]` — and would not describe
+// these partial doubles anyway.)
+
+/** Any fake Plugin API object: a scene node, a page, a style, a main component, a write target. */
+interface FakeNode {
+  type?: string;
+  name?: string;
+  id?: string;
+  visible?: boolean;
+  children?: readonly FakeNode[];
+  [field: string]: unknown;
+}
+interface FakeVariable {
+  id: string; name: string; resolvedType: string; variableCollectionId: string;
+  scopes: string[]; codeSyntax: Record<string, string>; remote: boolean;
+  description?: string; hiddenFromPublishing?: boolean; key?: string;
+  /** raw Plugin API values: RGBA, number, or a VARIABLE_ALIAS — code.js decodes them */
+  valuesByMode: Record<string, unknown>;
+}
+interface FakeCollection { id: string; name: string; modes: Array<{ modeId: string; name: string }>; defaultModeId: string }
+interface FakeImage { getSizeAsync(): Promise<{ width: number; height: number }>; getBytesAsync(): Promise<Uint8Array> }
+/** What the plugin posts to its UI (progress.ts): run-begin / progress / run-end frames. */
+interface PostedMessage {
+  type: string; source?: string; label?: string; phase?: string;
+  page?: { index: number; of: number; name: string; pageId?: string };
+  nodes?: number; assets?: number;
+}
+interface FakeTeamLibrary {
+  getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
+  getVariablesInLibraryCollectionAsync(key: string): Promise<Array<{ name: string; key: string; resolvedType: string }>>;
+}
+interface FakeFigma {
+  mixed: symbol;
+  showUI(): void;
+  on(): void;
+  ui: { onmessage: null; postMessage(m: PostedMessage): void };
+  clientStorage: { getAsync(): Promise<string>; setAsync(): Promise<void> };
+  currentPage: FakeNode & { selection: FakeNode[]; appendChild?: () => void };
+  fileKey: string;
+  root: { name: string; documentColorProfile: string; children: FakeNode[]; getPluginData?: (key: string) => string };
+  loadAllPagesAsync(): Promise<void>;
+  getImageByHash(hash: string): FakeImage | null;
+  getNodeByIdAsync(id: string): Promise<FakeNode | null>;
+  getStyleByIdAsync(id: string): Promise<FakeNode | null>;
+  getLocalPaintStylesAsync(): Promise<FakeNode[]>;
+  getLocalTextStylesAsync(): Promise<FakeNode[]>;
+  getLocalEffectStylesAsync(): Promise<FakeNode[]>;
+  getLocalGridStylesAsync(): Promise<FakeNode[]>;
+  variables: {
+    getLocalVariablesAsync(): Promise<FakeVariable[]>;
+    getLocalVariableCollectionsAsync(): Promise<FakeCollection[]>;
+    getVariableByIdAsync(id: string): Promise<FakeVariable | null>;
+    getVariableCollectionByIdAsync(id: string): Promise<FakeCollection | null>;
+  };
+  // installed / removed by individual sections below
+  editorType?: string;
+  teamLibrary?: FakeTeamLibrary;
+  skipInvisibleInstanceChildren?: boolean;
+  createFrame?: () => FakeNode;
+  createText?: () => FakeNode;
+  loadFontAsync?: () => Promise<void>;
+}
+
+// ---- what code.js's `__designExport` hands back, typed by the producer contract the bridge consumes
+// (bridge/src/doc-types.ts, write-out.ts ExportResult, figma-pull.ts LibrariesReply). The plugin source
+// itself returns `Obj` (figma-plugin/src/util.ts — an untyped record), so these are the declared
+// contract, not something inferred from the plugin.
+
+/** A variables dump (variables.ts dumpVariables): all three arrays are always present. */
+type DumpedVariables = VariablesDoc & Required<Pick<VariablesDoc, "collections" | "variables" | "hygiene">>;
+/** components.ts buildDesignSystem: every section is always present. */
+type DesignSystemOut = DesignSystemDoc & Required<Pick<DesignSystemDoc, "collections" | "variables" | "components" | "hygiene">> &
+  { styles: Required<DesignSystemStyles> };
+/** collect.ts screenResult */
+interface SelectionResult extends ExportResult { screen: ScreenExport & { manifest: Manifest }; variables: DumpedVariables; assets: ExportAsset[] }
+/** collect.ts collectFull */
+interface FullResult extends ExportResult {
+  designSystem: DesignSystemOut;
+  layersDoc: LayersDoc & Required<Pick<LayersDoc, "layers" | "index" | "manifest">>;
+  assets: ExportAsset[];
+}
+/** collect.ts collectDesignSystemOnly / collectLibraryFile */
+interface DesignSystemResult extends ExportResult { designSystem: DesignSystemOut }
+/** collect.ts summarize(): the ONLY shape the cheap index reads emit. The `undefined` fields are
+ *  never emitted — an index is not an export (the [LIST]/[CHILDREN] checks assert exactly that). */
+interface NodeSummary {
+  name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
+  children?: undefined; fills?: undefined; layout?: undefined; tokens?: undefined;
+}
+interface ListPagesResult {
+  exportedAt: string; file: string; depth: number;
+  pages: Array<{ name: string; id: string; current?: true; unreadable?: true; frames?: NodeSummary[] }>;
+  manifest: { pages: number; frames?: number; warnings: string[] };
+  /** never emitted (asserted) */
+  assets?: undefined;
+}
+interface ListChildrenResult {
+  exportedAt: string; id: string; name: string; type: string; children: NodeSummary[];
+  manifest: { children: number; warnings: string[] };
+  /** never emitted (asserted) */
+  assets?: undefined;
+}
+type LibrariesOut = LibrariesReply & Required<Pick<LibrariesReply, "libraries" | "warnings">>;
+/** writes.ts WriteResult (applied rows are `{ id }`) */
+interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string }
+interface WriteOp { op: string; [field: string]: unknown }
+/** progress.ts RunInfo */
+interface RunInfo { source: "ui" | "bridge"; label: string }
+/** collect.ts CollectOpts */
+interface CollectOpts extends Partial<Record<ReadOptName, boolean>> { allPages?: boolean; page?: string | string[] }
+interface DesignExportApi {
+  serialize(node: FakeNode, depth: number, parentControlsLayout?: boolean): Promise<IrNode>;
+  collectSelection(opts?: CollectOpts): Promise<SelectionResult>;
+  collectFull(opts?: CollectOpts): Promise<FullResult>;
+  collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult>;
+  collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult>;
+  buildDesignSystem(): Promise<DesignSystemOut>;
+  listPages(opts?: { depth?: number }): Promise<ListPagesResult>;
+  listChildren(rawId: string): Promise<ListChildrenResult>;
+  listLibraries(): Promise<LibrariesOut>;
+  collectLibraryComponents(sink?: (m: string) => void): Promise<CatalogComponent[]>;
+  applyWrites(ops?: WriteOp[]): Promise<WriteResult>;
+  serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T>;
+  requestCancel(): RunInfo | null;
+}
+/** The VM global object after the lift below: the export API plus the fake `figma` it reads. */
+type Sandbox = DesignExportApi & { figma: FakeFigma };
+
+/** A caught error's message, without trusting its realm: code.js throws the VM context's Error, which
+ *  is not `instanceof` this realm's. */
+interface Thrown { message: string }
+const thrown = (e: unknown): Thrown =>
+  (typeof e === "object" && e !== null && "message" in e && typeof e.message === "string" ? { message: e.message } : { message: String(e) });
+
+// ---- reading union-typed output without narrowing first (the assertions check `type` themselves)
+/** Every field any member of a discriminated union may carry, all optional. Each member is assignable
+ *  to it, so `flat()` is a widening, not a cast: a field the actual member lacks reads `undefined`,
+ *  exactly as it did untyped. */
+type AnyOf<U> = { [K in U extends unknown ? keyof U : never]?: U extends unknown ? (K extends keyof U ? U[K] : never) : never };
+const flatPaint = (p: Paint): AnyOf<Paint> => p;
+const flatEffect = (e: Effect): AnyOf<Effect> => e;
+/** A variable's per-mode value's alias target — `undefined` for a raw value, like `.aliasOf` on it was. */
+const aliasOf = (v: VariableValue): string | undefined => (typeof v === "object" ? v.aliasOf : undefined);
+
+/** util.ts easingCurve()'s cubic-bezier params — `unknown` in the contract (Transition.cubicBezier). */
+interface CubicBezier { x1: number; y1: number; x2: number; y2: number }
+/** motion.ts collectMotion's shape — the contract types IrNode.motion as an opaque JsonObject. */
+interface MotionTrack { base?: JsonValue; op?: string; keyframes?: Array<{ t: number; value: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier } }> }
+interface MotionView {
+  timelines?: Array<{ id: string; duration: number }>;
+  manualTracks?: Record<string, MotionTrack>;
+  animations?: Record<string, MotionTrack>;
+  styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
+}
 
 const MIXED = Symbol("figma.mixed");
 
 // ---- mock design-system data ----
-const VARS: any = {
+const VARS: Record<string, FakeVariable> = {
   v_primary: { id: "v_primary", name: "color/primary", resolvedType: "COLOR", variableCollectionId: "c_sem",
     scopes: ["FRAME_FILL"], codeSyntax: { WEB: "var(--color-primary)", iOS: "Color.primary" }, remote: false, description: "Primary brand color",
     valuesByMode: { m_light: { type: "VARIABLE_ALIAS", id: "v_blue600" }, m_dark: { type: "VARIABLE_ALIAS", id: "v_blue300" } } },
@@ -22,7 +186,7 @@ const VARS: any = {
   v_allscope: { id: "v_allscope", name: "misc/bad", resolvedType: "FLOAT", variableCollectionId: "c_sem",
     scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, valuesByMode: { m_light: 4, m_dark: 4 } },
 };
-const COLLECTIONS = [
+const COLLECTIONS: FakeCollection[] = [
   { id: "c_prim", name: "Primitives", modes: [{ modeId: "m_val", name: "Value" }], defaultModeId: "m_val" },
   { id: "c_sem", name: "Semantic", modes: [{ modeId: "m_light", name: "Light" }, { modeId: "m_dark", name: "Dark" }], defaultModeId: "m_light" },
 ];
@@ -81,7 +245,7 @@ const scrollFrame = {
   // --- Tier-1 read additions (opt-in via css/measurements/pluginData) ---
   getCSSAsync: async () => ({ display: "flex", "flex-direction": "column", padding: "16px" }),
   getPluginDataKeys: () => ["codeConnect"],
-  getPluginData: (k: any) => (k === "codeConnect" ? "Button/Primary" : ""),
+  getPluginData: (k: string) => (k === "codeConnect" ? "Button/Primary" : ""),
   inferredVariables: { fills: [[{ type: "VARIABLE_ALIAS", id: "v_primary" }]] }, // suggestion for an unbound field
   // Motion plane (Plugin API Update 130) — opt-in via {motion:true}.
   timelines: [{ id: "tl1", duration: 0.5 }],
@@ -96,8 +260,8 @@ const scrollFrame = {
   exportAsync: async () => new Uint8Array([137, 80, 78, 71]), // PNG magic bytes
   getDevResourcesAsync: async () => ([{ name: "Storybook", url: "https://sb.example.com/list", inheritedNodeId: null }]),
   // Cross-plugin shared data — Tokens Studio applied tokens (opt-in via {sharedData:true}).
-  getSharedPluginDataKeys: (ns: any) => (ns === "tokens" ? ["fill", "borderRadius"] : []),
-  getSharedPluginData: (ns: any, k: any) => (ns === "tokens" ? (({ fill: "color.primary", borderRadius: "radius.md" } as any)[k] || "") : ""),
+  getSharedPluginDataKeys: (ns: string) => (ns === "tokens" ? ["fill", "borderRadius"] : []),
+  getSharedPluginData: (ns: string, k: string) => { const tokens: Record<string, string> = { fill: "color.primary", borderRadius: "radius.md" }; return ns === "tokens" ? (tokens[k] || "") : ""; },
   children: [textNode, gradientRect, button],
 };
 
@@ -115,7 +279,7 @@ const buttonComponent = {
 
 // ---- mock figma ----
 const noop = () => {};
-const figma = {
+const figma: FakeFigma = {
   mixed: MIXED,
   showUI: noop, on: noop,
   ui: { onmessage: null, postMessage: noop },
@@ -129,9 +293,9 @@ const figma = {
   root: { name: "My File", documentColorProfile: "DISPLAY_P3", children: [{ name: "Page 1", children: [scrollFrame], findAllWithCriteria: () => [buttonComponent] }] },
   loadAllPagesAsync: async () => {},
   // Source-image resolution: intrinsic pixel size + original uploaded bytes, keyed by image hash.
-  getImageByHash: (hash: any) => (hash === "abc123" ? { getSizeAsync: async () => ({ width: 800, height: 600 }), getBytesAsync: async () => new Uint8Array([1, 2, 3, 4]) } : null),
-  getNodeByIdAsync: async (id: any) => (id === "frame_2" ? { name: "Details" } : null),
-  getStyleByIdAsync: async (id: any) => (({ s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" } } as any)[id] || null),
+  getImageByHash: (hash: string) => (hash === "abc123" ? { getSizeAsync: async () => ({ width: 800, height: 600 }), getBytesAsync: async () => new Uint8Array([1, 2, 3, 4]) } : null),
+  getNodeByIdAsync: async (id: string) => (id === "frame_2" ? { name: "Details" } : null),
+  getStyleByIdAsync: async (id: string) => { const styles: Record<string, FakeNode> = { s_heading: { name: "Heading/H1" }, s_brand: { name: "Brand/Primary" } }; return styles[id] || null; },
   getLocalPaintStylesAsync: async () => [{ name: "Brand/Primary", id: "s_brand", key: "paintkey123", paints: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], boundVariables: { paints: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, documentationLinks: [{ uri: "https://docs.example.com/brand" }], description: "", getPublishStatusAsync: async () => "CHANGED" }],
   getLocalTextStylesAsync: async () => [{ name: "Body/Regular", fontSize: 16, fontName: { family: "Inter", style: "Regular" }, lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, textCase: "ORIGINAL", textDecoration: "NONE", paragraphSpacing: 8, paragraphIndent: 4, leadingTrim: "CAP_HEIGHT", listSpacing: 6, boundVariables: { fontSize: { type: "VARIABLE_ALIAS", id: "v_allscope" } }, description: "" }],
   getLocalEffectStylesAsync: async () => [],
@@ -139,25 +303,27 @@ const figma = {
   variables: {
     getLocalVariablesAsync: async () => Object.values(VARS),
     getLocalVariableCollectionsAsync: async () => COLLECTIONS,
-    getVariableByIdAsync: async (id: any) => VARS[id] || null,
-    getVariableCollectionByIdAsync: async (id: any) => COLLECTIONS.find((c) => c.id === id) || null,
+    getVariableByIdAsync: async (id: string) => VARS[id] || null,
+    getVariableCollectionByIdAsync: async (id: string) => COLLECTIONS.find((c) => c.id === id) || null,
   },
 };
 
 // ---- load code.js into a VM sandbox ----
 const src = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "code.js"), "utf8");
-const sandbox: any = { figma, __html__: "<ui/>", Promise, JSON, Math, Array, Object, Symbol, Map, Set, Date, console, parseInt, Number, String, Boolean, isNaN, undefined };
-vm.createContext(sandbox);
-vm.runInContext(src, sandbox);
+const context: Record<string, unknown> = { figma, __html__: "<ui/>", Promise, JSON, Math, Array, Object, Symbol, Map, Set, Date, console, parseInt, Number, String, Boolean, isNaN, undefined };
+vm.createContext(context);
+vm.runInContext(src, context);
 // code.js is now an esbuild IIFE bundle (TypeScript source in figma-plugin/src/). It exposes the
 // read API on a namespaced global; lift those onto the sandbox so the assertions below read as before.
-Object.assign(sandbox, sandbox.__designExport || {});
+Object.assign(context, context.__designExport || {});
+// The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi).
+const sandbox = context as unknown as Sandbox;
 
 // ---- run + assert ----
 (async () => {
   const sel = await sandbox.collectSelection();
   const tree = sel.screen.nodes[0];
-  const [txt, rect, btn] = tree.children;
+  const [txt, rect, btn] = tree.children!;
 
   ok("manifest present", sel.screen.manifest && typeof sel.screen.manifest.nodes === "number");
   ok("manifest counted nodes (>=4)", sel.screen.manifest.nodes >= 4);
@@ -167,16 +333,16 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("layout flex column + gap + padding", tree.layout && tree.layout.flexDirection === "column" && tree.layout.gap === 12 && Array.isArray(tree.layout.padding));
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
-  ok("text run weight verbatim (Bold)", txt.runs[1].font.weight === "Bold");
-  ok("text run underline decoration", txt.runs[1].font.decoration === "underline");
-  ok("text run href", txt.runs[1].href === "https://x.com");
-  ok("lineHeight unit carried (percent)", txt.font.lineHeight && txt.font.lineHeight.unit === "percent");
-  ok("letterSpacing unit carried (px)", txt.font.letterSpacing && txt.font.letterSpacing.unit === "px");
-  ok("paragraphSpacing", txt.font.paragraphSpacing === 8);
+  ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
+  ok("text run underline decoration", txt.runs![1].font.decoration === "underline");
+  ok("text run href", txt.runs![1].href === "https://x.com");
+  ok("lineHeight unit carried (percent)", txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent");
+  ok("letterSpacing unit carried (px)", txt.font!.letterSpacing && txt.font!.letterSpacing.unit === "px");
+  ok("paragraphSpacing", txt.font!.paragraphSpacing === 8);
 
   // --- new READ additions (Batch: close the read gap) ---
   ok("node id captured", txt.id === "1:1");
-  ok("text vertical align", txt.font.valign === "center");
+  ok("text vertical align", txt.font!.valign === "center");
   ok("text autoResize", txt.autoResize === "height");
   ok("text truncate -> ellipsis", txt.truncate === true);
   ok("text maxLines (line-clamp)", txt.maxLines === 2);
@@ -216,18 +382,18 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0].pattern === "columns" && abs.layoutGrids[0].count === 12);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0].label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
-  ok("gradient transform carried", Array.isArray(abs.fills[0].transform) && abs.fills[0].transform[0][0] === 1);
-  ok("image hash carried", abs.fills[1].hash === "abc123");
-  ok("image intrinsicSize via getImageByHash", abs.fills[1].intrinsicSize && abs.fills[1].intrinsicSize.w === 800 && abs.fills[1].intrinsicSize.h === 600);
-  ok("stroke cap + join carried", abs.strokes.cap === "round" && abs.strokes.join === "round");
+  ok("gradient transform carried", Array.isArray(flatPaint(abs.fills![0]).transform) && flatPaint(abs.fills![0]).transform![0][0] === 1);
+  ok("image hash carried", flatPaint(abs.fills![1]).hash === "abc123");
+  ok("image intrinsicSize via getImageByHash", flatPaint(abs.fills![1]).intrinsicSize && flatPaint(abs.fills![1]).intrinsicSize!.w === 800 && flatPaint(abs.fills![1]).intrinsicSize!.h === 600);
+  ok("stroke cap + join carried", abs.strokes!.cap === "round" && abs.strokes!.join === "round");
 
-  ok("gradient stops carried", rect.fills[0].type === "gradient" && Array.isArray(rect.fills[0].stops) && rect.fills[0].stops.length === 2);
-  ok("gradient stop color hex", rect.fills[0].stops[0].color === "#ff0000");
-  ok("per-side stroke weights (mixed fallback)", rect.strokes.weights && rect.strokes.weights.bottom === 2);
+  ok("gradient stops carried", rect.fills![0].type === "gradient" && Array.isArray(rect.fills![0].stops) && rect.fills![0].stops.length === 2);
+  ok("gradient stop color hex", flatPaint(rect.fills![0]).stops![0].color === "#ff0000");
+  ok("per-side stroke weights (mixed fallback)", rect.strokes!.weights && rect.strokes!.weights.bottom === 2);
   ok("effects ordered array len 2", Array.isArray(rect.effects) && rect.effects.length === 2);
-  ok("drop_shadow discriminated", rect.effects[0].type === "drop_shadow" && rect.effects[0].offset.y === 2);
-  ok("background_blur no offset", rect.effects[1].type === "background_blur" && rect.effects[1].offset === undefined);
-  ok("per-corner radius (mixed fallback)", rect.radius && rect.radius.tl === 8 && rect.radius.bl === undefined);
+  ok("drop_shadow discriminated", rect.effects![0].type === "drop_shadow" && rect.effects![0].offset!.y === 2);
+  ok("background_blur no offset", rect.effects![1].type === "background_blur" && flatEffect(rect.effects![1]).offset === undefined);
+  ok("per-corner radius (mixed fallback)", rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined);
 
   // Two things used to land in `radius` that a builder then copied verbatim into CSS.
   const pill = await sandbox.serialize(
@@ -244,8 +410,8 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   ok("instance main component name", btn.component === "Button");
   ok("mainComponent join keys captured (id/key)", btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn");
-  ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent.setId === "set:btn" && btn.mainComponent.setKey === "setkey_btn");
-  ok("mainComponent variant name kept separately from the set name", btn.mainComponent.setName === "ButtonSet" && btn.mainComponent.variant === "Button");
+  ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent!.setId === "set:btn" && btn.mainComponent!.setKey === "setkey_btn");
+  ok("mainComponent variant name kept separately from the set name", btn.mainComponent!.setName === "ButtonSet" && btn.mainComponent!.variant === "Button");
 
   // A remote main whose `.parent` is NULL (plugin-api.d.ts documented shape) must not throw, and
   // must emit id/key with NO setId/setKey (there is no set to join to).
@@ -254,24 +420,24 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("remote main with null parent: id/key captured, no setId/setKey", remoteSer.mainComponent && remoteSer.mainComponent.id === "rc:1" && remoteSer.mainComponent.remote === true && remoteSer.mainComponent.setId === undefined);
   ok("bound token resolved to name", btn.tokens && btn.tokens.fills === "color/primary");
   ok("reactions extracted", Array.isArray(btn.reactions) && btn.reactions.length === 1);
-  ok("reaction trigger", btn.reactions[0].trigger === "on_click");
-  ok("reaction navigation + destination name", btn.reactions[0].actions[0].navigation === "navigate" && btn.reactions[0].actions[0].destination === "Details");
-  ok("reaction transition easing (lowercased)", btn.reactions[0].actions[0].transition.easing === "custom_cubic_bezier");
+  ok("reaction trigger", btn.reactions![0].trigger === "on_click");
+  ok("reaction navigation + destination name", btn.reactions![0].actions![0].navigation === "navigate" && btn.reactions![0].actions![0].destination === "Details");
+  ok("reaction transition easing (lowercased)", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier");
 
   const ds = await sandbox.buildDesignSystem();
-  const primary = ds.variables.find((v: any) => v.name === "color/primary");
+  const primary = ds.variables.find((v) => v.name === "color/primary");
   ok("variable tier semantic", primary && primary.tier === "semantic");
   ok("variable codeSyntax carried", primary && primary.codeSyntax && primary.codeSyntax.WEB === "var(--color-primary)");
-  ok("variable alias re-keyed by mode name", primary && primary.values.Light && primary.values.Light.aliasOf === "blue/600");
-  ok("COLOR primitive folded to hex", ds.variables.find((v: any) => v.name === "blue/600").values.Value === "#1a4de6");
-  ok("variable hiddenFromPublishing captured", ds.variables.find((v: any) => v.name === "blue/600").hiddenFromPublishing === true);
-  ok("variable key captured (durable identity)", ds.variables.find((v: any) => v.name === "blue/600").key === "varkey_blue600");
-  ok("public variable has no hiddenFromPublishing flag", primary.hiddenFromPublishing === undefined);
-  ok("hygiene: ALL_SCOPES flagged", ds.hygiene.some((h: any) => h.indexOf("ALL_SCOPES") !== -1));
+  ok("variable alias re-keyed by mode name", primary && primary.values.Light && aliasOf(primary.values.Light) === "blue/600");
+  ok("COLOR primitive folded to hex", ds.variables.find((v) => v.name === "blue/600")!.values.Value === "#1a4de6");
+  ok("variable hiddenFromPublishing captured", ds.variables.find((v) => v.name === "blue/600")!.hiddenFromPublishing === true);
+  ok("variable key captured (durable identity)", ds.variables.find((v) => v.name === "blue/600")!.key === "varkey_blue600");
+  ok("public variable has no hiddenFromPublishing flag", primary!.hiddenFromPublishing === undefined);
+  ok("hygiene: ALL_SCOPES flagged", ds.hygiene.some((h) => h.indexOf("ALL_SCOPES") !== -1));
   // tier regression: a raw (non-alias) variable whose only scope is the ALL_SCOPES default is a
   // primitive, not semantic — ALL_SCOPES must not be treated as a meaningful scope.
-  ok("tier: raw + ALL_SCOPES-only => primitive", (ds.variables.find((v: any) => v.name === "misc/bad") || {}).tier === "primitive");
-  ok("paint style carries color value", ds.styles.paint[0] && ds.styles.paint[0].paints && ds.styles.paint[0].paints[0].color === "#1a4de6");
+  ok("tier: raw + ALL_SCOPES-only => primitive", (ds.variables.find((v) => v.name === "misc/bad") || {}).tier === "primitive");
+  ok("paint style carries color value", ds.styles.paint[0] && ds.styles.paint[0].paints && flatPaint(ds.styles.paint[0].paints[0]).color === "#1a4de6");
   ok("grid style exported", ds.styles.grid && ds.styles.grid[0] && Array.isArray(ds.styles.grid[0].grids) && ds.styles.grid[0].grids[0].count === 12);
 
   // collectDesignSystemOnly — the --design-system / figma_export_design_system path: no page/frame
@@ -281,13 +447,13 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("collectDesignSystemOnly returns ONLY a designSystem (no layersDoc/assets keys)",
     dsOnly.designSystem && dsOnly.layersDoc === undefined && dsOnly.assets === undefined);
   ok("collectDesignSystemOnly's designSystem carries the same variable/style/component data as buildDesignSystem",
-    dsOnly.designSystem.variables.some((v: any) => v.name === "color/primary") &&
+    dsOnly.designSystem.variables.some((v) => v.name === "color/primary") &&
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));
   // The one documented gap (see collect.ts): with no page walk, the note lands in `hygiene` — the ONE
   // field buildDesignSystemLayout's split actually persists to disk (hygiene.json) and forwards
   // through the MCP writeToDisk path, unlike a `manifest.warnings` field the split would drop.
   ok("collectDesignSystemOnly notes the library-variable limitation in hygiene (the field that survives to disk)",
-    dsOnly.designSystem.hygiene.some((h: any) => /library \(remote\) variables/.test(h)));
+    dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
 
   // --- new READ additions (Tier 1: variable modes, prop-driven wiring, reference render, token bindings) ---
   ok("variable mode pin resolved to names", tree.variableModes && tree.variableModes.Semantic === "Dark");
@@ -296,41 +462,41 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("resolved (inherited) modes at root", tree.resolvedModes && tree.resolvedModes.Semantic === "Dark");
   ok("resolvedModes filters single-mode collections", tree.resolvedModes && tree.resolvedModes.Primitives === undefined);
   ok("reference screenshot path on tree", typeof tree.reference === "string" && tree.reference.indexOf("assets/") === 0 && tree.reference.indexOf("ref") !== -1);
-  ok("reference asset flagged kind:reference", sel.assets.some((a: any) => a.kind === "reference" && a.format === "png"));
+  ok("reference asset flagged kind:reference", sel.assets.some((a) => a.kind === "reference" && a.format === "png"));
   // The asset-naming contract: the producer names the file ONCE, and every `asset:`/`reference:` path
   // in the tree is "assets/" + that name. Consumers (figma-pull, the UI download) write a.file rather
   // than re-deriving it, so a drift here would silently point every path at a file that isn't on disk.
-  ok("every asset record carries its filename", sel.assets.length > 0 && sel.assets.every((a: any) => typeof a.file === "string" && a.file.length > 0));
-  ok("asset filename has no path separators", sel.assets.every((a: any) => a.file.indexOf("/") === -1));
-  ok("asset filename ends in its declared format", sel.assets.every((a: any) => a.file.endsWith("." + a.format)));
+  ok("every asset record carries its filename", sel.assets.length > 0 && sel.assets.every((a) => typeof a.file === "string" && a.file.length > 0));
+  ok("asset filename has no path separators", sel.assets.every((a) => a.file.indexOf("/") === -1));
+  ok("asset filename ends in its declared format", sel.assets.every((a) => a.file.endsWith("." + a.format)));
   ok(
     "tree reference path == assets/ + the record's file",
-    sel.assets.some((a: any) => a.kind === "reference" && "assets/" + a.file === tree.reference)
+    sel.assets.some((a) => a.kind === "reference" && "assets/" + a.file === tree.reference)
   );
   // Named from the LAYER, not from the node-id path. An app importing 41 icons used to import 41
   // filenames like `I10970_111374_1910_23337_1902_19173.svg` (live finding 96) while the layer name
   // sat unused right beside it in the tree.
   ok("the reference PNG keeps its <id>_ref.png name — build-screen looks it up by id",
-    sel.assets.some((a: any) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
+    sel.assets.some((a) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
   ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
-    sel.assets.every((a: any) => typeof a.hash === "string" && a.hash.length > 0));
+    sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
   ok("componentPropertyReferences -> propRefs (stripped)", txt.propRefs && txt.propRefs.characters === "Label");
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
-  ok("text run bound variable -> token name", txt.runs[1].tokens && txt.runs[1].tokens.fills === "color/primary");
-  ok("effect bound variable -> token name", rect.effects[0].tokens && rect.effects[0].tokens.radius === "misc/bad");
-  ok("transition matchLayers carried", btn.reactions[0].actions[0].transition.matchLayers === true);
-  ok("transition custom cubic-bezier carried", btn.reactions[0].actions[0].transition.easing === "custom_cubic_bezier" && btn.reactions[0].actions[0].transition.cubicBezier.x1 === 0.4);
-  const btnComp = ds.components.find((c: any) => c.name === "Button");
+  ok("text run bound variable -> token name", txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary");
+  ok("effect bound variable -> token name", rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad");
+  ok("transition matchLayers carried", btn.reactions![0].actions![0].transition!.matchLayers === true);
+  ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && (btn.reactions![0].actions![0].transition!.cubicBezier as CubicBezier).x1 === 0.4);
+  const btnComp = ds.components.find((c) => c.name === "Button");
   ok("component description captured", btnComp && btnComp.description === "Primary action button");
-  ok("INSTANCE_SWAP preferredValues captured", btnComp && btnComp.props.Icon && btnComp.props.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props.Icon.preferredValues) && btnComp.props.Icon.preferredValues.length === 2);
+  ok("INSTANCE_SWAP preferredValues captured", btnComp && btnComp.props!.Icon && btnComp.props!.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props!.Icon.preferredValues) && btnComp.props!.Icon.preferredValues.length === 2);
 
   // --- READ additions (verified vs developers.figma.com 2026-07-23): bug fix + HIGH tier + MED ---
   // BUG FIX: progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (were dropped).
-  ok("progressive blur endOffset Vector kept", abs.effects[0].blurType === "progressive" && abs.effects[0].endOffset && abs.effects[0].endOffset.y === 1);
-  ok("noise effect fields", abs.effects[1].type === "noise" && abs.effects[1].noiseType === "multitone" && abs.effects[1].opacity === 0.3);
-  ok("glass effect fields", abs.effects[2].type === "glass" && abs.effects[2].refraction === 0.2 && abs.effects[2].depth === 4);
-  ok("image filters carried", abs.fills[1].filters && abs.fills[1].filters.saturation === -0.5 && abs.fills[1].filters.exposure === undefined);
-  ok("pattern paint fields", abs.fills[2].type === "pattern" && abs.fills[2].sourceNodeId === "9:99" && abs.fills[2].tileType === "rectangular");
+  ok("progressive blur endOffset Vector kept", flatEffect(abs.effects![0]).blurType === "progressive" && flatEffect(abs.effects![0]).endOffset && flatEffect(abs.effects![0]).endOffset!.y === 1);
+  ok("noise effect fields", abs.effects![1].type === "noise" && abs.effects![1].noiseType === "multitone" && abs.effects![1].opacity === 0.3);
+  ok("glass effect fields", abs.effects![2].type === "glass" && abs.effects![2].refraction === 0.2 && abs.effects![2].depth === 4);
+  ok("image filters carried", flatPaint(abs.fills![1]).filters && flatPaint(abs.fills![1]).filters!.saturation === -0.5 && flatPaint(abs.fills![1]).filters!.exposure === undefined);
+  ok("pattern paint fields", abs.fills![2].type === "pattern" && abs.fills![2].sourceNodeId === "9:99" && abs.fills![2].tileType === "rectangular");
   ok("absolute bounding box -> box", abs.box && abs.box.w === 100 && abs.box.h === 50);
   ok("render box emitted when it differs", abs.renderBox && abs.renderBox.h === 56);
   ok("maskType (luminance) carried", abs.maskType === "luminance");
@@ -344,34 +510,34 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("strokesIncludedInLayout flagged", tree.strokesInLayout === true);
   ok("dev-resource links batched at root", Array.isArray(tree.devResources) && tree.devResources[0].url.indexOf("sb.example.com") !== -1);
 
-  ok("per-run textStyle resolved", txt.runs[1].textStyle === "Heading/H1");
-  ok("per-run fillStyle resolved", txt.runs[1].fillStyle === "Brand/Primary");
-  ok("per-run openType features (enabled only)", Array.isArray(txt.runs[1].font.openType) && txt.runs[1].font.openType.indexOf("SMCP") !== -1 && txt.runs[1].font.openType.indexOf("LIGA") === -1);
-  ok("per-run list indentation level", txt.runs[1].indent === 1);
+  ok("per-run textStyle resolved", txt.runs![1].textStyle === "Heading/H1");
+  ok("per-run fillStyle resolved", txt.runs![1].fillStyle === "Brand/Primary");
+  ok("per-run openType features (enabled only)", Array.isArray(txt.runs![1].font.openType) && txt.runs![1].font.openType.indexOf("SMCP") !== -1 && txt.runs![1].font.openType.indexOf("LIGA") === -1);
+  ok("per-run list indentation level", txt.runs![1].indent === 1);
 
-  const acts = btn.reactions[0].actions;
-  ok("NODE action preserveScroll flag", acts[0].preserveScroll === true);
-  ok("SET_VARIABLE resolves variable name", acts.some((a: any) => a.type === "set_variable" && a.variable === "color/primary"));
-  ok("SET_VARIABLE_MODE resolves collection+mode names", acts.some((a: any) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
-  ok("CONDITIONAL nests actions", acts.some((a: any) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions[0].destination === "Details"));
+  const acts = btn.reactions![0].actions;
+  ok("NODE action preserveScroll flag", acts![0].preserveScroll === true);
+  ok("SET_VARIABLE resolves variable name", acts!.some((a) => a.type === "set_variable" && a.variable === "color/primary"));
+  ok("SET_VARIABLE_MODE resolves collection+mode names", acts!.some((a) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
+  ok("CONDITIONAL nests actions", acts!.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions![0].destination === "Details"));
 
-  ok("collection defaultModeId -> mode name", ds.collections.find((c: any) => c.name === "Semantic").default === "Light");
-  ok("variable description captured", ds.variables.find((v: any) => v.name === "color/primary").description === "Primary brand color");
+  ok("collection defaultModeId -> mode name", ds.collections.find((c) => c.name === "Semantic")!.default === "Light");
+  ok("variable description captured", ds.variables.find((v) => v.name === "color/primary")!.description === "Primary brand color");
   ok("document color profile", ds.colorProfile === "display_p3");
   ok("document file name", ds.file === "My File");
-  ok("component publish key captured", btnComp.key === "compkey123");
-  ok("component documentationLinks captured", Array.isArray(btnComp.docs) && btnComp.docs[0].indexOf("docs.example.com") !== -1);
+  ok("component publish key captured", btnComp!.key === "compkey123");
+  ok("component documentationLinks captured", Array.isArray(btnComp!.docs) && btnComp!.docs[0].indexOf("docs.example.com") !== -1);
 
   const tableNode = { type: "TABLE", name: "Data", visible: true, id: "20:0", numRows: 2, numColumns: 2,
-    cellAt: (r: any, c: any) => ({ text: { characters: "r" + r + "c" + c }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }], rowSpan: 1, columnSpan: 1 }) };
+    cellAt: (r: number, c: number) => ({ text: { characters: "r" + r + "c" + c }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }], rowSpan: 1, columnSpan: 1 }) };
   const tbl = await sandbox.serialize(tableNode, 0, false);
   ok("table cells traversed via cellAt", Array.isArray(tbl.tableCells) && tbl.tableCells.length === 2 && tbl.tableCells[0][0].text === "r0c0");
 
   // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
   // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
-  ok("text decoration thickness (value+unit)", txt.runs[1].font.decorationThickness && txt.runs[1].font.decorationThickness.value === 2 && txt.runs[1].font.decorationThickness.unit === "px");
-  ok("text decoration offset (value+unit)", txt.runs[1].font.decorationOffset && txt.runs[1].font.decorationOffset.value === 1);
-  ok("text decoration skip-ink (only when false)", txt.runs[1].font.decorationSkipInk === false);
+  ok("text decoration thickness (value+unit)", txt.runs![1].font.decorationThickness && txt.runs![1].font.decorationThickness.value === 2 && txt.runs![1].font.decorationThickness.unit === "px");
+  ok("text decoration offset (value+unit)", txt.runs![1].font.decorationOffset && txt.runs![1].font.decorationOffset.value === 1);
+  ok("text decoration skip-ink (only when false)", txt.runs![1].font.decorationSkipInk === false);
 
   // GRID fidelity: per-track sizes + child anchor index + child cell alignment.
   const gridFrame = {
@@ -383,16 +549,16 @@ Object.assign(sandbox, sandbox.__designExport || {});
     children: [],
   };
   const gf = await sandbox.serialize(gridFrame, 0, false);
-  ok("grid track sizes (fixed px + flex fr)", gf.layout.display === "grid" && Array.isArray(gf.layout.columnSizes) && gf.layout.columnSizes[0].type === "fixed" && gf.layout.columnSizes[0].value === 200 && gf.layout.columnSizes[1].type === "flex");
-  ok("grid HUG track (value-less) handled", gf.layout.columnSizes[2].type === "hug" && gf.layout.columnSizes[2].value === undefined);
+  ok("grid track sizes (fixed px + flex fr)", gf.layout!.display === "grid" && Array.isArray(gf.layout!.columnSizes) && gf.layout!.columnSizes[0].type === "fixed" && gf.layout!.columnSizes[0].value === 200 && gf.layout!.columnSizes[1].type === "flex");
+  ok("grid HUG track (value-less) handled", gf.layout!.columnSizes![2].type === "hug" && gf.layout!.columnSizes![2].value === undefined);
   ok("grid child anchor index (start cell)", abs.gridColumnStart === 1 && abs.gridRowStart === 0);
   ok("grid child cell align (justify/align-self)", abs.gridJustifySelf === "center" && abs.gridAlignSelf === "end");
 
-  ok("shader paint id captured", abs.fills[3] && abs.fills[3].type === "shader" && abs.fills[3].shaderId === "shader_1");
+  ok("shader paint id captured", abs.fills![3] && abs.fills![3].type === "shader" && abs.fills![3].shaderId === "shader_1");
   ok("devStatus free-text note captured", abs.devStatusNote === "blocked on API");
   ok("instance component-prop variable binding -> propTokens", btn.propTokens && btn.propTokens.Label === "color/primary");
 
-  const bodyStyle = ds.styles.text.find((s: any) => s.name === "Body/Regular");
+  const bodyStyle = ds.styles.text.find((s) => s.name === "Body/Regular");
   ok("text style leadingTrim + listSpacing + paragraphIndent", bodyStyle && bodyStyle.leadingTrim === "cap_height" && bodyStyle.listSpacing === 6 && bodyStyle.paragraphIndent === 4);
   ok("text style variable binding (fontSize -> token)", bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad");
 
@@ -401,7 +567,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // measured 20.5% of a real payload (2,151 occurrences) with zero consumers, and the matches are
   // value-coincidence. The mock still SUPPLIES inferredVariables on scrollFrame, so this pins that the
   // extractor ignores it rather than that the fixture stopped providing it.
-  ok("[AUDIT-6b] inferredTokens is no longer emitted", tree.inferredTokens === undefined);
+  ok("[AUDIT-6b] inferredTokens is no longer emitted", (tree as IrNode & { inferredTokens?: unknown }).inferredTokens === undefined);
   ok("[AUDIT-6b] and no inferred* key leaks under another name", !Object.keys(tree).some((k) => /^inferred/.test(k)));
   // css / measurements / pluginData are OPT-IN — off by default.
   // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
@@ -412,14 +578,14 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const tree2 = sel2.screen.nodes[0];
   ok("getCSSAsync -> css oracle (opt-in)", tree2.css && tree2.css.display === "flex" && tree2.css.padding === "16px");
   ok("own-scope plugin data captured (opt-in)", tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary");
-  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start.side === "LEFT");
+  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start!.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
   const sel3 = await sandbox.collectSelection({ motion: true });
-  const m3 = sel3.screen.nodes[0].motion;
+  const m3 = sel3.screen.nodes[0].motion as MotionView | undefined;
   ok("motion timelines captured (opt-in)", m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5);
-  ok("motion keyframe track: base + keyframes + values", m3 && m3.manualTracks.TRANSLATION_X && m3.manualTracks.TRANSLATION_X.base === 0 && m3.manualTracks.TRANSLATION_X.keyframes[1].value === 100);
-  ok("motion keyframe custom cubic-bezier easing carried", m3 && m3.manualTracks.TRANSLATION_X.keyframes[1].easing.cubicBezier.x1 === 0.4);
-  ok("motion applied animation style captured", m3 && m3.styles[0].name === "Fade In" && m3.styles[0].duration === 0.3);
+  ok("motion keyframe track: base + keyframes + values", m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100);
+  ok("motion keyframe custom cubic-bezier easing carried", m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4);
+  ok("motion applied animation style captured", m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3);
 
   // --- sharedData (cross-plugin, e.g. Tokens Studio applied tokens) is OPT-IN ---
   ok("sharedData off by default", tree.sharedData === undefined);
@@ -453,7 +619,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const hero = await sandbox.serialize(heroFrame, 0, false);
   ok("image-backed container NOT flattened (no asset)", hero.asset === undefined);
   ok("image-backed container keeps children (text survives)", Array.isArray(hero.children) && hero.children.length === 1 && hero.children[0].text === "Welcome");
-  ok("image-backed container keeps image as background fill", Array.isArray(hero.fills) && hero.fills.some((f: any) => f.hash === "abc123"));
+  ok("image-backed container keeps image as background fill", Array.isArray(hero.fills) && hero.fills.some((f) => flatPaint(f).hash === "abc123"));
   // A childless image node (a plain image rectangle) still rasterizes to a PNG asset as before.
   const imageRect = { type: "RECTANGLE", name: "Photo", visible: true, id: "img:1",
     fills: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: "abc123" }],
@@ -482,10 +648,10 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // (the self-correction image), not the O(nodes) pass that caused the hang. So the contract is
   // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
   ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
-  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipRun.screen.nodes[0].reference === "string" || skipRun.assets.some((a: any) => a.kind === "reference"));
-  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
+  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipRun.screen.nodes[0].reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
+  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped! >= 1);
   ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
-    skipRun.screen.manifest.warnings.some((w: any) => /--no-assets/.test(w) && /skipped/.test(w)));
+    skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
 
   const normalRun = await sandbox.collectSelection({});
   ok("[RD-noassets] DEFAULT is unchanged — the asset still exports",
@@ -500,7 +666,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // payload it exists to shrink (and the skip counter counted those child vectors, not the exports).
   // Several vector children, and the icon nested one level down: with a single child the two trees
   // differ by too little for the node-count/size assertions below to actually discriminate.
-  const iconVec = (i: any) => ({ type: "VECTOR", name: "path" + i, visible: true, id: "ic:v" + i, width: 16, height: 16,
+  const iconVec = (i: number) => ({ type: "VECTOR", name: "path" + i, visible: true, id: "ic:v" + i, width: 16, height: 16,
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
     exportAsync: async () => "<svg/>" });
   const iconFrame = { type: "FRAME", name: "icon/home", visible: true, id: "ic:1", width: 24, height: 24,
@@ -510,7 +676,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   sandbox.figma.currentPage.selection = [iconSheet];
   const iconNormal = await sandbox.collectSelection({});
   const iconSkipped = await sandbox.collectSelection({ skipAssets: true });
-  const nNode = iconNormal.screen.nodes[0].children[0], sNode = iconSkipped.screen.nodes[0].children[0];
+  const nNode = iconNormal.screen.nodes[0].children![0], sNode = iconSkipped.screen.nodes[0].children![0];
 
   ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
     typeof nNode.asset === "string" && !nNode.children);
@@ -532,7 +698,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // Names came from the node-id PATH, which included the whole instance chain: an app importing 41
   // icons imported 41 filenames like `I10970_111374_1910_23337_1902_19173.svg`, and one shared
   // sidebar icon was re-exported under a different name for every screen that used it.
-  const svgIcon = (id: any, name: any, body: any) => ({ type: "VECTOR", name, visible: true, id, width: 16, height: 16,
+  const svgIcon = (id: string, name: string, body: string) => ({ type: "VECTOR", name, visible: true, id, width: 16, height: 16,
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
     exportAsync: async () => body });
   const namedSheet = { type: "FRAME", name: "Names", visible: true, id: "an:0", width: 100, height: 100,
@@ -545,22 +711,22 @@ Object.assign(sandbox, sandbox.__designExport || {});
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
   sandbox.figma.currentPage.selection = [namedSheet];
   const named = await sandbox.collectSelection({});
-  const icons = named.assets.filter((a: any) => a.format === "svg");
-  const fileOf = (n: any) => { const a = icons.find((x: any) => x.name === n); return a && a.file; };
+  const icons = named.assets.filter((a) => a.format === "svg");
+  const fileOf = (n: string) => { const a = icons.find((x) => x.name === n); return a && a.file; };
 
   ok("[ASSET-NAME] an icon is named after its Figma layer, not its node-id path", fileOf("vuesax/linear/element-4") === "element-4.svg");
   ok("[ASSET-NAME] the hyphen survives — it is the commonest character in an icon name",
-    icons.every((a: any) => a.file.indexOf("/") === -1) && fileOf("vuesax/linear/element-4").indexOf("-") !== -1);
+    icons.every((a) => a.file.indexOf("/") === -1) && fileOf("vuesax/linear/element-4")!.indexOf("-") !== -1);
   ok("[ASSET-NAME] a slash-pathed layer name files under its LAST segment, trimmed", fileOf("Linear / School / Diploma") === "Diploma.svg");
   ok("[ASSET-DEDUPE] the same artwork reached through two instance paths produces ONE file", icons.length === 3);
   ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",
-    (() => { const a = icons.find((x: any) => x.file === "element-4.svg"); return a.from && a.from.indexOf("I1:2:3") !== -1 && a.from.indexOf("I9:8:7") !== -1; })());
+    (() => { const a = icons.find((x) => x.file === "element-4.svg"); return a!.from && a!.from.indexOf("I1:2:3") !== -1 && a!.from.indexOf("I9:8:7") !== -1; })());
   ok("[ASSET-DEDUPE] the deduped node's tree path points at that same one file",
-    named.screen.nodes[0].children[1].asset === "assets/element-4.svg");
+    named.screen.nodes[0].children![1].asset === "assets/element-4.svg");
   ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",
     (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })());
   ok("[ASSET-NAME] every filename is still separator-free and ends in its format",
-    named.assets.every((a: any) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
+    named.assets.every((a) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
   sandbox.figma.currentPage.selection = [iconSheet];
 
   ok("[RD-noassets] and exportAsync did run when not skipping", exportCalls > skipCalls);
@@ -571,9 +737,9 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("[RD-manifest] the manifest names the opt-in reads that actually ran",
     Array.isArray(normalRun.screen.manifest.reads));
   ok("[RD-manifest] an opt-in read that was requested appears in it",
-    (await sandbox.collectSelection({ measurements: true })).screen.manifest.reads.includes("measurements"));
+    (await sandbox.collectSelection({ measurements: true })).screen.manifest.reads!.includes("measurements"));
   ok("[RD-manifest] one that was not, does not",
-    !(await sandbox.collectSelection({})).screen.manifest.reads.includes("measurements"));
+    !(await sandbox.collectSelection({})).screen.manifest.reads!.includes("measurements"));
   sandbox.figma.currentPage.selection = prevSelection;
 
   // --- FIX: hasMissingFont -> flag + warning so codegen knows the recorded font may be substituted ---
@@ -607,23 +773,23 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const prevGetVar = sandbox.figma.variables.getVariableByIdAsync;
   const prevGetColl = sandbox.figma.variables.getVariableCollectionByIdAsync;
   // Resolvable by id (as the real API does for consumed library variables) but absent from the LOCAL list.
-  sandbox.figma.variables.getVariableByIdAsync = async (id: any) => (id === "v_lib" ? LIB_VAR : prevGetVar(id));
-  sandbox.figma.variables.getVariableCollectionByIdAsync = async (id: any) => (id === "c_lib" ? LIB_COLLECTION : prevGetColl(id));
+  sandbox.figma.variables.getVariableByIdAsync = async (id: string) => (id === "v_lib" ? LIB_VAR : prevGetVar(id));
+  sandbox.figma.variables.getVariableCollectionByIdAsync = async (id: string) => (id === "c_lib" ? LIB_COLLECTION : prevGetColl(id));
 
   const libNode = { type: "FRAME", name: "LibCard", visible: true, id: "9:1", width: 100, height: 40,
     fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 0.4, b: 0 }, opacity: 1 }],
     boundVariables: { fills: [{ type: "VARIABLE_ALIAS", id: "v_lib" }] } };
   sandbox.figma.currentPage.selection = [libNode];
   const libSel = await sandbox.collectSelection({ css: false });
-  const libDump = libSel.variables.variables.find((v: any) => v.name === "brand/accent");
+  const libDump = libSel.variables.variables.find((v) => v.name === "brand/accent");
   ok("library var referenced by a node IS included in the dump", !!libDump);
   ok("library var flagged remote:true", libDump && libDump.remote === true);
   ok("library var values keyed by readable mode names", libDump && libDump.values && libDump.values.Light === "#ff6600");
-  ok("library var's collection is emitted (default mode for :root)", libSel.variables.collections.some((c: any) => c.name === "Library/Brand" && c.default === "Light"));
-  ok("library pull is reported in hygiene (never silent)", libSel.variables.hygiene.some((h: any) => /published LIBRARY/.test(h)));
+  ok("library var's collection is emitted (default mode for :root)", libSel.variables.collections.some((c) => c.name === "Library/Brand" && c.default === "Light"));
+  ok("library pull is reported in hygiene (never silent)", libSel.variables.hygiene.some((h) => /published LIBRARY/.test(h)));
   ok("node still resolves the library token by name", libSel.screen.nodes[0].tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent");
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
-  ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v: any) => v.name === "unused/never"));
+  ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
 
   // ---- [RD-alias] library variable reached ONLY through another variable's ALIAS ----
   // Regression from the first real export (2026-07-28). varName.ids() is a SNAPSHOT of ids referenced
@@ -640,8 +806,8 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const LIB_PRIM = { id: "v_libprim", name: "brand/gray-100", resolvedType: "COLOR", variableCollectionId: "c_lib",
     scopes: [], codeSyntax: {}, remote: true,
     valuesByMode: { m_l: { r: 0.9, g: 0.9, b: 0.9, a: 1 }, m_d: { r: 0.2, g: 0.2, b: 0.2, a: 1 } } };
-  const EXTRA: any = { v_libmid: LIB_MID, v_libprim: LIB_PRIM, v_lib: LIB_VAR };
-  sandbox.figma.variables.getVariableByIdAsync = async (id: any) => EXTRA[id] || prevGetVar(id);
+  const EXTRA: Record<string, FakeVariable> = { v_libmid: LIB_MID, v_libprim: LIB_PRIM, v_lib: LIB_VAR };
+  sandbox.figma.variables.getVariableByIdAsync = async (id: string) => EXTRA[id] || prevGetVar(id);
   // A LOCAL semantic token whose value aliases the library chain — neither library var is node-bound.
   VARS.v_semlib = { id: "v_semlib", name: "semantic/surface", resolvedType: "COLOR", variableCollectionId: "c_sem",
     scopes: ["FRAME_FILL"], codeSyntax: {}, remote: false,
@@ -652,23 +818,23 @@ Object.assign(sandbox, sandbox.__designExport || {});
     boundVariables: { fills: [{ type: "VARIABLE_ALIAS", id: "v_semlib" }] } };
   sandbox.figma.currentPage.selection = [chainNode];
   const chainSel = await sandbox.collectSelection({ css: false });
-  const cv = (n: any) => chainSel.variables.variables.find((v: any) => v.name === n);
+  const cv = (n: string) => chainSel.variables.variables.find((v) => v.name === n);
 
   ok("[RD-alias] hop 1 (aliased library var) is included", !!cv("brand/mid"));
   ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
   ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
-    !!cv("brand/gray-100") && cv("brand/gray-100").values.Light === "#e6e6e6");
-  ok("[RD-alias] the intermediate still reads as an alias", !!cv("brand/mid") && cv("brand/mid").values.Light &&
-    cv("brand/mid").values.Light.aliasOf === "brand/gray-100");
+    !!cv("brand/gray-100") && cv("brand/gray-100")!.values.Light === "#e6e6e6");
+  ok("[RD-alias] the intermediate still reads as an alias", !!cv("brand/mid") && cv("brand/mid")!.values.Light &&
+    aliasOf(cv("brand/mid")!.values.Light) === "brand/gray-100");
   // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
   ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
-    !chainSel.variables.hygiene.some((h: any) => /broken alias/.test(h)));
+    !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
   // And the whole point: no emitted alias may point at a name that isn't in the dump.
   ok("[RD-alias] no alias dangles — every aliasOf target exists in variables[]", (() => {
-    const names = new Set(chainSel.variables.variables.map((v: any) => v.name));
+    const names = new Set(chainSel.variables.variables.map((v) => v.name));
     for (const v of chainSel.variables.variables) {
       for (const val of Object.values(v.values || {})) {
-        if (val && typeof val === "object" && (val as any).aliasOf && !names.has((val as any).aliasOf)) return false;
+        if (val && typeof val === "object" && val.aliasOf && !names.has(val.aliasOf)) return false;
       }
     }
     return true;
@@ -690,10 +856,10 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const aliasHyg = aliasSel.variables.hygiene;
   // Matched loosely on purpose: the old wording was "broken/remote alias in '…'", so a regex tied to
   // the new phrasing would pass against the old behaviour too and prove nothing.
-  ok("alias to a RESOLVED library variable is not called broken", !aliasHyg.some((h: any) => /broken.*'color\/brand'/.test(h)));
-  ok("alias to a resolved library var still resolves to its name", aliasSel.variables.variables.some((v: any) => v.name === "color/brand" && v.values.Light && v.values.Light.aliasOf === "brand/accent"));
-  ok("a genuinely dangling alias IS still reported", aliasHyg.some((h: any) => /broken alias in 'color\/ghost'/.test(h)));
-  ok("dangling-alias warning names the unresolved id", aliasHyg.some((h: any) => /v_deleted/.test(h)));
+  ok("alias to a RESOLVED library variable is not called broken", !aliasHyg.some((h) => /broken.*'color\/brand'/.test(h)));
+  ok("alias to a resolved library var still resolves to its name", aliasSel.variables.variables.some((v) => v.name === "color/brand" && v.values.Light && aliasOf(v.values.Light) === "brand/accent"));
+  ok("a genuinely dangling alias IS still reported", aliasHyg.some((h) => /broken alias in 'color\/ghost'/.test(h)));
+  ok("dangling-alias warning names the unresolved id", aliasHyg.some((h) => /v_deleted/.test(h)));
   delete VARS.v_aliases_lib;
   delete VARS.v_dangling;
   sandbox.figma.variables.getVariableByIdAsync = prevGetVar;
@@ -702,7 +868,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   // ---- source-image container format (magic bytes, not a hardcoded ".img") ----
   const prevGetImage = sandbox.figma.getImageByHash;
-  const magicRect = (hash: any) => ({ type: "RECTANGLE", name: "Photo", visible: true, id: "m:" + hash, width: 10, height: 10,
+  const magicRect = (hash: string) => ({ type: "RECTANGLE", name: "Photo", visible: true, id: "m:" + hash, width: 10, height: 10,
     fills: [{ type: "IMAGE", visible: true, scaleMode: "FILL", imageHash: hash }], exportAsync: async () => new Uint8Array([137, 80, 78, 71]) });
   const MAGIC = {
     png: [0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10],
@@ -711,10 +877,10 @@ Object.assign(sandbox, sandbox.__designExport || {});
     webp: [0x52, 0x49, 0x46, 0x46, 4, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
   };
   for (const [fmt, bytes] of Object.entries(MAGIC)) {
-    sandbox.figma.getImageByHash = (h: any) => (h === "h_" + fmt ? { getSizeAsync: async () => ({ width: 8, height: 8 }), getBytesAsync: async () => new Uint8Array(bytes) } : null);
+    sandbox.figma.getImageByHash = (h: string) => (h === "h_" + fmt ? { getSizeAsync: async () => ({ width: 8, height: 8 }), getBytesAsync: async () => new Uint8Array(bytes) } : null);
     sandbox.figma.currentPage.selection = [magicRect("h_" + fmt)];
     const r = await sandbox.collectSelection({ css: false });
-    ok(`source image format detected from magic bytes: ${fmt}`, r.assets.some((a: any) => a.kind === "source" && a.format === fmt));
+    ok(`source image format detected from magic bytes: ${fmt}`, r.assets.some((a) => a.kind === "source" && a.format === fmt));
   }
   sandbox.figma.getImageByHash = prevGetImage;
   sandbox.figma.currentPage.selection = [scrollFrame];
@@ -723,45 +889,45 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // PageNode.children THROWS on a page that isn't current and wasn't loaded (dynamic-page access).
   // A failed loadAllPagesAsync used to warn "may miss pages" and then abort the whole export here.
   const goodPage = sandbox.figma.root.children[0];
-  const badPage = { name: "Locked Page", get children() { throw new Error("page not loaded"); },
+  const badPage = { name: "Locked Page", get children(): FakeNode[] { throw new Error("page not loaded"); },
     findAllWithCriteria: () => { throw new Error("page not loaded"); } };
   const prevRootChildren = sandbox.figma.root.children;
   sandbox.figma.root.children = [goodPage, badPage];
   const prevLoadAll = sandbox.figma.loadAllPagesAsync;
   sandbox.figma.loadAllPagesAsync = async () => { throw new Error("load failed"); };
-  let fullErr: any = null, full: any = null;
-  try { full = await sandbox.collectFull({ allPages: true, css: false }); } catch (e: any) { fullErr = e; }
+  let fullErr: Thrown | null = null, full: FullResult | null = null;
+  try { full = await sandbox.collectFull({ allPages: true, css: false }); } catch (e) { fullErr = thrown(e); }
   ok("unreadable page does NOT abort the export", fullErr === null && !!full);
   ok("readable pages still exported alongside the bad one", full && full.layersDoc.layers.length > 0);
-  ok("unreadable page is warned, not silently dropped", full && full.layersDoc.manifest.warnings.some((w: any) => /Locked Page.*could not be read/.test(w)));
-  ok("untraversable page warned in the component catalog too", full && full.layersDoc.manifest.warnings.some((w: any) => /component catalog.*Locked Page/.test(w)));
-  ok("loadAllPagesAsync failure is itself reported", full && full.layersDoc.manifest.warnings.some((w: any) => /loadAllPagesAsync failed/.test(w)));
+  ok("unreadable page is warned, not silently dropped", full && full.layersDoc.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
+  ok("untraversable page warned in the component catalog too", full && full.layersDoc.manifest.warnings.some((w) => /component catalog.*Locked Page/.test(w)));
+  ok("loadAllPagesAsync failure is itself reported", full && full.layersDoc.manifest.warnings.some((w) => /loadAllPagesAsync failed/.test(w)));
   // ---- [LIST] listPages: the cheap structural index ----
   // Reuses the unreadable-page fixture above (root.children is still [goodPage, badPage] and
   // loadAllPagesAsync still throws) — the case where an index is most tempting to get wrong.
   const listBad = await sandbox.listPages({});
-  const badEntry = listBad.pages.find((p: any) => p.name === "Locked Page");
+  const badEntry = listBad.pages.find((p) => p.name === "Locked Page");
   ok("[LIST] an unreadable page is still LISTED", !!badEntry);
   // The whole trap: an index that shows a readable-looking page with no frames reads as "this page is
   // empty" and the caller stops looking. It must be distinguishable.
   ok("[LIST] an unreadable page is flagged, not shown as empty", !!badEntry && badEntry.unreadable === true && badEntry.frames === undefined);
-  ok("[LIST] and the reason is warned", listBad.manifest.warnings.some((w: any) => /Locked Page.*could not be read/.test(w)));
+  ok("[LIST] and the reason is warned", listBad.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
   ok("[LIST] a readable page still lists its frames alongside the bad one",
-    Array.isArray(listBad.pages.find((p: any) => p.name === "Page 1").frames));
+    Array.isArray(listBad.pages.find((p) => p.name === "Page 1")!.frames));
   sandbox.figma.root.children = prevRootChildren;
   sandbox.figma.loadAllPagesAsync = prevLoadAll;
 
   const listed = await sandbox.listPages({});
   ok("[LIST] reports the file name", listed.file === "My File");
   ok("[LIST] lists every page", listed.pages.length === sandbox.figma.root.children.length);
-  ok("[LIST] marks the current page", listed.pages.some((p: any) => p.current === true));
+  ok("[LIST] marks the current page", listed.pages.some((p) => p.current === true));
   const lf = listed.pages[0].frames;
   ok("[LIST] top-level frames carry id/name/type", Array.isArray(lf) && lf.length > 0 && lf.every((f) => f.id && f.name && f.type));
-  ok("[LIST] frames carry size", lf.every((f: any) => typeof f.w === "number" && typeof f.h === "number"));
+  ok("[LIST] frames carry size", lf!.every((f) => typeof f.w === "number" && typeof f.h === "number"));
   // The POINT of the op: it is an index, not an export. No recursion, no serialization, no assets.
-  ok("[LIST] frames do NOT recurse (no children)", lf.every((f: any) => f.children === undefined));
+  ok("[LIST] frames do NOT recurse (no children)", lf!.every((f) => f.children === undefined));
   ok("[LIST] frames carry no serialized detail (no fills/layout/tokens)",
-    lf.every((f: any) => f.fills === undefined && f.layout === undefined && f.tokens === undefined));
+    lf!.every((f) => f.fills === undefined && f.layout === undefined && f.tokens === undefined));
   ok("[LIST] no assets are produced", listed.assets === undefined);
   ok("[LIST] manifest counts pages and frames", listed.manifest.pages === listed.pages.length && typeof listed.manifest.frames === "number");
   // depth 1 = page names only, and must NOT pay for loading pages.
@@ -775,7 +941,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   for (const p of sandbox.figma.root.children) if (!p.loadAsync) p.loadAsync = async () => { perPageLoads++; };
   const depth1 = await sandbox.listPages({ depth: 1 });
   ok("[LIST] depth 1 lists pages", depth1.pages.length === listed.pages.length && depth1.depth === 1);
-  ok("[LIST] depth 1 omits frames entirely", depth1.pages.every((p: any) => p.frames === undefined));
+  ok("[LIST] depth 1 omits frames entirely", depth1.pages.every((p) => p.frames === undefined));
   ok("[LIST] depth 1 loads NOTHING (that's why it's near-free)", loadCalls === 0 && perPageLoads === 0);
   await sandbox.listPages({ depth: 2 });
   ok("[LIST] depth 2 loads each page individually, NOT loadAllPagesAsync",
@@ -786,7 +952,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   flaky.loadAsync = async () => { throw new Error("nope"); };
   const listFlaky = await sandbox.listPages({ depth: 2 });
   ok("[LIST] a page that fails to load is warned, and the others still list",
-    listFlaky.manifest.warnings.some((w: any) => /failed to load/.test(w)) && listFlaky.pages.length === sandbox.figma.root.children.length);
+    listFlaky.manifest.warnings.some((w) => /failed to load/.test(w)) && listFlaky.pages.length === sandbox.figma.root.children.length);
   flaky.loadAsync = prevFlakyLoad;
   sandbox.figma.loadAllPagesAsync = prevLoad2;
 
@@ -799,31 +965,31 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const parentFrame = { id: "p:children", name: "Card", type: "FRAME", children: [childText, childFrame] };
   const leafNode = { id: "leaf:children", name: "Glyph", type: "VECTOR", width: 8, height: 8 }; // no `children` key
   const prevGetNodeC = sandbox.figma.getNodeByIdAsync;
-  sandbox.figma.getNodeByIdAsync = async (id: any) => (({ "p:children": parentFrame, "leaf:children": leafNode } as any)[id] || null);
+  sandbox.figma.getNodeByIdAsync = async (id: string) => { const nodes: Record<string, FakeNode> = { "p:children": parentFrame, "leaf:children": leafNode }; return nodes[id] || null; };
 
   const kids = await sandbox.listChildren("p:children");
   ok("[CHILDREN] reports the queried node's own id/name/type", kids.id === "p:children" && kids.name === "Card" && kids.type === "FRAME");
   ok("[CHILDREN] lists DIRECT children only", kids.children.length === 2);
-  ok("[CHILDREN] each child carries id/name/type", kids.children.every((c: any) => c.id && c.name && c.type));
-  ok("[CHILDREN] children carry size", kids.children.every((c: any) => typeof c.w === "number" && typeof c.h === "number"));
-  ok("[CHILDREN] a hidden child is flagged", kids.children.find((c: any) => c.id === "ch:1").hidden === true);
-  ok("[CHILDREN] a child that itself has children is flagged hasChildren:true", kids.children.find((c: any) => c.id === "ch:2").hasChildren === true);
+  ok("[CHILDREN] each child carries id/name/type", kids.children.every((c) => c.id && c.name && c.type));
+  ok("[CHILDREN] children carry size", kids.children.every((c) => typeof c.w === "number" && typeof c.h === "number"));
+  ok("[CHILDREN] a hidden child is flagged", kids.children.find((c) => c.id === "ch:1")!.hidden === true);
+  ok("[CHILDREN] a child that itself has children is flagged hasChildren:true", kids.children.find((c) => c.id === "ch:2")!.hasChildren === true);
   // The whole point of the op: it does NOT recurse. The grandchild must never appear anywhere.
   ok("[CHILDREN] does NOT recurse into grandchildren", JSON.stringify(kids).indexOf("gc:1") === -1);
   ok("[CHILDREN] no serialized detail leaks in (no fills/layout/tokens)",
-    kids.children.every((c: any) => c.fills === undefined && c.layout === undefined && c.tokens === undefined));
+    kids.children.every((c) => c.fills === undefined && c.layout === undefined && c.tokens === undefined));
   ok("[CHILDREN] no assets are produced", kids.assets === undefined);
 
-  let leafErr: any = null;
-  try { await sandbox.listChildren("leaf:children"); } catch (e: any) { leafErr = e; }
+  let leafErr: Thrown | null = null;
+  try { await sandbox.listChildren("leaf:children"); } catch (e) { leafErr = thrown(e); }
   ok("[CHILDREN] a leaf node (nothing to list) errors rather than returning an empty list", !!leafErr && /leaf/.test(leafErr.message));
 
-  let childrenMissErr: any = null;
-  try { await sandbox.listChildren("nope:children"); } catch (e: any) { childrenMissErr = e; }
+  let childrenMissErr: Thrown | null = null;
+  try { await sandbox.listChildren("nope:children"); } catch (e) { childrenMissErr = thrown(e); }
   ok("[CHILDREN] an unknown node id errors", !!childrenMissErr && /not in the open file/.test(childrenMissErr.message));
 
-  let childrenEmptyErr: any = null;
-  try { await sandbox.listChildren(""); } catch (e: any) { childrenEmptyErr = e; }
+  let childrenEmptyErr: Thrown | null = null;
+  try { await sandbox.listChildren(""); } catch (e) { childrenEmptyErr = thrown(e); }
   ok("[CHILDREN] an empty id errors", !!childrenEmptyErr && /No node id/.test(childrenEmptyErr.message));
 
   // A node on an UNLOADED page: getNodeByIdAsync only sees loaded pages under dynamic-page access, so
@@ -838,7 +1004,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const lazyPage = { name: "Lazy", id: "p:lazy", loadAsync: async () => { incrementalLoads++; unlockedPage = true; }, get children() { return []; } };
   const laterPage = { name: "Later", id: "p:later", loadAsync: async () => { incrementalLoads++; }, get children() { return []; } };
   sandbox.figma.root.children = [lazyPage, laterPage];
-  sandbox.figma.getNodeByIdAsync = async (id: any) => (id === "deep:1" && unlockedPage ? parentFrame : null);
+  sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "deep:1" && unlockedPage ? parentFrame : null);
   const lazyKids = await sandbox.listChildren("deep:1");
   ok("[CHILDREN] a node on an unloaded page is still found", lazyKids.children.length === 2);
   ok("[CHILDREN] the lookup loads pages incrementally, never loadAllPagesAsync", allPagesCalls === 0 && incrementalLoads === 1);
@@ -853,9 +1019,9 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // readable without loading, and figma.currentPage does NOT need to change — so a --page export
   // leaves the user's editor where it is. That last fact is what made the metadata bugs below
   // possible: three fields still assumed "exported page == currentPage".
-  const pgA: any = { name: "Screens", id: "p:A", children: [scrollFrame], loadAsync: async () => {}, findAllWithCriteria: () => [] };
-  const pgB: any = { name: "Screens", id: "p:B", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
-  const pgC: any = { name: "Archive", id: "p:C", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const pgA: FakeNode = { name: "Screens", id: "p:A", children: [scrollFrame], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const pgB: FakeNode = { name: "Screens", id: "p:B", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
+  const pgC: FakeNode = { name: "Archive", id: "p:C", children: [], loadAsync: async () => {}, findAllWithCriteria: () => [] };
   const prevKids = sandbox.figma.root.children;
   const prevCurrent = sandbox.figma.currentPage;
   sandbox.figma.root.children = [pgA, pgB, pgC];
@@ -872,9 +1038,9 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // on the name (bridge/pages-layout.js buckets pages into directories) merged two distinct pages
   // into one. The id is the only stable page identity that survives into the export.
   ok("[PAGE] every layer carries its page ID, not just the display name",
-    byId.layersDoc.layers.every((l: any) => l.pageId === "p:A" && l.page === "Screens"));
+    byId.layersDoc.layers.every((l) => l.pageId === "p:A" && l.page === "Screens"));
   ok("[PAGE] and so does every index entry, so the manifest can disambiguate too",
-    byId.layersDoc.index.every((e: any) => e.pageId === "p:A"));
+    byId.layersDoc.index.every((e) => e.pageId === "p:A"));
 
   const byName = await sandbox.collectFull({ page: "Archive", css: false });
   ok("[PAGE] resolves an unambiguous page by name", byName.layersDoc.page === "Archive");
@@ -883,14 +1049,14 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   // Figma ALLOWS duplicate page names. Exact-name matching used to pick-first with no guard, which is
   // the likeliest real collision. Nothing here is interactive, so a wrong silent pick is unrecoverable.
-  let dupErr: any = null;
-  try { await sandbox.collectFull({ page: "Screens", css: false }); } catch (e: any) { dupErr = e; }
+  let dupErr: Thrown | null = null;
+  try { await sandbox.collectFull({ page: "Screens", css: false }); } catch (e) { dupErr = thrown(e); }
   ok("[PAGE] a DUPLICATE exact name errors instead of picking one", !!dupErr && /ambiguous/.test(dupErr.message));
   ok("[PAGE] the ambiguity error says to use the id", !!dupErr && /use its id/.test(dupErr.message));
   ok("[PAGE] and lists the available pages (self-healing)", !!dupErr && /p:A/.test(dupErr.message) && /p:C/.test(dupErr.message));
 
-  let missErr: any = null;
-  try { await sandbox.collectFull({ page: "Nope", css: false }); } catch (e: any) { missErr = e; }
+  let missErr: Thrown | null = null;
+  try { await sandbox.collectFull({ page: "Nope", css: false }); } catch (e) { missErr = thrown(e); }
   ok("[PAGE] an unknown page errors", !!missErr && /no page matches/.test(missErr.message));
   ok("[PAGE] the not-found error lists the valid choices", !!missErr && /Available pages/.test(missErr.message) && /"Archive"/.test(missErr.message));
 
@@ -904,19 +1070,19 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // ---- [MEAS] measurements are read from the EXPORTED pages, not from whatever page is open ----
   // This used to hardcode figma.currentPage, so a --page export of a non-current page attached the
   // OPEN page's redlines to a doc about a different page. Each entry now carries its own page tag.
-  const redline = (id: any) => [{ start: { node: { id } , side: "LEFT" }, end: { node: { id }, side: "RIGHT" }, offset: 8, freeText: id }];
+  const redline = (id: string) => [{ start: { node: { id } , side: "LEFT" }, end: { node: { id }, side: "RIGHT" }, offset: 8, freeText: id }];
   pgA.getMeasurements = () => redline("a");
   pgC.getMeasurements = () => redline("c");
   const measMulti = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
   ok("[MEAS] each redline is tagged with the page it came from",
-    measMulti.layersDoc.measurements.some((m: any) => m.page === "Screens" && m.text === "a") &&
-    measMulti.layersDoc.measurements.some((m: any) => m.page === "Archive" && m.text === "c"));
+    measMulti.layersDoc.measurements!.some((m) => m.page === "Screens" && m.text === "a") &&
+    measMulti.layersDoc.measurements!.some((m) => m.page === "Archive" && m.text === "c"));
   ok("[MEAS] and with the page ID too — the name alone can't tell two same-named pages apart",
-    measMulti.layersDoc.measurements.every((m: any) => m.pageId === (m.text === "a" ? "p:A" : "p:C")));
+    measMulti.layersDoc.measurements!.every((m) => m.pageId === (m.text === "a" ? "p:A" : "p:C")));
   // Two pages CAN legitimately share identical redlines — that is data, not an error: emit both.
   pgC.getMeasurements = () => redline("a");
   const measDup = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
-  ok("[MEAS] identical sets on two pages are both emitted, not de-duplicated", measDup.layersDoc.measurements.length === 2);
+  ok("[MEAS] identical sets on two pages are both emitted, not de-duplicated", measDup.layersDoc.measurements!.length === 2);
   delete pgA.getMeasurements;
   delete pgC.getMeasurements;
 
@@ -924,14 +1090,14 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // falling back silently would export the wrong page and say nothing.
   const blank = await sandbox.collectFull({ page: "   ", css: false });
   ok("[PAGE] an empty selector warns rather than silently falling back",
-    blank.layersDoc.manifest.warnings.some((w: any) => /page selector was empty/.test(w)));
+    blank.layersDoc.manifest.warnings.some((w) => /page selector was empty/.test(w)));
 
   // allPages + page are MUTUALLY EXCLUSIVE. The branch below used to be `if (allPages) … else if
   // (page)`, so allPages silently won: a caller asking for one page got all of them — a plausible
   // export of the WRONG scope. figma-pull's arg parser refused this, but the MCP path did not, and
   // the guard belongs at the collector where EVERY caller passes through it.
-  let bothErr: any = null;
-  try { await sandbox.collectFull({ allPages: true, page: "p:A", css: false }); } catch (e: any) { bothErr = e; }
+  let bothErr: Thrown | null = null;
+  try { await sandbox.collectFull({ allPages: true, page: "p:A", css: false }); } catch (e) { bothErr = thrown(e); }
   ok("[PAGE] allPages + page is REFUSED, not silently resolved", !!bothErr && /different scopes/.test(bothErr.message));
   ok("[PAGE] the scope-conflict error names both ways out", !!bothErr && /page:\[ids\]/.test(bothErr.message) && /whole file/.test(bothErr.message));
   // An all-pages export with no page selector must be unaffected by that guard.
@@ -947,17 +1113,17 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // Previously untested entirely. The two contracts that matter to an agent driving figma_write:
   // a write that didn't happen must NOT report success, and a failed batch must still surface what
   // it already applied (Figma gives no transaction, so the earlier ops are committed for good).
-  const created: any[] = [];
+  const created: FakeNode[] = [];
   sandbox.figma.createFrame = () => { const f = { id: "new:frame", type: "FRAME", name: "", fills: [], resize() {}, appendChild() {} }; created.push(f); return f; };
   sandbox.figma.createText = () => { const t = { id: "new:text", type: "TEXT", characters: "", fills: [], fontName: { family: "Inter", style: "Regular" } }; created.push(t); return t; };
   sandbox.figma.loadFontAsync = async () => {};
   sandbox.figma.currentPage.appendChild = () => {};
 
-  const textTarget: any = { id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] };
-  const rectTarget: any = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
-  const groupTarget: any = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
+  const textTarget: FakeNode = { id: "t:1", type: "TEXT", name: "Label", characters: "old", fontName: { family: "Inter", style: "Regular" }, getRangeAllFontNames: () => [{ family: "Inter", style: "Regular" }] };
+  const rectTarget: FakeNode & { fills: Array<{ color: { g: number } }> } = { id: "r:1", type: "RECTANGLE", name: "Box", fills: [] };
+  const groupTarget: FakeNode = { id: "g:1", type: "GROUP", name: "Wrap" }; // no `fills`
   const prevGetNode = sandbox.figma.getNodeByIdAsync;
-  sandbox.figma.getNodeByIdAsync = async (id: any) => (({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget } as any)[id] || prevGetNode(id));
+  sandbox.figma.getNodeByIdAsync = async (id: string) => { const nodes: Record<string, FakeNode> = { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget }; return nodes[id] || prevGetNode(id); };
 
   const wOk = await sandbox.applyWrites([{ op: "createFrame", name: "Card", fill: "#ff0000" }, { op: "setText", nodeId: "t:1", text: "new" }]);
   ok("write: successful batch -> ok:true + applied ids", wOk.ok === true && wOk.applied.length === 2 && wOk.applied[0].id === "new:frame");
@@ -966,17 +1132,17 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   // A missing node must FAIL, not silently report {id} — the old behaviour told the agent it worked.
   const wMissing = await sandbox.applyWrites([{ op: "setFill", nodeId: "nope:1", color: "#fff" }]);
-  ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(wMissing.error));
+  ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(wMissing.error!));
   const wWrongType = await sandbox.applyWrites([{ op: "setText", nodeId: "r:1", text: "x" }]);
-  ok("write: setText on a non-TEXT node fails", wWrongType.ok === false && /not TEXT/.test(wWrongType.error));
+  ok("write: setText on a non-TEXT node fails", wWrongType.ok === false && /not TEXT/.test(wWrongType.error!));
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
-  ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(wNoFills.error));
+  ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(wNoFills.error!));
 
   // Dev Mode is read-only for plugins (manifest editorType now includes "dev"): the batch is refused
   // up front with the fix, not left to throw an opaque Plugin-API error partway through.
   sandbox.figma.editorType = "dev";
   const wDev = await sandbox.applyWrites([{ op: "createFrame", name: "X" }]);
-  ok("write: refused as a whole in Dev Mode, with the fix in the error", wDev.ok === false && wDev.applied.length === 0 && wDev.failedAt === 0 && /Dev Mode/.test(wDev.error) && /Design mode/.test(wDev.error));
+  ok("write: refused as a whole in Dev Mode, with the fix in the error", wDev.ok === false && wDev.applied.length === 0 && wDev.failedAt === 0 && /Dev Mode/.test(wDev.error!) && /Design mode/.test(wDev.error!));
   sandbox.figma.editorType = "figma";
 
   // Partial failure: ops 0-1 are already committed, so their ids must come back with the error.
@@ -990,20 +1156,22 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
   ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
   ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-  ok("write: unknown op is rejected", (await sandbox.applyWrites([{ op: "nope" }])).error.indexOf("unknown write op") !== -1);
+  ok("write: unknown op is rejected", (await sandbox.applyWrites([{ op: "nope" }])).error!.indexOf("unknown write op") !== -1);
   ok("write: empty/omitted batch is a no-op success", (await sandbox.applyWrites(undefined)).ok === true);
 
   // ---- parentId (was entirely uncovered, which is how the silent-reparent bug survived) ----
   // The contract mirrors setFill/setText: if the node did NOT land where it was asked to go, the op
   // must fail. The old code fell back to currentPage and still returned {id}, so an agent composing a
   // tree got ok:true and a flat pile of nodes on the canvas.
-  const parentKids: any[] = [];
-  const containerTarget = { id: "c:1", type: "FRAME", name: "Root", appendChild: (n: any) => parentKids.push(n) };
+  const parentKids: FakeNode[] = [];
+  const containerTarget = { id: "c:1", type: "FRAME", name: "Root", appendChild: (n: FakeNode) => parentKids.push(n) };
   const pageLoads = [];
-  const pageTarget = { id: "pg:1", type: "PAGE", name: "Page 2", loadAsync: async () => pageLoads.push("pg:1"), appendChild: (n: any) => parentKids.push(n) };
+  const pageTarget = { id: "pg:1", type: "PAGE", name: "Page 2", loadAsync: async () => pageLoads.push("pg:1"), appendChild: (n: FakeNode) => parentKids.push(n) };
   const leafTarget = { id: "lf:1", type: "TEXT", name: "Leaf" }; // no appendChild — cannot hold children
-  sandbox.figma.getNodeByIdAsync = async (id: any) =>
-    (({ "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "c:1": containerTarget, "pg:1": pageTarget, "lf:1": leafTarget } as any)[id] || null);
+  sandbox.figma.getNodeByIdAsync = async (id: string) => {
+    const nodes: Record<string, FakeNode> = { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget, "c:1": containerTarget, "pg:1": pageTarget, "lf:1": leafTarget };
+    return nodes[id] || null;
+  };
 
   const pOk = await sandbox.applyWrites([{ op: "createFrame", name: "Child", parentId: "c:1" }]);
   ok("write: valid parentId -> ok:true and the node lands on that parent", pOk.ok === true && parentKids.length === 1 && parentKids[0].id === "new:frame");
@@ -1011,15 +1179,15 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   const beforeOrphan = created.length;
   const pMissing = await sandbox.applyWrites([{ op: "createFrame", name: "Orphan", parentId: "gone:99" }]);
-  ok("write: unresolvable parentId fails (not silent reparent)", pMissing.ok === false && /not found/.test(pMissing.error));
+  ok("write: unresolvable parentId fails (not silent reparent)", pMissing.ok === false && /not found/.test(pMissing.error!));
   ok("write: failed parent leaves NO orphan node behind", created.length === beforeOrphan);
   ok("write: failed parent reports nothing as applied", pMissing.applied.length === 0);
 
   const pLeaf = await sandbox.applyWrites([{ op: "createFrame", parentId: "lf:1" }]);
-  ok("write: parent that cannot have children fails", pLeaf.ok === false && /cannot have children/.test(pLeaf.error));
+  ok("write: parent that cannot have children fails", pLeaf.ok === false && /cannot have children/.test(pLeaf.error!));
 
   const pText = await sandbox.applyWrites([{ op: "createText", text: "hi", parentId: "gone:99" }]);
-  ok("write: createText honours parentId failure too", pText.ok === false && /not found/.test(pText.error));
+  ok("write: createText honours parentId failure too", pText.ok === false && /not found/.test(pText.error!));
 
   // documentAccess:"dynamic-page" — appendChild on a PageNode throws unless the page is loaded first.
   const pPage = await sandbox.applyWrites([{ op: "createFrame", parentId: "pg:1" }]);
@@ -1038,7 +1206,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // icons simply unimplementable. Two distinct causes were collapsed into one counter and one
   // warning each: nodes that paint NOTHING (Figma rightly refuses to render them — not a failure),
   // and nodes that do paint but whose export threw (a real loss, and recoverable from geometry).
-  const vecHost = (id: any, kids: any) => ({ type: "FRAME", name: "Host" + id, visible: true, id: "vh:" + id,
+  const vecHost = (id: string, kids: FakeNode[]) => ({ type: "FRAME", name: "Host" + id, visible: true, id: "vh:" + id,
     width: 100, height: 100, layoutMode: "NONE", children: kids,
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) });
   const boom = async () => { throw new Error("could not be exported"); };
@@ -1050,7 +1218,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("inv", [invisibleVec, zeroAreaVec])];
   const invRun = await sandbox.collectSelection({ css: false });
-  const [invNode, zeroNode] = invRun.screen.nodes[0].children;
+  const [invNode, zeroNode] = invRun.screen.nodes[0].children!;
 
   ok("[AUDIT-1] a vector with no visible paint is skipped (no asset, no geometry)",
     invNode.asset === undefined && invNode.geometry === undefined);
@@ -1060,9 +1228,9 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // agent (and this repo's own audit) reads as "icons you have lost".
   ok("[AUDIT-1] and NOT counted as a failure", invRun.screen.manifest.assetsFailed === 0);
   ok("[AUDIT-1] and NOT warned — there is nothing to render, so there is nothing to report",
-    !invRun.screen.manifest.warnings.some((w: any) => /asset export/.test(w)));
+    !invRun.screen.manifest.warnings.some((w) => /asset export/.test(w)));
   ok("[AUDIT-1] exportAsync is never even attempted on them (they would have thrown)",
-    invRun.screen.manifest.warnings.every((w: any) => !/could not be exported/.test(w)));
+    invRun.screen.manifest.warnings.every((w) => !/could not be exported/.test(w)));
 
   // A node that DOES paint and still fails to export falls back to its resolved outlines. Docs call
   // `vectorPaths` "simple, but incomplete", so the fallback reads fillGeometry/strokeGeometry.
@@ -1074,12 +1242,12 @@ Object.assign(sandbox, sandbox.__designExport || {});
     exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("geo", [brokenVec])];
   const geoRun = await sandbox.collectSelection({ css: false });
-  const geoNode = geoRun.screen.nodes[0].children[0];
-  ok("[AUDIT-1] a real export failure falls back to fillGeometry", geoNode.geometry && geoNode.geometry.fills[0] === "M0 0h24v24H0z");
-  ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry.strokes[0] === "M2 2h20");
+  const geoNode = geoRun.screen.nodes[0].children![0];
+  ok("[AUDIT-1] a real export failure falls back to fillGeometry", geoNode.geometry && geoNode.geometry.fills![0] === "M0 0h24v24H0z");
+  ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry!.strokes![0] === "M2 2h20");
   // Without w/h the path data has no coordinate space — a consumer cannot build a viewBox from it.
   ok("[AUDIT-1] geometry carries the node's own w/h so it can be rendered as inline SVG",
-    geoNode.geometry.w === 24 && geoNode.geometry.h === 24);
+    geoNode.geometry!.w === 24 && geoNode.geometry!.h === 24);
   ok("[AUDIT-1] the incomplete `vectorPaths` is NOT what gets captured", JSON.stringify(geoNode.geometry).indexOf("M9 9L1 1") === -1);
   ok("[AUDIT-1] a recovered node is still a LEAF, like a successful export", geoNode.children === undefined && geoNode.asset === undefined);
   ok("[AUDIT-1] recovery is counted, and is not a failure",
@@ -1092,7 +1260,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const badRun = await sandbox.collectSelection({ css: false });
   ok("[AUDIT-1] an unrecoverable node IS counted as failed", badRun.screen.manifest.assetsFailed === 1);
   ok("[AUDIT-1] and IS warned, naming the node and the reason",
-    badRun.screen.manifest.warnings.some((w: any) => /asset export failed/.test(w) && /gone \(hv:1\)/.test(w) && /could not be exported/.test(w)));
+    badRun.screen.manifest.warnings.some((w) => /asset export failed/.test(w) && /gone \(hv:1\)/.test(w) && /could not be exported/.test(w)));
 
   // ---- [2026-08-13] isAsset: Figma's own icon/raster heuristic, OR'd into iconLike ----
   // A container that the name/size regex would NOT flag (unconventional name) but that Figma's own
@@ -1108,7 +1276,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
   const oddNameFrameWithText = { type: "FRAME", name: "Group 43", visible: true, id: "oa:2", width: 20, height: 20,
     isAsset: true, children: [{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }],
-    findOne: (pred: any) => ([{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }].find(pred) || null),
+    findOne: (pred: (n: FakeNode) => boolean) => ([{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }].find(pred) || null),
     exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [oddNameFrameWithText];
   const isAssetTextRun = await sandbox.collectSelection({});
@@ -1128,7 +1296,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("[variableWidth] a tapered stroke's profile type is captured",
     !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "multi_point");
   ok("[variableWidth] and its points, with position+weight",
-    taperedStroke.variableWidth.points.length === 3 && taperedStroke.variableWidth.points[1].pos === 0.5 && taperedStroke.variableWidth.points[1].weight === 4);
+    taperedStroke!.variableWidth!.points.length === 3 && taperedStroke!.variableWidth!.points[1].pos === 0.5 && taperedStroke!.variableWidth!.points[1].weight === 4);
 
   const plainStrokeNode = { type: "VECTOR", name: "plain", visible: true, id: "vw:2", width: 40, height: 4,
     strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
@@ -1142,14 +1310,14 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // A real export produced 896 warnings, ~800 asset failures + 80 identical missingFont sentences.
   // At that length the list is not readable, and the one-off warnings that DO need attention (an
   // unreadable page, a failed page load) are invisible inside it. The manifest stays a flat string[].
-  const missingFontText = (i: any) => ({ type: "TEXT", name: "Label" + i, visible: true, id: "mf:" + i, characters: "x", width: 50,
+  const missingFontText = (i: number) => ({ type: "TEXT", name: "Label" + i, visible: true, id: "mf:" + i, characters: "x", width: 50,
     fontName: { family: "Proxima Nova", style: "Regular" }, fontSize: 12, hasMissingFont: true, getStyledTextSegments: () => [] });
   const manyFonts = [];
   for (let i = 1; i <= 12; i++) manyFonts.push(missingFontText(i));
   sandbox.figma.currentPage.selection = [vecHost("fonts", manyFonts)];
   const aggRun = await sandbox.collectSelection({ css: false });
   const aggWarnings = aggRun.screen.manifest.warnings;
-  const fontLines = aggWarnings.filter((w: any) => /missing font/.test(w));
+  const fontLines = aggWarnings.filter((w) => /missing font/.test(w));
 
   ok("[AUDIT-6c] 12 missing-font nodes produce ONE warning, not 12", fontLines.length === 1);
   ok("[AUDIT-6c] the summary carries the real count", /12 node\(s\)/.test(fontLines[0]));
@@ -1160,11 +1328,11 @@ Object.assign(sandbox, sandbox.__designExport || {});
   ok("[AUDIT-6c] the manifest is still a flat array of strings", Array.isArray(aggWarnings) && aggWarnings.every((w) => typeof w === "string"));
   // Per-node flags are untouched — aggregation is about the MANIFEST, not about hiding the signal.
   ok("[AUDIT-6c] every affected node still carries its own missingFont flag",
-    aggRun.screen.nodes[0].children.every((c: any) => c.missingFont === true));
+    aggRun.screen.nodes[0].children!.every((c) => c.missingFont === true));
   sandbox.figma.currentPage.selection = prevSel2;
 
   // ---- [AUDIT-6a] box.x/y is page-space and must not survive inside an auto-layout parent ----
-  const boxed = (id: any, extra?: any) => Object.assign({ type: "FRAME", name: "Row" + id, visible: true, id: "bx:" + id,
+  const boxed = (id: string, extra?: FakeNode) => Object.assign({ type: "FRAME", name: "Row" + id, visible: true, id: "bx:" + id,
     width: 100, height: 20, layoutMode: "NONE", children: [],
     absoluteBoundingBox: { x: 40, y: 80, width: 100, height: 20 } }, extra || {});
   const flowKid = boxed("flow");
@@ -1173,20 +1341,20 @@ Object.assign(sandbox, sandbox.__designExport || {});
     layoutMode: "VERTICAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     absoluteBoundingBox: { x: 5, y: 6, width: 100, height: 100 }, children: [flowKid, absKid] };
   const stack = await sandbox.serialize(autoParent, 0, false);
-  const [flowOut, absOut] = stack.children;
-  ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box.w === 100 && flowOut.box.h === 20);
-  ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box.x === undefined && flowOut.box.y === undefined);
+  const [flowOut, absOut] = stack.children!;
+  ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box!.w === 100 && flowOut.box!.h === 20);
+  ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box!.x === undefined && flowOut.box!.y === undefined);
   // The exceptions have to survive, or absolutely-positioned overlays lose their only placement data.
-  ok("[AUDIT-6a] an ABSOLUTE child keeps box.x/y", absOut.box.x === 40 && absOut.box.y === 80);
+  ok("[AUDIT-6a] an ABSOLUTE child keeps box.x/y", absOut.box!.x === 40 && absOut.box!.y === 80);
   const looseParent = { type: "FRAME", name: "Canvas", visible: true, id: "bx:l", width: 100, height: 100,
     layoutMode: "NONE", children: [boxed("loose")] };
   const loose = await sandbox.serialize(looseParent, 0, false);
-  ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", loose.children[0].box.x === 40 && loose.children[0].box.y === 80);
+  ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", loose.children![0].box!.x === 40 && loose.children![0].box!.y === 80);
   // The export ROOT has no parent in the doc, so its own page-space origin is the only anchor there is.
-  ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box.x === 5 && stack.box.y === 6);
+  ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box!.x === 5 && stack.box!.y === 6);
 
   // ---- [AUDIT-6b] widthMode/heightMode: emit only the non-default values ----
-  const sizing = (h: any, v: any) => ({ type: "FRAME", name: "S", visible: true, id: "sz:1", width: 10, height: 10,
+  const sizing = (h: string, v: string) => ({ type: "FRAME", name: "S", visible: true, id: "sz:1", width: 10, height: 10,
     layoutMode: "NONE", layoutSizingHorizontal: h, layoutSizingVertical: v, children: [] });
   const fixedBoth = await sandbox.serialize(sizing("FIXED", "FIXED"), 0, false);
   ok("[AUDIT-6b] the FIXED default emits neither key", fixedBoth.widthMode === undefined && fixedBoth.heightMode === undefined);
@@ -1210,12 +1378,12 @@ Object.assign(sandbox, sandbox.__designExport || {});
       { format: "PNG", suffix: "@3x", constraint: { type: "SCALE", value: 3 } },
     ] }, 0, false);
   ok("[AUDIT-5] exportSettings captured, format lowercased", Array.isArray(exportNode.exportSettings) && exportNode.exportSettings[0].format === "svg");
-  ok("[AUDIT-5] the density suffix + scale survive", exportNode.exportSettings[1].suffix === "@3x" && exportNode.exportSettings[1].constraint.value === 3);
-  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", exportNode.exportSettings[0].constraint === undefined);
+  ok("[AUDIT-5] the density suffix + scale survive", exportNode.exportSettings![1].suffix === "@3x" && exportNode.exportSettings![1].constraint!.value === 3);
+  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", exportNode.exportSettings![0].constraint === undefined);
   ok("[AUDIT-5] a node with no presets emits nothing", plainFrame.exportSettings === undefined);
 
   // ---- [AUDIT-5] skew: the sheared transform the decomposition used to throw away ----
-  const xf = (m: any) => ({ type: "FRAME", name: "T", visible: true, id: "sk:1", width: 10, height: 10,
+  const xf = (m: number[][]) => ({ type: "FRAME", name: "T", visible: true, id: "sk:1", width: 10, height: 10,
     layoutMode: "NONE", relativeTransform: m, children: [] });
   const skewed = await sandbox.serialize(xf([[1, 0.5, 0], [0, 1, 0]]), 0, false);
   ok("[AUDIT-5] shear in relativeTransform -> skew (degrees, CSS skewX)", skewed.skew === 26.57);
@@ -1231,11 +1399,11 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const sized = await sandbox.collectFull({ css: false });
   const entry = sized.layersDoc.index[0];
   const layerTree = sized.layersDoc.layers[0].tree;
-  const countTree = (t: any) => 1 + (Array.isArray(t.children) ? t.children.reduce((a: any, c: any) => a + countTree(c), 0) : 0);
+  const countTree = (t: IrNode): number => 1 + (Array.isArray(t.children) ? t.children.reduce((a: number, c) => a + countTree(c), 0) : 0);
   ok("[AUDIT-4] index entries carry a subtree node count", entry.nodes === countTree(layerTree));
   ok("[AUDIT-4] and an approximate serialized byte size", typeof entry.bytes === "number" && entry.bytes > 100);
   ok("[AUDIT-4] bytes tracks the tree that actually lands in the layer file",
-    Math.abs(entry.bytes - JSON.stringify(layerTree).length) < 2);
+    Math.abs(entry.bytes! - JSON.stringify(layerTree).length) < 2);
   ok("[AUDIT-4] the identity fields are unchanged", !!entry.id && !!entry.name && !!entry.type && !!entry.page);
 
   // ---- [AUDIT-5] page backgrounds: the canvas a screen sits on ----
@@ -1249,12 +1417,12 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const prevKids2 = sandbox.figma.root.children;
   sandbox.figma.root.children = [bgPage, defaultPage];
   const bgRun = await sandbox.collectFull({ allPages: true, css: false });
-  const bgEntry = (bgRun.layersDoc.pageSettings || []).find((p: any) => p.pageId === "p:bg");
-  ok("[AUDIT-5] a page's chosen canvas background is captured", bgEntry && bgEntry.background[0].color === "#1a1a1a");
-  ok("[AUDIT-5] prototypeBackgrounds is captured separately", bgEntry && bgEntry.prototypeBackground[0].color === "#000000");
+  const bgEntry = (bgRun.layersDoc.pageSettings || []).find((p) => p.pageId === "p:bg");
+  ok("[AUDIT-5] a page's chosen canvas background is captured", bgEntry && flatPaint(bgEntry.background![0]).color === "#1a1a1a");
+  ok("[AUDIT-5] prototypeBackgrounds is captured separately", bgEntry && flatPaint(bgEntry.prototypeBackground![0]).color === "#000000");
   ok("[AUDIT-5] the page entry is keyed by pageId, not by the non-unique name", bgEntry && bgEntry.page === "Dark");
   // Figma's own default carries no designer intent — emitting it would put a line on every page.
-  ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p: any) => p.pageId === "p:plain"));
+  ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p) => p.pageId === "p:plain"));
   sandbox.figma.root.children = prevKids2;
 
   // ---- [LIB] team libraries: the half of the design system that lives in another file ----
@@ -1276,7 +1444,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
     componentPropertyDefinitions: { "Elevated#3:0": { type: "BOOLEAN", defaultValue: false }, "Tone": { type: "VARIANT", defaultValue: "a", variantOptions: ["a", "b"] } },
   };
   const localMain = { type: "COMPONENT", name: "LocalOnly", key: "compkey123", remote: false, parent: null, componentPropertyDefinitions: {} };
-  const libInst = (main: any, props: any) => ({ type: "INSTANCE", name: "i", visible: true, componentProperties: props, getMainComponentAsync: async () => main });
+  const libInst = (main: FakeNode, props: Record<string, { type: string; value: string }>) => ({ type: "INSTANCE", name: "i", visible: true, componentProperties: props, getMainComponentAsync: async () => main });
   const libInstances = [
     libInst(remoteVariantMain, { "Size": { type: "VARIANT", value: "md" }, "Label#1:0": { type: "TEXT", value: "Go" } }),
     libInst(remoteVariantMain, { "Size": { type: "VARIANT", value: "lg" }, "Label#1:0": { type: "TEXT", value: "Stop" } }),
@@ -1288,41 +1456,41 @@ Object.assign(sandbox, sandbox.__designExport || {});
   const libPage = { name: "Lib Page", id: "p:lib", loadAsync: async () => {}, children: [],
     // The catalog and the library scan ask for DIFFERENT types off the same page — answer each one
     // honestly so the merge below is exercised against a real local walk, not an empty one.
-    findAllWithCriteria: ({ types }: any) => (types.indexOf("INSTANCE") !== -1 ? libInstances : [buttonComponent]) };
+    findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("INSTANCE") !== -1 ? libInstances : [buttonComponent]) };
   const prevKids3 = sandbox.figma.root.children;
   sandbox.figma.root.children = [libPage];
 
   const libComps = await sandbox.collectLibraryComponents(() => {});
   ok("[LIB] library components recovered by walking instances (mains cannot be enumerated)", libComps.length === 2);
-  const btnLib = libComps.find((c: any) => c.key === "libkey_btn");
-  const cardLib = libComps.find((c: any) => c.key === "libkey_card");
-  ok("[LIB] a LOCAL main is not duplicated into the library catalog", !libComps.some((c: any) => c.key === "compkey123"));
+  const btnLib = libComps.find((c) => c.key === "libkey_btn");
+  const cardLib = libComps.find((c) => c.key === "libkey_card");
+  ok("[LIB] a LOCAL main is not duplicated into the library catalog", !libComps.some((c) => c.key === "compkey123"));
   ok("[LIB] an instance whose main cannot be resolved does not abort the scan", !!btnLib && !!cardLib);
   // Dedupe is by KEY, never by name: two libraries can both ship a "Button".
-  ok("[LIB] deduped by publish key", !!btnLib && libComps.filter((c: any) => c.key === "libkey_btn").length === 1);
-  ok("[LIB] and the instance count survives the dedupe", btnLib.uses === 3);
+  ok("[LIB] deduped by publish key", !!btnLib && libComps.filter((c) => c.key === "libkey_btn").length === 1);
+  ok("[LIB] and the instance count survives the dedupe", btnLib!.uses === 3);
   // parent === null is the documented remote shape — reading .parent.name would have thrown here.
-  ok("[LIB] a NULL parent on a remote main is survivable, and its own name is used", btnLib.name === "Size=md, State=default" && btnLib.variant === undefined);
-  ok("[LIB] a COMPONENT_SET parent gives the useful name, with the variant kept", cardLib.name === "CardSet" && cardLib.variant === "Card");
+  ok("[LIB] a NULL parent on a remote main is survivable, and its own name is used", btnLib!.name === "Size=md, State=default" && btnLib!.variant === undefined);
+  ok("[LIB] a COMPONENT_SET parent gives the useful name, with the variant kept", cardLib!.name === "CardSet" && cardLib!.variant === "Card");
   // The getter THROWS on a variant — the fallback must engage, and must SAY it did.
-  ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLib.derivedFrom === "instances");
-  ok("[LIB] observed variant values aggregated across instances", btnLib.props.Size.observed.indexOf("md") !== -1 && btnLib.props.Size.observed.indexOf("lg") !== -1);
-  ok("[LIB] repeated values are uniqued, not appended per instance", btnLib.props.Size.observed.length === 2);
-  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnLib.props.Label && btnLib.props.Label.key === "Label#1:0");
+  ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLib!.derivedFrom === "instances");
+  ok("[LIB] observed variant values aggregated across instances", btnLib!.props!.Size.observed!.indexOf("md") !== -1 && btnLib!.props!.Size.observed!.indexOf("lg") !== -1);
+  ok("[LIB] repeated values are uniqued, not appended per instance", btnLib!.props!.Size.observed!.length === 2);
+  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnLib!.props!.Label && btnLib!.props!.Label.key === "Label#1:0");
   // The whole point of derivedFrom: an inferred sample must never be mistaken for a complete enum.
-  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLib.derivedFrom === "definitions" && cardLib.props.Tone.options.length === 2);
-  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnLib.props.Size.options === undefined && cardLib.props.Tone.observed === undefined);
-  ok("[LIB] every entry is flagged remote", libComps.every((c: any) => c.remote === true));
+  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLib!.derivedFrom === "definitions" && cardLib!.props!.Tone.options!.length === 2);
+  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnLib!.props!.Size.options === undefined && cardLib!.props!.Tone.observed === undefined);
+  ok("[LIB] every entry is flagged remote", libComps.every((c) => c.remote === true));
   // There is NO API mapping a component key to its library — unattributed must read as unknown.
-  ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c: any) => c.source === "unknown-library"));
+  ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c) => c.source === "unknown-library"));
 
   // ---- [VARIANTVIS] --variant-visuals: per-variant layout/fills truth, not the set-wrapper's chrome ----
-  const variantA: any = {
+  const variantA: FakeNode = {
     type: "COMPONENT", id: "v:a", name: "Type=Default, Status=Default", key: "vkey_a",
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0.6, b: 0 }, opacity: 1 }],
     cornerRadius: 16, visible: true, children: [],
   };
-  const variantB: any = {
+  const variantB: FakeNode = {
     type: "COMPONENT", id: "v:b", name: "Type=Default, Status=Hover", key: "vkey_b",
     variantProperties: { Type: "Default", Status: "Hover" },
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0.4, b: 0 }, opacity: 1 }],
@@ -1346,67 +1514,67 @@ Object.assign(sandbox, sandbox.__designExport || {});
     cornerRadius: 8, visible: true, children: [], componentPropertyDefinitions: {},
   };
   const variantPage = { name: "Variants", id: "p:variants", loadAsync: async () => {},
-    findAllWithCriteria: ({ types }: any) => (types.indexOf("COMPONENT_SET") !== -1 ? [tagSet, variantA, variantB, standaloneComp] : []) };
+    findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("COMPONENT_SET") !== -1 ? [tagSet, variantA, variantB, standaloneComp] : []) };
   const kidsBeforeVariantPage = sandbox.figma.root.children; // = [libPage] — must be restored, not prevKids3, since the [LIB] section below still needs it
   sandbox.figma.root.children = [variantPage];
 
   const dsOff = await sandbox.collectDesignSystemOnly();
-  const tagOff = dsOff.designSystem.components.find((c: any) => c.id === "set:tag");
-  const soloOff = dsOff.designSystem.components.find((c: any) => c.id === "c:solo");
-  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", tagOff && tagOff.visuals && tagOff.visuals.fills[0].color === "#9947ff");
+  const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
+  const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
+  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", tagOff && tagOff.visuals && flatPaint(tagOff.visuals.fills![0]).color === "#9947ff");
   ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", tagOff && tagOff.variants === undefined);
   ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", soloOff && soloOff.node === undefined);
 
   const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
-  const tagOn = dsOn.designSystem.components.find((c: any) => c.id === "set:tag");
-  const soloOn = dsOn.designSystem.components.find((c: any) => c.id === "c:solo");
-  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", soloOn && soloOn.node && soloOn.node.fills && soloOn.node.fills[0].color === "#ff0000" && soloOn.node.radius === 8);
+  const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
+  const soloOn = dsOn.designSystem.components.find((c) => c.id === "c:solo");
+  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", soloOn && soloOn.node && soloOn.node.fills && flatPaint(soloOn.node.fills[0]).color === "#ff0000" && soloOn.node.radius === 8);
   ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", soloOn && soloOn.variants === undefined);
-  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", tagOn && tagOn.visuals && tagOn.visuals.fills[0].color === "#9947ff");
+  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", tagOn && tagOn.visuals && flatPaint(tagOn.visuals.fills![0]).color === "#9947ff");
   ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
-    tagOn.variants.every((v: any) => v.id && v.name && v.key));
-  const va = tagOn.variants.find((v: any) => v.id === "v:a");
-  const vb = tagOn.variants.find((v: any) => v.id === "v:b");
+    tagOn.variants.every((v) => v.id && v.name && v.key));
+  const va = tagOn!.variants!.find((v) => v.id === "v:a");
+  const vb = tagOn!.variants!.find((v) => v.id === "v:b");
   ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", va && va.values && va.values.Type === "Default" && va.values.Status === "Default");
   ok("[VARIANTVIS] variant values read from variantProperties when present", vb && vb.values && vb.values.Status === "Hover");
   ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",
-    va && va.node && va.node.fills && va.node.fills[0].color === "#009900" && va.node.radius === 16);
+    va && va.node && va.node.fills && flatPaint(va.node.fills[0]).color === "#009900" && va.node.radius === 16);
   ok("[VARIANTVIS] a variant whose own componentPropertyDefinitions throws still gets its node captured, not dropped",
-    vb && vb.node && vb.node.fills && vb.node.fills[0].color === "#006600");
+    vb && vb.node && vb.node.fills && flatPaint(vb.node.fills[0]).color === "#006600");
   ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",
     va && va.node && va.node.props === undefined);
   sandbox.figma.root.children = kidsBeforeVariantPage;
 
   // A user-maintained registry is the ONLY honest attribution route.
-  sandbox.figma.root.getPluginData = (k: any) => (k === "libraryRegistry" ? JSON.stringify({ libkey_btn: "Acme DS" }) : "");
+  sandbox.figma.root.getPluginData = (k: string) => (k === "libraryRegistry" ? JSON.stringify({ libkey_btn: "Acme DS" }) : "");
   const attributed = await sandbox.collectLibraryComponents(() => {});
-  ok("[LIB] the registry attributes a component to its library", attributed.find((c: any) => c.key === "libkey_btn").source === "Acme DS");
-  ok("[LIB] and unregistered ones stay unknown", attributed.find((c: any) => c.key === "libkey_card").source === "unknown-library");
-  sandbox.figma.root.getPluginData = (k: any) => "!!not json!!";
+  ok("[LIB] the registry attributes a component to its library", attributed.find((c) => c.key === "libkey_btn")!.source === "Acme DS");
+  ok("[LIB] and unregistered ones stay unknown", attributed.find((c) => c.key === "libkey_card")!.source === "unknown-library");
+  sandbox.figma.root.getPluginData = (k: string) => "!!not json!!";
   const badReg = await sandbox.collectLibraryComponents(() => {});
-  ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c: any) => c.source === "unknown-library"));
+  ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
   delete sandbox.figma.root.getPluginData;
 
   // --- listLibraries: the cheap discovery map ---
   // DEFAULT state first: no figma.teamLibrary at all (permission missing / older host).
   const noPerm = await sandbox.listLibraries();
-  ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w: any) => /teamlibrary/.test(w)));
-  ok("[LIB] and the component half still reports without it", noPerm.libraries.some((l: any) => l.componentCount === 2));
-  ok("[LIB] the local file is listed as kind:local", noPerm.libraries.some((l: any) => l.kind === "local" && l.name === "My File"));
-  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l: any) => l.kind === "local").variableCollections || []).some((c: any) => c.name === "Semantic" && c.variableCount === 2));
+  ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
+  ok("[LIB] and the component half still reports without it", noPerm.libraries.some((l) => l.componentCount === 2));
+  ok("[LIB] the local file is listed as kind:local", noPerm.libraries.some((l) => l.kind === "local" && l.name === "My File"));
+  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local")!.variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 2));
   ok("[LIB] the unknown-library bucket says counts are USED-IN-THIS-FILE, not what the library offers",
-    /USED IN THIS FILE/.test(noPerm.libraries.find((l: any) => l.name === "unknown-library").note));
+    /USED IN THIS FILE/.test(noPerm.libraries.find((l) => l.name === "unknown-library")!.note!));
 
   // Enabled-but-empty: a fresh file with no library turned on. NORMAL, and must say so.
   sandbox.figma.teamLibrary = { getAvailableLibraryVariableCollectionsAsync: async () => [], getVariablesInLibraryCollectionAsync: async () => [] };
   const empty = await sandbox.listLibraries();
-  ok("[LIB] an empty team-library result reads as normal, not as a failure", empty.warnings.some((w: any) => /normal, not a failure/.test(w) && /Assets > Libraries/.test(w)));
+  ok("[LIB] an empty team-library result reads as normal, not as a failure", empty.warnings.some((w) => /normal, not a failure/.test(w) && /Assets > Libraries/.test(w)));
   ok("[LIB] and it is not reported as an error", empty.libraries.length > 0);
   // The warning must SCOPE itself to variable collections. Worded as a flat "no libraries are
   // enabled" it contradicted the "LIBRARIES (2)" printed immediately below, whose rows come from the
   // component side and from this file itself — two true statements reading as one lie (finding 17).
   ok("[LIB] and it says WHICH list is empty, so it cannot contradict the rows printed beneath it",
-    empty.warnings.some((w: any) => /VARIABLE collections/.test(w) && /rows below come from this file itself/.test(w)));
+    empty.warnings.some((w) => /VARIABLE collections/.test(w) && /rows below come from this file itself/.test(w)));
 
   sandbox.figma.teamLibrary = {
     getAvailableLibraryVariableCollectionsAsync: async () => ([
@@ -1414,25 +1582,25 @@ Object.assign(sandbox, sandbox.__designExport || {});
       { name: "Primitives", key: "lc_prim", libraryName: "Acme DS" },
       { name: "Broken", key: "lc_bad", libraryName: "Acme DS" },
     ]),
-    getVariablesInLibraryCollectionAsync: async (k: any) => {
+    getVariablesInLibraryCollectionAsync: async (k: string) => {
       if (k === "lc_bad") throw new Error("no access");
       return k === "lc_sem" ? [{ name: "a", key: "1", resolvedType: "COLOR" }, { name: "b", key: "2", resolvedType: "FLOAT" }] : [{ name: "c", key: "3", resolvedType: "COLOR" }];
     },
   };
   const libs = await sandbox.listLibraries();
-  const acme = libs.libraries.find((l: any) => l.name === "Acme DS");
-  ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections.length === 3);
-  ok("[LIB] each collection carries its variable count", acme.variableCollections.find((c: any) => c.name === "Semantic").variableCount === 2);
-  ok("[LIB] one unreadable collection omits only its own count", acme.variableCollections.find((c: any) => c.name === "Broken").variableCount === undefined
-    && libs.warnings.some((w: any) => /'Broken'/.test(w)));
-  ok("[LIB] a library with no attributable components carries no invented count", acme.componentCount === undefined && /cannot be enumerated|impossible/.test(acme.note));
+  const acme = libs.libraries.find((l) => l.name === "Acme DS");
+  ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections!.length === 3);
+  ok("[LIB] each collection carries its variable count", acme!.variableCollections!.find((c) => c.name === "Semantic")!.variableCount === 2);
+  ok("[LIB] one unreadable collection omits only its own count", acme!.variableCollections!.find((c) => c.name === "Broken")!.variableCount === undefined
+    && libs.warnings.some((w) => /'Broken'/.test(w)));
+  ok("[LIB] a library with no attributable components carries no invented count", acme!.componentCount === undefined && /cannot be enumerated|impossible/.test(acme!.note!));
 
   // --- the merge into the design-system catalog ---
   const dsLib = await sandbox.buildDesignSystem();
-  ok("[LIB] library components are merged into the design-system catalog", dsLib.components.some((c: any) => c.key === "libkey_btn" && c.remote === true));
-  ok("[LIB] the local catalog walk still works alongside them", dsLib.components.some((c: any) => c.key === "compkey123" && !c.remote));
-  ok("[LIB] a library main already present locally is not double-listed", dsLib.components.filter((c: any) => c.key === "compkey123").length === 1);
-  ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h: any) => /published LIBRARY/.test(h) && /sample/.test(h)));
+  ok("[LIB] library components are merged into the design-system catalog", dsLib.components.some((c) => c.key === "libkey_btn" && c.remote === true));
+  ok("[LIB] the local catalog walk still works alongside them", dsLib.components.some((c) => c.key === "compkey123" && !c.remote));
+  ok("[LIB] a library main already present locally is not double-listed", dsLib.components.filter((c) => c.key === "compkey123").length === 1);
+  ok("[LIB] hygiene warns that inferred props are a sample", dsLib.hygiene.some((h) => /published LIBRARY/.test(h) && /sample/.test(h)));
   delete sandbox.figma.teamLibrary;
   sandbox.figma.root.children = prevKids3;
 
@@ -1444,21 +1612,21 @@ Object.assign(sandbox, sandbox.__designExport || {});
     const d = lib.designSystem;
 
     ok("[LIB-FILE] stamps source.role=library", d.source && d.source.role === "library");
-    ok("[LIB-FILE] carries the library name the user typed", d.source.libraryName === "NERA");
-    ok("[LIB-FILE] records fileKey as the durable directory identity", d.source.fileKey === "FILEKEY1234567");
-    ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(d.source.collectionKeys));
+    ok("[LIB-FILE] carries the library name the user typed", d.source!.libraryName === "NERA");
+    ok("[LIB-FILE] records fileKey as the durable directory identity", d.source!.fileKey === "FILEKEY1234567");
+    ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(d.source!.collectionKeys));
     // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
     ok("[LIB-FILE] keeps the freshness stamp intact", typeof d.exportedAt === "string" && d.file === "My File");
 
     // Publish status: gated to library mode because Figma answers UNPUBLISHED for everything when
     // asked from a consuming file or a branch.
-    const btn = d.components.find((c: any) => c.name === "Button");
+    const btn = d.components.find((c) => c.name === "Button");
     ok("[LIB-FILE] component carries publish status", btn && btn.publish === "current");
     const paint = d.styles.paint[0];
     ok("[LIB-FILE] style carries publish status", paint && paint.publish === "changed");
-    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h: any) => /COMPLETE local catalog of 'NERA'/.test(h)));
-    ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h: any) => /last PUBLISHED snapshot/.test(h)));
-    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h: any) => /prior\/no page walk referenced/.test(h)));
+    ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
+    ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
+    ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /prior\/no page walk referenced/.test(h)));
 
     // The style fixes, which apply on BOTH paths — `key` is what makes a library style joinable at all.
     ok("[LIB-FILE] paint style carries its cross-file key", paint.key === "paintkey123");
@@ -1467,7 +1635,7 @@ Object.assign(sandbox, sandbox.__designExport || {});
 
     // The default path must NOT gain a publish field: it would read as authoritative and be wrong.
     const dsPlain = (await sandbox.collectDesignSystemOnly({})).designSystem;
-    ok("[LIB-FILE] default design-system pull emits NO publish status", !dsPlain.components.some((c: any) => c.publish) && !dsPlain.styles.paint.some((s: any) => s.publish));
+    ok("[LIB-FILE] default design-system pull emits NO publish status", !dsPlain.components.some((c) => c.publish) && !dsPlain.styles.paint.some((s) => s.publish));
     ok("[LIB-FILE] default design-system pull emits NO source block", dsPlain.source === undefined);
     ok("[LIB-FILE] but the style key fix applies there too", dsPlain.styles.paint[0].key === "paintkey123");
   }
@@ -1478,11 +1646,11 @@ Object.assign(sandbox, sandbox.__designExport || {});
   // point main.ts and bridge.ts use) because progress and cancellation only exist inside a bracketed
   // run — a collector called directly must stay completely silent, which is asserted below.
   {
-    const posted: any[] = [];
+    const posted: PostedMessage[] = [];
     const prevPost = sandbox.figma.ui.postMessage;
-    sandbox.figma.ui.postMessage = (m: any) => { posted.push(m); };
+    sandbox.figma.ui.postMessage = (m: PostedMessage) => { posted.push(m); };
     const prevKidsPC = sandbox.figma.root.children;
-    const pcPage = (id: any, name: any, kids: any) => ({ id, name, children: kids || [], loadAsync: async () => {}, findAllWithCriteria: () => [] });
+    const pcPage = (id: string, name: string, kids: FakeNode[]) => ({ id, name, children: kids || [], loadAsync: async () => {}, findAllWithCriteria: () => [] });
     const pc1 = pcPage("p:pc1", "Home", [scrollFrame]);
     const pc2 = pcPage("p:pc2", "Checkout", []);
     const pc3 = pcPage("p:pc3", "Archive", []);
@@ -1498,10 +1666,10 @@ Object.assign(sandbox, sandbox.__designExport || {});
     // Page boundaries are the frames that must NEVER be dropped by the throttle — a missed one leaves
     // the status line naming a page the walk already finished.
     ok("[PROGRESS] one frame per page boundary, 1-based, with the total",
-      [1, 2, 3].every((i) => pageFrames.some((m) => m.page.index === i && m.page.of === 3)));
-    ok("[PROGRESS] the frame carries the page NAME for display…", pageFrames.some((m) => m.page.index === 2 && m.page.name === "Checkout"));
+      [1, 2, 3].every((i) => pageFrames.some((m) => m.page!.index === i && m.page!.of === 3)));
+    ok("[PROGRESS] the frame carries the page NAME for display…", pageFrames.some((m) => m.page!.index === 2 && m.page!.name === "Checkout"));
     // Page names are NOT unique in Figma; the id is the identity. Same rule as the exported docs.
-    ok("[PROGRESS] …and the pageId, which is the actual identity", pageFrames.some((m) => m.page.pageId === "p:pc2"));
+    ok("[PROGRESS] …and the pageId, which is the actual identity", pageFrames.some((m) => m.page!.pageId === "p:pc2"));
     ok("[PROGRESS] running node/asset counters ride along", pageFrames.every((m) => typeof m.nodes === "number" && typeof m.assets === "number"));
     ok("[PROGRESS] the design-system phase is announced (the walk going quiet reads as a hang otherwise)",
       posted.some((m) => m.type === "progress" && m.phase === "design-system"));
@@ -1514,20 +1682,20 @@ Object.assign(sandbox, sandbox.__designExport || {});
     // The trap page requests the cancel while its children are being read, so the very next safe point
     // (the top-level frame loop) is where the walk aborts.
     posted.length = 0;
-    let cancelHit: any = null;
+    let cancelHit = null as RunInfo | null; // widened: TS cannot see the getter below assign it
     const trapPage = { id: "p:trap", name: "Trap", loadAsync: async () => {}, findAllWithCriteria: () => [],
       get children() { cancelHit = sandbox.requestCancel(); return [scrollFrame]; } };
     sandbox.figma.root.children = [trapPage, pc2];
-    let cancelErr: any = null, cancelled: any = null;
+    let cancelErr: Thrown | null = null, cancelled: FullResult | null = null;
     try {
       cancelled = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "bridge", label: "exportFull" });
-    } catch (e: any) { cancelErr = e; }
+    } catch (e) { cancelErr = thrown(e); }
     // (c): a cancelled run must REJECT. A partial layers doc returned as if complete is the silent
     // truncation this codebase refuses everywhere else.
     ok("[CANCEL] a cancelled run rejects — no partial doc is ever handed back", cancelled === null && !!cancelErr);
     // (a): this exact string is what main.ts puts in `bridge-result.error`, so the CLI/MCP fails fast
     // with a human cause instead of sitting out its request timeout.
-    ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(cancelErr.message));
+    ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(cancelErr!.message));
     ok("[CANCEL] the cancel was matched to the live run", cancelHit && cancelHit.source === "bridge" && cancelHit.label === "exportFull");
     ok("[CANCEL] the bridge-triggered run was visible in the plugin window, and for whom",
       posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportFull"));
@@ -1543,8 +1711,8 @@ Object.assign(sandbox, sandbox.__designExport || {});
     const catA = { id: "p:catA", name: "Cat A", children: [], loadAsync: async () => {},
       findAllWithCriteria: () => { sandbox.requestCancel(); return []; } };
     sandbox.figma.root.children = [catA, pcPage("p:catB", "Cat B", [])];
-    let dsErr: any = null;
-    try { await sandbox.serializeRun(() => sandbox.collectDesignSystemOnly({}), { source: "ui", label: "exportDesignSystem" }); } catch (e: any) { dsErr = e; }
+    let dsErr: Thrown | null = null;
+    try { await sandbox.serializeRun(() => sandbox.collectDesignSystemOnly({}), { source: "ui", label: "exportDesignSystem" }); } catch (e) { dsErr = thrown(e); }
     ok("[CANCEL] a cancel inside the component-catalog page walk aborts it as well",
       !!dsErr && /export cancelled by the designer in Figma/.test(dsErr.message));
     ok("[CANCEL] and skipInvisibleInstanceChildren is restored, not stranded on", sandbox.figma.skipInvisibleInstanceChildren === false);

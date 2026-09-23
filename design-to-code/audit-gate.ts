@@ -46,7 +46,7 @@ function auditGateStatus(cwd: string, screenFile: string | null | undefined, scr
   if (!rel) return { auditFile: null, blockers: [] };
   // An audit report under design/audit/ is this repo's own writer's output (audit.ts --out).
   let doc: AuditReport;
-  try { doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8")); } catch { return { auditFile: rel, blockers: [], unreadable: true }; }
+  try { doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8")) as AuditReport; } catch { return { auditFile: rel, blockers: [], unreadable: true }; }
   return { auditFile: rel, blockers: blockerIds(doc), doc };
 }
 

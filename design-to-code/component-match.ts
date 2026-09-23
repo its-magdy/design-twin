@@ -24,7 +24,7 @@
 // The reference this was checked against is livetest-3's hand-written scripts-test/map-components.mjs:
 // same visible-instance walk, same name rule, same variant/prop evidence and tie-breaks.
 import type {
-  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchResult, MatchRow, ScreenDoc, VisibleInstance,
+  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 
 // Hidden layers are not built, so they are not mapped either (and a hidden subtree's instances are
@@ -77,7 +77,7 @@ interface Signature { verified: boolean; score: number; reasons: string[] }
 
 // Evidence that `cand` is the definition `inst` was made from. `verified` is the gate; `score` only
 // ranks candidates that share a name.
-function signature(inst: VisibleInstance, cand: CatalogComponent): Signature {
+function signature(inst: MatchInstance, cand: CatalogComponent): Signature {
   const props: Record<string, ComponentPropDef> = {};
   for (const [k, v] of Object.entries(cand.props || {})) props[baseProp(k)] = v;
   const reasons: string[] = [];
@@ -122,7 +122,7 @@ interface Scored { c: OrderedComponent; verified: boolean; score: number; reason
 // library: components.library.json (optional) — only used to say WHY a residual did not match.
 // Returns one row per distinct instance NAME (a screen using six Button variants proposes Button once),
 // in first-seen order.
-function matchByNameAndSignature(instances: readonly VisibleInstance[], catalog: ComponentsCatalog | null | undefined, library?: ComponentsCatalog | null): MatchResult {
+function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: ComponentsCatalog | null | undefined, library?: ComponentsCatalog | null): MatchResult {
   const comps = (catalog && catalog.components) || [];
   const byName = new Map<string, OrderedComponent[]>();
   comps.forEach((c, i) => { if (!byName.has(c.name)) byName.set(c.name, []); byName.get(c.name)!.push(Object.assign({ _order: i }, c)); });
@@ -130,7 +130,7 @@ function matchByNameAndSignature(instances: readonly VisibleInstance[], catalog:
   const libKeys = new Set(((library && library.components) || []).map((c) => c.key).filter((k): k is string => !!k));
   const libNames = new Set(((library && library.components) || []).map((c) => c.name));
 
-  const groups = new Map<string, VisibleInstance[]>();
+  const groups = new Map<string, MatchInstance[]>();
   for (const inst of instances) {
     if (!groups.has(inst.name)) groups.set(inst.name, []);
     groups.get(inst.name)!.push(inst);
@@ -142,7 +142,7 @@ function matchByNameAndSignature(instances: readonly VisibleInstance[], catalog:
       name,
       instances: list.length,
       nodeIds: list.map((i) => i.nodeId),
-      screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
+      screens: [...new Set(list.map((i) => i.screen).filter((s): s is string => !!s))],
       instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k): k is string => !!k))],
       remote: list.every((i) => i.remote),
       byKey,

@@ -29,7 +29,8 @@ import os from "node:os";
 import { ok, report } from "./assert.ts";
 import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
-import type { ResolveScreenResult } from "../design-to-code/types.ts";
+import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
+import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
 
 // ts-port: the union arms a few assertions read without a status check (they throw if the arm is wrong,
 // which is itself the failure signal — keep that, only tell the checker which arm is expected).
@@ -40,8 +41,12 @@ const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
 
 console.log("resolve-screen — title/texts derivation over the REAL export:");
 
-function screenRoot(pageDir: any, file: any, base?: any) {
-  const d = JSON.parse(fs.readFileSync(path.join(FIXTURE, base || "pages", pageDir, file), "utf8"));
+// The fixture files as this suite reads them: a screen doc (only its node tree) and the root index.
+interface ScreenFile { nodes: TextWalkNode[] }
+const readRoot = (dir: string): PagesRootIndex => JSON.parse(fs.readFileSync(path.join(dir, "pages", "index.json"), "utf8")) as PagesRootIndex;
+
+function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {
+  const d: ScreenFile = JSON.parse(fs.readFileSync(path.join(FIXTURE, base || "pages", pageDir, file), "utf8"));
   return d.nodes[0];
 }
 
@@ -64,7 +69,7 @@ ok("[title] a Page Title instance's leading Breadcrumb placeholder ('Text') is n
 ok("[texts] collectTexts returns deduped, non-empty strings in reading order, capped",
   (() => {
     const texts = collectTexts(screenRoot("__Organization_management_", "positions___7314_87192.json", "pages-titled"));
-    return texts.length > 0 && texts.length <= 8 && new Set(texts).size === texts.length && texts.every((t: any) => t.trim());
+    return texts.length > 0 && texts.length <= 8 && new Set(texts).size === texts.length && texts.every((t) => t.trim());
   })());
 
 console.log("\nresolve-screen — the resolution procedure (P3 #16 #70 #71 #90 #120 #150):");
@@ -84,7 +89,7 @@ ok("[resolve] #71/#150 an ambiguous partial name ('Job Role') STOPS as needs-con
   (() => {
     const r = resolveScreen(FIXTURE, "Job Role");
     return r.status === "needs-confirmation" && r.stage === "text search" && r.candidates.length >= 2 &&
-      r.candidates.some((c: any) => c.id === "20174:143363") && r.candidates.some((c: any) => c.id === "7314:87192");
+      r.candidates.some((c) => c.id === "20174:143363") && r.candidates.some((c) => c.id === "7314:87192");
   })());
 
 ok("[resolve] a name matching nothing STOPS and lists every known layer (never the nearest string)",
@@ -100,10 +105,10 @@ ok("[resolve] #19/#72/#73 two same-named `Create Activity Type` frames are ambig
   (() => {
     const r = resolveScreen(FIXTURE, "Create Activity Type");
     if (r.status !== "ambiguous") return false;
-    const ids = r.candidates.map((c: any) => c.id).sort();
-    const nodes = r.candidates.map((c: any) => c.nodes);
+    const ids = r.candidates.map((c) => c.id).sort();
+    const nodes = r.candidates.map((c) => c.nodes);
     return ids.join("|") === "18411:84111|18411:84502" && new Set(nodes).size === r.candidates.length &&
-      r.candidates.every((c: any) => c.reference && c.screenshot === `dtwin screenshot ${c.id}`);
+      r.candidates.every((c) => c.reference && c.screenshot === `dtwin screenshot ${c.id}`);
   })());
 
 ok("[resolve] node id ALWAYS beats a name stage, even if the id string also happens to be a substring elsewhere",
@@ -122,14 +127,14 @@ console.log("\nresolve-screen — root index shape (P3 #16 acceptance criterion 
 
 ok("[index] the fixture's root pages/index.json carries a row with name 'positions ' AND title 'Job Roles'",
   (() => {
-    const root = JSON.parse(fs.readFileSync(path.join(FIXTURE, "pages", "index.json"), "utf8"));
-    return root.layers.some((l: any) => l.name === "positions " && l.title === "Job Roles");
+    const root = readRoot(FIXTURE);
+    return root.layers!.some((l) => l.name === "positions " && l.title === "Job Roles");
   })());
 
 ok("[index] and a row with name 'System Configurations' AND title 'Global Policies'",
   (() => {
-    const root = JSON.parse(fs.readFileSync(path.join(FIXTURE, "pages", "index.json"), "utf8"));
-    return root.layers.some((l: any) => l.name === "System Configurations" && l.title === "Global Policies");
+    const root = readRoot(FIXTURE);
+    return root.layers!.some((l) => l.name === "System Configurations" && l.title === "Global Policies");
   })());
 
 // The prompt's literal `grep -i "job roles" pages/index.json` also matches a nav-label mention of
@@ -139,8 +144,8 @@ ok("[index] and a row with name 'System Configurations' AND title 'Global Polici
 // exactly what lets a consumer (or this test) ask that question precisely.
 ok("[index] acceptance criterion 2: exactly one row's `title` is 'Job Roles', and it is 7314:87192",
   (() => {
-    const root = JSON.parse(fs.readFileSync(path.join(FIXTURE, "pages", "index.json"), "utf8"));
-    const hits = root.layers.filter((l: any) => l.title === "Job Roles");
+    const root = readRoot(FIXTURE);
+    const hits = root.layers!.filter((l) => l.title === "Job Roles");
     return hits.length === 1 && hits[0].id === "7314:87192";
   })());
 
@@ -165,7 +170,7 @@ function legacyExportDir() {
 const LEGACY = legacyExportDir();
 
 ok("[legacy] the legacy index really has no titles at all (sanity check on the fixture itself)",
-  (() => { const root = JSON.parse(fs.readFileSync(path.join(LEGACY, "pages", "index.json"), "utf8")); return !root.layers; })());
+  (() => { const root = readRoot(LEGACY); return !root.layers; })());
 
 ok("[round2] 'Job Role' on the LEGACY (title-less) export does NOT resolve — needs-confirmation, exit-worthy, not a silent wrong answer",
   (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
@@ -209,12 +214,12 @@ function fixtureWithEmptyStateSibling() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-310-"));
   const pagesDir = path.join(tmp, "pages", "__Organization_management_");
   fs.mkdirSync(pagesDir, { recursive: true });
-  const root = JSON.parse(fs.readFileSync(path.join(FIXTURE, "pages", "index.json"), "utf8"));
-  const sibling = JSON.parse(fs.readFileSync(
+  const root = readRoot(FIXTURE);
+  const sibling: ScreenFile = JSON.parse(fs.readFileSync(
     path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), "utf8"));
   // deriveTitle/collectTexts are the same top-level import as line 29 — no need to re-require them.
   const siblingRoot = sibling.nodes[0];
-  root.layers = root.layers.concat([{
+  root.layers = root.layers!.concat([{
     name: "Job roles",
     id: "7314:83742",
     type: "FRAME",
@@ -235,8 +240,8 @@ const SIBLING_FIXTURE = fixtureWithEmptyStateSibling();
 
 ok("[round3] the sibling really is titled 'Job Roles' too (sanity check on the real pulled data)",
   (() => {
-    const root = JSON.parse(fs.readFileSync(path.join(SIBLING_FIXTURE, "pages", "index.json"), "utf8"));
-    const sib = root.layers.find((l: any) => l.id === "7314:83742");
+    const root = readRoot(SIBLING_FIXTURE);
+    const sib = root.layers!.find((l) => l.id === "7314:83742");
     return sib && sib.name === "Job roles" && sib.title === "Job Roles";
   })());
 
@@ -244,14 +249,14 @@ ok("[round3] finding 310: 'Job Roles' with BOTH a layer-name hit (Job roles, cas
   (() => {
     const r = resolveScreen(SIBLING_FIXTURE, "Job Roles");
     return r.status === "ambiguous" && r.candidates.length === 2 &&
-      r.candidates.some((c: any) => c.id === "7314:83742") && r.candidates.some((c: any) => c.id === "7314:87192");
+      r.candidates.some((c) => c.id === "7314:83742") && r.candidates.some((c) => c.id === "7314:87192");
   })());
 
 ok("[round3] the candidate list says WHICH field each row matched on",
   (() => {
     const r = resolveScreen(SIBLING_FIXTURE, "Job Roles") as Unresolved;
-    const empty = r.candidates.find((c: any) => c.id === "7314:83742");
-    const real = r.candidates.find((c: any) => c.id === "7314:87192");
+    const empty = r.candidates.find((c) => c.id === "7314:83742");
+    const real = r.candidates.find((c) => c.id === "7314:87192");
     return empty!.matchedVia!.includes("exact layer name") && real!.matchedVia!.includes("indexed title");
   })());
 

@@ -99,7 +99,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       name,
       instances: list.length,
       nodeIds: list.map((i) => i.nodeId),
-      screens: [...new Set(list.map((i) => i.screen).filter(Boolean))],
+      screens: [...new Set(list.map((i) => i.screen).filter((s) => !!s))],
       instanceKeys: [...new Set(list.map((i) => i.setKey || i.key).filter((k) => !!k))],
       remote: list.every((i) => i.remote),
       byKey,
@@ -201,7 +201,7 @@ if (false) {
   const varsFile = take("--variables");
   const out = take("--out");
   const jsonOnly = strip("--json"), gate = strip("--gate");
-  const USAGE2 = "usage: node design-to-code/cross-check.js <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
+  const USAGE2 = "usage: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE2);
     process.exit(0);
@@ -278,7 +278,7 @@ if (false) {
     return true;
   };
   const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
-  const USAGE2 = `usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]
+  const USAGE2 = `usage: node design-to-code/audit.ts <screen.json>... [--platform web|ios|android|react-native|flutter]
        [--design-system design/design-system] [--variables design/variables.json]
        [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
   --design-system turns on the cross-FILE pass (does this screen come from that design system?).
@@ -636,8 +636,7 @@ function buildComponents(doc, catalog, library, mapKeys) {
   const catKeys = /* @__PURE__ */ new Map();
   for (const c of catalog && catalog.components || []) if (c.key) catKeys.set(c.key, c);
   const byName = /* @__PURE__ */ new Map();
-  const asVisible = (i) => ({ screen: "", nodeId: i.nodeId, layer: i.layer, name: i.name, key: i.key ?? void 0, setKey: i.setKey ?? void 0, remote: i.remote, variant: i.variant, props: i.props });
-  if (catalog) for (const r of matchByNameAndSignature(insts.map(asVisible), catalog, library).rows) byName.set(r.name, r);
+  if (catalog) for (const r of matchByNameAndSignature(insts, catalog, library).rows) byName.set(r.name, r);
   return insts.map((i) => {
     let match = null;
     const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));

@@ -158,7 +158,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   const ldir = path.join(dir, built.dir);
 
   let prevIndexDoc: { files?: unknown } | null = null;
-  try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")); } catch (e) {} // absent/corrupt = first export
+  try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")) as { files?: unknown }; } catch (e) {} // absent/corrupt = first export
 
   fs.mkdirSync(ldir, { recursive: true });
   for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
@@ -178,7 +178,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   // must not erase library A's row.
   const rootIndex = path.join(dir, ROOT, INDEX);
   let prevRoot: unknown = null;
-  try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")); } catch (e) {}
+  try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")) as unknown; } catch (e) {}
   writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log);
 
   return { dir: built.dir, counts: built.counts, publish: built.manifest.publish, orphans };
@@ -532,7 +532,7 @@ function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; pat
 
 function readJsonOr(file: string, fallback: unknown): unknown {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
   } catch (e) {
     return fallback; // absent or corrupt — this pull is the first, or the last one was interrupted
   }
@@ -571,7 +571,7 @@ function sharedAssetHashes(assetsDir: string): Map<string, string[]> {
 }
 
 /** One row of <Screen>.assets.json `files[]` / `reference[]`. The palette fields are present on SVGs only. */
-interface AssetIndexEntry {
+export interface AssetIndexEntry {
   file: string;
   node: string | undefined;
   bytes: number;
@@ -626,7 +626,7 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: ExportAsset[
       "Every SHIPPABLE asset this screen references, with a content hash. `duplicates` is computed over " +
       "the WHOLE shared assets/ directory (every screen ever pulled), not just this screen's own files, " +
       "and treats two SVGs as the same asset when they agree modulo Figma's own sub-pixel export noise " +
-      "(bridge/svg-normalize.js) — so it also catches the same icon exported under two different names or " +
+      "(bridge/src/svg-normalize.ts) — so it also catches the same icon exported under two different names or " +
       "in two different pulls. `monochrome` lists the SVGs whose every fill/stroke is one colour — those " +
       "are the ones safe to recolour to currentColor at render time; the rest carry semantic colour (a red " +
       "trash, a green tick) and must keep it. `heavy` lists assets too large to inline. `reference` (if " +

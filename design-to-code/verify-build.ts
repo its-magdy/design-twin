@@ -97,7 +97,7 @@ function readHookInput(): Promise<HookRead> {
   let st: fs.Stats;
   try { st = fs.fstatSync(0); } catch { return Promise.resolve({ payload: {}, source: "closed" }); }
   // Whatever the pipe carried: only a JSON object is a payload (anything else reads as an empty one).
-  const parse = (raw: string): HookPayload => { try { const v: unknown = raw.trim() ? JSON.parse(raw) : {}; return isJsonObject(v) ? v : {}; } catch { return {}; } };
+  const parse = (raw: string): HookPayload => { try { const v: unknown = raw.trim() ? JSON.parse(raw) as unknown : {}; return isJsonObject(v) ? v : {}; } catch { return {}; } };
   if (st.isFile() || st.isCharacterDevice()) {
     try { return Promise.resolve({ payload: parse(fs.readFileSync(0, "utf8")), source: "file" }); } catch { return Promise.resolve({ payload: {}, source: "unreadable" }); }
   }
@@ -142,7 +142,7 @@ function isStale(file: string, now: number = Date.now()): boolean {
 export interface PlanFile { file: string; plan: Plan }
 
 function readPlan(file: string): PlanFile | null {
-  try { return { file, plan: JSON.parse(fs.readFileSync(file, "utf8")) }; } catch { return null; }
+  try { return { file, plan: JSON.parse(fs.readFileSync(file, "utf8")) as Plan }; } catch { return null; }
 }
 
 function findPlans(cwd: string): PlanFile[] {
@@ -407,7 +407,7 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
 
 // Every JSON read here is one this repo's own writers produced (an export, its index, a plan, a
 // verify report/expectation, a component map), so it is parsed as the shape it was written in.
-function readJsonOr<T>(file: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; } }
+function readJsonOr<T>(file: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch { return fallback; } }
 
 function exportDirOf(cwd: string): string {
   const e = path.join(cwd, "design", "export");

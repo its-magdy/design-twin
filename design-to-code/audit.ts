@@ -44,7 +44,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  ControlKind, ControlState, CrossCheckReport, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
+  AuditCrossFile, ControlKind, ControlState, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
   TokenMap, TokensDoc, VariableCollection,
 } from "./types.ts";
 
@@ -581,7 +581,7 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
   // design system beside it (finding 56). "Bound" meant "resolves to some variable in its own file",
   // never "matches what you exported" — and a reader reasonably read it as the latter. The join lives
   // in cross-check.ts; its findings are merged in here so one report answers both questions.
-  let crossFile: CrossCheckReport | null = null;
+  let crossFile: AuditCrossFile | null = null;
   let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
     crossFile = crossCheck({
@@ -758,7 +758,7 @@ function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
     // design/audit/ also holds cross-check reports; only an object with a nodeIds[] counts.
     let doc: unknown;
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch (e) { continue; }
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")) as unknown; } catch (e) { continue; }
     if (isJsonObject(doc) && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
   }
   return null;
@@ -787,7 +787,7 @@ if (import.meta.main) {
   const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
   const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
   const USAGE =
-    "usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]\n" +
+    "usage: node design-to-code/audit.ts <screen.json>... [--platform web|ios|android|react-native|flutter]\n" +
     "       [--design-system design/design-system] [--variables design/variables.json]\n" +
     "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]\n" +
     "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
@@ -810,7 +810,7 @@ if (import.meta.main) {
   // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
   // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
   // Each is a design-system split file this repo's own writer produced, parsed as the shape it was written in.
-  const maybe = <T,>(f: string): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
+  const maybe = <T,>(f: string): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) as T : null);
   const designSystem: AuditDesignSystem | undefined = dsDir
     ? {
         tokens: maybe<TokensDoc>(path.join(dsDir, "tokens.json")),

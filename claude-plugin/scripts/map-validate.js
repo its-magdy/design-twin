@@ -159,7 +159,7 @@ function isCodeConnectMap(x) {
 }
 if (import.meta.main) {
   const file = process.argv[2];
-  const USAGE = "usage: node design-to-code/map-validate.js <map.json>";
+  const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
   if (file === "--help" || file === "-h") {
     console.log(USAGE);
     process.exit(0);

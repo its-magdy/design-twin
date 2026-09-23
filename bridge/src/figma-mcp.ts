@@ -659,7 +659,7 @@ function componentsLocalPath(exportDir?: string): string {
   // The slim design-system.json manifest (untyped JSON from disk): only its componentsLocal pointer is read.
   let manifest: { files?: { componentsLocal?: string } } | null;
   try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { files?: { componentsLocal?: string } };
   } catch (e) {
     throw new Error(
       `No design export found at ${manifestPath}. Run an export first (figma_export_design_system with ` +
@@ -725,7 +725,7 @@ server.registerTool(
     // (it validates what it needs itself, exactly as it did when these were untyped).
     let map: unknown;
     try {
-      map = JSON.parse(fs.readFileSync(mapPath, "utf8"));
+      map = JSON.parse(fs.readFileSync(mapPath, "utf8")) as unknown;
     } catch (e) {
       throw new Error(
         `Could not read the map at ${mapPath}: ${errMsg(e)}. Scaffold one with ` +

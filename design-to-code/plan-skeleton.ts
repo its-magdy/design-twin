@@ -41,9 +41,9 @@ import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import type {
-  CodeConnectMap, ComponentsCatalog, ComponentPropValues, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
+  CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
-  VariableType, VisibleInstance,
+  MatchInstance, VariableType,
 } from "./types.ts";
 
 const USAGE = [
@@ -71,7 +71,7 @@ const USAGE = [
 
 // Every file read here is one this repo's own writers produced (a screen export, a .vars.json, the
 // design-system split files, a plan, an index), so it is parsed as the shape it was written in.
-const readJson = <T,>(f: string): T => JSON.parse(fs.readFileSync(f, "utf8"));
+const readJson = <T,>(f: string): T => JSON.parse(fs.readFileSync(f, "utf8")) as T;
 const readJsonOr = <T,>(f: string, fallback: T): T => { try { return readJson<T>(f); } catch { return fallback; } };
 
 // The screen doc's roots, in any of the shapes the exporter writes (single-screen pull: `nodes[]`;
@@ -316,11 +316,9 @@ function loadMap(file: string): Map<string, MapKeyEntry> {
   return keys;
 }
 
-// A visible instance as the plan lists it: keys are `null` (not absent) when the export has none.
-interface SkeletonInstance {
-  nodeId: string; layer: string; name: string; key: string | null; setKey: string | null; remote: boolean;
-  variant: Record<string, string> | null; props: ComponentPropValues; insideInstance: string | null;
-}
+// A visible instance as the plan lists it: keys are `null` (not absent) when the export has none, no
+// screen label (one screen), and the instance it sits inside.
+interface SkeletonInstance extends MatchInstance { key: string | null; setKey: string | null; insideInstance: string | null }
 
 function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsCatalog | null | undefined, library: ComponentsCatalog | null | undefined, mapKeys: Map<string, MapKeyEntry>): PlanComponentRow[] {
   const insts: SkeletonInstance[] = [];
@@ -342,10 +340,7 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
   const catKeys = new Map<string, ComponentsCatalog["components"][number]>();
   for (const c of (catalog && catalog.components) || []) if (c.key) catKeys.set(c.key, c);
   const byName = new Map<string, MatchRow>();
-  // The matcher reads the same fields under component-match.ts's VisibleInstance shape (keys absent
-  // rather than null, a screen label it only lists); the plan rows below keep this file's own shape.
-  const asVisible = (i: SkeletonInstance): VisibleInstance => ({ screen: "", nodeId: i.nodeId, layer: i.layer, name: i.name, key: i.key ?? undefined, setKey: i.setKey ?? undefined, remote: i.remote, variant: i.variant, props: i.props });
-  if (catalog) for (const r of matchByNameAndSignature(insts.map(asVisible), catalog, library).rows) byName.set(r.name, r);
+  if (catalog) for (const r of matchByNameAndSignature(insts, catalog, library).rows) byName.set(r.name, r);
 
   return insts.map((i) => {
     let match: PlanComponentMatch | null = null;

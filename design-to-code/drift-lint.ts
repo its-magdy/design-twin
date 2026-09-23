@@ -305,7 +305,7 @@ if (import.meta.main) {
   }
 
   const [mapFile, catalogFile] = argv;
-  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.js <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]"); process.exit(2); }
+  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.ts <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]"); process.exit(2); }
   const catalogRaw = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   assertNotManifest(catalogRaw, catalogFile, "components", "design-system/components.local.json");
   const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;

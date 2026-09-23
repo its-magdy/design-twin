@@ -1043,7 +1043,7 @@ if (import.meta.main) {
   const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
   const input = args[0];
   const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.js <design-system/tokens.json | design/variables.json> [outDir]\n" +
+  const USAGE = "usage: node design-to-code/tokens.ts <design-system/tokens.json | design/variables.json> [outDir]\n" +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
     "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +

@@ -76,8 +76,9 @@ function detectProfile(cwd: string): { profile: string; because: string } | null
   const has = (f: string) => fs.existsSync(path.join(cwd, f));
   const read = (f: string): string => { try { return fs.readFileSync(path.join(cwd, f), "utf8"); } catch { return ""; } };
   const ls: string[] = (() => { try { return fs.readdirSync(cwd); } catch { return []; } })();
-  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
-  try { pkg = JSON.parse(read("package.json")); } catch { /* no/invalid package.json */ }
+  type PackageJson = { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  let pkg: PackageJson | null = null;
+  try { pkg = JSON.parse(read("package.json")) as PackageJson; } catch { /* no/invalid package.json */ }
   if (pkg) {
     const deps: Record<string, string | undefined> = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
     if (deps["react-native"] || deps.expo) return { profile: "react-native", because: "react-native/expo in package.json" };
@@ -144,7 +145,7 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions = {}): 
     const file = path.join(cwd, ".mcp.json");
     let doc: McpJson = {};
     let bad = false;
-    if (fs.existsSync(file)) { try { doc = JSON.parse(fs.readFileSync(file, "utf8")); } catch { bad = true; } }
+    if (fs.existsSync(file)) { try { doc = JSON.parse(fs.readFileSync(file, "utf8")) as McpJson; } catch { bad = true; } }
     if (bad) actions.push({ kind: "skip", path: rel(file), note: "exists but is not valid JSON — fix it, then re-run with --mcp" });
     else {
       // Registered as "designtwin", never "figma": that is the name Figma's own MCP server is usually
@@ -192,7 +193,7 @@ function main(argv: string[]): void {
       "    design/README.md         which half of design/ a re-pull is allowed to destroy\n" +
       "    design/target.json       the detected stack, or profile:null for build-screen to fill in\n" +
       "  It does NOT create codeconnect.local.json, plan/, audit/ or verify/ — those are written later,\n" +
-      "  on demand, by map-bootstrap.js, build-screen, audit-design and verify respectively.\n" +
+      "  on demand, by map-bootstrap.ts, build-screen, audit-design and verify respectively.\n" +
       "  …makes sure a bridge token exists, and prints the remaining steps.\n\n" +
       "  --mcp      also register the Design Twin MCP server in ./.mcp.json (merged, never overwritten)\n" +
       "  --dry-run  print what would happen; write nothing (no token is created either)\n\n" +

@@ -7,12 +7,12 @@
 // persistence: generate once, store it, reuse it.
 //
 // Deliberately dependency-free. `env-paths` is the usual answer for per-OS config dirs, but v4 is
-// ESM-only and needs Node >= 20 while this package is `"type": "commonjs"` with `engines: >=18`;
+// ESM-only and needs Node >= 20 while this package is `"type": "module"` with `engines: >=24`;
 // v2 is CJS but stale. The logic is ~15 lines, so it lives here rather than costing a dependency
 // (and an ESM/CJS interop problem) to import.
 //
 // Not a `.env` file, for the same reason plus one more: `--env-file` is Node >= 20.6 and
-// `--env-file-if-exists` >= 22.9, both above this package's floor. A project-local `.env` would also
+// `--env-file-if-exists` >= 22.9, both below this package's Node >= 24 floor now, but a project-local `.env` would also
 // be the wrong CONVENTION — `.env` is for the secrets of the app you are building, not for a tool's
 // own credential, and putting it in the repo makes "did we gitignore it" a permanent live footgun.
 // Real CLIs (gh, wrangler, vercel) keep their own auth in a user config dir. So do we.

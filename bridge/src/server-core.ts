@@ -347,7 +347,7 @@ function createBridge(port: number = PORT) {
     ws.on("message", (buf) => {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(buf.toString());
+        parsed = JSON.parse(buf.toString()) as unknown;
       } catch (e) {
         return;
       }

@@ -13,18 +13,32 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { ok, report } from "./assert.ts";
+import type {
+  VariablesDoc, Variable, VariableConflict, ComponentsCatalog, ComponentPropDef, IrNode, CrossCheckReport,
+  ComponentProposal, CodeConnectMap, CrossCheckCoverage,
+} from "../design-to-code/types.ts";
+import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
+import type { DtcgLeaf } from "../design-to-code/tokens.ts";
+
+// The modules loaded through tryImport (P1_SRC may point them at another checkout — same exports).
+type DesignDiffModule = typeof import("../design-to-code/design-diff.ts");
+type VariablesMergeModule = typeof import("../bridge/src/variables-merge.ts");
+/** mapping.reference.json: per screen, the reference matcher's verdict for every instance name. */
+type MappingReference = Record<string, { instances: number; names: Record<string, { match: string | null; firstReason: string }> }>;
+/** a screen export as this suite walks it */
+interface ScreenFile { nodes: IrNode[] }
 
 const SRC = process.env.P1_SRC || path.join(import.meta.dirname, "..");
 const D2C = path.join(SRC, "design-to-code");
 const FX = path.join(import.meta.dirname, "fixtures", "livetest3");
-const read = (p: any) => JSON.parse(fs.readFileSync(path.join(FX, p), "utf8"));
-const clone = (o: any) => JSON.parse(JSON.stringify(o));
+const read = <T>(p: string): T => JSON.parse(fs.readFileSync(path.join(FX, p), "utf8")) as T;
+const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "dt-identity-"));
-const node = (script: any, args: any, opts?: any) => spawnSync(process.execPath, [path.join(D2C, script), ...args], Object.assign({ encoding: "utf8" }, opts || {}));
-const tryImport = async (p: string): Promise<any> => { try { return await import(pathToFileURL(p).href); } catch { return null; } };
+const node = (script: string, args: string[], opts?: SpawnSyncOptions) => spawnSync(process.execPath, [path.join(D2C, script), ...args], Object.assign({ encoding: "utf8" as const }, opts || {}));
+const tryImport = async <T>(p: string): Promise<T | null> => { try { return (await import(pathToFileURL(p).href)) as T; } catch { return null; } };
 
 const POS = "pages/__Organization_management_/positions___7314_87192";
 const GP = "pages/__Organization_management_/System_Configurations__1359_21337";
@@ -38,7 +52,8 @@ console.log("tokens.js on the merged variables.json:");
   const r = node("tokens.ts", [path.join(FX, "variables.json"), out, "--web", "tailwind", "--also-generic"]);
   const theme = fs.existsSync(path.join(out, "theme.css")) ? fs.readFileSync(path.join(out, "theme.css"), "utf8") : "";
   const css = fs.existsSync(path.join(out, "tokens.css")) ? fs.readFileSync(path.join(out, "tokens.css"), "utf8") : "";
-  const dtcg = fs.existsSync(path.join(out, "tokens.dtcg.json")) ? JSON.parse(fs.readFileSync(path.join(out, "tokens.dtcg.json"), "utf8")) : {};
+  // tokens.dtcg.json read at the two top-level leaves this check names (their group key has no "/" in it).
+  const dtcg = fs.existsSync(path.join(out, "tokens.dtcg.json")) ? JSON.parse(fs.readFileSync(path.join(out, "tokens.dtcg.json"), "utf8")) as Record<string, DtcgLeaf> : {};
   const warnings = r.stderr || "";
   ok("[44] BOTH Space 4 variables reach theme.css — 24 and 16, each under its own name, neither silently dropped",
     /--spacing-figma-space-4-e26d506e: 24px;/.test(theme) && /--spacing-figma-space-4-64928e3a: 16px;/.test(theme));
@@ -48,7 +63,7 @@ console.log("tokens.js on the merged variables.json:");
       && /positions___7314_87192/.test(warnings) && /Create_Activity_Type__18411_84111/.test(warnings) && !/later definition wins/.test(warnings));
   ok("[44] tokens.css and tokens.dtcg.json keep both too, and the DTCG leaf carries its Figma key",
     /--Space-4-e26d506e: 24px;/.test(css) && /--Space-4-64928e3a: 16px;/.test(css)
-      && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions["figma.com"].key === K24);
+      && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions!["figma.com"].key === K24);
   ok("[94] `Space 3` (16) and `(Space 3)` (12) are two reachable properties in theme.css, not one",
     /--spacing-figma-space-3: 16px;/.test(theme) && /--spacing-figma-space-3-a96c665b: 12px;/.test(theme));
   ok("[94] and the run WARNS about that pair (it used to fold them silently)", /'Space 3', '\(Space 3\)'/.test(warnings) && /a96c665b/.test(warnings));
@@ -56,10 +71,10 @@ console.log("tokens.js on the merged variables.json:");
     (theme.match(/--spacing-figma-space-2(-[a-z0-9]+)?: /g) || []).length === 1 && /share the name 'Space 2'.*resolve identically/.test(warnings));
 
   // Order must not decide anything: the old emitters kept "the later one".
-  const rev = clone(read("variables.json")); rev.variables.reverse();
+  const rev = clone(read<VariablesDoc>("variables.json")); rev.variables!.reverse();
   const revDir = tmp(); fs.writeFileSync(path.join(revDir, "v.json"), JSON.stringify(rev));
   node("tokens.ts", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
-  const decls = (t: any) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
+  const decls = (t: string) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
   const a = decls(theme), b = decls(fs.existsSync(path.join(revDir, "theme.css")) ? fs.readFileSync(path.join(revDir, "theme.css"), "utf8") : "");
   ok("[44] reversing the input rows changes no name→value pair in theme.css", a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x)));
 }
@@ -90,16 +105,16 @@ console.log("tokens.js on the merged variables.json:");
 // ------------------------------------------------------------------ design-diff.js (211)
 console.log("design-diff.js — tokens are keyed by Figma key:");
 {
-  const dd = await tryImport(path.join(D2C, "design-diff.ts"));
-  const base = read("variables.json");
-  const bump = (key: any, f: any) => { const d = clone(base); for (const v of d.variables) if (v.key === key) f(v); return d; };
-  const d1 = dd && dd.diffTokens(base, bump(K24, (v: any) => { v.values = { "Mode 1": 25 }; }));
+  const dd = await tryImport<DesignDiffModule>(path.join(D2C, "design-diff.ts"));
+  const base = read<VariablesDoc>("variables.json");
+  const bump = (key: string, f: (v: Variable) => void) => { const d = clone(base); for (const v of d.variables!) if (v.key === key) f(v); return d; };
+  const d1 = dd && dd.diffTokens(base, bump(K24, (v) => { v.values = { "Mode 1": 25 }; }));
   ok("[211] changing ONLY the 24-valued Space 4 reports exactly one change, named with its key",
     !!d1 && d1.changed.length === 1 && /e26d506e/.test(d1.changed[0].name) && d1.changed[0].modes[0].before === "24" && d1.changed[0].modes[0].after === "25");
-  const d2 = dd && dd.diffTokens(base, bump(K16, (v: any) => { v.values = Object.assign({}, v.values, { Desktop: 17 }); }));
+  const d2 = dd && dd.diffTokens(base, bump(K16, (v) => { v.values = Object.assign({}, v.values, { Desktop: 17 }); }));
   ok("[211] a change to the OTHER Space 4 is seen too (it used to be shadowed)",
     !!d2 && d2.changed.length === 1 && /64928e3a/.test(d2.changed[0].name) && d2.changed[0].modes[0].mode === "Desktop");
-  const rev = clone(base); rev.variables.reverse();
+  const rev = clone(base); rev.variables!.reverse();
   const d3 = dd && dd.diffTokens(base, rev);
   ok("[211] re-ordering the rows reports NOTHING (it used to report a false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
 }
@@ -107,97 +122,104 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
 // ------------------------------------------------------------------ variables-merge.js (21)
 console.log("variables-merge.js — same name, different key, is a conflict:");
 {
-  const vm = await tryImport(path.join(SRC, "bridge", "src", "variables-merge.ts"));
-  const merged = read("variables.json");
-  let doc: any = null;
-  for (const s of merged._slices) doc = vm.mergeVariablesDoc(doc, read(s.file.replace(/\.json$/, ".vars.json")), { screen: s.screen, file: s.file, at: s.at }).doc;
-  const space4 = (doc._conflicts || []).find((c: any) => c.name === "Space 4");
+  const vm = await tryImport<VariablesMergeModule>(path.join(SRC, "bridge", "src", "variables-merge.ts"));
+  const merged = read<MergedVariablesDoc>("variables.json");
+  let acc: MergedVariablesDoc | null = null;
+  for (const s of merged._slices) acc = vm!.mergeVariablesDoc(acc, read<VariablesDoc>(s.file!.replace(/\.json$/, ".vars.json")), { screen: s.screen, file: s.file, at: s.at }).doc;
+  const doc = acc!;
+  // a same-name conflict by name (a value-only conflict of that name is not the record these checks want)
+  const sameName = (c: VariableConflict | undefined) => (c && c.kind === "same-name" ? c : undefined);
+  const space4 = sameName((doc._conflicts || []).find((c) => c.name === "Space 4"));
   ok("[21] replaying the five real pulls still ACCUMULATES (finding 20 must not regress)", doc.variables.length === merged.variables.length);
   ok("[21] `_conflicts` is no longer empty: the two `Space 4` are recorded, both keys, both values",
-    !!space4 && space4.kind === "same-name" && space4.sameValue === false && space4.variants.map((v: any) => v.key).sort().join() === [K16, K24].sort().join());
+    !!space4 && space4.kind === "same-name" && space4.sameValue === false && space4.variants.map((v) => v.key).sort().join() === [K16, K24].sort().join());
   ok("[21] …with the screens each came from (64928e3a only from the two Create Activity Type pulls)",
-    !!space4 && space4.variants.find((v: any) => v.key === K16).screens.join() === "Create_Activity_Type__18411_84111,Create_Activity_Type__18411_84502"
-      && space4.variants.find((v: any) => v.key === K24).screens.includes("positions___7314_87192"));
+    !!space4 && space4.variants.find((v) => v.key === K16)!.screens.join() === "Create_Activity_Type__18411_84111,Create_Activity_Type__18411_84502"
+      && space4.variants.find((v) => v.key === K24)!.screens.includes("positions___7314_87192"));
   ok("[21] and mirrored into `hygiene`, the other place both skills say to read",
-    doc.hygiene.some((h: any) => /CONFLICT/.test(h) && /'Space 4'/.test(h) && /e26d506e/.test(h) && /64928e3a/.test(h)));
-  const space2 = (doc._conflicts || []).find((c: any) => c.name === "Space 2");
+    doc.hygiene.some((h) => /CONFLICT/.test(h) && /'Space 4'/.test(h) && /e26d506e/.test(h) && /64928e3a/.test(h)));
+  const space2 = sameName((doc._conflicts || []).find((c) => c.name === "Space 2"));
   ok("[21] the two `Space 2` (8 under Desktop/Tablet/Mobile, 8 under Mode 1) are recorded as the same VALUE", !!space2 && space2.sameValue === true);
 }
 
 // ------------------------------------------------------------------ cross-check.js (40, 106, 137, 226)
 console.log("cross-check.js — attribution and the re-keyed catalog:");
-const cc = (screenRel: any, extra?: any): any => {
+/** cross-check --json output, or the empty stand-in for a run whose stdout did not parse (every check
+ *  then fails) — that stand-in carries `coverage: {}`, hence the Partial coverage. */
+type CcResult = Pick<CrossCheckReport, "findings"> & Partial<Omit<CrossCheckReport, "findings" | "coverage">> &
+  { coverage?: Partial<CrossCheckCoverage> | null };
+const cc = (screenRel: string, extra?: string[]): CcResult => {
   const r = node("cross-check.ts", [path.join(FX, screenRel + ".json"), "--design-system", path.join(FX, "design-system"), "--variables", path.join(FX, "variables.json"), "--json", ...(extra || [])]);
-  try { return JSON.parse(r.stdout); } catch (e) { return { findings: [], coverage: {}, componentProposals: [] }; }
+  try { return JSON.parse(r.stdout) as CcResult; } catch (e) { return { findings: [], coverage: {}, componentProposals: [] }; }
 };
-const blockerOn = (res: any, code: any, token?: any) => res.findings.some((f: any) => f.severity === "blocker" && f.code === code && (!token || f.token === token));
+const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?: string) => res.findings.some((f) => f.severity === "blocker" && f.code === code && (!token || f.token === token));
 {
   const pos = cc(POS), cat = cc(CAT);
   ok("[40/106] Job Roles' own slice has ONE Space 4 (24, as the design system) — no token-name-collision blocker for it",
     Array.isArray(pos.findings) && pos.findings.length > 0 && !blockerOn(pos, "token-name-collision", "Space 4"));
   ok("[40] the union's ambiguity is still said, once, as a note naming the screen it belongs to",
-    pos.findings.some((f: any) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Activity_Type__18411_84111/.test(f.message)));
+    pos.findings.some((f) => f.code === "token-name-collision-elsewhere" && f.severity === "info" && /Create_Activity_Type__18411_84111/.test(f.message)));
   ok("[40] Create Activity Type's slice really carries both — there it IS a blocker, naming the 16-valued key",
-    cat.findings.some((f: any) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === "Space 4" && f.key === K16));
+    cat.findings.some((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === "Space 4" && f.key === K16));
   ok("[137] Global Policies: no Space 4 blocker either", !blockerOn(cc(GP), "token-name-collision", "Space 4"));
 }
 {
-  const ref = read("mapping.reference.json");
-  for (const [k, screenRel, min] of [["job-roles", POS, 26], ["global-policies", GP, 23]]) {
+  const ref = read<MappingReference>("mapping.reference.json");
+  for (const [k, screenRel, min] of [["job-roles", POS, 26], ["global-policies", GP, 23]] as const) {
     const res = cc(screenRel);
     const props = res.componentProposals || [];
     const refRows = ref[k].names;
-    const refMatched = Object.entries(refRows).filter(([, r]: [string, any]) => r.match);
-    const refResidual = Object.entries(refRows).filter(([, r]: [string, any]) => !r.match);
+    const refMatched = Object.entries(refRows).filter(([, r]) => r.match);
+    const refResidual = Object.entries(refRows).filter(([, r]) => !r.match);
     ok(`[226] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed), not catalog-covers-nothing`,
-      blockerOn(res, "catalog-rekeyed") && !res.findings.some((f: any) => f.code === "catalog-covers-nothing"));
+      blockerOn(res, "catalog-rekeyed") && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
     ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
     ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
-      refMatched.every(([n, r]: [string, any]) => props.some((p: any) => p.name === n && p.catalog.id === r.match)) && props.every((p: any) => refRows[p.name] && refRows[p.name].match === p.catalog.id));
+      refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog!.id === r.match)) && props.every((p) => refRows[p.name] && refRows[p.name].match === p.catalog!.id));
     ok(`[226] ${k}: the same ${refResidual.length}-name residual, with the same first reason`,
       (res.componentResidual || []).length === refResidual.length &&
-        refResidual.every(([n, r]: [string, any]) => (res.componentResidual || []).some((x: any) => x.name === n && x.reasons[0] === r.firstReason)));
-    ok(`[226] ${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p: any) => p.confirmed === false));
+        refResidual.every(([n, r]) => (res.componentResidual || []).some((x) => x.name === n && x.reasons[0] === r.firstReason)));
+    ok(`[226] ${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p) => p.confirmed === false));
     ok(`[226] ${k}: counts are over VISIBLE instances (${ref[k].instances}), like the build`, res.coverage && res.coverage.instances === ref[k].instances);
   }
   // Tie-breaks the reference needed, checked individually.
-  const byName = (res: any) => new Map<string, any>((res.componentProposals || []).map((p: any) => [p.name, p]));
+  const byName = (res: CcResult) => new Map<string, ComponentProposal>((res.componentProposals || []).map((p) => [p.name, p]));
   const jr = byName(cc(POS));
   ok("[226] tie-breaks: filter button → 326:2869, Header → 842:3470, Component 1 → 842:4815",
-    (jr.get("filter button") || {}).catalog?.id === "326:2869" && (jr.get("Header") || {}).catalog?.id === "842:3470" && (jr.get("Component 1") || {}).catalog?.id === "842:4815");
+    jr.get("filter button")?.catalog?.id === "326:2869" && jr.get("Header")?.catalog?.id === "842:3470" && jr.get("Component 1")?.catalog?.id === "842:4815");
   ok("[226] duplicated definitions (Button 1:1056 / 191:2702) are a harmless tie, not a failure",
-    (jr.get("Button") || {}).catalog?.id === "1:1056" && (jr.get("Button") || {}).tie === "duplicate-definitions");
+    jr.get("Button")?.catalog?.id === "1:1056" && jr.get("Button")?.tie === "duplicate-definitions");
 }
 {
   // A genuinely unrelated pair: same names, different prop signatures → still "wrong catalog".
   const dir = tmp(), ds = path.join(dir, "ds");
   fs.mkdirSync(ds);
   for (const f of ["tokens.json", "components.library.json"]) fs.copyFileSync(path.join(FX, "design-system", f), path.join(ds, f));
-  const cat = read("design-system/components.local.json");
+  const cat = read<ComponentsCatalog>("design-system/components.local.json");
   for (const c of cat.components) {
-    const p: any = {};
-    for (const [k, v] of Object.entries(c.props || {}) as [string, any][]) p["Other " + k] = Object.assign({}, v, v.options ? { options: v.options.map((o: any) => o + " (other)") } : {});
+    const p: Record<string, ComponentPropDef> = {};
+    for (const [k, v] of Object.entries(c.props || {})) p["Other " + k] = Object.assign({}, v, v.options ? { options: v.options.map((o) => o + " (other)") } : {});
     c.props = p;
     if (c.type === "COMPONENT") c.type = "COMPONENT_SET";
   }
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(cat));
   const r = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
-  let res: any = {}; try { res = JSON.parse(r.stdout); } catch (e) { /* stays empty */ }
+  let res: Partial<CrossCheckReport> = {}; try { res = JSON.parse(r.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
   ok("[226] an unrelated catalog (same names, different prop signatures) still reports catalog-covers-nothing, with no proposals",
-    Array.isArray(res.findings) && res.findings.some((f: any) => f.code === "catalog-covers-nothing") && !res.findings.some((f: any) => f.code === "catalog-rekeyed") && !(res.componentProposals || []).length);
+    Array.isArray(res.findings) && res.findings.some((f) => f.code === "catalog-covers-nothing") && !res.findings.some((f) => f.code === "catalog-rekeyed") && !(res.componentProposals || []).length);
 
   // And the ordinary case: keys NOT re-minted → resolved by key, no re-key finding at all.
-  const same = read("design-system/components.local.json");
-  const screen = read(POS + ".json");
-  const keyOf = new Map();
-  const walk = (n: any) => { if (n.type === "INSTANCE" && n.mainComponent) keyOf.set(n.mainComponent.setName || n.mainComponent.name, n.mainComponent.setKey || n.mainComponent.key); (n.children || []).forEach(walk); };
+  const same = read<ComponentsCatalog>("design-system/components.local.json");
+  const screen = read<ScreenFile>(POS + ".json");
+  const keyOf = new Map<string, string | undefined>();
+  const walk = (n: IrNode) => { if (n.type === "INSTANCE" && n.mainComponent) keyOf.set(n.mainComponent.setName || n.mainComponent.name, n.mainComponent.setKey || n.mainComponent.key); (n.children || []).forEach(walk); };
   screen.nodes.forEach(walk);
   for (const c of same.components) if (keyOf.has(c.name)) c.key = keyOf.get(c.name);
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(same));
   const r2 = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
-  let res2: any = {}; try { res2 = JSON.parse(r2.stdout); } catch (e) { /* stays empty */ }
+  let res2: Partial<CrossCheckReport> = {}; try { res2 = JSON.parse(r2.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
   ok("[226] control: when the keys DO match, it is key coverage, not a re-key proposal",
-    Array.isArray(res2.findings) && !res2.findings.some((f: any) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && res2.coverage.matchedByLocalKey > 0);
+    Array.isArray(res2.findings) && !res2.findings.some((f) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && res2.coverage!.matchedByLocalKey > 0);
 }
 
 // ------------------------------------------------------------------ map-bootstrap / drift-lint (226, 103)
@@ -209,20 +231,20 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const map = path.join(dir, "codeconnect.local.json");
   const none = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
   ok("[226] nothing confirmed → nothing written, exit 1 (proposals are never accepted automatically)", none.status === 1 && !fs.existsSync(map));
-  const rep = JSON.parse(fs.readFileSync(report0, "utf8"));
+  const rep: CrossCheckReport = JSON.parse(fs.readFileSync(report0, "utf8"));
   const accept = new Set(["Button", "Header", "Pagination"]);
   for (const p of rep.componentProposals || []) if (accept.has(p.name)) p.confirmed = true;
   fs.writeFileSync(report0, JSON.stringify(rep));
   const yes = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
-  const m = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) : { components: {} };
-  const btn = (rep.componentProposals || []).find((p: any) => p.name === "Button") || { instanceKeys: [] };
+  const m: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
+  const btn: Pick<ComponentProposal, "instanceKeys" | "catalog"> = (rep.componentProposals || []).find((p) => p.name === "Button") || { instanceKeys: [], catalog: null };
   ok("[226] stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
-    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog.key);
+    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog!.key);
   ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
-  const m2 = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) : { components: {} };
+  const m2: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
-    !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog.key]);
+    !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog!.key!]);
   const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 

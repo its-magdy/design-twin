@@ -74,7 +74,7 @@ function sourcesOf(doc: TokensDoc | null | undefined, docPath: string | null | u
 //   staleLegacy   path of an ignored design/variables.json above design/export/, if one exists
 function variablesContext(screenFiles: readonly string[] | null | undefined, varsFile: string | null | undefined, fs: FsLike, path: PathLike, opts?: { sliceFallback?: boolean }): VariablesContext {
   // Same trust boundary as sourcesOf: a variables.json / .vars.json is this repo's own output.
-  const readJson = (f: string | null | undefined): TokensDoc | null => { try { return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null; } catch (_) { return null; } };
+  const readJson = (f: string | null | undefined): TokensDoc | null => { try { return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) as TokensDoc : null; } catch (_) { return null; } };
   const files = screenFiles || [];
   const own = files.map((f) => readJson(String(f).replace(/\.json$/, ".vars.json")));
   let variablesPath = varsFile || null;

@@ -38,8 +38,8 @@ import { readJsonFile } from "./catalog-input.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredNode, MeasuredStyles,
-  NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyExpectation, VerifyFrame, VerifyInstance, VerifyInteraction,
-  VerifyInteractionResult, VerifyMeasured, VerifyReport, VerifySpec, VerifyVerdict,
+  NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
+  VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 
 // ---------------------------------------------------------------- tolerances
@@ -371,18 +371,11 @@ const COORDINATES =
 // singular, `trigger.type`, `on`) beside the producer's reactions[].actions[] + plain-string trigger.
 type LegacyReaction = Omit<Reaction, "trigger"> & { trigger?: ReactionTrigger | { type?: string }; action?: Action; on?: string };
 
-type Frame = Omit<VerifyFrame, "x" | "y">;
-/** The hidden-layer counts an expectation carries. */
-type HiddenCounts = NonNullable<VerifyExpectation["counts"]>["hidden"];
-/**
- * An expectation as READ BACK from disk (or built here): every field may be absent, and `frame` is empty
- * when the export had no roots. VerifyExpectation (what --expect writes) is assignable to it.
- */
-export type Expectation = Omit<VerifyExpectation, "schema" | "nodes" | "frame" | "frames"> & { schema?: string; nodes?: VerifySpec[]; frame?: Partial<Frame>; frames?: Array<Partial<Frame>> };
+/** An expectation as READ BACK from disk (or built here): every field may be absent. */
+export type Expectation = Partial<VerifyExpectation>;
 /** What buildExpectation() returns: every field present (frame's own fields still depend on the export having a root). */
-export interface BuiltExpectation extends Omit<VerifyExpectation, "frame" | "frames"> {
-  frame: Partial<Frame>;
-  frames: Array<Partial<Frame>> | undefined;
+export interface BuiltExpectation extends VerifyExpectation {
+  frames: VerifyExpectation["frames"] | undefined;
   exportContentSha256: string;
   counts: NonNullable<VerifyExpectation["counts"]>;
   nodes: VerifySpec[];
@@ -632,36 +625,6 @@ const LIMITS = [
 
 /** compare()'s options — the evidence the CLI ties the report to. */
 export interface CompareOptions { interactions?: InteractionEvidence[] | null; expectationSha256?: string; measuredSha256?: string; artifactCheck?: ArtifactCheck[] | null; code?: CodeInputs }
-type FieldNeverMeasured = NonNullable<NonNullable<VerifyReport["coverage"]>["fieldsNeverMeasured"]>[number];
-/** report.coverage as compare() writes it (every counter present). */
-export interface Coverage {
-  nodesExpected: number; nodesMeasured: number; nodesNotMeasured: number; nodesMatchedByComponentPath: number; fieldsChecked: number;
-  fieldsNotMeasured: number; fieldsNeverMeasured: FieldNeverMeasured[]; valuesNotComparable: number; valuesUnverifiable: number;
-  hiddenLayersSkipped: HiddenCounts | undefined; instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
-  interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
-}
-/**
- * The report compare() returns: every @2 field present. `artifacts` is the CLI's on-disk check when it
- * ran, else the probe's own list passed through as-is (the one field wider than VerifyReport's).
- */
-export interface Report extends Omit<VerifyReport, "artifacts"> {
-  artifacts: Array<string | ArtifactCheck | { path?: string }>;
-  verdict: VerifyVerdict;
-  headline: string;
-  why: string[];
-  coverage: Coverage;
-  summary: NonNullable<VerifyReport["summary"]>;
-  deltas: VerifyDelta[];
-  componentsAbsent: NonNullable<VerifyReport["componentsAbsent"]>;
-  untaggedInstanceSets: NonNullable<VerifyReport["untaggedInstanceSets"]>;
-  interactions: VerifyInteractionResult[];
-  notMeasured: NonNullable<VerifyReport["notMeasured"]>;
-  fieldsNotMeasured: NonNullable<VerifyReport["fieldsNotMeasured"]>;
-  unverifiable: NonNullable<VerifyReport["unverifiable"]>;
-  notComparable: NotComparable[];
-  probe: NonNullable<VerifyReport["probe"]>;
-  limits: string[];
-}
 
 const SEVERITY_RANK: Record<DeltaSeverity, number> = { high: 0, medium: 1, low: 2 };
 
@@ -670,13 +633,13 @@ const SEVERITY_RANK: Record<DeltaSeverity, number> = { high: 0, medium: 1, low: 
  * opts: { interactions: [...] extra interaction evidence (the --interactions file),
  *         expectationSha256, measuredSha256, artifactCheck: [{path, exists, image}] }
  */
-function compare(expectation: Expectation, measured: VerifyMeasured | null | undefined, opts?: CompareOptions | null): Report {
+function compare(expectation: Expectation, measured: VerifyMeasured | null | undefined, opts?: CompareOptions | null): VerifyReportV2 {
   opts = opts || {};
   measured = measured || {};
   const hiddenSet = new Set(((expectation.hidden && expectation.hidden.ids) || []).map(String));
   const legacy = expectation.schema !== EXPECTATION_SCHEMA;
   const specs = (expectation.nodes || []).filter((s) => !hiddenSet.has(String(s.nodeId)));
-  const frameOf = (spec: VerifySpec): Partial<Frame> => (spec.frameId && (expectation.frames || []).find((f) => f.nodeId === spec.frameId)) || expectation.frame || {};
+  const frameOf = (spec: VerifySpec): Partial<VerifyRootFrame> => (spec.frameId && (expectation.frames || []).find((f) => f.nodeId === spec.frameId)) || expectation.frame || {};
 
   // ---- index the measurements (first one wins; duplicates are counted, not silently merged)
   const byId = new Map<string, MeasuredNode>();
@@ -705,9 +668,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const viaSharedPath = (id: string): string | null => { const sfx = suffix(String(id)); const c = sfx && foreignBySuffix.get(sfx); return c && c.length === 1 ? c[0] : null; };
 
   const deltas: VerifyDelta[] = [];
-  const notMeasured: Report["notMeasured"] = []; // node specs with NO measurement at all — one row per node, never per field
-  const fieldsNotMeasured: Report["fieldsNotMeasured"] = []; // a measured node missing a field the spec states
-  const unverifiable: Report["unverifiable"] = []; // values the method cannot read unless the probe goes out of its way
+  const notMeasured: VerifyReportV2["notMeasured"] = []; // node specs with NO measurement at all — one row per node, never per field
+  const fieldsNotMeasured: VerifyReportV2["fieldsNotMeasured"] = []; // a measured node missing a field the spec states
+  const unverifiable: VerifyReportV2["unverifiable"] = []; // values the method cannot read unless the probe goes out of its way
   const census = new Map<string, { expected: number; present: number }>(); // field -> { expected, present } over MEASURED nodes
   const tally = (key: string, present: boolean): void => { const c = census.get(key) || { expected: 0, present: 0 }; c.expected++; if (present) c.present++; census.set(key, c); };
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0;
@@ -887,7 +850,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   }
 
   // ---- fields in FIELDS that the probe never reported under the canonical key (finding 182)
-  const fieldsNeverMeasured: FieldNeverMeasured[] = [];
+  const fieldsNeverMeasured: VerifyCoverageV2["fieldsNeverMeasured"] = [];
   for (const [key, c] of census) {
     if (FIELDS.some((f) => f.key === key && f.optional)) continue; // listed under `unverifiable` instead
     if (c.expected > 0 && c.present === 0) {
@@ -912,14 +875,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     bySet.get(k)!.instances++;
     bySet.get(k)!.nodeIds.push(i.nodeId);
   }
-  const untaggedInstanceSets: Report["untaggedInstanceSets"] = [];
+  const untaggedInstanceSets: VerifyReportV2["untaggedInstanceSets"] = [];
   let setsViaSharedPath = 0;
   for (const [k, v] of bySet) {
     if (namesSeen.has(k) || v.nodeIds.some((id) => idsSeen.has(String(id)))) continue;
     if (v.nodeIds.some((id) => viaSharedPath(id))) { setsViaSharedPath++; continue; }
     untaggedInstanceSets.push(v);
   }
-  const componentsAbsent: Report["componentsAbsent"] = [];
+  const componentsAbsent: VerifyReportV2["componentsAbsent"] = [];
   for (const c of comps.filter((c) => c && c.present === false)) {
     const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || (c.nodeId !== undefined && v.nodeIds.includes(c.nodeId)));
     if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, detail: c.detail || c.note });
@@ -960,7 +923,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const medium = deltas.filter((d) => d.severity === "medium").length;
 
   // ---- what the evidence is tied to (findings 153/166/190)
-  const inputs: Report["inputs"] = {
+  const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
     expectationSha256: opts.expectationSha256,
     measuredSha256: opts.measuredSha256,
@@ -994,7 +957,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
 
   const verdict: VerifyVerdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
 
-  const coverage: Coverage = {
+  const coverage: VerifyCoverageV2 = {
     nodesExpected,
     nodesMeasured,
     nodesNotMeasured: notMeasured.length,
@@ -1054,7 +1017,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   };
 }
 
-function reportToMarkdown(r: Report): string {
+function reportToMarkdown(r: VerifyReportV2): string {
   const L: string[] = [];
   L.push(`# Verify — ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
@@ -1121,7 +1084,7 @@ function reportToMarkdown(r: Report): string {
     if (r.notComparable.length + r.unverifiable.length > 40) L.push(`- …and ${r.notComparable.length + r.unverifiable.length - 40} more`);
     L.push("");
   }
-  const p: Partial<Report["probe"]> = r.probe || {};
+  const p: Partial<VerifyReportV2["probe"]> = r.probe || {};
   if ((p.unknownKeys && p.unknownKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}×) is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
@@ -1152,7 +1115,7 @@ function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTar
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
     // an expectation this repo wrote — but read as raw JSON, since only frame.nodeId is looked at
     let doc: unknown;
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch (e) { continue; }
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")) as unknown; } catch (e) { continue; }
     if (isJsonObject(doc) && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
@@ -1177,12 +1140,12 @@ if (import.meta.main) {
   const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
-    "  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen> [--force]\n" +
+    "  node design-to-code/verify-screen.ts --expect <screen.json>... --out design/verify/<Screen> [--force]\n" +
     "      writes <Screen>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
     "      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n" +
     "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
     "      directory — pass --force to write a second one anyway.\n" +
-    "  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n" +
+    "  node design-to-code/verify-screen.ts --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n" +
     "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n" +
@@ -1289,7 +1252,7 @@ if (import.meta.main) {
     const hits: Array<{ f: string; p: Plan }> = [];
     for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
       // a plan under design/plan/ is this repo's own writer's output (plan-skeleton.ts)
-      let p: Plan; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")); } catch { continue; }
+      let p: Plan; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")) as Plan; } catch { continue; }
       const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
       const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
       if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });

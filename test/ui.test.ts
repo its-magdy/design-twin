@@ -9,35 +9,54 @@ import { check, report } from "./assert.ts";
 
 const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
 const script = /<script>([\s\S]*)<\/script>/.exec(html)![1];
-const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8"));
+const manifest: { networkAccess: { allowedDomains: string[] } } = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8"));
+
+// Fake DOM element / WebSocket / timer shapes — only what ui.html's script touches.
+interface FakeEl {
+  id: string; textContent: string; className: string; hidden: boolean; open: boolean; disabled: boolean;
+  value: string; style: Record<string, string>; appendChild(): void; innerHTML: string;
+  onclick?: () => void;
+}
+interface FakeSocket {
+  url: string; readyState: number;
+  onopen?: () => void; onclose?: (e: { code: number }) => void;
+  close(): void; send(): void;
+}
+interface Timer { fn: (() => void) | null; ms: number }
+interface PluginMsg { type: string; token?: string }
 
 // One plugin window: returns handles to drive it. `sockets` collects every WebSocket the script opens.
 function boot() {
-  const els: any = {};
-  const el = (id: any) => (els[id] ||= { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, appendChild() {}, innerHTML: "" });
-  const sockets: any[] = [];
-  const posted: any[] = [];
-  const timers: any[] = [];
-  function FakeWS(this: any, url: any) { this.url = url; this.readyState = 0; sockets.push(this); }
-  FakeWS.prototype.close = function (this: any) { this.readyState = 3; };
-  FakeWS.prototype.send = function () {};
-  const ctx: any = {
+  const els: Record<string, FakeEl> = {};
+  const el = (id: string): FakeEl => (els[id] ||= { id, textContent: "", className: "", hidden: false, open: false, disabled: false, value: "", style: {}, appendChild() {}, innerHTML: "" });
+  const sockets: FakeSocket[] = [];
+  const posted: PluginMsg[] = [];
+  const timers: Timer[] = [];
+  class FakeWS implements FakeSocket {
+    url: string; readyState = 0;
+    // assigned by the script under test; `declare` keeps them off the instance until it does
+    declare onopen?: () => void; declare onclose?: (e: { code: number }) => void;
+    constructor(url: string) { this.url = url; sockets.push(this); }
+    close() { this.readyState = 3; }
+    send() {}
+  }
+  const ctx: Record<string, unknown> & { onmessage?: (e: { data: { pluginMessage: PluginMsg } }) => void } = {
     document: { getElementById: el, readyState: "complete", createElement: () => el("_tmp"), addEventListener() {} },
     window: {},
-    parent: { postMessage: (m: any) => posted.push(m.pluginMessage) },
+    parent: { postMessage: (m: { pluginMessage: PluginMsg }) => posted.push(m.pluginMessage) },
     WebSocket: FakeWS,
-    setTimeout: (fn: any, ms: any) => { timers.push({ fn, ms }); return timers.length; },
-    clearTimeout: (id: any) => { if (timers[id - 1]) timers[id - 1].fn = null; },
+    setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: (id: number) => { if (timers[id - 1]) timers[id - 1].fn = null; },
     encodeURIComponent, JSON, String, Math, Uint8Array, console,
   };
   ctx.window = ctx; // the script assigns window.onmessage / window.onerror
   vm.runInNewContext(script, ctx);
-  const msg = (m: any) => ctx.onmessage({ data: { pluginMessage: m } });
+  const msg = (m: PluginMsg) => ctx.onmessage!({ data: { pluginMessage: m } });
   const runTimers = () => { const due = timers.splice(0); for (const t of due) if (t.fn) t.fn(); };
   return { el, sockets, posted, timers, msg, runTimers, last: () => sockets[sockets.length - 1] };
 }
-const openIt = (s: any) => { s.readyState = 1; s.onopen(); };
-const closeIt = (s: any, code: any) => { s.readyState = 3; s.onclose({ code }); };
+const openIt = (s: FakeSocket) => { s.readyState = 1; s.onopen!(); };
+const closeIt = (s: FakeSocket, code: number) => { s.readyState = 3; s.onclose!({ code }); };
 
 console.log("markup the script depends on:");
 const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge"];
@@ -46,8 +65,8 @@ check("the token input has a real <label for>, not just a placeholder", /<label[
 check("status and banner are live regions (a finished export is announced)", /id="status"[^>]*aria-live/.test(html) && /id="banner"[^>]*role="alert"/.test(html));
 check("the connection section is a <details> that is NOT open by default", /<details id="connect">/.test(html));
 check("the ports the UI dials are exactly the ports the manifest allows", (() => {
-  const dialled = JSON.parse(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script)![1]);
-  const allowed = manifest.networkAccess.allowedDomains.map((d: any) => Number(d.split(":").pop()));
+  const dialled = JSON.parse(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script)![1]) as number[];
+  const allowed = manifest.networkAccess.allowedDomains.map((d) => Number(d.split(":").pop()));
   return JSON.stringify(dialled) === JSON.stringify(allowed);
 })());
 
@@ -81,7 +100,7 @@ check("nothing listening → walks every allowed port, THEN says 'not running' (
   closeIt(w.last(), 1006); const afterOne = w.el("pill").textContent; w.runTimers();
   closeIt(w.last(), 1006); w.runTimers();
   closeIt(w.last(), 1006);
-  const ports = w.sockets.map((s: any) => /:(\d+)\//.exec(s.url)![1]).join(",");
+  const ports = w.sockets.map((s) => /:(\d+)\//.exec(s.url)![1]).join(",");
   return afterOne === "connecting…" && ports === "8787,8788,8789" && w.el("pill").textContent === "not running" && w.el("bridge").className === ""
     && /dtwin --serve/.test(w.el("bridge").textContent) && w.el("connect").open === false;
 })());
@@ -92,7 +111,7 @@ check("a bridge that WAS connected and went away → 'waiting', worded as normal
 check("saving a new token after a rejection reconnects at once, not after the 15s retry", (() => {
   const w = boot(); w.msg({ type: "token", token: "stale" }); closeIt(w.last(), 4401);
   const before = w.sockets.length;
-  w.el("token").value = "fresh"; w.el("save-token").onclick();
+  w.el("token").value = "fresh"; w.el("save-token").onclick!();
   return w.sockets.length === before + 1 && /token=fresh/.test(w.last().url) && w.posted.some((p) => p.type === "set-token" && p.token === "fresh");
 })());
 check("only ONE reconnect is ever pending, however many closes arrive", (() => {
