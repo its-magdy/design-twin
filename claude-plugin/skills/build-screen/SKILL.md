@@ -52,9 +52,10 @@ its export directly in `design/` — every path below works either way, just dro
   **Resolving "build the Job Roles screen" when no layer is named that:** the Figma layer name and
   the visible on-screen title are often different strings. Resolve with
   `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name → indexed
-  `title` → plan `screenName`/`route` → text search over `name`/`title`/`texts[]`) rather than
-  guessing — it stops and lists candidates on zero or more than one match instead of picking the
-  nearest name. This is the one procedure every skill uses; see `extract/SKILL.md` for the full rule.
+  `title` → plan `screenName`/`route`, each exact) rather than guessing. Only an exact stage may
+  resolve; a text-search fallback over `name`/`title`/`texts[]` NEVER resolves by itself — even one
+  hit is a candidate to confirm by node id, not an answer to build from. This is the one procedure
+  every skill uses; see `extract/SKILL.md` for the full rule.
 - **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.
   `assets/<id>_ref.png`), held by the `reference` field: **`nodes[0].reference`** in a single-screen
   pull (the field sits on the node), or the **root `reference`** of a page-walk layer file. Look in

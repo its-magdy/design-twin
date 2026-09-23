@@ -57,9 +57,11 @@ Copy this checklist into your working notes and tick it off:
    named `positions `), and near-matches are a trap — a query of "Job Roles" string-matching only
    "Job Role Details" is a DIFFERENT screen, not a fuzzy hit. Resolve with
    `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name →
-   indexed `title` → plan `screenName`/`route` → text search — the one procedure every skill uses,
-   see `extract/SKILL.md`); on zero or more than one match it stops and prints the candidates
-   (name, id, size, node count, `dtwin screenshot <id>`) instead of auditing a guess. Find the screen
+   indexed `title` → plan `screenName`/`route`, each exact — the one procedure every skill uses, see
+   `extract/SKILL.md`); on zero or more than one exact match it stops and prints the candidates
+   (name, id, size, node count, `dtwin screenshot <id>`) instead of auditing a guess. A looser text
+   search runs last but never resolves by itself — even a single hit ("Job Roles" narrowing only to
+   "Job Role Details") is a candidate to confirm by node id, never something to audit outright. Find the screen
    through the index, never by guessing a filename: the root
    `design/export/pages/index.json` → the layer's `file`. Screen files
    are `pages/<Page>/<Screen>__<node-id>.json`, because a frame name does not identify a frame (two

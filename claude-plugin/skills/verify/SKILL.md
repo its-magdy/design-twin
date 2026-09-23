@@ -58,10 +58,12 @@ Three things that trip up a literal reading of the old recipe:
 - **The user's name for the screen (e.g. "Job Roles") may not be the Figma layer name (e.g.
   `positions `, trailing space, a different string entirely).** Resolve it with
   `node design-to-code/resolve-screen.js <exportDir> "<name>"` — node id → exact layer name → the
-  index's `title` → a plan's `screenName`/`route` → text search — the same procedure every other
-  skill uses (see `extract/SKILL.md`). If it stops with zero or several candidates, print them and
-  ask; don't fall back to `design/plan/*` alone (a plan's free-text `screen` field is a human's
-  string, not a guaranteed resolver) and don't pick the nearest name.
+  index's `title` → a plan's `screenName`/`route`, each exact — the same procedure every other skill
+  uses (see `extract/SKILL.md`). A looser text-search fallback runs last but never resolves by
+  itself: even a single hit is a candidate to confirm by node id, not a screen to verify against. If
+  it stops with zero, several, or only text-search candidates, print them and ask; don't fall back to
+  `design/plan/*` alone (a plan's free-text `screen` field is a human's string, not a guaranteed
+  resolver) and don't pick the nearest name.
 
 One more thing about the plan file so it does not surprise you: **build-screen's `Stop` hook writes
 it**, setting `status` as the building turn ends. If a build is finishing while you read, `status` can
