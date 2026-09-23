@@ -263,7 +263,7 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
     module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });
@@ -386,10 +386,12 @@ var require_cross_check = __commonJS({
       const screenColls = variables && variables.collections || [];
       if (!tokens) {
         notChecked.push(
-          "collection provenance \u2014 no design-system tokens.json was given, so nothing could verify that the screen's variables come from the design system you exported. Run `dtwin pull design --design-system` and pass it."
+          "collection provenance \u2014 no design-system tokens.json was given, so nothing could verify that the screen's variables come from the design system you exported. Run `dtwin pull --design-system` and pass it."
         );
       } else if (!screenColls.length) {
-        notChecked.push("collection provenance \u2014 no design/variables.json was given, so the screen's own token library is unknown.");
+        notChecked.push(
+          input.variablesPath ? `collection provenance \u2014 ${input.variablesPath} was checked but carries no collections for this screen, so its own token library is unknown.` : `collection provenance \u2014 no variables.json was found (looked in design/export/variables.json), so the screen's own token library is unknown.`
+        );
       } else {
         const foreign = [];
         for (const c of screenColls) {
@@ -403,7 +405,7 @@ var require_cross_check = __commonJS({
           push(
             severity,
             "foreign-token-library",
-            `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export \u2014 the screen consumes a DIFFERENT library than the one you pulled. ` + (sameNameDifferentKey.length ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key (${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. ` : "") + `Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run \`dtwin list libraries --client <the screen's file>\` \u2014 variable collections are the ONE thing Figma attributes to a library by name \u2014 then open that file and export it with \`dtwin pull design --as-library "<name>"\`.`,
+            `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export \u2014 the screen consumes a DIFFERENT library than the one you pulled. ` + (sameNameDifferentKey.length ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key (${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. ` : "") + `Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run \`dtwin list libraries --client <the screen's file>\` \u2014 variable collections are the ONE thing Figma attributes to a library by name \u2014 then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
             { collections: foreign }
           );
         } else {
@@ -635,7 +637,7 @@ var require_cross_check = __commonJS({
           push(
             "blocker",
             "catalog-covers-nothing",
-            `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key \u2014 the catalog you exported is not the library this screen is built from. ` + (coverage.matchedByKey > coverage.matchedByLocalKey ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. ` : "") + (coverage.matchedByName ? `${coverage.matchedByName} match BY NAME only and are marked unverified: a lead, not a mapping. ` : "") + (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") + `A "318/318 mapped" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > "Go to main component" \u2014 it jumps to the file that defines it. Then connect that file and run \`dtwin pull design --as-library "<name>"\`. Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` + (rekey && rekey.summary.withCandidates ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature \u2014 too few to call it the same library under new keys.)` : ""),
+            `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key \u2014 the catalog you exported is not the library this screen is built from. ` + (coverage.matchedByKey > coverage.matchedByLocalKey ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. ` : "") + (coverage.matchedByName ? `${coverage.matchedByName} match BY NAME only and are marked unverified: a lead, not a mapping. ` : "") + (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") + `A "318/318 mapped" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > "Go to main component" \u2014 it jumps to the file that defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` + (rekey && rekey.summary.withCandidates ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature \u2014 too few to call it the same library under new keys.)` : ""),
             { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct } }
           );
         } else if (coverage.localPct < 100) {
@@ -982,12 +984,23 @@ var require_cross_check = __commonJS({
         vars: maybe(f.replace(/\.json$/, ".vars.json"))
       }));
       const dsBase = dsDir || "design/design-system";
-      const variablesPath = varsFile || path2.join(path2.dirname(argv[0]), "variables.json");
+      const exportRoot = path2.resolve(path2.dirname(argv[0]), "..", "..");
+      const exportRootVarsPath = path2.join(exportRoot, "variables.json");
+      const siblingVarsPath = path2.join(path2.dirname(argv[0]), "variables.json");
+      let variablesPath = varsFile;
+      if (!variablesPath && fs2.existsSync(exportRootVarsPath)) variablesPath = exportRootVarsPath;
+      if (!variablesPath && fs2.existsSync(siblingVarsPath)) variablesPath = siblingVarsPath;
       const variablesDoc = maybe(variablesPath);
+      if (variablesPath) console.error(`variables: ${variablesPath}`);
+      const staleLegacyVars = path2.join(exportRoot, "..", "variables.json");
+      if (fs2.existsSync(staleLegacyVars) && path2.resolve(staleLegacyVars) !== path2.resolve(variablesPath || "")) {
+        console.error(`warn  ${staleLegacyVars} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
+      }
       const res = crossCheck({
         screens,
         sliceSources: variablesDoc ? require_slice_sources().sourcesOf(variablesDoc, variablesPath, fs2, path2) : null,
         variables: variablesDoc,
+        variablesPath,
         tokens: maybe(path2.join(dsBase, "tokens.json")),
         components: maybe(path2.join(dsBase, "components.local.json")),
         componentsLibrary: maybe(path2.join(dsBase, "components.library.json")),
@@ -1117,7 +1130,27 @@ var require_audit = __commonJS({
     function audit(input, opts = {}) {
       const platformAssumed = !PLATFORMS.includes(opts.platform);
       const platform = platformAssumed ? "web" : opts.platform;
-      const grid = opts.grid > 0 ? opts.grid : 4;
+      const gridAssumed = !(opts.grid > 0);
+      const grid = gridAssumed ? 4 : opts.grid;
+      let gridMismatch = null;
+      if (gridAssumed) {
+        const dsTokens = opts.designSystem && opts.designSystem.tokens;
+        const spacingValues = [];
+        for (const c of dsTokens && dsTokens.collections || []) {
+          if (!/spac|space/i.test(c.name || "")) continue;
+          for (const v of c.variables || []) {
+            for (const mv of Object.values(v.valuesByMode || v.values || {})) {
+              const n = typeof mv === "number" ? mv : typeof mv === "string" && /^-?\d+(\.\d+)?$/.test(mv) ? Number(mv) : null;
+              if (n !== null && Number.isFinite(n) && n > 0) spacingValues.push(Math.abs(n));
+            }
+          }
+        }
+        if (spacingValues.length >= 2) {
+          const gcd2 = (a, b) => b === 0 ? a : gcd2(b, a % b);
+          const step = spacingValues.map(Math.round).reduce((a, b) => gcd2(a, b));
+          if (step > 0 && step !== grid) gridMismatch = step;
+        }
+      }
       const docs = Array.isArray(input) ? input : [input];
       const roots = docs.flatMap((d, i) => rootsOf2(d && d.doc !== void 0 ? d.doc : d, d && d.label || `input${i}`));
       const catalog = opts.catalog && Array.isArray(opts.catalog.components) ? opts.catalog.components : [];
@@ -1442,6 +1475,8 @@ var require_audit = __commonJS({
         platformAssumed,
         crossFile,
         grid,
+        gridAssumed,
+        gridMismatch,
         screenStatesScope,
         screens: roots.map((r) => r.label),
         summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
@@ -1457,7 +1492,8 @@ var require_audit = __commonJS({
     function toMarkdown(res) {
       const L = [];
       L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
-      L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+      const gridNote = res.gridAssumed ? res.gridMismatch ? ` *(DEFAULT \u2014 not given; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px \u2014 pass \`--grid ${res.gridMismatch}\`)*` : " *(default \u2014 not given)*" : "";
+      L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px${gridNote} \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
       if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped \u2014 they are not built, and no finding below cites one.*`, "");
       if (res.platformAssumed) {
         L.push(
