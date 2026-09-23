@@ -631,10 +631,12 @@ function checkPlan({ plan, file }, cwd, opts) {
 
   const tokens = Array.isArray(plan.tokens) ? plan.tokens : [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
-  for (const row of live) {
-    if ((verdictOf(row) === "missing" || !hasToken(row)) && !row.decision) {
-      warnings.push(`token ${row.figmaName ? `'${row.figmaName}' ` : ""}${row.value} (${row.kind}) has no token (${JSON.stringify(row.codeToken ?? null)}) and no recorded decision — say what you did about it (a one-off literal is a legitimate answer; say so)`);
-    }
+  // One message, however many rows: a fresh plan-skeleton plan has every row unfilled, and 33 lines
+  // of the same sentence would bury the two things that actually block.
+  const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
+  if (undecided.length) {
+    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${row.value} (${row.kind})`).join(", ");
+    warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} — fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
 
   // Token IDENTITY: two DIFFERENT Figma tokens on one code token (finding 130 — right, and kept).

@@ -149,7 +149,7 @@ check("allowedLiterals with a reason exempts it", problems({ "theme.ts": "brand6
 check("allowedLiterals WITHOUT a reason does not", problems({ "theme.ts": "'#5B5FC7'" }, { files: ["theme.ts"], tokens: [brand], allowedLiterals: [{ value: "#5B5FC7" }], verification: STATIC }).length === 1);
 check("a MISSING token with no decision fails; with one passes", (() => {
   const row = { value: "#123456", kind: "color", codeToken: null, verdict: "missing" };
-  return has(problems({}, { tokens: [row], verification: STATIC }), /no token .* and no recorded decision/)
+  return has(problems({}, { tokens: [row], verification: STATIC }), /have no token and no recorded decision/)
     && problems({ "a.tsx": "" }, { files: ["a.tsx"], tokens: [{ ...row, decision: "deferred — asked designer" }], verification: STATIC }).length === 0;
 })());
 // Live run #25: the builder honestly wrote codeToken "MISSING" — the documented "no token exists"
@@ -521,6 +521,30 @@ console.log("P2b [156] the verification block is checked against itself; [196] d
     gp.warnings.some((w) => /^7 deviation\(s\) are missing fields/.test(w) && /duplicateFooter/.test(w)));
   check("[196] a calibrated deviation {nodeId, field, designed, built, reason} passes",
     deviationWarnings({ deviations: [{ nodeId: "18580:60861", field: "x", designed: 1296.81, built: 1315.75, reason: "status chips aligned to their header" }] }).length === 0);
+}
+
+console.log("P2b end to end — plan-skeleton.js writes the plan, the hook checks it:");
+{
+  const root = liveProject({});
+  const SK = require.resolve("../design-to-code/plan-skeleton.js");
+  const E = "design/export/pages/__Organization_management_";
+  const planRel = "design/plan/" + JR + ".json";
+  const g = spawnSync(process.execPath, [SK, `${E}/${JR}.json`, `${E}/${JR}.vars.json`, "design/export/design-system", "--out", planRel], { cwd: root, encoding: "utf8" });
+  const hook = () => spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
+  const r1 = hook();
+  check("a fresh skeleton (nothing filled) BLOCKS on its one unanchored subtree — the frame — and on nothing else",
+    g.status === 0 && r1.status === 2 && /254 visible design node\(s\) have no anchor/.test(r1.stderr) && /7314:87192 'positions'/.test(r1.stderr) && !/raw colour/.test(r1.stderr));
+  check("…its header is complete except the route, and its unfilled token rows are ONE warning, not 33",
+    /plan header is missing `route`/.test(r1.stderr) && (r1.stderr.match(/have no token and no recorded decision/g) || []).length === 1 && /33 token row\(s\)/.test(r1.stderr));
+  const p = JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8"));
+  p.anchors["7314:87192"].mapModule = "app/src/layout/Header.tsx";
+  p.files = ["app/src/layout/Header.tsx"];
+  p.route = "/job-roles";
+  fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
+  const r2 = hook();
+  const st = computeStatus(JSON.parse(fs.readFileSync(path.join(root, planRel), "utf8")), { cwd: root, planFile: path.join(root, planRel) });
+  check(`one anchor on the frame + files[] → the hook passes (exit ${r2.status}); status is computed from the live JobRoles report: ${st.status}`,
+    r2.status === 0 && st.status === "failed" && /JobRoles\.report\.json/.test(st.reasons.join(" ")));
 }
 
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
