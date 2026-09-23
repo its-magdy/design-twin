@@ -167,7 +167,7 @@ Copy this checklist into your notes and keep it updated:
 
      A `catalog-covers-nothing` or `foreign-token-library` blocker changes what you do next, so surface
      it to the user before building: the fix is to find the owning file (right-click an instance in
-     Figma → **Go to main component**), connect it, and `dtwin pull design --as-library "<name>"`.
+     Figma → **Go to main component**), connect it, and `dtwin pull --as-library "<name>"`.
      If the user would rather proceed, that is fine — but then every instance really is `verdict:"new"`,
      and the step-6 report says why.
 
@@ -193,7 +193,7 @@ Copy this checklist into your notes and keep it updated:
 
    - **Component map — check for the catalog FIRST.** Every command below reads
      `design/export/design-system/components.local.json`, and a single-screen pull
-     (`dtwin pull design --node <id>`) does **not** write it: that pull exports the screen, its assets
+     (`dtwin pull --node <id>`) does **not** write it: that pull exports the screen, its assets
      and the variables, nothing else. So `ls design/export/design-system/components.local.json`
      before anything, and take exactly one of these two branches:
      - **The catalog exists.** Run the drift check **with the screen**, which is the only form whose
@@ -204,17 +204,20 @@ Copy this checklist into your notes and keep it updated:
        `318/318 components mapped · 0 error(s)` on a map covering 0% of the screen about to be built,
        because it measures the catalog against itself. With `--screen` it prints SCREEN COVERAGE and
        exits non-zero at 0%. Fix an `ok:false` map before generating against it; heed a stale-snapshot
-       warning. No map at all → **stop**: run
+       warning. No map at all → **stop**, but run the coverage/cross-check FIRST and bootstrap only
+       what this screen actually uses — a full bootstrap on a real catalog stubs every component in
+       the file (318 on the live run, none of them on the screen about to be built) and produces a
+       confirm list nobody can evaluate:
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
-       --out design/codeconnect.local.json` and have the user confirm the stub entries before
-       continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form above
-       instead: a full bootstrap files every stub under a catalog key the screen's instances never
-       carry, so it would map nothing on this screen. After any hand edit, check its shape with
+       --out design/codeconnect.local.json --screen <screen json>` scopes the stubs to the keys/ids
+       this screen's own visible instances reference, and have the user confirm only that short list
+       before continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form
+       above instead (also already scoped to the screen's own instance keys). After any hand edit, check its shape with
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" design/codeconnect.local.json` — drift-lint
        assumes a well-formed map.
      - **The catalog does not exist** (the normal single-screen case). This is **not** a stop, and it
        is not a reason to run map-bootstrap anyway — it will just tell you the file is missing.
-       Offer the one-command fix: `dtwin pull design --design-system` writes
+       Offer the one-command fix: `dtwin pull --design-system` writes
        `design/export/design-system/` and is cheap (tokens/styles/components only — no page walk, no
        assets), after which you take the branch above. If the user declines, or no bridge is
        available, **build without a map**: every `INSTANCE` gets `verdict:"new"` in the plan's
@@ -242,7 +245,11 @@ Copy this checklist into your notes and keep it updated:
      **is not optional and is not "by hand" if it's missing** — `${CLAUDE_PLUGIN_ROOT}/scripts/` ships
      with this plugin. `--gate` makes the process exit non-zero on any blocker; a non-zero exit **stops
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
-     final report — never a silent invention.
+     final report — never a silent invention. If `design/audit/<screen>.json` exists and is Blocked and
+     the user has decided to build past it, record that decision in the plan's
+     `auditGate: {auditFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
+     `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
+     blocker id is missing from `overridden` or `reason` is empty.
 
 2. **Map before coding.** **Generate** the plan — never hand-transcribe it (that is how hidden layers,
    mistyped token names and wrong values got into plans that then "passed"):
@@ -263,8 +270,12 @@ Copy this checklist into your notes and keep it updated:
    `mapModule` on anchors (step 3), `route`, `target`, `architecture`, `files[]` (step 3),
    `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
    `verification` (step 5). Re-running it merges; filled fields survive. The `Stop` hook checks the
-   built code against this file, so it must exist before step 3. Sections to decide (show
-   large-screen plans to the user too):
+   built code against this file, so it must exist before step 3. **On a large export, filling in
+   these decisions genuinely takes several turns — that is normal and does not need a status.**
+   `status` stays `"pending"` the whole time a decision is still being worked out; `"awaiting-user"`
+   is reserved for a real external block (a MISSING token, an audit blocker, a map needing review) —
+   do not reach for it just because the plan is still being filled in mid-session. Sections to decide
+   (show large-screen plans to the user too):
    - **Architecture** → the `architecture` object, decided *before* the first file and recorded so
      the next feature can follow it. **Inspect the repo first and follow what is already there**; only
      on a genuinely fresh scaffold propose a layout, get a yes, and record it. Where code goes is a
@@ -292,7 +303,9 @@ Copy this checklist into your notes and keep it updated:
      per screen — two screens built in separate sessions then disagree about what `color/primary` is
      called. Generate it once with `tokens.js …` — `--native <profile>` on a native
      stack, the `--web` target your web profile names, no flag for plain `tokens.css` — rather than
-     hand-writing a theme from the bound token names. Feed it the design
+     hand-writing a theme from the bound token names. `tokens.js … --web tailwind` writes only
+     `theme.css` to the given directory; the generic token set is not written there unless you pass
+     `--also-generic`. Feed it the design
      system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
      whose repeated names come out key-suffixed (see *Where everything is*). Move the file into the
      app's source tree (ask where), list it in `files[]`, and have every screen import it; a project
@@ -448,6 +461,12 @@ Copy this checklist into your notes and keep it updated:
      values — not just a visual read of the `.png`. Computed colors come back as `rgb()`/`rgba()`, not
      hex — convert one side before comparing, don't string-match `rgb(229, 231, 235)` against `#E5E7EB`
      and call it a mismatch.
+   - **Getting a dev server up is itself a step, not an assumption.** Follow whatever the repo already
+     documents (a `README`/`Makefile`/`package.json` script, a `docker-compose.yml`) — the first
+     attempt at an unfamiliar or cross-arch setup (e.g. a container built for a different CPU
+     architecture than the host) commonly needs one platform-specific flag before it boots; treat that
+     failure as a one-line environment fix to make and record, not a reason to fall back to
+     `static-only`. Only fall back once starting it has genuinely been tried and failed.
    - **Measure per node, against the design's own numbers.** Generate the expectation and diff it:
 
      ```
@@ -507,6 +526,12 @@ Copy this checklist into your notes and keep it updated:
      header gaps, a deviation without `{nodeId, field, designed, built, reason}`. A resolved value that
      must stay literal goes in `allowedLiterals`: `{"value": "#5B5FC7", "reason": "…"}` (exact string,
      alpha included) or `{"file": "…", "reason": "…"}` for a generated token file.
+   - **Run it by hand** the same way the Stop hook does:
+     `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json` (the plan
+     path is a positional argument). It reads the hook's JSON from stdin only when fd 0 is not a TTY;
+     a piped payload that delivers nothing within 1 s is treated as "no payload"; the whole read is
+     capped at 60 s naming what it was still waiting on. A manual run from a terminal never blocks on
+     stdin at all.
    - **Status is computed, never stored.** The hook records its result and a hash of every file in
      `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed

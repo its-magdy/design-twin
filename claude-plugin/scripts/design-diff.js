@@ -149,13 +149,14 @@ var require_pages_layout = __commonJS({
           pages.push(bucket);
         }
         const base = safe(l.name || "layer") + "__" + safe(l.id) + ".json";
+        const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
         layerFiles.push({
           path: join(bucket.dir, base),
-          data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources }
+          data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
         });
         const title = l.tree ? deriveTitle(l.tree) : void 0;
         const texts = l.tree ? collectTexts(l.tree) : void 0;
-        bucket.entries.push({ ...(index2 || [])[i], title, texts, file: join(bucket.dir, base) });
+        bucket.entries.push({ ...(index2 || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
       });
       meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
       meta.layers = pages.flatMap((b) => b.entries);
@@ -373,7 +374,7 @@ var require_catalog_input = __commonJS({
         process.exit(2);
       }
     }
-    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull design --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull design --design-system` to create it.";
+    var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
     module2.exports = { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
   }
 });

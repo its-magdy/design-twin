@@ -97,8 +97,11 @@ It lays out the project as two halves, and the split is the point:
 ```
 design/
   export/                  <- dtwin writes ONLY here. rm -rf and re-pull loses nothing.
-    pages/<Page>/<Screen>__<node-id>.json    one screen, any pull shape
-    pages/index.json                          every screen pulled
+    pages/<Page>/<Screen>__<node-id>.json    one screen, any pull shape — carries `sourceFile` (the
+                                              connected Figma file this pull actually talked to; absent
+                                              on a screen pulled before this field existed, never
+                                              guessed from another file's export)
+    pages/index.json                          every screen pulled, each row also carrying `sourceFile`
     design-system/                            tokens, styles, component catalogs
     variables.json                            the union of every screen's tokens (merged, never replaced)
     assets/                                   named after the Figma layer, deduped by content
@@ -126,7 +129,7 @@ steps it cannot do — importing the plugin into Figma and pasting the token —
 
 ```
 dtwin list                        # what is in the file: pages + top-level frames, with ids
-dtwin pull design --page Screens  # export ONE page into ./design
+dtwin pull --page Screens  # export ONE page into ./design/export
 dtwin screenshot 12:34            # a reference PNG of one node
 dtwin doctor                      # something not working? start here
 ```
@@ -228,8 +231,8 @@ dtwin list libraries           # 1. WHICH libraries does this file draw on?
 dtwin list pages               # 1b. page NAMES only (near-free — loads no page)
 dtwin list                     # 2. WHERE is what — pages + top-level frames (ids)
 dtwin list children <id>       # 3. (optional) peek inside one frame
-dtwin pull design --page <id>  # 4. pull only what you need — or just ONE node:
-dtwin pull design --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
+dtwin pull --page <id>  # 4. pull only what you need — or just ONE node:
+dtwin pull --node <id>  # 4b. (optional) just that ONE node, real export + its own assets
 dtwin screenshot <id>          # 5. (optional) visually check ONE component after generating code for it
 ```
 (The flag spellings — `--whoami`, `--list-libraries`, `--list-pages`, `--list`, `--children`,

@@ -333,4 +333,29 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[hidden] …and never grades a pair used only by hidden text, nor cites a hidden node", !!dm && !dm.pairs.some((p) => p.fg === "Text/Description") && !citesHidden(dm));
 }
 
+// ---------------------------------------------------------------- CLI: auto-discovery of variables.json (P4 #38/#39/#138) ----------
+// Real layout: test/fixtures/livetest3/pages/<Page>/<Screen>.json + test/fixtures/livetest3/variables.json
+// (the export root, two levels up from the screen file) — the same shape design/export/ has in a real
+// project. Before the fix, the CLI looked in path.dirname(argv[0]) (the <Page> directory) and never
+// found the export-root file, so every invocation without an explicit --variables reported "not
+// checked". After the fix it is found automatically and the path used is printed on stderr.
+{
+  const path = require("path");
+  const { spawnSync } = require("child_process");
+  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
+  const dsDir = path.join(FXL, "design-system");
+  const withoutFlag = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"),
+    screen, "--design-system", dsDir, "--json"], { encoding: "utf8" });
+  const withFlag = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "cross-check.js"),
+    screen, "--design-system", dsDir, "--variables", path.join(FXL, "variables.json"), "--json"], { encoding: "utf8" });
+  ok("[cli-autodiscover] no --variables prints which path it auto-discovered", withoutFlag.stderr.includes(path.join(FXL, "variables.json")));
+  const resNoFlag = JSON.parse(withoutFlag.stdout);
+  const resFlag = JSON.parse(withFlag.stdout);
+  ok("[cli-autodiscover] auto-discovery reports the SAME blocker count as passing --variables explicitly",
+    resNoFlag.summary.blockers === resFlag.summary.blockers && resNoFlag.summary.warnings === resFlag.summary.warnings);
+  ok("[cli-autodiscover] the stale-wording bug is gone: never says 'no design/variables.json was given' while one exists",
+    !withoutFlag.stdout.includes("no design/variables.json was given"));
+}
+
 report();

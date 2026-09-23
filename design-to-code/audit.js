@@ -146,7 +146,31 @@ function audit(input, opts = {}) {
   // guess and printed at the TOP of the report rather than left for the reader to notice.
   const platformAssumed = !PLATFORMS.includes(opts.platform);
   const platform = platformAssumed ? "web" : opts.platform;
-  const grid = opts.grid > 0 ? opts.grid : 4;
+  const gridAssumed = !(opts.grid > 0);
+  const grid = gridAssumed ? 4 : opts.grid;
+  // P4 #43: the 4px default silently under-flags an 8px-grid system (77 → 124 off-grid violations on
+  // the live run) and nothing said the run used the weaker default. When the default was used AND the
+  // design system's own tokens have a spacing scale, say so and name the real step — never raise the
+  // default itself (a different wrong default is not an improvement; the fix is to PASS the real one).
+  let gridMismatch = null;
+  if (gridAssumed) {
+    const dsTokens = opts.designSystem && opts.designSystem.tokens;
+    const spacingValues = [];
+    for (const c of (dsTokens && dsTokens.collections) || []) {
+      if (!/spac|space/i.test(c.name || "")) continue;
+      for (const v of c.variables || []) {
+        for (const mv of Object.values(v.valuesByMode || v.values || {})) {
+          const n = typeof mv === "number" ? mv : typeof mv === "string" && /^-?\d+(\.\d+)?$/.test(mv) ? Number(mv) : null;
+          if (n !== null && Number.isFinite(n) && n > 0) spacingValues.push(Math.abs(n));
+        }
+      }
+    }
+    if (spacingValues.length >= 2) {
+      const gcd2 = (a, b) => (b === 0 ? a : gcd2(b, a % b));
+      const step = spacingValues.map(Math.round).reduce((a, b) => gcd2(a, b));
+      if (step > 0 && step !== grid) gridMismatch = step;
+    }
+  }
   const docs = Array.isArray(input) ? input : [input];
   const roots = docs.flatMap((d, i) => rootsOf(d && d.doc !== undefined ? d.doc : d, (d && d.label) || `input${i}`));
   const catalog = (opts.catalog && Array.isArray(opts.catalog.components)) ? opts.catalog.components : [];
@@ -538,6 +562,8 @@ function audit(input, opts = {}) {
     platformAssumed,
     crossFile,
     grid,
+    gridAssumed,
+    gridMismatch,
     screenStatesScope,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
@@ -555,7 +581,12 @@ function audit(input, opts = {}) {
 function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit — ${res.screens.join(", ") || "(no screens)"}`, "");
-  L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED — not given)*" : ""} · grid ${res.grid}px · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  const gridNote = res.gridAssumed
+    ? res.gridMismatch
+      ? ` *(DEFAULT — not given; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px — pass \`--grid ${res.gridMismatch}\`)*`
+      : " *(default — not given)*"
+    : "";
+  L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED — not given)*" : ""} · grid ${res.grid}px${gridNote} · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
   if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped — they are not built, and no finding below cites one.*`, "");
   if (res.platformAssumed) {
     L.push(`> ⚠️ **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,

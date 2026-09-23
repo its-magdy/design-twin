@@ -367,6 +367,13 @@ async function disconnectErr(code, reason) {
     const j = pullSrc.indexOf("} else if (asLibrary) {");
     return i !== -1 && j !== -1 && i < j && pullSrc.slice(i, j).includes("OUT.writeScreen(outDir, r, plog)");
   })());
+  // P4 round 3: `dtwin list`'s own "next step" hint used to recommend `dtwin pull design --page/--node
+  // <id>` — the finding-14/15 outDir trap, printed by the tool itself right after the command that
+  // discovers ids to pull. A user-facing STRING, not a doc, so the doc-only grep in the ground rules
+  // never caught it. Pin it at the source level (this hint only prints after a live plugin
+  // connection, which a unit test cannot fake cheaply) so it can never regress silently.
+  ok("[args] the `list` next-step hint never recommends the outDir-trap form `dtwin pull design `",
+    !pullSrc.split("\n").some((l) => /console\.(error|log)/.test(l) && /pull design /.test(l)));
 
   console.log("\nfigma-pull — argument parsing:");
   // --as-library is a SCOPE: it selects what is exported, so it collides with the other scopes and,
@@ -496,6 +503,26 @@ async function disconnectErr(code, reason) {
       const run = (args) => require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "init", ...args], { cwd: d, encoding: "utf8", timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_TOKEN: "t" } });
       const r = run(["--dry-run", "--mcp"]);
       return r.status === 0 && /Import plugin from manifest/.test(r.stdout) && /would write/.test(r.stderr) && !fs.existsSync(path.join(d, "design")) && !fs.existsSync(path.join(d, ".mcp.json")) && run(["--nope"]).status === 1;
+    })());
+
+    // P4 #2: `dtwin init --help` must list EXACTLY what init creates — no more, no less. Walk the real
+    // filesystem diff after a real `init` and cross-check it against the four paths named in --help.
+    ok("[init] --help lists exactly what init creates — a filesystem diff after init matches the help text", (() => {
+      const helpRun = require("child_process").spawnSync(process.execPath, [require.resolve("../bridge/figma-pull.js"), "init", "--help"], { encoding: "utf8", timeout: 5000 });
+      const help = helpRun.stdout;
+      // Never promise to create the hand-owned files that only get written later, on demand.
+      if (/Creates:.*codeconnect\.local\.json/s.test(help) || /Creates:.*plan\//s.test(help) || /Creates:.*audit\//s.test(help) || /Creates:.*verify\//s.test(help)) return false;
+      if (!/codeconnect\.local\.json/.test(help) || !/plan\//.test(help) || !/audit\b/.test(help) || !/verify\//.test(help)) return false; // still SAID, just not claimed as created
+      const d = mk({});
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const walk = (dir, base) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const rel = path.join(base, e.name);
+        return e.isDirectory() ? [rel, ...walk(path.join(dir, e.name), rel)] : [rel];
+      });
+      const created = walk(d, "").map((p) => p.split(path.sep).join("/")).sort();
+      const expected = ["design", "design/README.md", "design/export", "design/target.json"].sort();
+      return JSON.stringify(created) === JSON.stringify(expected)
+        && /design\/export\//.test(help) && /design\/README\.md/.test(help) && /design\/target\.json/.test(help);
     })());
   }
   ok("[args] --json is accepted on the printing commands", parse(["--list-clients", "--json"]).json === true && parse(["--list-libraries", "--json"]).json === true && parse(["--list", "--json"]).json === true && parse(["--list"]).json === false);
@@ -1159,6 +1186,44 @@ async function disconnectErr(code, reason) {
       Array.isArray(rootIdx.layers[0].texts) && rootIdx.layers[0].texts.length > 0 &&
       new Set(rootIdx.layers[0].texts).size === rootIdx.layers[0].texts.length);
     fs.rmSync(sdir, { recursive: true, force: true });
+  }
+
+  // ---------- writeScreen: sourceFile stamp lands on the screen doc AND its index row (P4 #33) ----------
+  // figma-pull.js resolves which connected Figma file a pull actually talked to and stamps the RESULT
+  // as `r.sourceFile` (see resolveSourceFile()/stampSource() there); write-out.js's job is only to
+  // persist it. Before this fix, a screen JSON carried no field naming its own source at all, so
+  // doctor.js could only ever report whichever file design-system.json or the snapshot-meta pick
+  // happened to name — attributing every screen to the wrong Figma file when the design system lives
+  // in a different one.
+  {
+    const sdir2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-src-"));
+    OUT.writeScreen(sdir2, {
+      screenName: "positions ",
+      nodeId: "7314:87192",
+      page: "✅ Organization management ",
+      pageId: "5282:58823",
+      sourceFile: "TeamSmart (Copy)",
+      screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
+    }, null);
+    const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8"));
+    ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers[0].sourceFile === "TeamSmart (Copy)");
+    fs.rmSync(sdir2, { recursive: true, force: true });
+
+    // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
+    // is simply ABSENT, never a guessed or default value.
+    const sdir3 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-nosrc-"));
+    OUT.writeScreen(sdir3, {
+      screenName: "positions ",
+      nodeId: "7314:87192",
+      page: "✅ Organization management ",
+      pageId: "5282:58823",
+      screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
+    }, null);
+    const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8"));
+    ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
+    fs.rmSync(sdir3, { recursive: true, force: true });
   }
 
   // ---------- library-file export layout (--as-library) ----------
@@ -2103,6 +2168,80 @@ async function disconnectErr(code, reason) {
   fs.writeFileSync(path.join(projDir, ".mcp.json"), JSON.stringify({ mcpServers: { designtwin: { command: "node", args: ["/x/figma-mcp.mjs"] }, figma: { url: "https://mcp.figma.com/mcp" } } }));
   ok("[doctor] project: the `designtwin` key is ok, and Figma's OWN `figma` server is not mistaken for ours", byId(doctor.checkProject(projDir), "mcp").status === "ok");
 
+  // P4 #14/#33/#203: a stray `dtwin pull design ...` writes a SECOND export tree directly under
+  // design/ (design/pages/, design/assets/, design/variables.json, design/design-system/) beside the
+  // real one at design/export/. Doctor must name which layout it reads AND warn that the other one
+  // also exists, rather than silently picking the modern one and saying nothing.
+  {
+    const parDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-parallel-"));
+    fs.mkdirSync(path.join(parDir, "design", "export", "pages"), { recursive: true });
+    fs.writeFileSync(path.join(parDir, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: new Date().toISOString(), file: "Real File" }));
+    // The stray legacy tree beside it:
+    fs.mkdirSync(path.join(parDir, "design", "pages"), { recursive: true });
+    fs.writeFileSync(path.join(parDir, "design", "variables.json"), JSON.stringify({ collections: [] }));
+    const checks = doctor.checkProject(parDir);
+    const layout = byId(checks, "layout");
+    ok("[doctor] parallel layout: warns (never fails) that BOTH design/export/ and a stray design/pages exist",
+      layout && layout.status === "warn" && /BOTH layouts/.test(layout.detail) && /design\/pages/.test(layout.detail));
+    ok("[doctor] parallel layout: says which one it is actually reading", /design\/export/.test(layout.detail));
+    ok("[doctor] parallel layout: the fix points at `dtwin pull --node`, and calls out `dtwin pull design ...` as the trap to avoid, never as the recommended fix",
+      /never `dtwin pull design/.test(layout.next) && /dtwin pull --node/.test(layout.next));
+
+    // No parallel tree, no warning:
+    const cleanDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-clean-"));
+    fs.mkdirSync(path.join(cleanDir, "design", "export"), { recursive: true });
+    fs.writeFileSync(path.join(cleanDir, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: new Date().toISOString(), file: "Real File" }));
+    ok("[doctor] no parallel tree, no layout warning", !byId(doctor.checkProject(cleanDir), "layout"));
+  }
+
+  // P4 #33: doctor's export line, built from exportSourceCounts(), on a livetest3-shaped copy — 5
+  // screens across two pages, none stamped (an older-bridge export), plus one design system. Before
+  // the fix this reported a single line naming only the design system's file for the WHOLE export
+  // ("exported 12.7h ago from 'Design System - NERA (Copy)'"); after, it counts screens separately
+  // from the design system and says plainly when a screen's source was never recorded.
+  {
+    const dsDir3 = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-sourcecounts-"));
+    const at = new Date().toISOString();
+    fs.mkdirSync(path.join(dsDir3, "design", "export"), { recursive: true });
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "design-system.json"), JSON.stringify({ exportedAt: at, file: "Design System - NERA (Copy)" }));
+    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageA"), { recursive: true });
+    fs.mkdirSync(path.join(dsDir3, "design", "export", "pages", "PageB"), { recursive: true });
+    // Root index has NO layers[] at all (the older-bridge shape) — only pageDirs, forcing the
+    // per-page-index fallback.
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "index.json"), JSON.stringify({
+      pageDirs: [
+        { page: "PageA", dir: "PageA", index: "pages/PageA/index.json", layers: 3 },
+        { page: "PageB", dir: "PageB", index: "pages/PageB/index.json", layers: 2 },
+      ],
+    }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageA", "index.json"), JSON.stringify({
+      layers: [{ name: "S1", file: "pages/PageA/S1.json", exportedAt: at }, { name: "S2", file: "pages/PageA/S2.json", exportedAt: at }, { name: "S3", file: "pages/PageA/S3.json", exportedAt: at }],
+    }));
+    fs.writeFileSync(path.join(dsDir3, "design", "export", "pages", "PageB", "index.json"), JSON.stringify({
+      layers: [{ name: "S4", file: "pages/PageB/S4.json", exportedAt: at }, { name: "S5", file: "pages/PageB/S5.json", exportedAt: at }],
+    }));
+    const checks3 = doctor.checkProject(dsDir3);
+    const exp3 = byId(checks3, "export");
+    ok("[doctor] exportSourceCounts: 5 unstamped screens are counted and named as source-not-recorded",
+      exp3.status === "ok" && /5 screen\(s\) \(source not recorded — pulled by an older bridge; re-pull to stamp it\)/.test(exp3.detail));
+    ok("[doctor] exportSourceCounts: the design system is reported separately, by its own name",
+      /design system from 'Design System - NERA \(Copy\)'/.test(exp3.detail));
+    ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
+      !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
+  }
+
+  // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be
+  // false, not just when something outright failed.
+  {
+    const okChecks = [{ id: "a", status: "ok" }, { id: "b", status: "ok" }];
+    const notCheckedWarn = [{ id: "a", status: "ok" }, { id: "plugin", status: "warn", detail: "not checked — port 8787 is held by something else" }];
+    const ordinaryWarn = [{ id: "a", status: "ok" }, { id: "export", status: "warn", detail: "exported 3 days ago — the Figma file may have moved on" }];
+    const runOk = (checks) => !checks.some((c) => c.status === "fail" || (c.status === "warn" && /not checked/i.test(c.detail || "")));
+    ok("[doctor] ok roll-up: all-ok is true", runOk(okChecks) === true);
+    ok("[doctor] ok roll-up: a plain warn (advice about project state) stays true", runOk(ordinaryWarn) === true);
+    ok("[doctor] ok roll-up: a 'not checked' warn makes it false, even with zero fails", runOk(notCheckedWarn) === false);
+  }
+
   console.log("\ndoctor — probes (real sockets, spare ports):");
   const httpSrv = require("http").createServer((q, s) => s.end("hi"));
   await new Promise((r) => httpSrv.listen(0, "127.0.0.1", r));
@@ -2146,12 +2285,21 @@ async function disconnectErr(code, reason) {
     if (!extraEnv.FIGMA_BRIDGE_PORT) delete env.FIGMA_BRIDGE_PORT;
     return spawnSync(process.execPath, [cli, "doctor", ...argv], { encoding: "utf8", env, cwd: projDir, timeout: 20000 });
   };
-  const docJson = runDoctor(["--json"]);
+  // These two assertions need the port to be genuinely free — no daemon, no plugin — which port 8787
+  // is NOT when a real dtwin daemon happens to be running on the developer's machine (a live daemon
+  // answers `daemon.status()` regardless of this subprocess's own empty token, which reports the
+  // plugin as connected instead of "not checked" and makes the test pass only by accident of the
+  // environment). 8788/8789 are the other two ports the plugin's manifest allows
+  // (bridge/doctor.js ALLOWED_PORTS) and are not bound by the daemon (which only ever holds one), so
+  // this is deterministic whether or not a daemon is running elsewhere.
+  const docJson = runDoctor(["--json"], { FIGMA_BRIDGE_PORT: "8789" });
   const docReport = (() => { try { return JSON.parse(docJson.stdout); } catch (e) { return { checks: [] }; } })();
   ok("[doctor-cli] --json prints one parseable report and nothing else on stdout", docReport.checks.length >= 6);
   ok("[doctor-cli] exit code is 1 only when a check failed", docJson.status === (docReport.ok ? 0 : 1));
   ok("[doctor-cli] with no token, the plugin probe is SKIPPED rather than minting one",
     byId(docReport.checks, "plugin").status === "warn" && byId(docReport.checks, "token").status === "warn");
+  ok("[doctor-cli] P4 #203: ok is false while the plugin check is a 'not checked' warn, not just on an outright fail",
+    docReport.ok === false && /not checked/.test(byId(docReport.checks, "plugin").detail));
   ok("[doctor-cli] and it left no token file behind — doctor has no side effects", !fs.existsSync(path.join(docDir, "bridge-token")));
   const docHuman = runDoctor([]);
   ok("[doctor-cli] the human report marks each check and gives next steps", /^✓ Node\.js:/m.test(docHuman.stdout) && /^! Bridge token:/m.test(docHuman.stdout) && /^    → /m.test(docHuman.stdout));
@@ -2172,6 +2320,22 @@ async function disconnectErr(code, reason) {
     const r = spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
+  }
+
+  // ---------------------------------------------------------------- P4: figma-pull.js, outDir trap (findings 14/201)
+  console.log("\nfigma-pull.js — outDir-already-has-export/ warning (findings 14/201):");
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-trap-"));
+    fs.mkdirSync(path.join(dir, "design", "export"), { recursive: true });
+    // No daemon/plugin reachable on this port — the command still fails downstream (no client), but
+    // the warning is printed BEFORE any network attempt, so it is present regardless of what happens next.
+    const r = spawnSync(process.execPath, [cli, "design", "--list"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    ok("[outdir-trap] warns when the user-typed outDir already contains export/",
+      /warn: design already contains design(\/|\\)export/.test(r.stderr));
+    ok("[outdir-trap] never refuses — `design` is still a legitimate, deliberate outDir", r.status !== 2 || !/unknown/.test(r.stderr));
+    const clean = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-outdir-clean-"));
+    const r2 = spawnSync(process.execPath, [cli, "somewhere-else", "--list"], { encoding: "utf8", cwd: clean, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    ok("[outdir-trap] no warning when the outDir does not already contain export/", !/already contains/.test(r2.stderr));
   }
 
   // ---------------------------------------------------------------- P5: server-core waitForIdentified (finding 216)

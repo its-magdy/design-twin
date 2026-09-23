@@ -841,4 +841,26 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   }
 }
 
+// ---------- map-bootstrap.js --screen scopes the catalog to what one screen actually uses (P4 #103) ----------
+// Before the fix, a full bootstrap on a real catalog stubbed EVERY component in it (59 here, 318 on
+// the live run) regardless of the screen about to be built — a confirm list nobody can evaluate.
+// --screen filters that down to the keys/ids the screen's own VISIBLE instances reference.
+(() => {
+  const { spawnSync } = require("child_process");
+  const D2C = path.join(__dirname, "..", "design-to-code");
+  const FXL = path.join(__dirname, "fixtures", "livetest3");
+  const catalog = path.join(FXL, "design-system", "components.local.json");
+  const screen = path.join(FXL, "pages", "__Organization_management_", "positions___7314_87192.json");
+  const full = JSON.parse(spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.js"), catalog], { encoding: "utf8" }).stdout);
+  const scopedRun = spawnSync(process.execPath, [path.join(D2C, "map-bootstrap.js"), catalog, "--screen", screen], { encoding: "utf8" });
+  const scoped = JSON.parse(scopedRun.stdout);
+  const fullCount = Object.keys(full.components).length;
+  const scopedCount = Object.keys(scoped.components).length;
+  // This fixture screen is the 0%-catalog-match case (finding 103's own scenario: 0 of the screen's
+  // instance keys are in this catalog), so the scoped count is legitimately 0 — the point is that it
+  // is never the full 59, i.e. it never asks the user to confirm components the screen doesn't use.
+  check("[map-bootstrap --screen] scopes to fewer components than a full bootstrap", scopedCount < fullCount);
+  check("[map-bootstrap --screen] says on stderr how much it scoped, from -> to", new RegExp(`from ${fullCount} to ${scopedCount}`).test(scopedRun.stderr));
+})();
+
 report();

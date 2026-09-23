@@ -165,14 +165,20 @@ module.exports = { bootstrap, bootstrapFromProposals, proposalsIn };
 if (require.main === module) {
   const fs = require("fs");
   const { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } = require("./catalog-input.js");
-  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>]";
+  const usage = "usage: node design-to-code/map-bootstrap.js <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
-  let outFile = null, proposalsFile = null;
+  let outFile = null, proposalsFile = null, screenFile = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     proposalsFile = argv[pi + 1];
     if (!proposalsFile || proposalsFile.startsWith("--")) { console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage); process.exit(1); }
     argv.splice(pi, 2);
+  }
+  const si = argv.indexOf("--screen");
+  if (si !== -1) {
+    screenFile = argv[si + 1];
+    if (!screenFile || screenFile.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); process.exit(1); }
+    argv.splice(si, 2);
   }
   const o = argv.indexOf("--out");
   if (o !== -1) {
@@ -204,7 +210,27 @@ if (require.main === module) {
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) → ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` — wrote ${outFile}` : ""}`);
     process.exit(0);
   }
-  const json = JSON.stringify(bootstrap(catalog, existing), null, 2) + "\n";
+  // Finding 103: a full bootstrap on a real catalog stubs EVERY component in the file (318 on the
+  // live run) — a list nobody can evaluate, and none of them may even be on the screen the user is
+  // about to build. When --screen is given, scope the catalog to the keys/ids that screen's own
+  // VISIBLE instances actually reference first, so the "confirm the stubs" step is small and every
+  // entry is one the screen actually needs. Run the screen-coverage/cross-check BEFORE this (the
+  // skill's own ordering), then pass its screen json here.
+  let scopedCatalog = catalog;
+  if (screenFile) {
+    const { visibleInstances } = require("./component-match.js");
+    const screenDoc = readJsonFile(screenFile, "screen export");
+    const used = new Set();
+    for (const i of visibleInstances(screenDoc, "screen")) {
+      if (i.key) used.add(i.key);
+      if (i.setKey) used.add(i.setKey);
+    }
+    const all = (catalog && catalog.components) || [];
+    const scoped = all.filter((c) => (c.key && used.has(c.key)) || (c.id && used.has(c.id)));
+    scopedCatalog = Object.assign({}, catalog, { components: scoped });
+    console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
+  }
+  const json = JSON.stringify(bootstrap(scopedCatalog, existing), null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);
   } else {

@@ -534,8 +534,28 @@ if (unknown.length) {
 // Default: design/export — dtwin writes only there, so `rm -rf design/export && re-pull` cannot take
 // the component map, the plan or the audit with it. A project created under the older flat layout
 // keeps working: its export is still found (bridge/project-layout.js findExportDir).
-const outDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i)) ||
+const userOutDir = args.find((a, i) => !a.startsWith("--") && !consumedIdx.has(i));
+const outDir = userOutDir ||
   (LAYOUT.findExportDir(process.cwd()).layout === "legacy-flat" ? LAYOUT.DESIGN_DIR : LAYOUT.EXPORT_DIR);
+
+// P4 #14/#201: `dtwin pull design --node <id>` is the outDir trap — `design` is a valid, deliberate
+// positional outDir (never special-cased; see the note above), but when the project ALREADY has a
+// design/export/ tree, writing into `design` too creates a SECOND, parallel export tree that every
+// other command (doctor, cross-check, audit, build-screen) keeps ignoring. Warn, don't refuse — a
+// project genuinely named "design" for something else is legitimate, and refusing would be the parser
+// getting magic about one string.
+if (userOutDir) {
+  const requested = path.resolve(process.cwd(), userOutDir);
+  const alreadyHasExport = fs.existsSync(path.join(requested, "export"));
+  if (alreadyHasExport) {
+    console.error(
+      `[dtwin] warn: ${userOutDir} already contains ${path.join(userOutDir, "export")} — writing here too creates a` +
+      ` PARALLEL export tree that doctor/cross-check/audit/build-screen do not read. You almost certainly want` +
+      ` \`dtwin pull ${userOutDir === "design" ? "" : userOutDir + "/export "}...\` (drop the outDir to use the default` +
+      ` design/export, or pass the export dir itself) instead of writing into ${userOutDir}.`
+    );
+  }
+}
 
 // Scope flags are MUTUALLY EXCLUSIVE, and the loser used to be discarded in silence: collectFull is
 // `if (allPages) … else if (page)`, so `--all-pages --page Foo` exported all 25 pages while the user
@@ -1018,8 +1038,8 @@ async function main() {
       console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
       console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
     }
-    console.error("[dtwin] next: dtwin pull design --page <id>   (repeatable; add --no-assets to skip the render pass)");
-    console.error("[dtwin]       or: dtwin pull design --node <id>   (just ONE node, fully exported with its own assets)");
+    console.error("[dtwin] next: dtwin pull --page <id>   (repeatable; add --no-assets to skip the render pass)");
+    console.error("[dtwin]       or: dtwin pull --node <id>   (just ONE node, fully exported with its own assets)");
     console.error("[dtwin]       unsure which of two same-named frames? dtwin screenshot <id> renders one cheaply.");
     // The WS server keeps the event loop alive, so without an explicit shutdown these commands hung
     // forever after printing (found live: still resident and holding port 8787 a minute later,
@@ -1056,17 +1076,51 @@ async function main() {
   }
   console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
 
+  // P4 #33: the bridge already knows exactly which connected Figma file this pull talked to (the
+  // same `resolveClient()` matching --client goes through, server-side) — it is just never carried
+  // past the request. A screen export result has no field of its own naming its source file (unlike
+  // design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could only
+  // ever report whichever file's export happened to sort first, attributing every screen to it. Look
+  // the resolved client up the same way `--list-clients`/`whoami` already do and stamp it onto the
+  // result before it reaches write-out.js, which persists it onto the screen JSON and its index row.
+  async function resolveSourceFile() {
+    try {
+      const clients = bridge && typeof bridge.listClients === "function" ? bridge.listClients() : ((await daemon.status()) || {}).clients || [];
+      if (!clients.length) return null;
+      if (client) {
+        const t = String(client);
+        const byId = clients.find((c) => c.connId === t);
+        if (byId) return byId;
+        const byKey = clients.find((c) => c.fileKey && c.fileKey === t);
+        if (byKey) return byKey;
+        const byName = clients.filter((c) => c.file && c.file.toLowerCase().includes(t.toLowerCase()));
+        if (byName.length === 1) return byName[0];
+        return null; // ambiguous or no match — leave the screen unstamped rather than guess
+      }
+      return clients.length === 1 ? clients[0] : null;
+    } catch { return null; }
+  }
+  const stampSource = (r) => {
+    if (!r || typeof r !== "object") return r;
+    // Fire-and-forget-free: resolved synchronously enough (the export already completed) that the
+    // client list has not changed since the request went out.
+    return resolveSourceFile().then((src) => {
+      if (src && src.file) { r.sourceFile = src.file; if (src.fileKey) r.sourceFileKey = src.fileKey; }
+      return r;
+    });
+  };
+
   if (nodeId) {
     // Same writer the MCP figma_export_url tool uses (write-out.js's writeScreen), so a CLI --node
     // pull and an MCP pull of the same node land in identical shape.
-    const r = await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (selection) {
     // Same writer as --node above — routing both through write-out.js's writeScreen means a
     // selection pull and a --node pull can never drift into two slightly different write shapes
     // (this used to write variables.json unconditionally, where writeScreen correctly skips it
     // when the result carries none, and printed no summary).
-    const r = await send("exportSelection", { ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportSelection", { ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
@@ -1084,7 +1138,7 @@ async function main() {
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else {
-    const r = await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs);
+    const r = await stampSource(await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs));
     // Route through the SAME split writer the MCP export tools use (write-out.js's writeExport), so a
     // CLI pull and an MCP pull land in identical shape. The CLI used to write r.designSystem flat to
     // design-system.json here — undocumented drift from the split described in this file's own header
