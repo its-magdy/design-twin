@@ -452,9 +452,12 @@ Copy this checklist into your notes and keep it updated:
      styles trace to exactly that: a component carrying the comment "heading 20/Semi Bold, subtitle
      16/Regular" which contradicted the export, and no later step re-read the node.
 
-     `--compare` diffs measured computed styles against the spec with explicit tolerances, checks that
-     every component on the frame has a counterpart in the build, drives every designed interaction,
-     and writes `design/verify/<Screen>.report.json`. It exits non-zero unless the verdict is `pass`.
+     `--compare` has **no browser**: it diffs the measured computed styles against the spec with
+     explicit tolerances and grades the interaction results the probe recorded (in `measured.json`'s
+     `interactions[]`, or a separate `--interactions <file>`), then writes
+     `design/verify/<Screen>.report.json`. Driving each designed interaction is the probe's job — the
+     `visual-verifier` agent records the selector it drove; anything nobody drove is reported
+     `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass`.
      That verdict is computed, and it is what you report — three passes on one live build all said
      "pass" while a third of the sampled values were wrong, because each compared screenshots and
      structure and none compared numbers.

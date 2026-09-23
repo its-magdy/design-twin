@@ -1,6 +1,6 @@
 ---
 name: verify
-description: CHECK an already-built screen against its Figma design, without changing any code. Use this whenever the user asks whether code matches the design — "does this match the design?", "check the login screen against Figma", "compare my build to the mockup", "is this pixel-accurate?", "what's off in this screen?", "verify the settings page" — for a screen that exists in code and has an export under design/export/. It renders the screen, measures every node against the design's own numbers, checks that every component on the frame was actually built and that every designed interaction works, and writes a machine-readable report. To build a screen use build-screen; to apply a changed design use sync-design; to review the DESIGN itself (not the code) use audit-design.
+description: CHECK an already-built screen against its Figma design, without changing any code. Use this whenever the user asks whether code matches the design — "does this match the design?", "check the login screen against Figma", "compare my build to the mockup", "is this pixel-accurate?", "what's off in this screen?", "verify the settings page" — for a screen that exists in code and has an export under design/export/. An agent renders the screen, measures every visible node and drives every designed interaction; a script compares those measurements with the design's own numbers and writes a machine-readable report whose headline says how much was actually checked. To build a screen use build-screen; to apply a changed design use sync-design; to review the DESIGN itself (not the code) use audit-design.
 argument-hint: "[screen name | path to the screen's export | path to the screen's code]"
 ---
 
@@ -65,11 +65,10 @@ Three things that trip up a literal reading of the old recipe:
   `design/plan/*` alone (a plan's free-text `screen` field is a human's string, not a guaranteed
   resolver) and don't pick the nearest name.
 
-One more thing about the plan file so it does not surprise you: **build-screen's `Stop` hook writes
-it**, setting `status` as the building turn ends. If a build is finishing while you read, `status` can
-legitimately change under you. Copy `files[]` and move on. The plan may already carry a `verification`
-block from the build's own inner verifier — read it, and in step 4 say whether this run confirms or
-contradicts it.
+One more thing about the plan file: **its `status` is computed, never stored (see build-screen)** —
+do not read a `"verified"` in it as evidence, and never write one. Copy `files[]` and move on. The plan
+may already carry a `verification` block from the build's own inner verifier — read it, and in step 5
+say whether this run confirms or contradicts it.
 
 ## 2. Emit the design's own numbers, as data
 
@@ -79,62 +78,115 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
   --out design/verify/<Screen>
 ```
 
-This writes `design/verify/<Screen>.expected.json`: one row per node that carries a checkable value,
-plus every component instance on the frame and every designed `reactions` edge. It is read straight
-off the export, which is the point — the root cause of the live run's wrong text styles was a builder
-who had *paraphrased* the spec into a code comment ("heading 20/Semi Bold") that contradicted the
-export, and no later step ever re-read the node. Nobody retypes a number that a file already holds.
+This writes `design/verify/<Screen>.expected.json`: one row per **visible** node that carries a
+checkable value, plus every visible component instance and every designed `reactions` edge on a
+visible layer. It is read straight off the export, which is the point — the root cause of the live
+run's wrong text styles was a builder who had *paraphrased* the spec into a code comment ("heading
+20/Semi Bold") that contradicted the export, and no later step ever re-read the node. Nobody retypes a
+number that a file already holds.
+
+What it prints, and why each part matters:
+
+- **Hidden layers are skipped, and counted.** A layer is hidden when it — or any ancestor — carries
+  `"hidden": true` (never `visible: false`; `visible` in this export is a component-property name).
+  The file lists their ids under `hidden`; they are not built, not measured and not driven. Before
+  this, a third of one screen's rows and 11 of 12 "designed interactions" on another were layers the
+  designer had switched off, and a correct build was graded on them.
+- **`notComparable`** lists design values the method cannot compare, each with the reason — a gap
+  that is auto-layout slack (a `space-between` row, a row whose child fills the main axis, fewer than
+  two laid-out children). They are stated so nobody mistakes them for passes.
+- **Positions are frame-relative** — the file's `coordinates` field says exactly how to measure them.
+- It is byte-deterministic, and it says so when it **replaces** an existing expectation that differed,
+  naming any `.measured.json`/`.report.json` beside it that is now stale. Every report records the
+  sha256 of the expectation it was computed on.
 
 Pass several screen files if the build covers a flow; the expectation merges them.
 
 ## 3. Let the agent measure — it renders, it does not judge
 
+`verify-screen.js` has **no browser**. `--compare` diffs two JSON files; rendering, measuring and
+driving interactions happen here, in the agent, and arrive as data.
+
 Invoke `designtwin:visual-verifier` with: the screen name, the expectation path, the reference PNG
 path, the code files from `files[]`, the profile, and any state/theme/size the user asked about.
 
-It returns — and writes — `design/verify/<Screen>.measured.json`: the computed style of each node it
-could find, which components exist in the build, and the result of driving each designed interaction.
-It never edits app code.
+It returns — and writes — `design/verify/<Screen>.measured.json` (every field under the canonical key
+the expectation's `measuredKeys` lists — `borderRadius`, not `radius`), the screenshot
+`design/verify/<Screen>.png` it measured, and one result per designed interaction naming the
+selector it drove. It never edits app code, and it never writes the report it is graded by.
+
+**Interaction evidence has its own input channel.** Results go in `measured.json`'s
+`interactions[]`, or — when a separate script drove them — in a file passed as
+`--interactions <file>` (a JSON array of `{nodeId, trigger, ok, selector, selectorCount, detail}`).
+`ok: true` counts only with the `selector` that was driven and a `selectorCount` of at least 1; a
+result with no evidence, or `ok: null`, is `not-probed`.
 
 ## 4. Compute the verdict
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
   design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json \
-  --out design/verify/<Screen>
+  [--interactions <file>] --out design/verify/<Screen>
 ```
 
-Exit 0 only when the verdict is `pass`. It writes `<Screen>.report.json` and `<Screen>.report.md`
-carrying the verdict, *what was actually checked* (nodes measured, values compared, components found,
-interactions confirmed), the per-node deltas with expected vs actual, the components on the frame
-with no counterpart in the build, and the interactions nobody exercised.
+Exit 0 only when the verdict is `pass`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
+and prints the **headline** — the coverage line, verdict first:
 
-Three ways it refuses to say `pass`, all of them deliberate:
+```
+FAIL — nodes measured 74/179 · 329 values compared · 0 high, 81 medium · interactions 0 pass, 4 fail, 2 not-probed of 6 · data-dt-node/component evidence 26/41 instance sets (tag coverage, not presence)
+```
 
-- **fail** — a high-severity value mismatch, a component on the frame that was never built, or a
-  designed interaction that did not work.
-- **incomplete** — geometry drift beyond tolerance, or designed interactions that were never
-  exercised. A screen can match every pixel and still be the dead mockup the tooling exists to avoid.
-- **an unmeasured expectation is not a passed one.** Nodes the probe could not find are listed under
-  `notMeasured` and block the pass. Silence is not evidence.
+If the probe named a field differently from the canonical key, the headline says so before anything
+else (`NEVER MEASURED: 'borderRadius' present in 0 of 74 measurements (probe sent 'radius')`) — a
+field nobody measured was once silently "not wrong" for a whole phase.
+
+How the verdict is computed, all of it deliberate:
+
+- **fail** — a high-severity mismatch (type, colour, copy, or a node the design places inside the
+  frame rendering outside it), a designed interaction that was driven and did not work, or a
+  component the probe explicitly reported absent (`present: false`).
+- **incomplete** — medium mismatches (size, spacing, radius, position), interactions nobody probed,
+  node specs never measured, fields the probe did not report, a measurement taken against a different
+  expectation, or no screenshot on disk. A screen can match every pixel and still be the dead mockup
+  the tooling exists to avoid.
+- **An unmeasured expectation is not a passed one.** `notMeasured` has one row per node spec that got
+  no measurement (so `nodesExpected − nodesMeasured` is exactly its length); `fieldsNotMeasured` lists
+  values a measured node did not report. Both block the pass. Silence is not evidence.
+- **Three interaction states, not two:** `pass` (driven, with the selector), `fail` (driven, did not
+  work), `not-probed` (nobody drove it — neither passed nor failed).
+- **`untaggedInstanceSets` is tag coverage, not presence.** It lists instance sets the probe could not
+  point at (no `data-dt-node`, no reported setName). A list rendered by one `.map()` and a shared app
+  shell tagged with another frame's ids both leave gaps here by design, so it never fails a screen on
+  its own — the old "N components were never built" was this number, and it was 0-for-83 wrong.
+- **Excluded by method** (`notComparable`, `unverifiable`) and the report's `limits` say what this
+  method cannot see (`::placeholder` colour unless reported, `::before`/`::after`, a `rotate` that
+  reads `transform: none`). Say them; they are not passes.
 
 ## 5. Report the file, not an impression of it
 
-Lead with the verdict and the coverage line — "x of y node specs measured, n values compared, c/C
-components found, i/I interactions confirmed" — because that sentence is what tells the user how much
-the verdict is worth. Then the deltas, largest impact first (what, where in the code, design value →
-built value), then what was **not** checked.
+Lead with the report's `headline`, verbatim — it is the coverage line, and that sentence is what
+tells the user how much the verdict is worth. Then any `NEVER MEASURED` field, then the deltas,
+largest impact first (what, where in the code, design value → built value, and the `token` on the
+delta), then what was **not** checked: `notMeasured`, `fieldsNotMeasured`, `not-probed` interactions,
+the excluded-by-method values.
+
+**Every defect you repeat must quote the line it contradicts** — the expectation row (node id, field,
+value) and the export node it came from. The second-pair-of-eyes agent once reported "leave specific"
+vs "Leave Specific" as a copy bug when the export itself says `"text": "leave specific"`; a defect that
+does not survive being checked against its own input file is not reported.
 
 If the plan already had a `verification` block, say whether this run confirms or contradicts it: same
 deltas, deltas reported fixed that are back, new ones. An independent second look is the point;
 silently repeating the first one is not.
 
 If the agent could not render (`mode: "static-only"`), say "not rendered — reviewed statically",
-never "matches". Don't soften or drop deltas, and don't fix them here.
+never "matches". Don't soften or drop deltas, and don't fix them here. Never write `"status":
+"verified"` into a plan — status is computed, never stored (see build-screen).
 
 ## 6. Offer the next step, don't take it
 
 Differences in the code → the user can ask for them to be fixed (a normal edit; when the screen has a
-plan, record the new `verification` there, pointing at the report file). The design itself changed
+plan, record the new `verification` there, pointing at the report file — the report, not the plan,
+carries the verdict). The design itself changed
 since the build → `/designtwin:sync-design`. Problems that are in the *design* — contrast, a missing
 state, a token collision → `/designtwin:audit-design`.
