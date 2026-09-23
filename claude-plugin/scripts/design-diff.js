@@ -301,7 +301,7 @@ function normalizeSvgBytes(buf) {
   const text = buf.toString("utf8");
   const normalized = text.replace(SVG_NUM_RE, (m) => {
     const n = Number(m);
-    return Number.isFinite(n) ? n.toFixed(2) : m;
+    return Number.isFinite(n) ? n.toFixed(1) : m;
   });
   return Buffer.from(normalized, "utf8");
 }
@@ -485,4 +485,4 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   } else process.stdout.write(text);
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

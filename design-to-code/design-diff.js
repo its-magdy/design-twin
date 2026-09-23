@@ -272,15 +272,19 @@ function snapshotPath(file, cwd = process.cwd()) {
 // Figma's SVG export is not bit-reproducible (findings 25/222): re-exporting the SAME icon with
 // NOTHING changed in the design comes back with different floating-point path coordinates, ≤0.002px
 // apart. Hashing the raw bytes reported 27 "changed" assets on a byte-identical re-pull. This is the
-// SAME normalisation figma-plugin/src/assets.ts applies before its own content-hash (round every
-// numeric token to 2 decimal places, ~0.01px — coarse enough to absorb the export noise, fine enough
-// that the eight real arrow-down*.svg variants — three genuinely different icons — stay distinct).
+// SAME normalisation figma-plugin/src/assets.ts applies before its own content-hash — round every
+// numeric token to 1 decimal place (~0.1px). See that file's comment for why 1 decimal, not 2: two
+// legitimately identical re-exports can straddle a 2-decimal rounding boundary (4.97401 -> 4.97 vs
+// 4.97596 -> 4.98, only 0.00195 apart) and split into different hashes anyway — verified against the
+// real eight arrow-down*.svg variants in test/fixtures/livetest3/arrow-down/, which are the fixture
+// for this exact tolerance choice. 1 decimal is still two orders of magnitude below a real
+// repositioning and correctly keeps the three genuinely different icons among those eight apart.
 // Non-SVG bytes (PNG) are hashed as-is: they have no textual coordinate space to normalise, and a
 // changed pixel there is real signal.
 const SVG_NUM_RE = /-?\d+\.\d+/g;
 function normalizeSvgBytes(buf) {
   const text = buf.toString("utf8");
-  const normalized = text.replace(SVG_NUM_RE, (m) => { const n = Number(m); return Number.isFinite(n) ? n.toFixed(2) : m; });
+  const normalized = text.replace(SVG_NUM_RE, (m) => { const n = Number(m); return Number.isFinite(n) ? n.toFixed(1) : m; });
   return Buffer.from(normalized, "utf8");
 }
 function hashAssetBytes(fileName, buf) {
@@ -429,4 +433,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous };
+module.exports = { diffScreens, diffTokens, diffCatalog, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

@@ -32,17 +32,27 @@ const ASSET_DIR = "assets/";
 // findings 25/222, e.g. `arrow-down-3ea6be.svg` d="…8.77734…4.97401…" vs `arrow-down-ccfd6b.svg`
 // d="…8.7793 …4.97596…", the same icon exported twice). Hashing the raw SVG text made every re-pull
 // with zero design changes report a fresh batch of "changed" assets, and made two genuinely identical
-// icons dedupe-fail (finding 24). Rounding every numeric token in the `d`/coordinate attributes to 2
-// decimal places (~0.01px — an order of magnitude coarser than the observed drift, two orders finer
-// than anything a human would call "moved") absorbs the export noise while still telling apart the
-// eight real `arrow-down*.svg` variants, which are THREE genuinely different icons at >0.1px apart.
+// icons dedupe-fail (finding 24).
+//
+// Rounding every numeric token in the `d`/coordinate attributes absorbs that noise before hashing —
+// but the round-trip target matters more than the label "2 vs 1 decimal place" suggests. Tried
+// rounding to 2 decimals (~0.01px) FIRST: it does NOT reliably collapse the drift, because two
+// legitimately identical re-exports can straddle a rounding boundary — 4.97401 rounds to 4.97 but
+// 4.97596 (0.00195 away — well inside the ≤0.002px drift budget) rounds to 4.98, so the "same" icon
+// split into two hashes anyway. Verified against the real eight `arrow-down*.svg` variants
+// (test/fixtures/livetest3/arrow-down/, from a real Figma export) with a small script before changing
+// this: 1 decimal place (~0.1px — still an order of magnitude below anything a human would call
+// "moved", and two orders below a real repositioning) is the coarsest rounding that does NOT itself
+// introduce a boundary split on this data, and it correctly separates the THREE genuinely different
+// icons among those eight files (two icon designs sharing the "arrow-down" name, one with real
+// per-pull re-export noise each, plus one visually distinct `arrow-down.svg`).
 // PNG/base64 assets are untouched: they have no textual coordinate space to normalise, and their
 // pixels really do change when Figma recompresses them, which is legitimate signal, not noise.
 const NUM_RE = /-?\d+\.\d+/g;
 function normalizeSvgForHash(svg: string): string {
   return svg.replace(NUM_RE, (m) => {
     const n = Number(m);
-    return Number.isFinite(n) ? n.toFixed(2) : m;
+    return Number.isFinite(n) ? n.toFixed(1) : m;
   });
 }
 

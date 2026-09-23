@@ -69,6 +69,44 @@ check("snapshot → overwrite → diff finds the change; no snapshot and no git 
     && snapshotPath(rel, root).endsWith("pages__home__login.json") && d.status === 0 && JSON.parse(d.stdout).summary.changed === 1;
 })());
 
+// Finding 205: `--snapshot` used to be an unconditional fs.copyFileSync — running step 2 of the
+// sync-design skill twice (once before each of two later re-pulls) silently replaced the FIRST
+// baseline with whatever was on disk by the second call, which by then could already be a post-re-pull
+// export. Non-destructive by default; --force is required to replace a baseline that would actually change.
+console.log("CLI — --snapshot is non-destructive (finding 205):");
+check("a second --snapshot of DIFFERENT content is refused without --force, and the first baseline survives", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-force-"));
+  const rel = path.join("design", "export", "design-system", "tokens.json");
+  fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+  const run = (...a) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  fs.writeFileSync(path.join(root, rel), JSON.stringify({ variables: [{ name: "a", values: { M: 1 } }] }));
+  const first = run("--snapshot", rel);
+  const snapFile = snapshotPath(rel, root);
+  const firstBytes = fs.readFileSync(snapFile, "utf8");
+  // Simulate a re-pull that changed the export, then a MISTAKEN second `--snapshot` call (should have
+  // been run BEFORE this re-pull, not after).
+  fs.writeFileSync(path.join(root, rel), JSON.stringify({ variables: [{ name: "a", values: { M: 2 } }] }));
+  const second = run("--snapshot", rel);
+  const stillFirst = fs.readFileSync(snapFile, "utf8") === firstBytes;
+  const forced = run("--snapshot", rel, "--force");
+  const nowChanged = fs.readFileSync(snapFile, "utf8") !== firstBytes;
+  const prevKept = fs.existsSync(snapFile + ".prev") && fs.readFileSync(snapFile + ".prev", "utf8") === firstBytes;
+  // Refusing to overwrite is reported the same way "nothing to snapshot yet" is (a warning on stderr,
+  // exit 0) — --snapshot never hard-fails a whole `--snapshot a b c` batch because ONE of several files
+  // needed --force; it just leaves that one alone and says so.
+  return first.status === 0 && second.status === 0 && /refusing to overwrite/.test(second.stderr) && stillFirst && forced.status === 0 && nowChanged && prevKept;
+})());
+check("re-running --snapshot with UNCHANGED content is a silent no-op, not an error", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-force-noop-"));
+  const rel = path.join("design", "export", "design-system", "tokens.json");
+  fs.mkdirSync(path.join(root, path.dirname(rel)), { recursive: true });
+  fs.writeFileSync(path.join(root, rel), JSON.stringify({ variables: [] }));
+  const run = (...a) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const first = run("--snapshot", rel);
+  const second = run("--snapshot", rel); // same bytes, no --force needed
+  return first.status === 0 && second.status === 0 && /unchanged/.test(second.stdout);
+})());
+
 console.log("regressions from the 2026-09-21 execution audit:");
 check("a change deep inside a long nested value names the LEAF — never two identical truncated blobs", (() => {
   const grad = (c) => [{ type: "gradient", gradientType: "linear", angle: 90, opacity: 1, blendMode: "normal", visible: true, transform: [[1, 0, 0], [0, 1, 0]], stops: [{ pos: 0, color: "#112233ff" }, { pos: 0.25, color: "#223344ff" }, { pos: 0.5, color: "#445566ff" }, { pos: 0.75, color: "#556677ff" }, { pos: 1, color: c }] }];

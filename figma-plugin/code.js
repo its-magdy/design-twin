@@ -470,7 +470,7 @@
   function normalizeSvgForHash(svg) {
     return svg.replace(NUM_RE, (m) => {
       const n = Number(m);
-      return Number.isFinite(n) ? n.toFixed(2) : m;
+      return Number.isFinite(n) ? n.toFixed(1) : m;
     });
   }
   function contentHash(a) {
