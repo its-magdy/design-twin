@@ -7,6 +7,7 @@ hooks:
     - hooks:
         - type: command
           command: node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js"
+          timeout: 90
 ---
 
 # Figma → code (any stack)
@@ -243,16 +244,27 @@ Copy this checklist into your notes and keep it updated:
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
      final report — never a silent invention.
 
-2. **Map before coding.** Write the plan to **`design/plan/<screen>.json`** — not "in your notes":
-   `{screen, status:"pending", target, architecture, files:[],
-   tokens:[{value,kind,figmaName,codeToken,verdict,decision?}],
-   components:[{name,key,mapModule,verdict,matchedByName?}], anchors:{},
-   allowedLiterals:[{value,reason}|{file,reason}]?}` (step 3 fills `anchors`, step 5 adds
-   `verification`). This file is what step 5's `Stop` hook (wired in this
-   skill's frontmatter) checks the built code against, so it must exist and be accurate before step 3 —
-   a plan that only lives in your notes is invisible to that check and the mistake reappears at the end
-   as a rubber-stamped "done" that the user has to catch by hand. Sections to fill in (show large-screen
-   plans to the user too, this isn't only for the hook):
+2. **Map before coding.** **Generate** the plan — never hand-transcribe it (that is how hidden layers,
+   mistyped token names and wrong values got into plans that then "passed"):
+
+   ```
+   node "${CLAUDE_PLUGIN_ROOT}/scripts/plan-skeleton.js" <screen json> <screen .vars.json> \
+     design/export/design-system --out design/plan/<screen>.json [--route /<route>]
+   ```
+
+   It writes what the export already knows: the header (`screenName`, `nodeId`, `file`) every skill
+   finds the plan by; `tokens[]` — every bound variable with its Figma `key`, its `value` in this
+   frame's mode and its design-system match (rows bound only by hidden layers come pre-marked
+   `hidden-only`); `components[]` — every **visible** instance with key/variant/props and its
+   `catalog` identity (by key, or cross-check's name+signature proposal — component identity comes
+   from there and from `design/codeconnect.local.json`, never from an attribute you place in markup);
+   `anchors{}` — every visible node id; `hidden[]` — what is not built. **You fill only the
+   decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
+   `mapModule` on anchors (step 3), `route`, `target`, `architecture`, `files[]` (step 3),
+   `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
+   `verification` (step 5). Re-running it merges; filled fields survive. The `Stop` hook checks the
+   built code against this file, so it must exist before step 3. Sections to decide (show
+   large-screen plans to the user too):
    - **Architecture** → the `architecture` object, decided *before* the first file and recorded so
      the next feature can follow it. **Inspect the repo first and follow what is already there**; only
      on a genuinely fresh scaffold propose a layout, get a yes, and record it. Where code goes is a
@@ -263,16 +275,15 @@ Copy this checklist into your notes and keep it updated:
      `references/architecture.md` has the detection checklist, the default layout per stack, and how
      the catalog — not taste — decides what counts as a shared component.
 
-   - **Component inventory** → the `components[]` array. Every `INSTANCE`: mapped code component (via
-     `mainComponent.key`/`setKey`), a native platform control (per the profile's native-controls list),
-     or `verdict:"new"`. A new component for something that exists in the codebase is a bug; check by
-     structure, not name — glob the project's actual component files/exports, don't rely on memory.
-   - **Token map** → the `tokens[]` array. One row per distinct Figma color/spacing/radius/type-style/
-     effect value in the node tree, each recording **`figmaName`** — the variable or style the value
-     is bound to (`null` only when nothing is bound). See *Names come from Figma* below for why that
-     field carries the weight it does. Prefer the variable's `codeSyntax.{WEB,ANDROID,iOS}` when Figma
-     provides one (see `references/export-layout.md`) — that's the designer's own code name and beats
-     hand-mapping. Otherwise grep the project's actual palette/theme source file (`tailwind.config.*`,
+   - **Component inventory** → `components[]` (one row per visible instance, already listed): a mapped
+     code component (`verdict:"reused"`, `mapModule` = its file or import path), a native platform
+     control (per the profile), or `verdict:"new"`. Rows of one repeated component get the same
+     answer. A new component for something that exists in the codebase is a bug; check by structure,
+     not name — glob the project's actual component files/exports, don't rely on memory.
+   - **Token map** → `tokens[]` (every bound variable, already listed with its `figmaName` and `key`;
+     add a row, `figmaName: null`, for a raw unbound value you write as a literal; *Names come from
+     Figma* says why the name carries the weight). Prefer `codeSyntax.{WEB,ANDROID,iOS}` (the designer's
+     code name, `references/export-layout.md`); else grep the project's palette/theme source (`tailwind.config.*`,
      `--color-*`/`@theme` CSS vars, `theme.ts`, `*.xcassets` colorsets, `Color.kt`/`Dimens.kt`,
      `ColorScheme`/`ThemeExtension` in Dart — not `design/export/design-system/tokens.json`, which is Figma's
      raw values, never copy hex straight out of it). The verdict is either the **exact** matching token
@@ -292,15 +303,12 @@ Copy this checklist into your notes and keep it updated:
      use; on the answer, record it as that row's `decision` and set `status` back to `"pending"`.
      Don't proceed to coding with an unresolved MISSING row.
 
-     **"MISSING" means the token was expected and is not there — not "this value has no token".**
-     A screen with 17% spacing binding has dozens of raw values, and every one of them is a normal,
-     correctly-exported number. Building those exactly as exported, each with a one-line `decision`
-     ("no variable is bound; kept as a one-off literal"), is a complete answer and needs no user
-     input — that is also what the audit's own default says to do. Reserve the stop-and-ask for a
-     value that *should* have a token and doesn't: a colour the rest of the screen themes, a spacing
-     step the design system defines under another name, a row where a collision (step 1's
-     cross-check) means you genuinely cannot tell which value is right. Filing thirteen questions
-     about values the designer has already answered by drawing them wastes the one round-trip you get.
+     **"MISSING" means the token was expected and is not there — not "this value has no token".** A
+     raw value with no variable bound is built exactly as exported with a one-line `decision` ("no
+     variable is bound; kept as a one-off literal") — complete, no user input, the audit's own
+     default. Stop and ask only for a value that *should* have a token: a colour the rest of the
+     screen themes, a spacing step the design system names differently, a step-1 collision where you
+     cannot tell which value is right. Thirteen questions about drawn values waste your one round-trip.
    - **Layout tree** — stacks/grids/native containers with fill/hug/fixed per node; system chrome
      drawn in the frame (status bar, home indicator) becomes insets, not views.
    - **State matrix** — interaction states per control (from variant options + audit), screen data
@@ -360,14 +368,14 @@ Copy this checklist into your notes and keep it updated:
 
 3. **Build leaf → composite → screen.** Implement the smallest pieces first (new components, token
    additions), each compiling and checked before composing. For a large screen scaffold the outer
-   structure, then one section at a time. As each file lands, add its path to the plan's `files[]`
-   array (paths relative to the project root) — the `Stop` hook only inspects files listed there, so
-   a file missing from `files[]` is a file this skill's own gate never checks; an empty list, or a
-   listed path that isn't on disk, fails the gate outright. In the same edit, record where each
-   section and component instance landed: `anchors: {"<node id>": {file, symbol}}` — the top-level
-   frames and every `INSTANCE`, not every leaf (`"12:40": {"file":"src/screens/Login.tsx",
-   "symbol":"LoginHeader"}`). It costs a line now; when the design changes, `sync-design` gets a change
-   list keyed by node id, and without anchors it has to guess which code a renamed layer became.
+   structure, then one section at a time. As each file lands, add its path to `files[]`
+   (project-relative) — the `Stop` hook reads only the files listed there. In the same edit fill
+   `anchors["<node id>"].mapModule` with the file that renders that node — the frame, each section,
+   each instance. A node left empty is covered by its nearest filled ancestor, so twelve rows from one
+   `.map()` or a shell shared with another screen need one entry, not one per node; a visible node you
+   deliberately do not build gets `{"omitted": "<why>"}`. A visible node with no anchor at all is one
+   of the two things the hook blocks on: `sync-design` keys its change list by node id, and an
+   unanchored subtree is code nobody can find.
    Rules while building:
    - **Fit the app, not just the design** — before the first file, do the detection in the profile's
      *Fit the existing app* section (strings/l10n, router, state, theme, styling library) and follow
@@ -410,11 +418,14 @@ Copy this checklist into your notes and keep it updated:
      the stack's modal/sheet; transitions use the given duration (seconds → ms) and easing. The export
      hands over the whole interaction graph keyed by node id, and step 5 drives every edge of it — so
      a button wired to nothing now fails verification instead of passing as a nice-looking mockup.
-   - **Carry the node id into the markup.** On every element you generate from a node, emit its Figma
-     node id: `data-dt-node="4210:1873"` on web, `accessibilityIdentifier` on SwiftUI, `testTag` on
-     Compose, `Semantics(identifier:)` on Flutter. One attribute, and it is what lets step 5 measure
-     the right element instead of guessing from visible text — which fails on every icon-only control
-     and every repeated table row.
+   - **Carry the node id into the markup** where it names one element: `data-dt-node="4210:1873"` on
+     web, `accessibilityIdentifier` on SwiftUI, `testTag` on Compose, `Semantics(identifier:)` on
+     Flutter — on sections, controls and each instance's root, so step 5 measures the right element
+     instead of guessing from text. **Full coverage is not expected:** rows rendered by one `.map()`
+     carry at most one row's ids, and a shell shared by two screens carries the ids of the frame it
+     was built from. Both follow the reuse rules and are correct: an untagged node is one the verifier
+     could not measure, not a component never built. Tags are a measurement aid, never component
+     identity — that is the plan's `components[]` (catalog match, `design/codeconnect.local.json`).
 
 4. **States, scaling, theme, direction.** Before calling a component done:
    - Every interaction state in the matrix, including a **visible focus indicator** even if undrawn,
@@ -481,35 +492,30 @@ Copy this checklist into your notes and keep it updated:
    - Only if the project genuinely has no dev server/rendering tooling available (checked, not
      assumed) fall back to a structural + visual self-review against the `.png` — and report it as
      "not rendered — reviewed statically", never as a verified match.
-   - **Record the evidence in the plan** — the `Stop` hook blocks "done" without it. After a render:
-     `verification: {mode:"rendered", renderer, artifacts:[<screenshot/report paths that exist on
-     disk>], deltas:[<residual differences, [] if none>], coverage:{rendered:[<states/themes/sizes
-     you rendered>], notChecked:[{what, why}]}, a11y:{tool, violations}?}`. With genuinely nothing to
-     render with:
-     `verification: {mode:"static-only", reason:<what you checked for and didn't find>}`. The hook
-     sets `status` itself — `"verified"` only for a rendered check, `"static-only"` otherwise — **by
-     rewriting `design/plan/<screen>.json` as your turn ends**, so that file legitimately changes on
-     disk after you last wrote it. Never write `status` by hand, with two exceptions: `"abandoned"` for a plan the user decided not
-     to finish, and `"awaiting-user"` whenever you end the turn to **ask the user something the build
-     is blocked on** (a MISSING token row, an audit blocker, the component-map stub review). Set it
-     before you ask — a step-1 pause comes before the plan exists, so create it then with just
-     `{screen, status:"awaiting-user", files:[]}` — and set it back to `"pending"` the moment you resume — the hook skips a paused
-     plan but never approves one, so a build left at `"awaiting-user"` is not done.
-     The hook fails a literal only where the plan resolved that value to a **real** token (in any
-     spelling: `#hex`, `0xFF…`, `rgb()`, `[16px]`); a value with no token — `codeToken: null`, or the
-     word `MISSING`/`none`/`n/a`, which all mean the same thing — is fine, and so is a one-off shadow
-     `rgba()` or `text-[15px]`. What such a row **does** need is a `decision` saying what you did
-     about it ("no token exists, kept as a one-off literal" is a perfectly good answer). Recording
-     the gap honestly must never cost you more than leaving the row out. A resolved value that must
-     appear literally (the theme file that defines it is in `files[]`) goes in `allowedLiterals` with
-     a reason. **`allowedLiterals` matches on the exact `value` string** — `{"value": "#5B5FC7",
-     "reason": "…"}`, not a prose description like "every hex in theme.css", which reads perfectly and
-     matches nothing. You will rarely need it now: a hex that appears ONLY on the line declaring its
-     own token (`--brand-600: #5B5FC7`, `brand600: "#5B5FC7"`, `val brand600 = Color(0xFF5B5FC7)`) is
-     recognised as a definition and never flagged. For a generated file where that pattern doesn't
-     hold, an entry may name the file instead: `{"file": "src/styles/theme.css", "reason": "generated
-     token source"}`. Alpha is part of a colour's identity throughout: `#ffffff1a` is a different
-     value from `#ffffff`, needs its own row, and is not covered by the other's entry.
+   - **Record the evidence in the plan** under `verification`. After a render: `{mode:"rendered",
+     renderer, artifacts:[<paths on disk>], deltas:[<residual differences, [] if none>],
+     coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations}?}` — never an `a11y`
+     result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself).
+     Nothing can render: `{mode:"static-only", reason:<what you checked for and didn't find>}`.
+   - **The `Stop` hook** (`verify-build.js`, as your turn ends) **blocks** on exactly two things: a
+     raw colour in a source file of `files[]` whose value the plan resolved to a real token (`#hex`,
+     `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and the line
+     that *defines* the token, e.g. `--color-figma-brand-600: #5B5FC7`, is not a usage), and a visible
+     design node with no anchor. The rest warns: merged Figma tokens, missing a11y/coverage evidence,
+     `[16px]` where a token exists, a `reused` module nothing imports, a no-token row (`codeToken:
+     null`/`MISSING`) without a `decision` ("no token exists, kept as a one-off literal" is complete),
+     header gaps, a deviation without `{nodeId, field, designed, built, reason}`. A resolved value that
+     must stay literal goes in `allowedLiterals`: `{"value": "#5B5FC7", "reason": "…"}` (exact string,
+     alpha included) or `{"file": "…", "reason": "…"}` for a generated token file.
+   - **Status is computed, never stored.** The hook records its result and a hash of every file in
+     `files[]` under `verification.hook`; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status
+     design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed
+     file changed since, **and** the screen's `design/verify/<…>.report.json` says `pass` and is newer
+     than the code — else `failed`, `stale`, `unverified` (no report), `static-only`, `blocked` or
+     `pending`. Write `status` yourself only as `"abandoned"` (not to be finished) or `"awaiting-user"`
+     when you end the turn to ask something the build is blocked on (MISSING token, audit blocker,
+     map review; a step-1 pause creates `{screen, status:"awaiting-user", files:[]}`), and back to
+     `"pending"` when you resume — the hook skips a paused plan and never approves one.
 
 6. **Report** (short): files created/changed; components reused vs generated (from `design/plan/
    <screen>.json`'s `components[]`, not from memory); tokens missing or resolved (from `tokens[]`);
@@ -518,23 +524,17 @@ Copy this checklist into your notes and keep it updated:
    it lives, so the user can rename it before it spreads); verification evidence (what was rendered
    and compared, residual differences); open designer questions. If no component catalog
    was exported (step 1), say so in one line — "new" there means unverified against Figma's catalog.
-   If the `Stop` hook (`${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js`) reported problems earlier in
-   this turn, they must be resolved before this report is written — a report claiming "done" while
-   problems are outstanding is the exact failure this hook exists to catch.
+   Resolve whatever the `Stop` hook blocked on earlier in this turn before writing this report.
 
-   **Do not state a granted status — you cannot have seen one.** The hook runs *after* you hand
-   back, so at the moment you write this report the plan still says `"pending"`, and it says
-   `"pending"` even on a build that is about to pass. Claiming `"verified"` there is a guess that
-   happened to be right; claiming `"pending"` reads like a failure. Write instead:
+   **Do not state a status — you cannot have seen one** (the hook runs after you hand back). Report
+   the evidence (`verification.mode`, what you rendered, the `--compare` verdict and coverage line)
+   and the status you *expect*:
 
-   > Verification: rendered (`<the renderer you actually used>`, `design/verify/<screen>.png`,
-   > 0 residual deltas). Plan status is set by the build-screen Stop hook after this report —
-   > expect `verified`.
+   > Verification: rendered (`<renderer>`, `design/verify/<screen>.png`); `--compare` verdict `pass`,
+   > 180/254 nodes measured. Expected computed status after the Stop hook: `verified`.
 
-   …i.e. report the **evidence** you actually have (the `verification.mode` you recorded, what you
-   rendered, what came back), and name the status you expect *as* an expectation. `static-only` means
-   "built, not visually verified" — never "matches the design". If the hook then blocks, fix what it
-   listed and hand back again: it re-runs on every stop and grants the status on the one that passes.
+   `static-only` means "built, not visually verified" — never "matches the design". If the hook
+   blocks, fix what it listed and hand back again; it re-runs on every stop.
 
 ## Building several screens in one session
 

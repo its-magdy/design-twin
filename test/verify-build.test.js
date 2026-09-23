@@ -561,7 +561,7 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
 {
-  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate"];
+  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton"];
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
   const bare = [];
