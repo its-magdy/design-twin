@@ -113,3 +113,25 @@ editing, and the orchestrator routes it.
 6. **Prompt 7** cannot be fully executed by a subagent: skills run only in a consumer Claude Code
    session and Phase 7b needs a human to edit Figma. The subagent runs everything CLI/script-level
    and writes a checklist for the owner for the rest.
+
+## Wave A log (orchestrator)
+
+- P1 verified against the livetest export (criteria 1–7 reproduced, proposals agree with
+  `scripts-test/out/components/mapping.json` 26/15 name-for-name) and fast-forwarded into
+  `fix/livetest-3` at bdc114f. Decision accepted: Tailwind tokens live under a `figma-` sub-namespace
+  (`--radius-figma-xl` → `rounded-figma-xl`); `catalog-rekeyed` is a blocker that lists proposals,
+  never auto-accepts; `map-bootstrap.js --from-proposals` is additive.
+- P3 needed a second round: the text-search stage auto-resolved a single substring hit ("Job Role" →
+  Job Role Details on the pre-fix index — finding 70 verbatim). Now only the four exact stages may
+  resolve; a text-search hit is always a candidate list, exit 1, and an index without titles says so.
+  Merge order changed to P1 → P3 → P5 so Wave B (which edits `verify-screen.js`/`verify-build.js`
+  after P3's `--out`/plan-header changes) can start before P5 lands.
+- P5 needed a second round: four `[args]` bridge tests are cwd-dependent (default outDir is layout-
+  derived) and were mis-reported as pre-existing; `writeAssets` decided "same asset" on raw bytes so a
+  drifted re-pull would still mint a suffixed file per pull; criterion 3 (the 300 s wedge) had no code
+  change; 27 and 206 were left open. All five sent back. Accepted deviation: SVG coordinates are
+  rounded to 0.1px, not 0.01px, because 2-decimal rounding splits real re-exports of the same icon
+  across a rounding boundary (shown on the eight `arrow-down*.svg`). P5 also wires
+  `assetsGeometryWarning()` into `writeScreen` once it rebases onto a head that contains P3.
+- Live check on the main checkout, through the daemon: `--client "TeamSmart (Copy)"` resolved 10/10.
+  The finding 216 race is the no-daemon path, which `waitForIdentified()` targets; re-check after P5.
