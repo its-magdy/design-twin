@@ -185,9 +185,14 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const dir = fs.readdirSync(path.join(cwd, "design", "audit"));
   check("[cli-out] re-auditing the SAME screen never produces a second name for it",
     dir.filter((f) => f.startsWith("positions")).length === 2); // .md + .json, no duplicate under another name
-  check("[cli-out] an explicit --out still wins over the default", (() => {
+  check("[cli-out] an explicit --out under a NEW name for the SAME already-audited node is refused (finding 315's sibling), naming the existing file", (() => {
     const r2 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name")], { encoding: "utf8", cwd });
-    return r2.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
+    return r2.status === 1 && /already has an audit report/.test(r2.stderr) && /positions___7314_87192/.test(r2.stderr) &&
+      !fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
+  })());
+  check("[cli-out] --force overrides the refusal and writes the second name anyway", (() => {
+    const r3 = spawnSync(process.execPath, [scriptPath, screenFile, "--out", path.join(cwd, "design", "audit", "custom-name"), "--force"], { encoding: "utf8", cwd });
+    return r3.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "custom-name.md"));
   })());
 })();
 

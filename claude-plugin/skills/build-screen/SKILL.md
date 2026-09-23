@@ -52,9 +52,10 @@ its export directly in `design/` — every path below works either way, just dro
   a name ending in a space sanitises to a trailing `_`). Read the index; never reconstruct a filename.
   **Resolving "build the Job Roles screen" when no layer is named that:** the Figma layer name and
   the visible on-screen title are often different strings. Resolve with
-  `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name → indexed
-  `title` → plan `screenName`/`route`, each exact) rather than guessing. Only an exact stage may
-  resolve; a text-search fallback over `name`/`title`/`texts[]` NEVER resolves by itself — even one
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` (node id wins alone;
+  otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
+  one pool, never in sequence — more than one match anywhere stops the run) rather than guessing.
+  A text-search fallback over `name`/`title`/`texts[]` NEVER resolves by itself — even one
   hit is a candidate to confirm by node id, not an answer to build from. This is the one procedure
   every skill uses; see `extract/SKILL.md` for the full rule.
 - **The reference render** — visual ground truth, at a path relative to `design/export/` (e.g.

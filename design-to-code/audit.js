@@ -570,6 +570,10 @@ function audit(input, opts = {}) {
     gridMismatch,
     screenStatesScope,
     screens: roots.map((r) => r.label),
+    // The root node id(s) audited — additive, read only by the CLI's finding-315 duplicate-artefact
+    // check (P3 round 3): it lets a re-run find an EARLIER report for the same screen under a
+    // different name without re-parsing every screen export in the directory.
+    nodeIds: roots.map((r) => r.tree && r.tree.id).filter(Boolean),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
     tokenBinding,
@@ -684,7 +688,27 @@ function blockerIds(auditDoc) {
   return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
 }
 
-module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds };
+// P3 round 3, finding 315's sibling in audit.js: an explicit `--out <nickname>` still wrote a second
+// complete report pair for a screen that already has one under its default name. Scans a directory's
+// own `*.json` audit reports (never a subdirectory — one screen, one flat design/audit/) for one
+// whose `nodeIds` already includes this run's root node, at a DIFFERENT basename than the one about
+// to be written. Returns that file's path, or null.
+function findExistingAuditFor(dir, nodeId, ownTarget) {
+  const fs = require("fs");
+  const path = require("path");
+  if (!nodeId || !fs.existsSync(dir)) return null;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith(".json")) continue;
+    const full = path.join(dir, f);
+    if (path.resolve(full) === path.resolve(ownTarget)) continue;
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch (e) { continue; }
+    if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
+  }
+  return null;
+}
+
+module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor };
 
 // CLI: node design-to-code/audit.js <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
@@ -701,16 +725,17 @@ if (require.main === module) {
   const gridArg = take("--grid");
   const out = take("--out");
   const strip = (flag) => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
-  const jsonOnly = strip("--json"), gate = strip("--gate");
+  const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
   const USAGE =
     "usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]\n" +
     "       [--design-system design/design-system] [--variables design/variables.json]\n" +
-    "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]\n" +
+    "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]\n" +
     "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
     "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
     "  --out defaults to design/audit/<input file's own basename> — the same <LayerName>__<node-id>\n" +
     "  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same\n" +
-    "  report pair instead of a new name each run.";
+    "  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same\n" +
+    "  directory already covers this node under a DIFFERENT name — pass --force to write a second one.";
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
   const stray = argv.filter((a) => a.startsWith("-"));
   if (stray.length || !argv.length) { console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
@@ -746,6 +771,18 @@ if (require.main === module) {
   // so two runs on the same screen land on the same report pair without either caller having to
   // agree on a name out of band. Only the first input names it when several are given at once.
   const outBase = out || (argv[0] ? path.join("design", "audit", path.basename(argv[0], ".json")) : undefined);
+  // Finding 315's sibling / P3 c6: refuse an explicit --out under a different name than an existing
+  // report already covering this node, unless --force.
+  if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
+    const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
+    if (dup && !force) {
+      console.error(
+        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} — refusing to also write ${outBase}.json/.md ` +
+          "(one screen, one report pair). Use that existing name, or pass --force to write this one anyway."
+      );
+      process.exit(1);
+    }
+  }
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {

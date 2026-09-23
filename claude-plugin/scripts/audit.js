@@ -1521,6 +1521,10 @@ function audit(input, opts = {}) {
     gridMismatch,
     screenStatesScope,
     screens: roots.map((r) => r.label),
+    // The root node id(s) audited — additive, read only by the CLI's finding-315 duplicate-artefact
+    // check (P3 round 3): it lets a re-run find an EARLIER report for the same screen under a
+    // different name without re-parsing every screen export in the directory.
+    nodeIds: roots.map((r) => r.tree && r.tree.id).filter(Boolean),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
     tokenBinding,
@@ -1622,7 +1626,25 @@ function blockerIds(auditDoc) {
   const findings = auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
   return findings.filter((f) => f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
 }
-module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds };
+function findExistingAuditFor(dir, nodeId, ownTarget) {
+  const fs = require("fs");
+  const path = require("path");
+  if (!nodeId || !fs.existsSync(dir)) return null;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith(".json")) continue;
+    const full = path.join(dir, f);
+    if (path.resolve(full) === path.resolve(ownTarget)) continue;
+    let doc;
+    try {
+      doc = JSON.parse(fs.readFileSync(full, "utf8"));
+    } catch (e) {
+      continue;
+    }
+    if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
+  }
+  return null;
+}
+module.exports = { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor };
 if (require.main === module) {
   const fs = require("fs");
   const path = require("path");
@@ -1646,15 +1668,16 @@ if (require.main === module) {
     argv.splice(i, 1);
     return true;
   };
-  const jsonOnly = strip("--json"), gate = strip("--gate");
+  const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
   const USAGE = `usage: node design-to-code/audit.js <screen.json>... [--platform web|ios|android|react-native|flutter]
        [--design-system design/design-system] [--variables design/variables.json]
-       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
+       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
   --design-system turns on the cross-FILE pass (does this screen come from that design system?).
   Without it every token-binding % below means "binds SOME variable", not "matches your design system".
   --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
   name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
-  report pair instead of a new name each run.`;
+  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
+  directory already covers this node under a DIFFERENT name \u2014 pass --force to write a second one.`;
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     process.exit(0);
@@ -1686,6 +1709,15 @@ if (require.main === module) {
   const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid: gridArg ? Number(gridArg) : void 0 });
   const md = jsonOnly ? "" : toMarkdown(res);
   const outBase = out || (argv[0] ? path.join("design", "audit", path.basename(argv[0], ".json")) : void 0);
+  if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
+    const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
+    if (dup && !force) {
+      console.error(
+        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
+      );
+      process.exit(1);
+    }
+  }
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {

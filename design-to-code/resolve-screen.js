@@ -8,29 +8,32 @@
 // in one, finding nothing in another, listing candidates in a third. This module is the one place
 // that decision gets made, so it is made the same way everywhere.
 //
-// Resolution order, each stage tried only if the previous one matched NOTHING:
-//   1. node id           — the query IS a Figma node id (e.g. "7314:87192"); ids are unique, this
-//                           either matches exactly one row or none exist for that id.
-//   2. exact layer name   — row.name === query, trimmed and compared case-insensitively (the layer
-//                           can be `positions ` with a trailing space; a user typing "positions"
-//                           still means it byte-for-byte, they just didn't type the space).
-//   3. indexed title      — row.title === query (trimmed, case-insensitive): the text a user reads.
-//   4. plan screenName/route — design/plan/*.json's schema'd header (screenName, nodeId, route),
-//                           resolved back to the row whose id === that plan's nodeId.
-//   5. text search        — query is a case-insensitive substring of row.name, row.title, or any of
-//                           row.texts (the first N deduped text strings on the frame).
+// Resolution order:
+//   1. node id            — the query IS a Figma node id (e.g. "7314:87192"); ids are unique, this
+//                            either matches exactly one row or none exist for that id. Evaluated
+//                            ALONE and wins alone: a node id is never ambiguous with a name/title.
+//   2–4. the EXACT union   — exact layer name, indexed title and plan screenName/route (each
+//                            trimmed and case-folded) are evaluated TOGETHER, not as a sequence of
+//                            independent stages. A row that matches ANY of the three joins ONE
+//                            candidate pool; if that pool holds more than one row, the run stops and
+//                            lists them (naming which field each one matched) — it does NOT resolve
+//                            on whichever field happened to be checked first.
+//   5. text search         — query is a case-insensitive substring of row.name, row.title, or any of
+//                            row.texts (the first N deduped text strings on the frame).
 //
-// Stages 1–4 are EXACT (id, or trimmed/case-folded name/title/plan-header match) — a stage that
-// matches more than one row there stops immediately, and zero matches falls through to the next
-// stage. Only a stage that matches EXACTLY ONE row resolves.
+// Round 3 (finding 310): evaluating exact layer name -> title -> plan header as a SEQUENCE, each
+// tried only if the previous stage matched nothing, is itself a fuzziness bug — pull the empty-state
+// sibling of "Job Roles" (layer `Job roles`, node 7314:83742) next to the real one (layer
+// `positions `, node 7314:87192) and the case-insensitive layer-name stage matches exactly the ONE
+// row named `Job roles`, resolves, and never even LOOKS at the title stage — where the OTHER row
+// (`positions `, title "Job Roles") would also have matched. Two rows visibly titled "Job Roles" is
+// exactly the ambiguity Prompt 3 exists to catch, and a sequence of independent exact stages hid it.
+// Collecting the union first is what makes "evaluated together" true in code, not just in comment.
 //
-// Stage 5 (text search) NEVER resolves, even on exactly one hit — round 2 of this fix: the
-// substring "Job Role" matches ONLY "Job Role Details" on the pre-title-indexing export, and a
-// single substring hit auto-resolving to it is finding 70 verbatim (a query for "Job Roles"
-// silently landing on a different screen with full confidence). A text-search hit is always
-// reported as `needs-confirmation` — a candidate list the caller must resolve by node id — never as
-// `resolved`. This is what "never take a near-match" / "do not make name matching fuzzy" means in
-// code: fuzziness may narrow the list, it may never pick from it.
+// Text search (stage 5) still NEVER resolves, even on exactly one hit (round 2's fix, finding 70):
+// a text-search hit is always reported as `needs-confirmation` — a candidate list the caller must
+// resolve by node id — never as `resolved`. This is what "never take a near-match" / "do not make
+// name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 const fs = require("fs");
 const path = require("path");
 
@@ -76,9 +79,12 @@ function planRows(planDir) {
 
 // One candidate line for the "stop and list" report: enough to tell same-named frames apart without
 // opening any file (finding 19 — node count / id / reference PNG are the only discriminators between
-// two `Create Activity Type` frames of identical name/type/w/h).
-function describe(row) {
-  return {
+// two `Create Activity Type` frames of identical name/type/w/h). `matchedVia`, when passed, is which
+// field(s) in the exact union this particular row matched on (finding 310 — the report must say
+// WHICH field, not just that it matched, since two rows can carry the same title under different
+// layer names).
+function describe(row, matchedVia) {
+  const out = {
     name: row.name,
     id: row.id,
     title: row.title || null,
@@ -88,13 +94,17 @@ function describe(row) {
     reference: row.reference || null,
     screenshot: row.id ? `dtwin screenshot ${row.id}` : null,
   };
+  if (matchedVia && matchedVia.length) out.matchedVia = matchedVia;
+  return out;
 }
 
 const fold = (s) => String(s || "").trim().toLowerCase();
 
 // Returns one of:
-//   { status: "resolved", row, stage }                          — exactly one EXACT-stage match.
-//   { status: "ambiguous", stage, candidates }                  — an exact stage matched >1 row.
+//   { status: "resolved", row, stage }                          — node id alone, or exactly one row
+//     in the exact-stage union.
+//   { status: "ambiguous", stage, candidates }                  — the exact-stage union has >1 row;
+//     each candidate's `matchedVia` names which field(s) it matched on.
 //   { status: "needs-confirmation", stage: "text search", candidates } — one or more text-search
 //     hits; never auto-picked, even when there is only one.
 //   { status: "not-found", candidates, noTitles? }               — nothing matched anywhere;
@@ -108,28 +118,43 @@ function resolveScreen(exportDir, query, opts) {
   const qFold = fold(q);
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
 
-  const stage = (name, matches) => ({ stage: name, matches });
-
-  const exactStages = [];
-
+  // Stage 1: node id. Evaluated ALONE — an id is unique and never joins the name/title union below.
   if (NODE_ID_RE.test(q)) {
-    exactStages.push(stage("node id", rows.filter((r) => r.id === q)));
+    const idMatches = rows.filter((r) => r.id === q);
+    if (idMatches.length === 1) return { status: "resolved", row: idMatches[0], stage: "node id" };
+    // idMatches.length > 1 cannot legitimately happen (ids are unique in one export) and 0 falls
+    // through to the union below on the off chance the query is BOTH id-shaped and a real name.
   }
-  exactStages.push(stage("exact layer name", rows.filter((r) => fold(r.name) === qFold)));
-  exactStages.push(stage("indexed title", rows.filter((r) => r.title && fold(r.title) === qFold)));
 
+  // Stages 2–4, evaluated TOGETHER as one union (finding 310): a row joins the pool if it matches on
+  // ANY of exact layer name / indexed title / plan screenName-route, and every field it matched on
+  // is recorded so the candidate list (if the union has >1 row) says which.
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
-  if (planHit.length) {
-    const ids = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
-    exactStages.push(stage("plan screenName/route", rows.filter((r) => ids.has(r.id))));
-  } else {
-    exactStages.push(stage("plan screenName/route", []));
-  }
+  const planIds = new Set(planHit.map((p) => p.nodeId).filter(Boolean));
 
-  for (const s of exactStages) {
-    if (s.matches.length === 1) return { status: "resolved", row: s.matches[0], stage: s.stage };
-    if (s.matches.length > 1) return { status: "ambiguous", stage: s.stage, candidates: s.matches.map(describe) };
+  const union = new Map(); // row.id -> { row, via: Set<string> }
+  const join = (row, via) => {
+    const key = row.id || row.file || JSON.stringify(row);
+    if (!union.has(key)) union.set(key, { row, via: new Set() });
+    union.get(key).via.add(via);
+  };
+  for (const r of rows) {
+    if (fold(r.name) === qFold) join(r, "exact layer name");
+    if (r.title && fold(r.title) === qFold) join(r, "indexed title");
+    if (planIds.has(r.id)) join(r, "plan screenName/route");
+  }
+  const unionRows = [...union.values()];
+  if (unionRows.length === 1) {
+    const only = unionRows[0];
+    return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
+  }
+  if (unionRows.length > 1) {
+    return {
+      status: "ambiguous",
+      stage: "exact match (layer name / title / plan header)",
+      candidates: unionRows.map((u) => describe(u.row, [...u.via])),
+    };
   }
 
   // Stage 5: text search. A hit here is a CANDIDATE, never a result — see the file header. This is
@@ -142,28 +167,29 @@ function resolveScreen(exportDir, query, opts) {
   );
   if (textMatches.length) {
     return Object.assign(
-      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map(describe) },
+      { status: "needs-confirmation", stage: "text search", candidates: textMatches.map((r) => describe(r)) },
       noTitles ? { noTitles: true } : null
     );
   }
 
-  return Object.assign({ status: "not-found", candidates: rows.map(describe) }, noTitles ? { noTitles: true } : null);
+  return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
 
 module.exports = { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 
-// CLI: node design-to-code/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
+// CLI: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]
+// (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.js).
 if (require.main === module) {
   const [exportDir, query, planDir] = process.argv.slice(2);
   if (!exportDir || !query) {
-    console.error("usage: node design-to-code/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]");
+    console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
     process.exit(2);
   }
   const NOTITLES_NOTE =
     "note   this export's index carries no titles (pulled before title indexing) — re-pull the " +
     "screen (`dtwin pull --node <id>`) to enable lookup by title";
   const listCandidates = (candidates) => {
-    for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
+    for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}${c.matchedVia ? ` [matched: ${c.matchedVia.join(", ")}]` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
   };
   const res = resolveScreen(exportDir, query, { planDir });
   if (res.status === "resolved") {

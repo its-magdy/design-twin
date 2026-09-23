@@ -74,9 +74,10 @@ full turn; a clean summary can be reported from the JSON alone.
    Figma layer name and the on-screen title are often different strings ("Job Roles" is the frame
    named `positions `), and near-matches are a trap — a query of "Job Roles" string-matching only
    "Job Role Details" is a DIFFERENT screen, not a fuzzy hit. Resolve with
-   `node design-to-code/resolve-screen.js <exportDir> "<name>"` (node id → exact layer name →
-   indexed `title` → plan `screenName`/`route`, each exact — the one procedure every skill uses, see
-   `extract/SKILL.md`); on zero or more than one exact match it stops and prints the candidates
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` (node id wins alone;
+   otherwise exact layer name, indexed `title` and plan `screenName`/`route` are checked TOGETHER, as
+   one pool, never in sequence — the one procedure every skill uses, see
+   `extract/SKILL.md`); on zero or more than one exact match anywhere in that pool it stops and prints the candidates
    (name, id, size, node count, `dtwin screenshot <id>`) instead of auditing a guess. A looser text
    search runs last but never resolves by itself — even a single hit ("Job Roles" narrowing only to
    "Job Role Details") is a candidate to confirm by node id, never something to audit outright. Find the screen

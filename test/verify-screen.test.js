@@ -214,6 +214,18 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   spawnSync(process.execPath, [scriptPath, "--compare", expFile, measuredFile], { encoding: "utf8", cwd });
   ok("[cli-out] --compare defaults to the .expected.json's own basename, not a new name",
     fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.report.json")));
+
+  // P3 round 3, finding 315: an explicit --out under a NICKNAME for a screen already indexed under
+  // its default name still wrote a second complete artefact set with no warning. Refuse instead,
+  // naming the existing file; --force overrides.
+  const nicknameOut = path.join(cwd, "design", "verify", "JobRoles");
+  const r2 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut], { encoding: "utf8", cwd });
+  ok("[315] --expect --out <nickname> for a node that already has an expectation elsewhere is refused",
+    r2.status === 1 && /already has an expectation/.test(r2.stderr) && /positions___7314_87192\.expected\.json/.test(r2.stderr) &&
+      !fs.existsSync(nicknameOut + ".expected.json"));
+  const r3 = spawnSync(process.execPath, [scriptPath, "--expect", screenFile, "--out", nicknameOut, "--force"], { encoding: "utf8", cwd });
+  ok("[315] --force overrides the refusal and writes the second name anyway",
+    r3.status === 0 && fs.existsSync(nicknameOut + ".expected.json"));
 })();
 
 // ================================================================= livetest-3 regressions (P2a)

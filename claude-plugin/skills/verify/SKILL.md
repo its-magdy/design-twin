@@ -57,9 +57,10 @@ Three things that trip up a literal reading of the old recipe:
   the PNG alone. A project from before the `export/` split has the same tree directly under `design/`.
 - **The user's name for the screen (e.g. "Job Roles") may not be the Figma layer name (e.g.
   `positions `, trailing space, a different string entirely).** Resolve it with
-  `node design-to-code/resolve-screen.js <exportDir> "<name>"` — node id → exact layer name → the
-  index's `title` → a plan's `screenName`/`route`, each exact — the same procedure every other skill
-  uses (see `extract/SKILL.md`). A looser text-search fallback runs last but never resolves by
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <exportDir> "<name>"` — node id wins alone;
+  otherwise exact layer name, the index's `title` and a plan's `screenName`/`route` are checked
+  TOGETHER as one pool, never in sequence (more than one match anywhere in the pool stops the run —
+  the same procedure every other skill uses, see `extract/SKILL.md`). A looser text-search fallback runs last but never resolves by
   itself: even a single hit is a candidate to confirm by node id, not a screen to verify against. If
   it stops with zero, several, or only text-search candidates, print them and ask; don't fall back to
   `design/plan/*` alone (a plan's free-text `screen` field is a human's string, not a guaranteed
@@ -77,6 +78,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect \
   design/export/pages/<Page>/<Screen>__<id>.json \
   --out design/verify/<Screen>
 ```
+
+Always use the `<Layer>__<id>` name (the screen file's own basename), never a nickname — the script
+refuses (exit 1, naming the existing file) if this node already has an expectation under a different
+name in `design/verify/`, precisely so "positions" and "Job Roles" don't end up as two artefact sets
+for the same screen. `--force` overrides, but there is normally no reason to.
 
 This writes `design/verify/<Screen>.expected.json`: one row per **visible** node that carries a
 checkable value, plus every visible component instance and every designed `reactions` edge on a
