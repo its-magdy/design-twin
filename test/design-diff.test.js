@@ -107,6 +107,44 @@ check("re-running --snapshot with UNCHANGED content is a silent no-op, not an er
   return first.status === 0 && second.status === 0 && /unchanged/.test(second.stdout);
 })());
 
+// Finding 206: a snapshot of ONE file is not a copy of the export it belongs to. --snapshot now also
+// copies the sibling set: a design-system file's other 8 siblings (bridge/design-system-layout.js is
+// the one definition of that 9-file set), and a screen's .vars.json/.assets.json plus the shared
+// pages/index.json it is indexed under.
+console.log("CLI — --snapshot copies the sibling set (finding 206):");
+check("snapshotting ONE design-system file also snapshots its 8 siblings", (() => {
+  const { DESIGN_SYSTEM_FILES } = require("../bridge/design-system-layout.js");
+  const names = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
+  const dsDir = path.join(root, "design", "export", "design-system");
+  fs.mkdirSync(dsDir, { recursive: true });
+  for (const n of names) fs.writeFileSync(path.join(dsDir, n), JSON.stringify({ file: n }));
+  const rel = path.join("design", "export", "design-system", "tokens.json");
+  const run = (...a) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const r = run("--snapshot", rel);
+  const syncDir = path.join(root, "design", ".sync");
+  const gotAll = names.every((n) => fs.existsSync(path.join(syncDir, "export__design-system__" + n)));
+  return r.status === 0 && gotAll;
+})());
+check("snapshotting a screen file also snapshots its .vars.json/.assets.json and pages/index.json", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-screen-siblings-"));
+  const pageDir = path.join(root, "design", "export", "pages", "home");
+  fs.mkdirSync(pageDir, { recursive: true });
+  const stem = "Login__1_23";
+  fs.writeFileSync(path.join(pageDir, stem + ".json"), JSON.stringify(screen()));
+  fs.writeFileSync(path.join(pageDir, stem + ".vars.json"), JSON.stringify({ variables: [] }));
+  fs.writeFileSync(path.join(pageDir, stem + ".assets.json"), JSON.stringify({ files: [] }));
+  fs.writeFileSync(path.join(root, "design", "export", "pages", "index.json"), JSON.stringify({ pageDirs: [] }));
+  const rel = path.join("design", "export", "pages", "home", stem + ".json");
+  const run = (...a) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
+  const r = run("--snapshot", rel);
+  const syncDir = path.join(root, "design", ".sync");
+  return r.status === 0
+    && fs.existsSync(path.join(syncDir, "export__pages__home__" + stem + ".vars.json"))
+    && fs.existsSync(path.join(syncDir, "export__pages__home__" + stem + ".assets.json"))
+    && fs.existsSync(path.join(syncDir, "export__pages__index.json"));
+})());
+
 console.log("regressions from the 2026-09-21 execution audit:");
 check("a change deep inside a long nested value names the LEAF — never two identical truncated blobs", (() => {
   const grad = (c) => [{ type: "gradient", gradientType: "linear", angle: 90, opacity: 1, blendMode: "normal", visible: true, transform: [[1, 0, 0], [0, 1, 0]], stops: [{ pos: 0, color: "#112233ff" }, { pos: 0.25, color: "#223344ff" }, { pos: 0.5, color: "#445566ff" }, { pos: 0.75, color: "#556677ff" }, { pos: 1, color: c }] }];
