@@ -162,3 +162,18 @@ editing, and the orchestrator routes it.
   anchors. Blocks on exactly two conditions; everything else warns. Merged at 2807c1b.
 - Wave C: P4 started before P2b landed (held its Stop-hook doc lines, released at 2807c1b); P6
   started before P4 landed (holds its one-sentence additions to the P4-owned skill files).
+
+## Wave C log (orchestrator)
+
+- P6 needed a second round: the new `self-inconsistent-geometry` audit finding fired 39 times on
+  positions (sidebar rows whose children are shorter than a fixed box = normal cross-axis alignment).
+  Rule tightened to: fixed/fill box → fire only on overflow; hug box → fire on any mismatch. Now 18
+  hits: the finding-172 header + 12 rows, plus 5 genuine overflows. 123 confirmed not-a-bug (exit 1
+  direct and piped), pinned by a test. 225 (`--also-generic`), 136 (`auditGate`), 80 verified.
+  168 (pixel diff %) left undone — needs an image-diff dependency. Merged at 33d8e21; the merge
+  combined two generated bundles textually, so the orchestrator committed a rebuild (acc513c).
+- P4 round 1 verified: 0 `dtwin pull design ` examples left in the repo; outDir-trap warning; doctor
+  names both layouts; cross-check auto-discovers `design/export/variables.json` and prints the path;
+  init help matches the filesystem. Sent back for: finding 33 (doctor still attributes the export
+  to the design-system file — screens carry no source-file stamp; granted `write-out.js` to add
+  `sourceFile`), and its own new doctor test being machine-dependent (live daemon on 8787).
