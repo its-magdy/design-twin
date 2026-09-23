@@ -131,13 +131,14 @@
             pages.push(bucket);
           }
           const base = safe2(l.name || "layer") + "__" + safe2(l.id) + ".json";
+          const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
           layerFiles.push({
             path: join(bucket.dir, base),
-            data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, tree: l.tree, reference: l.reference, devResources: l.devResources }
+            data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
           });
           const title = l.tree ? deriveTitle(l.tree) : void 0;
           const texts = l.tree ? collectTexts(l.tree) : void 0;
-          bucket.entries.push({ ...(index || [])[i], title, texts, file: join(bucket.dir, base) });
+          bucket.entries.push({ ...(index || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
         });
         meta.pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
         meta.layers = pages.flatMap((b) => b.entries);
