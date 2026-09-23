@@ -1,0 +1,411 @@
+{
+ "job-roles": {
+  "file": "pages/__Organization_management_/positions___7314_87192.json",
+  "node": "7314:87192",
+  "instances": 51,
+  "names": {
+   "Component 1": {
+    "match": "842:4815",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 2": {
+    "match": "842:3849",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/element-4": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/element-4\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Component 5": {
+    "match": "842:3914",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/calendar-tick": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-tick\"",
+    "confidence": "n/a — external icon library"
+   },
+   "License Health Check": {
+    "match": "842:4660",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Linear / School / Diploma": {
+    "match": null,
+    "firstReason": "no catalog entry named \"Linear / School / Diploma\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Org Management": {
+    "match": "842:4188",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/bold/buliding": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/bold/buliding\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Staff Management": {
+    "match": "842:4478",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "shift Demand": {
+    "match": "842:4093",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Projects": {
+    "match": "842:3666",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "activity demand": {
+    "match": "842:4728",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 7": {
+    "match": "842:3932",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/activity": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/activity\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Requests": {
+    "match": "842:4670",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Outline / Messages, Conversation / Inbox In": {
+    "match": null,
+    "firstReason": "no catalog entry named \"Outline / Messages, Conversation / Inbox In\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Component 8": {
+    "match": "842:4171",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/calendar-edit": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-edit\"",
+    "confidence": "n/a — external icon library"
+   },
+   "OJT Management": {
+    "match": "842:4719",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/book": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/book\"",
+    "confidence": "n/a — external icon library"
+   },
+   "reports": {
+    "match": "842:3923",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 1/vuesax/linear/Property 33": {
+    "match": "842:4806",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "Header": {
+    "match": "842:3470",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "sun": {
+    "match": null,
+    "firstReason": "no catalog entry named \"sun\"",
+    "confidence": "n/a — external icon library"
+   },
+   "User Avatar": {
+    "match": "1:1189",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/arrow-down": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/arrow-down\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Page Title": {
+    "match": "72:3454",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "Button": {
+    "match": "1:1056",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "Add Icon": {
+    "match": "1:1673",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/import": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/import\"",
+    "confidence": "n/a — external icon library"
+   },
+   "search and filter": {
+    "match": "885:3006",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "search bar": {
+    "match": "880:3734",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/outline/search-normal": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/outline/search-normal\"",
+    "confidence": "n/a — external icon library"
+   },
+   "filter button": {
+    "match": "326:2869",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "filter icon": {
+    "match": "325:2562",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/close-circle": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/close-circle\"",
+    "confidence": "n/a — external icon library"
+   },
+   "vuesax/linear/tick-circle": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/tick-circle\"",
+    "confidence": "n/a — external icon library"
+   },
+   "actions": {
+    "match": "2000:21387",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/edit-2": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/edit-2\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Pagination": {
+    "match": "75:2842",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   }
+  }
+ },
+ "global-policies": {
+  "file": "pages/__Organization_management_/System_Configurations__1359_21337.json",
+  "node": "1359:21337",
+  "instances": 42,
+  "names": {
+   "Component 1": {
+    "match": "842:4815",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 2": {
+    "match": "842:3849",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/element-4": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/element-4\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Component 5": {
+    "match": "842:3914",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/calendar-tick": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-tick\"",
+    "confidence": "n/a — external icon library"
+   },
+   "License Health Check": {
+    "match": "842:4660",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Linear / School / Diploma": {
+    "match": null,
+    "firstReason": "no catalog entry named \"Linear / School / Diploma\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Org Management": {
+    "match": "842:4188",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/bold/buliding": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/bold/buliding\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Staff Management": {
+    "match": "842:4478",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "shift Demand": {
+    "match": "842:4093",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Projects": {
+    "match": "842:3666",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "activity demand": {
+    "match": "842:4728",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 7": {
+    "match": "842:3932",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/activity": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/activity\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Requests": {
+    "match": "842:4670",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Outline / Messages, Conversation / Inbox In": {
+    "match": null,
+    "firstReason": "no catalog entry named \"Outline / Messages, Conversation / Inbox In\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Component 8": {
+    "match": "842:4171",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/calendar-edit": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-edit\"",
+    "confidence": "n/a — external icon library"
+   },
+   "OJT Management": {
+    "match": "842:4719",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "vuesax/linear/book": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/book\"",
+    "confidence": "n/a — external icon library"
+   },
+   "reports": {
+    "match": "842:3923",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "Component 1/vuesax/linear/Property 33": {
+    "match": "842:4806",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "Header": {
+    "match": "842:3470",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "sun": {
+    "match": null,
+    "firstReason": "no catalog entry named \"sun\"",
+    "confidence": "n/a — external icon library"
+   },
+   "User Avatar": {
+    "match": "1:1189",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/arrow-down": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/arrow-down\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Page Title": {
+    "match": "72:3454",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "search and filter": {
+    "match": "885:3006",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "search bar": {
+    "match": "880:3734",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/outline/search-normal": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/outline/search-normal\"",
+    "confidence": "n/a — external icon library"
+   },
+   "filter button": {
+    "match": "326:2869",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "high"
+   },
+   "filter icon": {
+    "match": "325:2562",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/calendar-2": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-2\"",
+    "confidence": "n/a — external icon library"
+   },
+   "Badge": {
+    "match": "1:2731",
+    "firstReason": "name matches catalog entry verbatim",
+    "confidence": "medium"
+   },
+   "vuesax/linear/edit-2": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/edit-2\"",
+    "confidence": "n/a — external icon library"
+   },
+   "vuesax/linear/shield-tick": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/shield-tick\"",
+    "confidence": "n/a — external icon library"
+   },
+   "vuesax/linear/calendar-remove": {
+    "match": null,
+    "firstReason": "no catalog entry named \"vuesax/linear/calendar-remove\"",
+    "confidence": "n/a — external icon library"
+   }
+  }
+ }
+}

@@ -1,0 +1,169 @@
+{
+ "collections": [
+  {
+   "name": "Spacing",
+   "modes": [
+    "Mode 1"
+   ],
+   "default": "Mode 1",
+   "theming": false,
+   "hiddenFromPublishing": true,
+   "key": "69f809cec215ff47e90e204a34cea34702fcfc11"
+  },
+  {
+   "name": "Spacing",
+   "modes": [
+    "Desktop",
+    "Tablet",
+    "Mobile"
+   ],
+   "default": "Desktop",
+   "theming": true,
+   "hiddenFromPublishing": true,
+   "key": "a0d882e0e7fbe6669cf1b0ae59c20e9574b95384"
+  },
+  {
+   "name": "Border Radius",
+   "modes": [
+    "Mode 1"
+   ],
+   "default": "Mode 1",
+   "theming": false,
+   "hiddenFromPublishing": true,
+   "key": "164b155cc6d63cc580f28f95623eb3676be668d8"
+  }
+ ],
+ "variables": [
+  {
+   "name": "Space 3",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": 16
+   },
+   "scopes": [
+    "WIDTH_HEIGHT",
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "a9aa73e78e34066545c67621b5f7aef9ab89a4f1"
+  },
+  {
+   "name": "Space 2",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Desktop": 8,
+    "Tablet": 8,
+    "Mobile": 8
+   },
+   "scopes": [
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "006fbedfaf8a6396ddec38d6c6966bc11db599bb"
+  },
+  {
+   "name": "Semantic rounds/forms-rounded",
+   "type": "FLOAT",
+   "collection": "Border Radius",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": {
+     "aliasOf": "Rounds Variables/roundes-lg"
+    }
+   },
+   "scopes": [
+    "CORNER_RADIUS"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "a4adab5d4472f118032a0a56e394aad01fa9d4c0"
+  },
+  {
+   "name": "(Space 3)",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Desktop": 12,
+    "Tablet": 8,
+    "Mobile": 8
+   },
+   "scopes": [
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "a96c665bae7a1989c41dd71440cfd9b0a0c0ba4f"
+  },
+  {
+   "name": "Space 4",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": 24
+   },
+   "scopes": [
+    "WIDTH_HEIGHT",
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "e26d506ea43ae0582896add59d9e04156fb3f6d5"
+  },
+  {
+   "name": "Rounds Variables/roundes-lg",
+   "type": "FLOAT",
+   "collection": "Border Radius",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": 8
+   },
+   "scopes": [
+    "CORNER_RADIUS"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "b80425f33e83309aba443cd78209004663e5517f"
+  },
+  {
+   "name": "Space 2",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": 8
+   },
+   "scopes": [
+    "WIDTH_HEIGHT",
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "a0e2344faf1eb3bb5c6529701c71f00cec18a55c"
+  },
+  {
+   "name": "Space 1",
+   "type": "FLOAT",
+   "collection": "Spacing",
+   "tier": "semantic",
+   "values": {
+    "Mode 1": 4
+   },
+   "scopes": [
+    "WIDTH_HEIGHT",
+    "GAP"
+   ],
+   "remote": true,
+   "hiddenFromPublishing": true,
+   "key": "8f8705cededb5688487bcd3736711fc30e6d70a2"
+  }
+ ],
+ "hygiene": []
+}

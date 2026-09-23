@@ -1,0 +1,505 @@
+{
+ "exportedAt": "2026-09-22T19:12:16.945Z",
+ "file": "Design System - NERA (Copy)",
+ "colorProfile": "srgb",
+ "components": [
+  {
+   "name": "Right Icon",
+   "key": "daf67c241cdcd274523836091b162607f9822211",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 47,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Left Icon",
+   "key": "af02a3a3a30b0dc19e8b6cbf635c31f4058802b6",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 8,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/import",
+   "key": "06b06877f426e65212a404919bd669248e472d5e",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 2,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/outline/search-normal",
+   "key": "ec84d08848ba6a00960337395a60a2bf11eae968",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 7,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Pagination",
+   "key": "970458040e769ffac377a5f04197b0216bcf9cfa",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Right Icon",
+   "key": "e312ed3a5fadf29c198097d9fcabed2c760908fc",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 2,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/arrow-down",
+   "key": "0ad903d4d8f644fa3ed521e4d98261f29f9dd582",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/element-4",
+   "key": "5978d2610e4ba1cebd1deabc56e2f4c18344ddec",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 8,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/calendar-tick",
+   "key": "52e2b60121ada6969f56afe289d19b9482164773",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/activity",
+   "key": "8b3a4f3ba1ac274cd472d44596eb0f302387a89c",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 5,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/calendar-edit",
+   "key": "f4dc91cb25edd2a58071d884eab483624317a8f2",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/buliding",
+   "key": "4ea2ddedae50eaa0b7ece82c1502ec1bf00b061d",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/bold/buliding",
+   "key": "b80e1d5d56871a7345d0353237cba03ce2858110",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 7,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Linear / School / Diploma",
+   "key": "1dfaea16a193abacdb3c62246cbe7c8660a84315",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Outline / Messages, Conversation / Inbox In",
+   "key": "d091d89c09eb06361b0c4d372eceac1c3fdaa4e6",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/book",
+   "key": "d70086c8d72a1b65f188c630c828a069f368caca",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 6,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "sun",
+   "key": "c8d6f9b4a2846159659f91b1805d937e8394b689",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 7,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/arrow-down",
+   "key": "bdd3626355b8b9d4a8fe6bc29d81c1ea2f726d69",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 7,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 2",
+   "key": "3a9fffffc4b00280568bc81122cff6e345faa646",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Dashboard=default",
+   "props": {
+    "Dashboard": {
+     "key": "Dashboard",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 5",
+   "key": "48920fdc0e3afec4783522fd9fafe756d895ded6",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Team Calendar=default",
+   "props": {
+    "Team Calendar": {
+     "key": "Team Calendar",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "License Health Check",
+   "key": "99612d4cecf88aecd37c7877e2b10af97aed1826",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "License Health Check=default",
+   "props": {
+    "License Health Check": {
+     "key": "License Health Check",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Org Management",
+   "key": "a1e60129811a7502221cee1e47cd57e23c985ab1",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Property 1=Default",
+   "props": {
+    "Property 1": {
+     "key": "Property 1",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Staff Management",
+   "key": "1b98a983c2dd2295f647bd421edb8b668ff45fe9",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Staff Management=Default",
+   "props": {
+    "Staff Management": {
+     "key": "Staff Management",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "shift Demand",
+   "key": "3302b4a7810046a1b60bbe567db6f3d9c0b30367",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Property 1=Default",
+   "props": {
+    "Property 1": {
+     "key": "Property 1",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Projects",
+   "key": "bfd04ec87fd1981b81ffee6027137c94f9c4bcaa",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Planning=Default",
+   "props": {
+    "Planning": {
+     "key": "Planning",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "activity demand",
+   "key": "207e4ae2ca6ca1863e0a58b4b491ed5d71fc014e",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Property 1=Default",
+   "props": {
+    "Property 1": {
+     "key": "Property 1",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 7",
+   "key": "bc2f6f9f69fbafee3db310151fe797d25839dde2",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Rostering=Rostering7",
+   "props": {
+    "Rostering": {
+     "key": "Rostering",
+     "type": "VARIANT",
+     "observed": [
+      "Rostering7"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Requests",
+   "key": "367c5b76152bc6f425b78577eb218dd095daa9e7",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Requests=Default",
+   "props": {
+    "Requests": {
+     "key": "Requests",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 8",
+   "key": "8d25f61e745c724731a056f19f893d5ea5b93cc4",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Day Of Operation=default",
+   "props": {
+    "Day Of Operation": {
+     "key": "Day Of Operation",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "OJT Management",
+   "key": "4e81e7cb888cb2cff8cb95c31b29492526fdc022",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Property 1=default",
+   "props": {
+    "Property 1": {
+     "key": "Property 1",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "reports",
+   "key": "611caf910c53074d8ad854dbb3e71afc98427b2b",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "variant": "Reports=default",
+   "props": {
+    "Reports": {
+     "key": "Reports",
+     "type": "VARIANT",
+     "observed": [
+      "default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 1/vuesax/linear/Property 33",
+   "key": "9dd02b9a6c5af4c01206d8130841ab6ce6a13100",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 1,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/edit-2",
+   "key": "3f9af8f31ac040014c4cf13c227646ee58c6dc2a",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 3,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Info Icon",
+   "key": "16d484783f90a4da256d02401421c2c7c69d7ba2",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 21,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "vuesax/linear/tick-circle",
+   "key": "6364f1c7d2aa3a72c770517abdb16a1297869873",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 4,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 1",
+   "key": "c26c186f92108b5123a3a7fc25faefc42b400fef",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 4,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Component 10",
+   "key": "60f724cb947ca8cdc190174428c94052d287992a",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 2,
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Button",
+   "key": "b511499b031950b027cbb2066009d31f2bde326e",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 2,
+   "variant": "State=Default",
+   "props": {
+    "Text": {
+     "key": "Text#5793:0",
+     "type": "TEXT",
+     "observed": [
+      "Generate by AI"
+     ]
+    },
+    "State": {
+     "key": "State",
+     "type": "VARIANT",
+     "observed": [
+      "Default"
+     ]
+    }
+   },
+   "derivedFrom": "instances"
+  },
+  {
+   "name": "Button lines/Variant5",
+   "key": "713b032450e9aae79db39896c4fc8f17db3c4a12",
+   "type": "COMPONENT",
+   "remote": true,
+   "source": "unknown-library",
+   "uses": 2,
+   "derivedFrom": "instances"
+  }
+ ]
+}
