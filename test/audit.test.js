@@ -216,28 +216,67 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   }
 })();
 
-// ---------- finding 172: self-inconsistent-geometry (padding + children cannot produce box.h) ----------
-// Real Job Roles table: header 20173:142077 (padding [16,32,16,32], row, tallest child box.h=24,
-// declared box.h=44 — 16+24+16=56) and row 20173:142081 (padding [16,24,16,24], row, tallest child
-// box.h=24, declared box.h=48 — 16+24+16=56). Both are contradictions the export makes about itself.
+// ---------- finding 172: self-inconsistent-geometry (round 2: FIXED-overflow / HUG-mismatch only) ----------
+// Real Job Roles table: header 20173:142077 (heightMode absent="fixed", padding [16,32,16,32], tallest
+// child box.h=24, declared box.h=44 — content computes 56, OVERFLOWING a fixed box) and every table row
+// 20173:142081/086/091/.../137 (heightMode:"hug", padding [16,24,16,24], declared box.h=48, content
+// computes 56 — a hug box's declared size must equal its content, in EITHER direction).
+//
+// Round-2 correction: the first cut also fired on ordinary auto-layout — a FIXED-height sidebar row
+// (I10970:111588;1910:23337 'Component 2', box.h=40, padding [0,4,0,12]) whose tallest child is a
+// 24-high icon centred in it. Content SHORTER than a fixed box is normal, not a contradiction; the
+// rule must only fire when content OVERFLOWS a fixed/fill box, or a hug box's declared size does not
+// equal its content (over or under). node.heightMode is the export's own sizing-mode field
+// (figma-plugin/src/serialize.ts layoutSizingVertical -> heightMode, default "fixed").
 (() => {
   const fs = require("fs");
   const FX = path.join(__dirname, "fixtures", "livetest3", "verify");
   const doc = JSON.parse(fs.readFileSync(path.join(FX, "positions___7314_87192.json"), "utf8"));
   const res = audit([{ doc, label: "positions___7314_87192" }], { platform: "web" });
   const hits = res.findings.filter((f) => f.code === "self-inconsistent-geometry");
-  check("[172] table header (20173:142077) fires self-inconsistent-geometry", hits.some((f) => f.nodeId === "20173:142077"));
-  check("[172] table row (20173:142081) fires self-inconsistent-geometry", hits.some((f) => f.nodeId === "20173:142081"));
-  check("[172] the message names the stated box.h, the padding and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /16,32,16,32/.test(f.message) && /= 56/.test(f.message)));
+  const rowIds = ["20173:142081", "20173:142086", "20173:142091", "20173:142096", "20173:142102", "20173:142107", "20173:142112", "20173:142117", "20173:142122", "20173:142127", "20173:142132", "20173:142137"];
+  check("[172] table header (20173:142077, fixed, overflow 56>44) fires", hits.some((f) => f.nodeId === "20173:142077"));
+  check("[172] every table row (hug, declared 48 != computed 56) fires — 12 rows", rowIds.every((id) => hits.some((f) => f.nodeId === id)));
+  check("[172] the message names the stated box.h, heightMode and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /heightMode:"fixed"/.test(f.message) && /= 56/.test(f.message)));
+  check("[172] the hug row's message says a hug box's height IS the content height", hits.some((f) => f.nodeId === "20173:142081" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
+  check("[172] round-2: the sidebar's FIXED 40-high row (I10970:111588;1910:23337, 24-high icon centred, content fits) does NOT fire", !hits.some((f) => f.nodeId === "I10970:111588;1910:23337"));
+  check("[172] round-2: its siblings Component 5 / License Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|License Health Check/.test(f.nodeName || "")));
 
-  // A consistent node (padding + tallest child really does equal box.h) must NOT fire.
-  const consistent = {
+  // A consistent FIXED node (padding + tallest child fits inside the declared box) must NOT fire.
+  const consistentFixed = {
     id: "root", name: "root", box: { w: 100, h: 100 },
-    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 56 }, layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
+    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 40 }, layout: { display: "flex", flexDirection: "row", padding: [8, 0, 8, 0] },
+      children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 8+24+8=40 == declared 40: exact fit
+  };
+  const resFixed = audit([{ doc: { nodes: [consistentFixed] }, label: "consistent-fixed" }], { platform: "web" });
+  check("[172] a FIXED box with children fitting exactly (8+24+8=40, declared 40) does not fire", !resFixed.findings.some((f) => f.code === "self-inconsistent-geometry"));
+
+  // A FIXED box with children SHORTER than the box (the sidebar-row shape) must NOT fire.
+  const shorterFixed = {
+    id: "root", name: "root", box: { w: 100, h: 100 },
+    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 220, h: 40 }, layout: { display: "flex", flexDirection: "row", padding: [0, 4, 0, 12] },
+      children: [{ id: "c1a", name: "Icon", type: "FRAME", box: { w: 24, h: 24 } }] }], // 0+24+0=24 < declared 40: content fits with room to spare
+  };
+  const resShorter = audit([{ doc: { nodes: [shorterFixed] }, label: "shorter-fixed" }], { platform: "web" });
+  check("[172] a FIXED box whose content is SHORTER than the declared box (normal centred auto-layout) does not fire", !resShorter.findings.some((f) => f.code === "self-inconsistent-geometry"));
+
+  // A HUG box whose declared size DOES equal its content must NOT fire.
+  const consistentHug = {
+    id: "root", name: "root", box: { w: 100, h: 100 },
+    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 56 }, heightMode: "hug", layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
       children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }],
   };
-  const res2 = audit([{ doc: { nodes: [consistent] }, label: "consistent" }], { platform: "web" });
-  check("[172] a consistent node (16+24+16=56, declared 56) does not fire", !res2.findings.some((f) => f.code === "self-inconsistent-geometry"));
+  const resHug = audit([{ doc: { nodes: [consistentHug] }, label: "consistent-hug" }], { platform: "web" });
+  check("[172] a HUG box whose declared size equals its content (16+24+16=56, declared 56) does not fire", !resHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
+
+  // A HUG box whose declared size is SMALLER than its content must fire (a hug mismatch, not just overflow).
+  const shortHug = {
+    id: "root", name: "root", box: { w: 100, h: 100 },
+    children: [{ id: "c1", name: "Row", type: "FRAME", box: { w: 100, h: 40 }, heightMode: "hug", layout: { display: "flex", flexDirection: "row", padding: [16, 0, 16, 0] },
+      children: [{ id: "c1a", name: "Label", type: "TEXT", box: { w: 60, h: 24 } }] }], // 16+24+16=56 != declared 40
+  };
+  const resShortHug = audit([{ doc: { nodes: [shortHug] }, label: "short-hug" }], { platform: "web" });
+  check("[172] a HUG box whose declared size is smaller than its content (40 vs computed 56) DOES fire", resShortHug.findings.some((f) => f.code === "self-inconsistent-geometry"));
 })();
 
 report();
