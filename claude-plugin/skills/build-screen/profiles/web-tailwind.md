@@ -77,7 +77,7 @@ Output
   `--color-figma-primary-primary` → `bg-figma-primary-primary`, a font size is `text-figma-…`.
   Use those for design values and leave the bare utilities (`rounded-xl`, `p-4`) with their framework
   meaning. When you add a design token by hand, follow the same rule.
-- A generated name ending in `-<8 hex>` (`--spacing-figma-space-4-e26d506e`) means two Figma variables
+- A generated name ending in `-<8 hex>` (`--spacing-figma-space-4-1a2b3c4d`) means two Figma variables
   share that name with different values; the suffix is the variable's key. Use the one whose key the
   screen's own `.vars.json` carries — never the other because it looks shorter.
 - Figma's "fully rounded" corner (a literal 1e9) is emitted as `9999px`; `rounded-full` is equivalent.

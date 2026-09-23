@@ -242,7 +242,7 @@ those. Turn them into the stack's own theme file once, instead of re-mapping val
 Why not the union by default: names repeat across screens' libraries. A union can hold two
 `Space 4` — say 24 (the design system's) and 16 (one screen's local copy); a theme generated from the
 union cannot give both screens the plain `space-4`, so each is emitted under its key
-(`space-4-e26d506e`, `space-4-64928e3a`) and the screen that binds 24 must pick that one. Generated from
+(`space-4-<first 8 of key A>`, `space-4-<first 8 of key B>`) and the screen that binds 24 must pick that one. Generated from
 that screen's own `.vars.json`, it is simply `space-4: 24px`.
 
 ```bash
@@ -255,17 +255,11 @@ It writes more than a theme file: `tokens.dtcg.json`, `tokens.css`, `tokens.reso
 `tokens/` directory of per-collection/per-mode set files — around 20 files for a real system. Point
 it at a directory you are happy to have filled.
 
-Pick the output by stack. `tokens.css` is plain `:root` custom properties — right for CSS Modules or
-vanilla CSS, but **Tailwind generates no utilities from it**, so on Tailwind v4 use `--web tailwind`:
-it writes `theme.css` (`@import "tailwindcss"` + an `@theme` block) with each variable under the
-namespace that earns it a utility, inside a `figma-` sub-namespace — `--color-figma-*` → `bg-figma-…`/
-`text-figma-…`, `--spacing-figma-*` → `p-figma-…`/`gap-figma-…`, `--radius-figma-*` → `rounded-figma-…`,
-`--text-figma-*` → `text-figma-<size>` — and every non-default mode reassigning those properties in a
-`[data-theme="…"]` block. The prefix is there because an `@theme` variable REPLACES Tailwind's own
-of the same name: Figma's `XL` radius as `--radius-xl: 16px` silently turned every `rounded-xl` (12px)
-in the project into 16px. So `rounded-xl` keeps Tailwind's meaning and the design's XL is
-`rounded-figma-xl`. Import it as the app's entry CSS. Do not hand-write an
-`@theme` block from bound token names: that is the per-screen re-mapping this step exists to stop.
+Pick the output by stack; the build-screen profile for the stack says which flag and what the
+generated names look like. `tokens.css` (no flag) is plain `:root` custom properties for CSS
+Modules or vanilla CSS; `--web tailwind` writes a Tailwind v4 `theme.css`; `--native <profile>`
+writes one native token file. Import the result as the app's theme. Do not hand-write a theme from
+bound token names: that is the per-screen re-mapping this step exists to stop.
 
 **Read the warnings it prints.** Nothing is dropped any more, but one warning changes names: `N
 different Figma variables share the name 'X' … resolve DIFFERENTLY` means both were emitted, each
