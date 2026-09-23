@@ -191,4 +191,29 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   })());
 })();
 
+// ---------- livetest-3 finding 74: no finding may cite a layer the designer switched off ----------
+// Real exports (test/fixtures/livetest3/verify/, built from the livetest-3 run and proven to audit
+// byte-identically to the full files). Before: 44 of Job Roles' 119 findings (and 40 of Global
+// Policies' 105) cited hidden nodes, including I7314:87216;6:87 "_selected icon" with the instruction
+// "the build uses these values EXACTLY".
+(() => {
+  const fs = require("fs");
+  const FX = path.join(__dirname, "fixtures", "livetest3", "verify");
+  for (const [file, label] of [["positions___7314_87192.json", "Job Roles"], ["System_Configurations__1359_21337.json", "Global Policies"]]) {
+    const doc = JSON.parse(fs.readFileSync(path.join(FX, file), "utf8"));
+    // independent walk — the prompt's own snippet, not hidden.js
+    const hidden = new Set();
+    (function w(n, h) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: doc.nodes }, false);
+    const res = audit([{ doc, label: file.replace(/\.json$/, "") }], { platform: "web" });
+    const cited = res.findings.filter((f) => f.nodeId && hidden.has(f.nodeId));
+    check(`[74] ${label}: no finding cites a hidden node (${cited.length} do)`, cited.length === 0);
+    check(`[74] ${label}: the skipped layers are counted in the result (${res.hiddenLayers && res.hiddenLayers.nodesSkipped} of ${hidden.size})`, !!res.hiddenLayers && res.hiddenLayers.nodesSkipped === hidden.size);
+    check(`[74] ${label}: the markdown says hidden layers were skipped`, /hidden layers \(switched off in Figma\) were skipped/.test(toMarkdown(res)));
+    if (label === "Job Roles") {
+      check("[74] I7314:87216;6:87 ('_selected icon', hidden) is not cited at all", !res.findings.some((f) => f.nodeId === "I7314:87216;6:87"));
+      check("[74] …while visible off-grid spacing is still reported (the audit did not go quiet)", res.findings.some((f) => f.code === "off-grid-spacing" && !hidden.has(f.nodeId)));
+    }
+  }
+})();
+
 report();

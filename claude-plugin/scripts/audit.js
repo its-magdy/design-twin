@@ -8,6 +8,39 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
+// design-to-code/hidden.js
+var require_hidden = __commonJS({
+  "design-to-code/hidden.js"(exports2, module2) {
+    var hiddenSelf2 = (node) => !!(node && typeof node === "object" && node.hidden);
+    var isHidden2 = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf2(node);
+    function walkWithHidden(root, fn, opts) {
+      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+      (function go(node, parentHidden, path, parent, depth) {
+        if (!node || typeof node !== "object") return;
+        const hidden = isHidden2(node, parentHidden);
+        fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+        const kids = Array.isArray(node.children) ? node.children : [];
+        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+      })(root, false, root && pathOf(root, 0), null, 0);
+    }
+    function hiddenIds(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && n.id) out.push(n.id);
+      });
+      return out;
+    }
+    function hiddenRoots(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden(r, (n, c) => {
+        if (c.hidden && !c.parentHidden) out.push(n);
+      });
+      return out;
+    }
+    module2.exports = { hiddenSelf: hiddenSelf2, isHidden: isHidden2, walkWithHidden, hiddenIds, hiddenRoots };
+  }
+});
+
 // design-to-code/component-match.js
 var require_component_match = __commonJS({
   "design-to-code/component-match.js"(exports2, module2) {
@@ -976,6 +1009,7 @@ var require_cross_check = __commonJS({
 });
 
 // design-to-code/audit.js
+var { isHidden, hiddenSelf } = require_hidden();
 var SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 var omit = (o, keys) => {
   const out = {};
@@ -1099,6 +1133,7 @@ function audit(input, opts = {}) {
   const usedComponents = /* @__PURE__ */ new Map();
   const stateHits = { loading: [], empty: [], error: [] };
   const annotations = [];
+  const hiddenIds = /* @__PURE__ */ new Set();
   for (const root of roots) {
     const m = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
@@ -1112,13 +1147,19 @@ function audit(input, opts = {}) {
     if (!node || typeof node !== "object") return;
     const path = [...ancestors.map((a) => a.name), node.name].join(" > ");
     const here = { label: ctx.label, path };
-    const hiddenBranch = node.hidden || ancestors.some((a) => a.hidden);
+    const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
     if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: a.label || a.markdown });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
     for (const [state, re] of Object.entries(STATE_WORDS)) {
       if (re.test(node.name || "") || node.type === "TEXT" && ancestors.length <= 6 && re.test(node.text || "")) {
         stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
       }
+    }
+    if (hiddenBranch) {
+      if (node.id) hiddenIds.add(node.id);
+      const self = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
+      for (const child of Array.isArray(node.children) ? node.children : []) walk(child, [...ancestors, self], ctx);
+      return;
     }
     if (node.mainComponent || node.component) {
       const mc = node.mainComponent || {};
@@ -1340,6 +1381,7 @@ function audit(input, opts = {}) {
   for (const c of components.filter((c2) => c2.missing && c2.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design \u2014 use the design-system default, or is there a spec?`);
   if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size \u2014 at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
   let crossFile = null;
+  let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
     const { crossCheck } = require_cross_check();
     crossFile = crossCheck({
@@ -1352,6 +1394,10 @@ function audit(input, opts = {}) {
     });
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue;
+      if (f.nodeId && hiddenIds.has(f.nodeId)) {
+        hiddenFindingsOmitted++;
+        continue;
+      }
       findings.push(Object.assign({ severity: f.severity, code: f.code, message: f.message, crossFile: true }, omit(f, ["severity", "code", "message"])));
     }
   } else {
@@ -1375,6 +1421,7 @@ function audit(input, opts = {}) {
     screenStatesScope,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
     tokenBinding,
     components,
     screenStates,
@@ -1387,6 +1434,7 @@ function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
   L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped \u2014 they are not built, and no finding below cites one.*`, "");
   if (res.platformAssumed) {
     L.push(
       `> \u26A0\uFE0F **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,

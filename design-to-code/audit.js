@@ -22,6 +22,8 @@
 //                     can be read correctly ("not in this frame" vs "nowhere")
 //   screens           [label] — one per audited root, from the input's label/filename
 //   summary           { blockers, warnings, info } — counts by severity
+//   hiddenLayers      { nodesSkipped, crossFileFindingsOmitted } — layers switched off in Figma
+//                     (`hidden: true` on the node or an ancestor): no finding cites one
 //   tokenBinding      { color|typography|spacing|radius|effects: { bound, total, pct|null } }
 //   components        [{ name, kind, known, present[], missing[], note?, sampled? }]
 //   screenStates      { list|loading|empty|error|...: "designed"|"not-found" }
@@ -31,6 +33,8 @@
 //                     where `extra` is per-code (e.g. { component, missing } on
 //                     missing-component-states, { category } on low-token-binding)
 // There is no `exportedAt`/`manifest`/`screen` at this level; those stay on the export document.
+
+const { isHidden, hiddenSelf } = require("./hidden.js");
 
 const SEVERITY_ORDER = { blocker: 0, warning: 1, info: 2 };
 
@@ -161,6 +165,7 @@ function audit(input, opts = {}) {
   const usedComponents = new Map(); // setKey|key|name -> { name, kind }
   const stateHits = { loading: [], empty: [], error: [] };
   const annotations = [];
+  const hiddenIds = new Set(); // every node skipped by the hidden predicate — cross-file findings are filtered by it too
 
   for (const root of roots) {
     const m = root.manifest || {};
@@ -176,7 +181,8 @@ function audit(input, opts = {}) {
     if (!node || typeof node !== "object") return;
     const path = [...ancestors.map((a) => a.name), node.name].join(" > ");
     const here = { label: ctx.label, path };
-    const hiddenBranch = node.hidden || ancestors.some((a) => a.hidden);
+    // hidden.js's one predicate: the node or any ancestor carries `hidden: true`.
+    const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
 
     // Designer intent the agent must read, collected verbatim.
     if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: a.label || a.markdown });
@@ -187,6 +193,19 @@ function audit(input, opts = {}) {
       if (re.test(node.name || "") || (node.type === "TEXT" && ancestors.length <= 6 && re.test(node.text || ""))) {
         stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
       }
+    }
+
+    // A layer the designer switched off renders nothing, so nothing about it is a finding: the audit
+    // used to hand a builder "use paddingTop=2 EXACTLY" for a hidden selected-state icon (finding 74 —
+    // 44 of Job Roles' 119 findings cited hidden nodes). It is still WALKED, only for the two
+    // collections above: a hidden "Error toast" is evidence the error state was designed, and an
+    // annotation is designer intent wherever it sits. Token-binding tallies, component usage and every
+    // emitter below see visible layers only.
+    if (hiddenBranch) {
+      if (node.id) hiddenIds.add(node.id);
+      const self = { name: node.name, hidden: true, fills: [], __tappable: false, __beneath: [] };
+      for (const child of Array.isArray(node.children) ? node.children : []) walk(child, [...ancestors, self], ctx);
+      return;
     }
 
     // Component usage → state coverage later.
@@ -448,6 +467,7 @@ function audit(input, opts = {}) {
   // never "matches what you exported" — and a reader reasonably read it as the latter. The join lives
   // in cross-check.js; its findings are merged in here so one report answers both questions.
   let crossFile = null;
+  let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
     const { crossCheck } = require("./cross-check.js");
     crossFile = crossCheck({
@@ -460,6 +480,7 @@ function audit(input, opts = {}) {
     });
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue; // the coverage table below carries the informational half
+      if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk (finding 74)
       findings.push(Object.assign({ severity: f.severity, code: f.code, message: f.message, crossFile: true }, omit(f, ["severity", "code", "message"])));
     }
   } else {
@@ -486,6 +507,7 @@ function audit(input, opts = {}) {
     screenStatesScope,
     screens: roots.map((r) => r.label),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
+    hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
     tokenBinding,
     components,
     screenStates,
@@ -500,6 +522,7 @@ function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit — ${res.screens.join(", ") || "(no screens)"}`, "");
   L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED — not given)*" : ""} · grid ${res.grid}px · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped — they are not built, and no finding below cites one.*`, "");
   if (res.platformAssumed) {
     L.push(`> ⚠️ **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,
       `> spread, blur and blend-mode support all differ per platform — on the wrong one, every one of`,
