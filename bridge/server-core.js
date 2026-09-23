@@ -25,12 +25,36 @@ function versionOlder(a, b) {
   for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] < b[i]; }
   return false;
 }
-// `null` means "nothing to warn about" — either the plugin didn't report a version (a pre-327 bundle;
-// already named separately, at the call site, as "unknown") or it isn't older than this CLI/MCP.
+// `null` means "nothing to warn about" — the plugin reported a version, and it isn't older than this
+// CLI/MCP. Everything else IS worth a warn, including a MISSING version: the first live check of this
+// exact feature found a real daemon + a real Figma plugin both still running pre-327 code, and doctor
+// said nothing — `list clients --json` printed `pluginVersion: null, pluginStale: null` for both
+// files, because the old logic only ever compared two REAL version strings and treated "didn't report
+// one" as "nothing to check," which is backwards: no version at all is the ONE case we can be certain
+// predates this feature, so it is unconditionally worth a warning, not a silent pass.
 function pluginStalenessNote(pluginVersion) {
+  if (typeof pluginVersion !== "string" || !pluginVersion) {
+    return "plugin bundle predates version reporting (or the daemon was started before this bridge was updated) — " +
+      "re-run Plugins → Development → Design Twin in Figma and restart `dtwin serve`";
+  }
   const p = parseVersion(pluginVersion), b = parseVersion(BRIDGE_VERSION);
   if (!p || !b || !versionOlder(p, b)) return null;
   return `plugin v${pluginVersion} is older than this ${BRIDGE_VERSION} bridge — reload the plugin in Figma (Plugins → Development → Design Twin) to pick up recent fixes`;
+}
+
+// Distinct from the above: this fires when the CLIENT ROW ITSELF has no `pluginVersion` KEY at all
+// (`"pluginVersion" in row` is false), which is not the same as the key being present and `null`.
+// `describe()` below always sets the key — to a string or explicitly to `null` — for any bridge
+// running this code, so a row with the key entirely absent can only have come from an OLDER daemon's
+// own (pre-327) `describe()`, read back over its status socket by a NEWER `dtwin` CLI. That is a
+// second, independent kind of staleness this tool can detect: not just "the Figma plugin is old" but
+// "the long-running `dtwin serve` process itself predates this bridge version and needs restarting" —
+// which reloading the Figma plugin alone will not fix, since the daemon in front of it is what's stale.
+function daemonRowStalenessNote(row) {
+  if (row && typeof row === "object" && !("pluginVersion" in row)) {
+    return "the `dtwin serve` daemon in front of this connection predates plugin-version reporting — restart it (`dtwin serve --stop` then `dtwin serve`) to pick up recent fixes";
+  }
+  return null;
 }
 
 // The ONLY ports a published plugin can reach. figma-plugin/manifest.json lists these three in
@@ -596,4 +620,4 @@ function createBridge(port = PORT) {
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.js). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-module.exports = { createBridge, verifyClient, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote };
+module.exports = { createBridge, verifyClient, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };

@@ -99,17 +99,30 @@ const fileNames = (clients) => (clients || []).map((c) => c.file || "(unidentifi
 // command. `pluginStale` is computed server-side (server-core.js's `describe()`), so doctor doesn't
 // duplicate the version-compare logic; it just relays whichever client(s) are behind.
 function connectedDetail(clients, prefix) {
+  // Lazily required, same discipline as probePlugin()'s own `require("./server-core")` — this file's
+  // header rule is that server-core is never loaded until the port is already known to be valid,
+  // because requiring it eagerly can exit the process on a bad FIGMA_BRIDGE_PORT. connectedDetail is
+  // only ever called after that check has already passed (the `problem` branch in run() returns via
+  // checkPlugin({skipped}) without reaching here), so this stays safe.
+  const { daemonRowStalenessNote } = require("./server-core.js");
   const detail = `${prefix}: ${fileNames(clients)}`;
   const stale = (clients || []).map((c) => c.pluginStale).filter(Boolean);
-  if ((clients || []).length < 2 && !stale.length) return { detail };
+  // A row with no `pluginVersion` KEY at all (not merely a `null` value) means it came from a
+  // `dtwin serve` daemon whose own `describe()` predates plugin-version reporting — a SEPARATE
+  // staleness, distinct from "this Figma plugin's bundle is old": reloading the plugin will not fix it,
+  // restarting the daemon will. `list clients`/`whoami` name it per-row (figma-pull.js); doctor folds
+  // it into this same summary line so it's never a silent gap here either.
+  const daemonStale = [...new Set((clients || []).map(daemonRowStalenessNote).filter(Boolean))];
+  if ((clients || []).length < 2 && !stale.length && !daemonStale.length) return { detail };
   const bits = [];
   if ((clients || []).length >= 2) bits.push(`${detail} — ${clients.length} files, so commands must say which`);
   const nexts = [];
   if ((clients || []).length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
   if (stale.length) nexts.push(...new Set(stale));
+  if (daemonStale.length) nexts.push(...daemonStale);
   return {
     detail: bits.length ? bits[0] : detail,
-    next: nexts.length ? nexts.join(" ") : undefined,
+    next: nexts.length ? nexts.join("; ") : undefined,
   };
 }
 
@@ -382,8 +395,13 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait } = {}) 
       // #328), which reads `pluginCheck.status` to decide whether the token warning is real.
       pluginCheck = st.pluginConnected
         ? (() => {
+            const { daemonRowStalenessNote } = require("./server-core.js"); // lazy — see connectedDetail's comment
             const c = connectedDetail(st.clients, "connected (through the daemon)");
-            const stale = (st.clients || []).some((cl) => cl.pluginStale);
+            // Two independent kinds of stale, either one is a warn: a stale PLUGIN bundle (pluginStale,
+            // set by an up-to-date daemon that saw a version-less/old `hello`), or the DAEMON itself
+            // predating version reporting (its rows have no `pluginVersion` key at all — the live case
+            // this was found in: a long-running `dtwin serve` older than this bridge).
+            const stale = (st.clients || []).some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
             return { id: "plugin", title: "Figma plugin", status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
           })()
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");

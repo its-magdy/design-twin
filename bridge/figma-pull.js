@@ -270,7 +270,7 @@ if (require.main === module) {
 
 // TIMEOUTS is the per-command budget table both front-ends read (server-core.js) — the tiers below
 // pick from it rather than restating them, so the CLI and the MCP tools cannot drift apart.
-const { createBridge, TIMEOUTS, exportTimeout, errMsg, tokenStore, pluginStalenessNote } = require("./server-core");
+const { createBridge, TIMEOUTS, exportTimeout, errMsg, tokenStore, pluginStalenessNote, daemonRowStalenessNote } = require("./server-core");
 // node-id.js is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
 // (its own header). This file used to hand --children's raw token straight to the plugin, whose only
 // normalisation is replace(/-/g, ":") — so a pasted design URL worked through the MCP twin
@@ -713,10 +713,15 @@ function formatClients(rows) {
     bits.push(c.fileKey ? "fileKey " + c.fileKey : "no fileKey (private-plugin API not in effect)");
     bits.push("up " + (mins >= 1 ? mins + "m" : Math.round((c.uptimeMs || 0) / 1000) + "s"));
     // Finding 327: a version per row, so a stale plugin bundle is visible right where the user is
-    // already looking to pick a file — not just buried in a separate `dtwin doctor` run.
-    if (c.identified) bits.push("plugin v" + (c.pluginVersion || "unknown"));
+    // already looking to pick a file — not just buried in a separate `dtwin doctor` run. No version at
+    // all is itself the signal (a pre-327 plugin bundle, or a `dtwin serve` daemon old enough that its
+    // own `describe()` never learned to relay one) — named explicitly rather than a bare "unknown",
+    // which read as "couldn't be determined" instead of "definitely predates this".
+    if (c.identified) bits.push("plugin v" + (c.pluginVersion || "unknown (pre-versioning)"));
     lines.push("        " + bits.join(" · "));
     if (c.pluginStale) lines.push("        ! " + c.pluginStale);
+    const daemonStale = daemonRowStalenessNote(c);
+    if (daemonStale) lines.push("        ! " + daemonStale);
   }
   lines.push("");
   lines.push("Address one with --client <connId | fileKey | part of the file name>, e.g. --client " +
