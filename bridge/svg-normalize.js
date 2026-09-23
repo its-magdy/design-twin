@@ -28,11 +28,25 @@
 // icons among those eight files. Still two orders of magnitude below anything a human would call
 // "moved" — accepted by the orchestrator as the tolerance to use, despite differing from the ~0.01px
 // originally suggested, specifically because 0.01px empirically fails on this real fixture data.
-const NUM_RE = /-?\d+\.\d+/g;
+// Matches BOTH plain decimals (`-0.000406265`) and scientific notation (`2.09808e-05`) — Figma emits
+// both for a coordinate near zero, sometimes for the SAME logical value across two exports of what is
+// otherwise the identical icon (live evidence: a real `angle-left` chevron came back as
+// `2.09808e-05`/`-0.000406265`/`8.2016e-05` in three different pulls of the same shape). The regex
+// used to stop at the decimal mantissa (`-?\d+\.\d+`), so a scientific-notation coordinate like
+// `2.09808e-05` had only its `2.09808` replaced, leaving the exponent dangling as `2.1e-05` — a
+// corrupted, un-normalised leftover that could never match the plain-decimal form's `0.0`, and the
+// icon failed to dedup even though every OTHER coordinate in the path matched exactly. Round 3 found
+// this live: five `angle-left*.svg` files for what should have been two (a real up/down pair).
+const NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
 function normalizeSvgText(svg) {
   return svg.replace(NUM_RE, (m) => {
     const n = Number(m);
-    return Number.isFinite(n) ? n.toFixed(1) : m;
+    if (!Number.isFinite(n)) return m;
+    // toFixed can print "-0.0" for a tiny negative value that rounds to zero — a plain "0.0" and a
+    // "-0.0" are the same design value and must normalise identically, or they poison dedup the same
+    // way the scientific-notation bug above did.
+    const fixed = n.toFixed(1);
+    return fixed === "-0.0" ? "0.0" : fixed;
   });
 }
 

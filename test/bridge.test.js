@@ -1433,9 +1433,13 @@ async function disconnectErr(code, reason) {
   });
   const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8"));
   ok("[write-out] the asset index lists every asset this screen references", aIdx.files.length === 3);
-  ok("[write-out] and names the byte-identical duplicates under one hash",
-    aIdx.duplicates.length === 1 && aIdx.duplicates[0].files.length === 2);
-  ok("[write-out] the returned summary reports the duplicate count too", withAssets.wrote.assetIndex.duplicates === 1);
+  // P5 round 3 (findings 24/25/27): writeAssets now dedups by CONTENT before ever writing a file, so
+  // two byte-identical entries under two DIFFERENT names ("I1_2_3.svg"/"I4_5_6.svg") collapse to ONE
+  // file on disk instead of two — `duplicates` is now empty because there is no longer a duplicate
+  // FILE for it to find; both manifest rows correctly point at the one file that was actually written.
+  ok("[write-out] byte-identical entries under different names are deduped at WRITE time, not just reported after the fact",
+    aIdx.files[0].file === aIdx.files[1].file && aIdx.duplicates.length === 0);
+  ok("[write-out] the returned summary agrees — no duplicate count to report", withAssets.wrote.assetIndex.duplicates === 0);
 
   // Which icons are safe to recolour. Figma exports the frame as it LOOKS, so a Dark-mode glyph
   // arrives with its stroke baked in and cannot serve a Light theme (finding 73) — but a red trash
@@ -2270,6 +2274,78 @@ async function disconnectErr(code, reason) {
     writeOut.writeAssets(dir, [{ id: "n1b", file: "assets/angle-left.svg", text: svg1, hash: "aaaaaaaa-1" }]);
     ok("[case-fold] an identical re-pull reuses the existing file rather than duplicating it",
       fs.readdirSync(path.join(dir, "assets")).length === 2);
+  }
+  // ---------------------------------------------------------------- P5 round 3: content dedup regardless of NAME (findings 24/25/27)
+  console.log("\nwrite-out.js — writeAssets dedups by CONTENT, not just by name (P5 round 3, findings 24/25/27):");
+  {
+    // A live three-screen pull with the round-2 fix already in place still produced 4 Ellipse_2327*
+    // files for one icon: the round-2 reuse path only checked "is anything already written under THIS
+    // exact name" — it had no way to see that a NEW name's bytes were already on disk under a
+    // DIFFERENT, earlier name (an earlier screen's pull, or a same-run sibling the plugin named
+    // differently). This is the exact shape: write "Ellipse_2327.svg" first, then hand writeAssets the
+    // SAME bytes under the name "Ellipse_2327-e9af26.svg" (what a real duplicate-content pull looks
+    // like on disk before this fix).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-content-dedup-"));
+    const circle = '<svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="#fff"/></svg>';
+    const a1 = { id: "n1", file: "assets/Ellipse_2327.svg", text: circle, hash: "aaaaaaaa-1" };
+    writeOut.writeAssets(dir, [a1]);
+    const a2 = { id: "n2", file: "assets/Ellipse_2327-e9af26.svg", text: circle, hash: "bbbbbbbb-1" };
+    writeOut.writeAssets(dir, [a2]);
+    const onDisk = fs.readdirSync(path.join(dir, "assets"));
+    ok("[content-dedup] a new NAME whose content already exists on disk reuses the existing file — one file, not two",
+      onDisk.length === 1 && onDisk[0] === "Ellipse_2327.svg");
+    ok("[content-dedup] the reused asset's `a.file` points at the EXISTING name, not the one it arrived under",
+      a2.file === "assets/Ellipse_2327.svg");
+    // duplicates must be EMPTY for this group now that dedup happens before either file is written —
+    // there is only ever one file, so there is nothing for the duplicates scan to find.
+    fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
+    const idx = writeOut.writeScreenAssets(dir, { base: "S", assets: "pages/P/S.assets.json" }, [a1, a2]);
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8"));
+    ok("[content-dedup] `duplicates` is empty — the writer no longer creates the duplicate it used to report",
+      doc.duplicates.length === 0);
+    const diskHash = require("crypto").createHash("sha1").update(fs.readFileSync(path.join(dir, "assets", "Ellipse_2327.svg"))).digest("hex");
+    ok("[content-dedup] both manifest rows carry the hash of the ONE file on disk",
+      doc.files.every((f) => f.hash === diskHash));
+  }
+  {
+    // The drifted arrow-down pair (real fixture, ≤0.002px apart) handed to writeAssets under two
+    // DIFFERENT names — the shape a same-run plugin `byName` suffix or two different screens' pulls
+    // produce. Must still collapse to one file via the SAME content-independent-of-name path (SVG
+    // normalisation applies here too, not just byte-identical content like the Ellipse_2327 case).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-content-dedup-drift-"));
+    const svgA = fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "arrow-down", "arrow-down-3ea6be.svg"), "utf8");
+    const svgB = fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "arrow-down", "arrow-down-ccfd6b.svg"), "utf8");
+    const a1 = { id: "n1", file: "assets/arrow-down-3ea6be.svg", text: svgA, hash: "cccccccc-1" };
+    writeOut.writeAssets(dir, [a1]);
+    const a2 = { id: "n2", file: "assets/arrow-down-ccfd6b.svg", text: svgB, hash: "dddddddd-1" };
+    writeOut.writeAssets(dir, [a2]);
+    const onDisk = fs.readdirSync(path.join(dir, "assets"));
+    ok("[content-dedup] the real drifted arrow-down pair, under two different names, still collapses to ONE file",
+      onDisk.length === 1 && a2.file === a1.file);
+  }
+  {
+    // Genuinely NEW content must still get written — this fix must not turn writeAssets into a
+    // no-op for real new icons.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-content-dedup-new-"));
+    writeOut.writeAssets(dir, [{ id: "n1", file: "assets/a.svg", text: "<svg>A</svg>", hash: "e1e1e1e1-1" }]);
+    writeOut.writeAssets(dir, [{ id: "n2", file: "assets/b.svg", text: "<svg>B</svg>", hash: "f2f2f2f2-1" }]);
+    ok("[content-dedup] genuinely different content is still written as two files",
+      fs.readdirSync(path.join(dir, "assets")).length === 2);
+  }
+  {
+    // Live evidence from a real pull (round 3): a near-zero coordinate came back as
+    // `2.09808e-05` in one export and `-0.000406265` in another, for what is otherwise the identical
+    // path — the old regex (`-?\d+\.\d+`, no exponent) only replaced the `2.09808` mantissa, leaving a
+    // corrupted `2.1e-05` fragment that could never match the plain-decimal form's normalised `0.0`.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-content-dedup-sci-"));
+    const svgSci = '<svg width="18" height="10"><path d="M2.09808e-05 8.61087C8.2016e-05 8.61087"/></svg>';
+    const svgPlain = '<svg width="18" height="10"><path d="M-0.000406265 8.61087C0.0000821 8.61087"/></svg>';
+    const a1 = { id: "n1", file: "assets/angle-left-a.svg", text: svgSci, hash: "aaaaaaaa-2" };
+    writeOut.writeAssets(dir, [a1]);
+    const a2 = { id: "n2", file: "assets/angle-left-b.svg", text: svgPlain, hash: "bbbbbbbb-2" };
+    writeOut.writeAssets(dir, [a2]);
+    ok("[content-dedup] scientific-notation and plain-decimal near-zero coordinates normalise the same way",
+      fs.readdirSync(path.join(dir, "assets")).length === 1 && a2.file === a1.file);
   }
   {
     // Finding 28: the whole-frame reference PNG must not inflate the screen's shippable asset totals.

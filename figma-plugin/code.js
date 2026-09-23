@@ -200,11 +200,13 @@
   var require_svg_normalize = __commonJS({
     "../bridge/svg-normalize.js"(exports, module) {
       "use strict";
-      var NUM_RE = /-?\d+\.\d+/g;
+      var NUM_RE = /-?\d+\.\d+(?:[eE][+-]?\d+)?/g;
       function normalizeSvgText2(svg) {
         return svg.replace(NUM_RE, (m) => {
           const n = Number(m);
-          return Number.isFinite(n) ? n.toFixed(1) : m;
+          if (!Number.isFinite(n)) return m;
+          const fixed = n.toFixed(1);
+          return fixed === "-0.0" ? "0.0" : fixed;
         });
       }
       function isSvgName(fileName) {

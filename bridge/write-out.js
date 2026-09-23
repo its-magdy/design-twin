@@ -16,7 +16,7 @@ const { buildPageLayout, screenPaths, mergeScreenIndex, mergeRootIndex, deriveTi
 const { buildDesignSystemLayout } = require("./design-system-layout.js");
 const { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } = require("./library-layout.js");
 const { mergeVariablesDoc } = require("./variables-merge.js");
-const { sameAsset, sha1Hex, normalizeForCompare } = require("./asset-compare.js");
+const { sha1Hex, normalizeForCompare } = require("./asset-compare.js");
 
 // outDir is resolved against the CURRENT WORKING DIRECTORY on purpose: for the MCP server that is
 // the project Claude Code was started in, so an export lands in the project you are building — not
@@ -165,11 +165,47 @@ function readExistingDirCaseFold(adir) {
   return map;
 }
 
+// The CONTENT half of dedup, keyed independent of name — the gap the name-only check above cannot
+// close. A name-only check reuses `angle-left.svg` only when the NEW asset is ALSO named
+// `angle-left.svg` (mod case); it writes a second copy of the exact same icon under a name the plugin
+// (or a different screen's pull) happened to pick instead, which is finding 24/live evidence: a real
+// three-screen pull with this fix already live still produced `Ellipse_2327.svg`,
+// `Ellipse_2327-e9af26.svg`, `Ellipse_2327-51bd18.svg` AND `Ellipse_2327-51bd18_1.svg` — four files,
+// one icon — because each pull's own suffix (assigned by the PLUGIN's per-run `byName`, or by an
+// earlier version of this file) was a different, equally-valid-looking name, and writeAssets only ever
+// asked "is anything ALREADY WRITTEN under THIS exact name" instead of "does this content already
+// exist ANYWHERE in the shared directory". Built once per writeAssets() call over the files ALREADY on
+// disk (sharedAssetHashes() does the identical scan for the duplicates report — same map, same
+// semantics, so a file this function reuses can never show up as a `duplicates` entry afterwards).
+function readExistingDirByContent(adir) {
+  const map = new Map(); // normalised sha1 -> real basename on disk
+  let names = [];
+  try { names = fs.readdirSync(adir); } catch (e) { return map; }
+  for (const name of names) {
+    let bytes;
+    try { bytes = fs.readFileSync(path.join(adir, name)); } catch (e) { continue; }
+    const hash = sha1Hex(normalizeForCompare(name, bytes));
+    if (!map.has(hash)) map.set(hash, name); // first (alphabetically-readdir'd) name wins ties
+  }
+  return map;
+}
+
 function shortHashOf(a, bytes) {
   // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
   // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
   if (typeof a.hash === "string" && a.hash) return a.hash.replace(/[^a-z0-9]/gi, "").slice(0, 6);
   return require("crypto").createHash("sha1").update(bytes).digest("hex").slice(0, 6);
+}
+
+// Reuse `existingName`'s bytes for `a`: point `a.file` at it, and replace `a.text`/`a.base64` with the
+// ACTUAL on-disk bytes so the manifest (writeScreenAssets, called right after this on the same array)
+// hashes what is really there — a normalised-equal-but-byte-different re-pull must never record a hash
+// for content that was never written (findings 23/104's "recorded hash matches nothing on disk", just
+// introduced by a naive fix instead of closed by one).
+function reuseExisting(a, dirPrefix, existingName, priorBytes) {
+  a.file = dirPrefix + "/" + existingName;
+  if (a.text != null) a.text = priorBytes.toString("utf8");
+  else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
 }
 
 function writeAssets(dir, assets, log, subdir) {
@@ -179,6 +215,9 @@ function writeAssets(dir, assets, log, subdir) {
   const existing = readExistingDirCaseFold(adir); // lower -> real name already on disk
   const claimed = new Map(); // lower -> real name this call has written/claimed so far (this batch)
   for (const [k, v] of existing) claimed.set(k, v);
+  // normalised sha1 -> real name, seeded from disk and updated as THIS call writes new content, so two
+  // assets in the SAME pull that happen to share content (not just two pulls) also collapse to one file.
+  const byContent = readExistingDirByContent(adir);
   const heavy = [];
   let n = 0;
   for (const a of assets) {
@@ -189,44 +228,50 @@ function writeAssets(dir, assets, log, subdir) {
 
     let baseName = path.basename(a.file);
     const dirPrefix = path.dirname(a.file); // usually "assets"
-    let key = baseName.toLowerCase();
-    const priorName = claimed.get(key);
-    if (priorName !== undefined) {
-      // Something with this name (case-insensitively) is already on disk or already written this
-      // batch. Same asset -> reuse it silently (this IS the same icon, re-pulled). Different asset ->
-      // give the NEW one a content-hash suffix rather than touch the file that was there first.
-      //
-      // "Same" is decided by sameAsset() (bridge/svg-normalize.js), NOT a raw Buffer.compare: a real
-      // re-pull of an unchanged SVG icon drifts sub-pixel on EVERY pull (finding 222 — that is the
-      // NORMAL case, not the exception), so a byte-exact compare would suffix every single re-pull of
-      // every icon (`-<hash6>`, then `_1`, then `_2`…), which is finding 25's "one chevron, eight
-      // files" happening all over again, just inside this function instead of across screens.
+
+    // CONTENT check FIRST, independent of what name this asset arrived under (finding 24/25/27): a
+    // name-only check only ever catches "this pull picked the SAME name as something already there".
+    // It has no way to see that `Ellipse_2327-e9af26.svg`'s bytes are already on disk as
+    // `Ellipse_2327.svg`, or that a drifted `arrow-down-<hash>.svg` is already there under a different
+    // hash suffix from an earlier pull — which is exactly the shape a live three-screen pull produced
+    // (4 Ellipse_2327* files, 6 arrow-down* files, 3 angle-left* files for what should be 1/1/2 real
+    // icons) even with the name-only reuse path already in place.
+    const contentHash = sha1Hex(normalizeForCompare(baseName, bytes));
+    const byContentName = byContent.get(contentHash);
+    if (byContentName !== undefined) {
       let priorBytes = null;
-      try { priorBytes = fs.readFileSync(path.join(adir, priorName)); } catch (e) { /* fall through as different */ }
-      const same = priorBytes && sameAsset(baseName, priorBytes, bytes);
-      if (same) {
-        a.file = dirPrefix + "/" + priorName;
-        // The manifest (writeScreenAssets, called right after this on the same array) hashes whatever
-        // is in `a.text`/`a.base64` — it must hash what is ACTUALLY ON DISK under `a.file`, or a
-        // normalised-equal-but-byte-different re-pull would record a hash for bytes that were never
-        // written (the exact "recorded hash matches nothing on disk" shape findings 23/104 complain
-        // about, just introduced by this fix instead of fixed by it). Replace with the disk content.
-        if (a.text != null) a.text = priorBytes.toString("utf8");
-        else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
+      try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch (e) { /* fall through as new */ }
+      if (priorBytes) {
+        reuseExisting(a, dirPrefix, byContentName, priorBytes);
         n++; // counted as written even though the on-disk file was left untouched
         continue;
       }
+    }
+
+    let key = baseName.toLowerCase();
+    const priorName = claimed.get(key);
+    if (priorName !== undefined) {
+      // Reaching here means the CONTENT check above already ruled out "this is the same asset under
+      // any name" — so a name collision at this point is a same-name (mod case) DIFFERENT asset, full
+      // stop. It never fires for a content-duplicate any more, which is also the fix for the `_1` guard
+      // bug: `Ellipse_2327-51bd18_1.svg` used to happen because a genuinely identical asset reached this
+      // branch (the content check didn't exist yet) with a hash-suffixed name that ALSO already existed
+      // (both suffix attempts were the exact same 6 hex chars, since both were hashes of the SAME
+      // content) — the guard's `_N` was masking a content-dedup failure, not resolving a real 6-hex
+      // collision. With content checked first, the guard can now only ever fire on a genuine collision
+      // between two DIFFERENT assets' hash suffixes, which is the vanishingly-unlikely case its comment
+      // always claimed it was.
       const ext = path.extname(baseName);
       const stem = baseName.slice(0, baseName.length - ext.length);
       baseName = stem + "-" + shortHashOf(a, bytes) + ext;
       key = baseName.toLowerCase();
-      // Vanishingly unlikely (a 6-char hex suffix colliding too), but never loop forever on it.
       let guard = 0;
       while (claimed.has(key) && guard++ < 5) { baseName = stem + "-" + shortHashOf(a, bytes) + "_" + guard + ext; key = baseName.toLowerCase(); }
     }
     const file = path.join(adir, baseName);
     fs.writeFileSync(file, bytes);
     claimed.set(key, baseName);
+    byContent.set(contentHash, baseName); // so a LATER asset in this same call also dedups against it
     a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
     const paths = a.text != null ? (a.text.match(/<path\b/g) || []).length : 0;
     if (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths });
