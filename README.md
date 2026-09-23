@@ -53,7 +53,7 @@ Supported target stacks: `web-tailwind`, `web-css-modules`, `react-native`, `swi
 ## Prerequisites
 
 - The **Figma desktop app**. A browser tab can't import a development plugin. Any plan works, including free.
-- **Node.js 18+** (CI runs on 20).
+- **Node.js 24+** (CI runs on 24).
 - **Claude Code**, for the skills.
 - **git**, to clone this repo.
 

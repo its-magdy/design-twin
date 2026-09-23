@@ -17,7 +17,7 @@
   ],
   "type": "commonjs",
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "bin": {
     "dtwin": "./figma-pull.js"

@@ -13,7 +13,8 @@
 const path = require("path");
 const fs = require("fs");
 
-// esbuild is a devDependency of bridge/ (and figma-plugin/) — there is no root package.json.
+// esbuild is a devDependency of bridge/ (and figma-plugin/); resolution walks upward to the
+// hoisted root node_modules too.
 const esbuild = require(require.resolve("esbuild", { paths: [path.join(__dirname, "..", "bridge"), path.join(__dirname, "..", "figma-plugin")] }));
 
 const SRC = path.join(__dirname, "..", "design-to-code");

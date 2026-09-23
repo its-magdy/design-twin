@@ -1,0 +1,17 @@
+{
+  "name": "design-twin",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "bridge",
+    "figma-plugin"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build --workspaces && node claude-plugin/build-scripts.js",
+    "test": "node test/harness.js && node test/bridge.test.js && node test/design-to-code.test.js && node test/audit.test.js && node test/verify-build.test.js && node test/verify-screen.test.js && node test/cross-check.test.js && node test/design-diff.test.js && node test/identity.test.js && node test/plan-skeleton.test.js && node test/resolve-screen.test.js && node test/ui.test.js && node test/mcp-share.test.js && node test/mcp-smoke.test.js"
+  }
+}

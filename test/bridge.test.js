@@ -132,7 +132,7 @@ fs.rmSync(tmp, { recursive: true, force: true });
 // up and the file WAS open. It sent debugging in the wrong direction. No offline test could catch it:
 // the mock harness answers instantly, so a timeout never elapsed. This drives the REAL socket path
 // with a client that deliberately never replies.
-const WebSocket = require("../bridge/node_modules/ws");
+const WebSocket = require("ws");
 
 // A bridge plus an OPEN, authenticated client on it. The `?token=` query and the "null" origin are
 // exactly what verifyClient gates on, so that handshake shape lives in one place — three copies meant
