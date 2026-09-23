@@ -1014,7 +1014,31 @@ function reportToMarkdown(r) {
 }
 const fmt = (v) => (Array.isArray(v) ? v.join("/") : String(v));
 
-module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+const fs = require("fs");
+const path = require("path");
+
+// P3 round 3, finding 315 ("--expect still writes two artefact sets for one screen" — Prompt 3
+// criterion 6 reopened): defaulting `--out` to the input's own basename (round 1's fix) only helps
+// when the caller actually uses that default. An explicit `--out <nickname>` — which both the verify
+// skill's own `<Screen>` placeholder and build-screen's `<Layer>__<id>` convention invite, under two
+// different names for the SAME node — still wrote a second, complete artefact set with no warning.
+// Scans a directory's own `*.expected.json` files (never a subdirectory — one screen, one flat
+// design/verify/) for one whose `frame.nodeId` already matches, at a DIFFERENT basename than the one
+// about to be written. Returns that file's path, or null.
+function findExistingExpectedFor(dir, nodeId, ownTarget) {
+  if (!nodeId || !fs.existsSync(dir)) return null;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith(".expected.json")) continue;
+    const full = path.join(dir, f);
+    if (path.resolve(full) === path.resolve(ownTarget)) continue;
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(full, "utf8")); } catch (e) { continue; }
+    if (doc && doc.frame && doc.frame.nodeId === nodeId) return full;
+  }
+  return null;
+}
+
+module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
 
 // ---------------------------------------------------------------- CLI
 if (require.main === module) {
@@ -1028,9 +1052,11 @@ if (require.main === module) {
   const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
-    "  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen>\n" +
+    "  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen> [--force]\n" +
     "      writes <Screen>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
     "      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n" +
+    "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
+    "      directory — pass --force to write a second one anyway.\n" +
     "  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n" +
     "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
@@ -1040,6 +1066,7 @@ if (require.main === module) {
 
   const out = take("--out");
   const interactionsFile = take("--interactions");
+  const force = strip("--force");
   const doExpect = strip("--expect");
   const doCompare = strip("--compare");
   if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); process.exit(2); }
@@ -1070,6 +1097,17 @@ if (require.main === module) {
     // report from the OLD expectation beside it, undated. The file itself stays byte-deterministic
     // (finding 154) — the notice goes to stderr, and every report records the sha it was computed on.
     const target = outBase + ".expected.json";
+    // Finding 315 / P3 c6: an explicit --out under a DIFFERENT name than the one already indexing
+    // this node (e.g. --out design/verify/JobRoles when design/verify/positions___7314_87192 already
+    // covers node 7314:87192) is refused rather than silently creating a second artefact set.
+    const dup = findExistingExpectedFor(path.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    if (dup && !force) {
+      console.error(
+        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
+          "(one screen, one artefact set). Use that existing name, or pass --force to write this one anyway."
+      );
+      process.exit(1);
+    }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     write(outBase, exp);

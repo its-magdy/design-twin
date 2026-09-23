@@ -15,12 +15,12 @@ var require_hidden = __commonJS({
     var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
     function walkWithHidden2(root, fn, opts) {
       const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-      (function go(node, parentHidden, path, parent, depth) {
+      (function go(node, parentHidden, path2, parent, depth) {
         if (!node || typeof node !== "object") return;
         const hidden = isHidden(node, parentHidden);
-        fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+        fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
         const kids = Array.isArray(node.children) ? node.children : [];
-        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
       })(root, false, root && pathOf(root, 0), null, 0);
     }
     function hiddenIds(roots) {
@@ -58,10 +58,10 @@ var require_catalog_input = __commonJS({
       }
     }
     function readJsonFile(file, what, hint) {
-      const fs = require("fs");
+      const fs2 = require("fs");
       let raw;
       try {
-        raw = fs.readFileSync(file, "utf8");
+        raw = fs2.readFileSync(file, "utf8");
       } catch (e) {
         const why = e && e.code === "ENOENT" ? "does not exist" : e && e.code === "EISDIR" ? "is a directory, not a file" : e && e.code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${e && e.code || e})`;
         console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
@@ -1015,10 +1015,28 @@ function reportToMarkdown(r) {
   return L.join("\n") + "\n";
 }
 var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
-module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+var fs = require("fs");
+var path = require("path");
+function findExistingExpectedFor(dir, nodeId, ownTarget) {
+  if (!nodeId || !fs.existsSync(dir)) return null;
+  for (const f of fs.readdirSync(dir)) {
+    if (!f.endsWith(".expected.json")) continue;
+    const full = path.join(dir, f);
+    if (path.resolve(full) === path.resolve(ownTarget)) continue;
+    let doc;
+    try {
+      doc = JSON.parse(fs.readFileSync(full, "utf8"));
+    } catch (e) {
+      continue;
+    }
+    if (doc && doc.frame && doc.frame.nodeId === nodeId) return full;
+  }
+  return null;
+}
+module.exports = { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
 if (require.main === module) {
-  const fs = require("fs");
-  const path = require("path");
+  const fs2 = require("fs");
+  const path2 = require("path");
   const crypto = require("crypto");
   const { readJsonFile } = require_catalog_input();
   const argv = process.argv.slice(2);
@@ -1035,14 +1053,15 @@ if (require.main === module) {
     argv.splice(i, 1);
     return true;
   };
-  const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-  const USAGE = "usage:\n  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen>\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.\n      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
+  const sha = (file) => crypto.createHash("sha256").update(fs2.readFileSync(file)).digest("hex");
+  const USAGE = "usage:\n  node design-to-code/verify-screen.js --expect <screen.json>... --out design/verify/<Screen> [--force]\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.\n      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n      directory \u2014 pass --force to write a second one anyway.\n  node design-to-code/verify-screen.js --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     process.exit(argv.length ? 0 : 2);
   }
   const out = take("--out");
   const interactionsFile = take("--interactions");
+  const force = strip("--force");
   const doExpect = strip("--expect");
   const doCompare = strip("--compare");
   if (doExpect === doCompare) {
@@ -1064,9 +1083,9 @@ if (require.main === module) {
       process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
       return;
     }
-    fs.mkdirSync(path.dirname(base), { recursive: true });
-    fs.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md2) fs.writeFileSync(base + ".report.md", md2);
+    fs2.mkdirSync(path2.dirname(base), { recursive: true });
+    fs2.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+    if (md2) fs2.writeFileSync(base + ".report.md", md2);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
@@ -1074,18 +1093,25 @@ if (require.main === module) {
       console.error("--expect needs at least one screen export\n" + USAGE);
       process.exit(2);
     }
-    const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path.basename(f, ".json") }));
+    const docs = argv.map((f) => ({ doc: readJsonFile(f, "screen export"), label: path2.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    const outBase = out || path.join("design", "verify", path.basename(argv[0], ".json"));
+    const outBase = out || path2.join("design", "verify", path2.basename(argv[0], ".json"));
     const target = outBase + ".expected.json";
+    const dup = findExistingExpectedFor(path2.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    if (dup && !force) {
+      console.error(
+        `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). Use that existing name, or pass --force to write this one anyway.`
+      );
+      process.exit(1);
+    }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
+    const prev = fs2.existsSync(target) ? fs2.readFileSync(target, "utf8") : null;
     write(outBase, exp);
     const h = crypto.createHash("sha256").update(next).digest("hex");
     if (prev !== null && prev === next) console.error(`note  ${target} was already identical (sha256 ${h.slice(0, 12)}\u2026) \u2014 unchanged`);
     else if (prev !== null) {
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs.existsSync(f));
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs2.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -1116,12 +1142,12 @@ if (require.main === module) {
   const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists = !!p && fs.existsSync(p);
+    const exists = !!p && fs2.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : void 0 };
   });
   const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck });
   const md = reportToMarkdown(rep);
-  const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path2.join("design", "verify", path2.basename(expFile, ".json").replace(/\.expected$/, ""));
   write(compareBase, rep, md);
   console.error(rep.headline);
   process.exit(rep.verdict === "pass" ? 0 : 1);
