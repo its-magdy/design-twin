@@ -184,6 +184,8 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
 // This one does: of the components actually placed on the screen, how many can you reuse? It keys on
 // the instance's mainComponent set key (a screen using six Button variants is ONE component to map),
 // and it deliberately reports zero as an error rather than as an empty success.
+const { walkWithHidden } = require("./hidden.js");
+
 function screenCoverage(map, catalog, screenDocs) {
   const entries = (map && map.components) || {};
   const mapKeys = new Set();
@@ -195,22 +197,22 @@ function screenCoverage(map, catalog, screenDocs) {
   }
   const catKeys = new Set(((catalog && catalog.components) || []).map((c) => c.key).filter(Boolean));
 
-  const used = new Map(); // set key -> { setName, instances }
-  const walk = (n) => {
-    if (!n || typeof n !== "object") return;
-    if (n.type === "INSTANCE" && n.mainComponent) {
-      const mc = n.mainComponent;
-      const id = mc.setKey || mc.key;
-      if (id) {
-        if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, key: id, variantKey: mc.key });
-        used.get(id).instances++;
-      }
-    }
-    for (const c of n.children || []) walk(c);
-  };
+  // Counted over EVERY instance in the export, as before — but each set also records how many of its
+  // instances sit on layers the designer switched off (hidden.js's predicate), so the headline can say
+  // how many of "the components on this screen" will never be built at all (livetest-3: 45 of Global
+  // Policies' 87 instances are hidden).
+  const used = new Map(); // set key -> { setName, instances, hiddenInstances }
   for (const doc of screenDocs || []) {
     const roots = Array.isArray(doc && doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
-    for (const r of roots) walk(r);
+    for (const r of roots) walkWithHidden(r, (n, c) => {
+      if (n.type !== "INSTANCE" || !n.mainComponent) return;
+      const mc = n.mainComponent;
+      const id = mc.setKey || mc.key;
+      if (!id) return;
+      if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key });
+      used.get(id).instances++;
+      if (c.hidden) used.get(id).hiddenInstances++;
+    });
   }
 
   const rows = [...used.values()].map((u) => ({
@@ -219,11 +221,15 @@ function screenCoverage(map, catalog, screenDocs) {
     inMap: mapKeys.has(u.key) || mapKeys.has(u.variantKey),
   }));
   const instances = rows.reduce((n, r) => n + r.instances, 0);
+  const hiddenInstances = rows.reduce((n, r) => n + r.hiddenInstances, 0);
+  const hiddenOnly = rows.filter((r) => r.instances === r.hiddenInstances).length;
   const inCatalog = rows.filter((r) => r.inCatalog).length;
   const inMap = rows.filter((r) => r.inMap).length;
   return {
     distinct: rows.length,
     instances,
+    hiddenInstances,
+    hiddenOnly,
     inCatalog,
     inMap,
     catalogPct: rows.length ? Math.round((inCatalog / rows.length) * 100) : null,
@@ -286,10 +292,12 @@ if (require.main === module) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
     } else {
       console.error(
-        `\nSCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the components on this screen are in your map` +
+        `\nSCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component sets placed on this screen are in your map (by component key)` +
           ` · ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog` +
-          ` · ${cov.instances} instance(s) total`
+          ` · ${cov.instances} instance(s) total, ${cov.hiddenInstances} of them on hidden layers` +
+          (cov.hiddenOnly ? ` (${cov.hiddenOnly} set(s) appear ONLY on hidden layers and will not be built)` : "")
       );
+      console.error(`       (this says which components you can REUSE by key — not which ones the build contains; that is verify's job.)`);
       // 0% by key is also exactly what a DUPLICATED design-system file looks like — every key re-minted,
       // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
       // pointing the user at "the wrong library".

@@ -275,4 +275,26 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[screen-cov] a real half-match reports 50%, in the map and in the catalog", cov.mapPct === 50 && cov.catalogPct === 50);
 }
 
+// ---------- drift-lint SCREEN COVERAGE says how much of "the screen" is hidden (P2a, 107/139/185) ----------
+// The real Global Policies export: 87 instances, 45 of them on layers the designer switched off. The
+// coverage line keeps its numbers (it is map/catalog coverage by key) but must say how many of those
+// instances — and which whole sets — will never be built, and that it is NOT a build-coverage number.
+{
+  const fs = require("fs");
+  const path = require("path");
+  const gp = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json"), "utf8"));
+  const cov = screenCoverage({ components: {} }, { components: [] }, [gp]);
+  ok("[drift-lint wording] instances are still counted in full (87), with the 45 on hidden layers named", cov.instances === 87 && cov.hiddenInstances === 45);
+  ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
+  const os = require("os");
+  const { spawnSync } = require("child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-drift-"));
+  fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ components: {} }));
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "design-to-code", "drift-lint.js"), path.join(tmp, "map.json"),
+    path.join(__dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
+    "--screen", path.join(__dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json")], { encoding: "utf8" });
+  ok("[drift-lint wording] the printed line names the hidden instances and says it measures reuse by key, not what the build contains",
+    /SCREEN COVERAGE: \d+\/\d+ .* 87 instance\(s\) total, 45 of them on hidden layers/.test(r.stderr) && /not which ones the build contains/.test(r.stderr));
+}
+
 report();

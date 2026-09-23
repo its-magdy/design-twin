@@ -207,6 +207,39 @@ var require_snapshot_meta = __commonJS({
   }
 });
 
+// design-to-code/hidden.js
+var require_hidden = __commonJS({
+  "design-to-code/hidden.js"(exports2, module2) {
+    var hiddenSelf = (node) => !!(node && typeof node === "object" && node.hidden);
+    var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
+    function walkWithHidden2(root, fn, opts) {
+      const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
+      (function go(node, parentHidden, path, parent, depth) {
+        if (!node || typeof node !== "object") return;
+        const hidden = isHidden(node, parentHidden);
+        fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
+        const kids = Array.isArray(node.children) ? node.children : [];
+        for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+      })(root, false, root && pathOf(root, 0), null, 0);
+    }
+    function hiddenIds(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
+        if (c.hidden && n.id) out.push(n.id);
+      });
+      return out;
+    }
+    function hiddenRoots(roots) {
+      const out = [];
+      for (const r of roots || []) walkWithHidden2(r, (n, c) => {
+        if (c.hidden && !c.parentHidden) out.push(n);
+      });
+      return out;
+    }
+    module2.exports = { hiddenSelf, isHidden, walkWithHidden: walkWithHidden2, hiddenIds, hiddenRoots };
+  }
+});
+
 // design-to-code/catalog-input.js
 var require_catalog_input = __commonJS({
   "design-to-code/catalog-input.js"(exports2, module2) {
@@ -561,6 +594,7 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
   const aheadOfSnapshot = exportedAt ? Date.parse(lastModified) > Date.parse(exportedAt) : void 0;
   return { lastModified, aheadOfSnapshot };
 }
+var { walkWithHidden } = require_hidden();
 function screenCoverage(map, catalog, screenDocs) {
   const entries = map && map.components || {};
   const mapKeys = /* @__PURE__ */ new Set();
@@ -572,21 +606,17 @@ function screenCoverage(map, catalog, screenDocs) {
   }
   const catKeys = new Set((catalog && catalog.components || []).map((c) => c.key).filter(Boolean));
   const used = /* @__PURE__ */ new Map();
-  const walk = (n) => {
-    if (!n || typeof n !== "object") return;
-    if (n.type === "INSTANCE" && n.mainComponent) {
-      const mc = n.mainComponent;
-      const id = mc.setKey || mc.key;
-      if (id) {
-        if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, key: id, variantKey: mc.key });
-        used.get(id).instances++;
-      }
-    }
-    for (const c of n.children || []) walk(c);
-  };
   for (const doc of screenDocs || []) {
     const roots = Array.isArray(doc && doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
-    for (const r of roots) walk(r);
+    for (const r of roots) walkWithHidden(r, (n, c) => {
+      if (n.type !== "INSTANCE" || !n.mainComponent) return;
+      const mc = n.mainComponent;
+      const id = mc.setKey || mc.key;
+      if (!id) return;
+      if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key });
+      used.get(id).instances++;
+      if (c.hidden) used.get(id).hiddenInstances++;
+    });
   }
   const rows = [...used.values()].map((u) => ({
     ...u,
@@ -594,11 +624,15 @@ function screenCoverage(map, catalog, screenDocs) {
     inMap: mapKeys.has(u.key) || mapKeys.has(u.variantKey)
   }));
   const instances = rows.reduce((n, r) => n + r.instances, 0);
+  const hiddenInstances = rows.reduce((n, r) => n + r.hiddenInstances, 0);
+  const hiddenOnly = rows.filter((r) => r.instances === r.hiddenInstances).length;
   const inCatalog = rows.filter((r) => r.inCatalog).length;
   const inMap = rows.filter((r) => r.inMap).length;
   return {
     distinct: rows.length,
     instances,
+    hiddenInstances,
+    hiddenOnly,
     inCatalog,
     inMap,
     catalogPct: rows.length ? Math.round(inCatalog / rows.length * 100) : null,
@@ -664,8 +698,9 @@ SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 not
     } else {
       console.error(
         `
-SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the components on this screen are in your map \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total`
+SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component sets placed on this screen are in your map (by component key) \xB7 ${cov.inCatalog}/${cov.distinct} (${cov.catalogPct}%) are even in the catalog \xB7 ${cov.instances} instance(s) total, ${cov.hiddenInstances} of them on hidden layers` + (cov.hiddenOnly ? ` (${cov.hiddenOnly} set(s) appear ONLY on hidden layers and will not be built)` : "")
       );
+      console.error(`       (this says which components you can REUSE by key \u2014 not which ones the build contains; that is verify's job.)`);
       const { visibleInstances, matchByNameAndSignature, isRekeyed } = require_component_match();
       const rekey = cov.mapPct === 0 ? matchByNameAndSignature([].concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
