@@ -2,5 +2,7 @@
   // Exists for oxlint's type-aware mode: tsgolint types each file by the NEAREST tsconfig, and without
   // this one every design-to-code file typed as `error`. test/tsconfig.json still type-checks these files.
   "extends": "../test/tsconfig.json",
+  // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (as in bridge/tsconfig.json)
+  "compilerOptions": { "exactOptionalPropertyTypes": true },
   "include": ["./**/*.ts"]
 }

@@ -124,6 +124,11 @@ function nullProto() {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -311,8 +316,8 @@ function visibleInstances(doc, label) {
         nodeId: n.id,
         layer: n.name,
         name: mc.setName || mc.name || n.name,
-        key: mc.key,
-        setKey: mc.setKey,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
         remote: mc.remote === true,
         variant: parseVariant(n.component) || parseVariant(mc.variant),
         props: n.props && typeof n.props === "object" ? n.props : {}
@@ -447,7 +452,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     }
     const verifiedOnes = scored.filter((s) => s.verified);
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
     row.reasons = best.reasons.slice();
     if (ties.length) {
@@ -457,7 +462,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
@@ -668,7 +673,7 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
   }
   if (problem === "unparseable") {
     const w = { code: "unknown-freshness", message: `design-system.json's \`exportedAt\` ('${exportedAt}') is not a parseable timestamp \u2014 freshness cannot be verified.` };
-    push(warnings, w.code, w.message, { exportedAt });
+    push(warnings, w.code, w.message, { ...ifDefined("exportedAt", exportedAt) });
     return w;
   }
   if (typeof ageMs === "number" && ageMs > maxAgeMs) {
@@ -678,7 +683,7 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
       code: "stale-snapshot",
       message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog && catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file \u2014 re-run dtwin / the export tool before trusting them.`
     };
-    push(warnings, w.code, w.message, { exportedAt, ageMs, maxAgeMs });
+    push(warnings, w.code, w.message, { ...ifDefined("exportedAt", exportedAt), ageMs, maxAgeMs });
     return w;
   }
   return void 0;
@@ -726,7 +731,7 @@ function driftLint(map, catalog, opts) {
         errors,
         "orphaned-entry",
         `map entry '${mapKey}' (was '${f.name || "?"}'${f.id ? ", id " + f.id : ""}) has no matching component in Figma \u2014 deleted, moved, or unpublished${suggestedKey ? ` (a component named '${f.name}' exists with key ${suggestedKey} \u2014 verify before re-pointing)` : ""}`,
-        { mapKey, suggestedKey }
+        { mapKey, ...ifDefined("suggestedKey", suggestedKey) }
       );
       continue;
     }
@@ -766,7 +771,7 @@ function driftLint(map, catalog, opts) {
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
     catalogComponents++;
     if (c.key && mappedIds.has(c.key) || c.id && mappedIds.has(c.id)) continue;
-    push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished \u2014 no key)"} has no map entry`, { key: c.key, name: c.name });
+    push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished \u2014 no key)"} has no map entry`, { ...ifDefined("key", c.key), name: c.name });
   }
   return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
 }
@@ -873,7 +878,7 @@ ${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014
   }
   if (!isCodeConnectMap(mapRaw)) process.exit(1);
   const map = mapRaw;
-  const res = driftLint(map, catalog, { maxAgeMs });
+  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;

@@ -28,6 +28,7 @@ import type {
 } from "./types.ts";
 import { screenRoots } from "./export-shape.ts";
 import { isJsonObject } from "./types.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 
 // Hidden layers are not built, so they are not mapped either (and a hidden subtree's instances are
 // skipped with it).
@@ -44,8 +45,8 @@ function visibleInstances(doc: ScreenDoc | null | undefined, label: string): Vis
         nodeId: n.id,
         layer: n.name,
         name: mc.setName || mc.name || n.name,
-        key: mc.key,
-        setKey: mc.setKey,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
         remote: mc.remote === true,
         variant: parseVariant(n.component) || parseVariant(mc.variant),
         props: n.props && typeof n.props === "object" ? n.props : {},
@@ -180,7 +181,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
     }
     const verifiedOnes = scored.filter((s) => s.verified);
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     // How much the signature actually proved: an instance with variants or props proved it; one with
     // neither only proved "a plain component of that name with no props", which is weaker — shown as
     // such on the confirmation list, and not counted towards the re-key verdict.
@@ -195,7 +196,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s): MatchAlternative => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s): MatchAlternative => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog — re-keyed)"));
     rows.push(row);
   }

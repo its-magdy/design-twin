@@ -93,6 +93,11 @@ function nullProto() {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -1292,7 +1297,7 @@ function toResolver(designSystem, warnings, opts) {
   for (const [collName, groupVars] of groups) {
     const c = declared.get(collName);
     const label = collName || "tokens";
-    const sub = { colorProfile: ds.colorProfile, collections, variables: groupVars };
+    const sub = { ...ifDefined("colorProfile", ds.colorProfile), collections, variables: groupVars };
     const base = buildTree(sub, warn, opts, (v) => baseValue(v, collections), false, plan);
     if (!Object.keys(base).length) continue;
     const setName = reserveKey(label, "set");
@@ -1493,7 +1498,7 @@ ${USAGE}`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
-    const n = toNative(ds, native, { package: kotlinPackage || void 0 });
+    const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
     fs3.writeFileSync(path2.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;

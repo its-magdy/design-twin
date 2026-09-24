@@ -34,6 +34,16 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
@@ -47,8 +57,8 @@ function visibleInstances(doc, label) {
         nodeId: n.id,
         layer: n.name,
         name: mc.setName || mc.name || n.name,
-        key: mc.key,
-        setKey: mc.setKey,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
         remote: mc.remote === true,
         variant: parseVariant(n.component) || parseVariant(mc.variant),
         props: n.props && typeof n.props === "object" ? n.props : {}
@@ -183,7 +193,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     }
     const verifiedOnes = scored.filter((s) => s.verified);
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
     row.reasons = best.reasons.slice();
     if (ties.length) {
@@ -193,7 +203,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
@@ -323,11 +333,6 @@ function readDocFile(file, what, guard, hint) {
 }
 function readOptionalDoc(file, what, guard) {
   return fs2.existsSync(file) ? readDocFile(file, what, guard) : null;
-}
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
 // design-to-code/doc-guards.ts
@@ -615,7 +620,7 @@ function crossCheck(input) {
     const label = s.label || screenExportOf(s.doc)?.screen || "screen";
     for (const i of visibleInstances(s.doc, label)) {
       visible.push(i);
-      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, key: i.key, setKey: i.setKey, setName: i.name, propNames: Object.keys(i.props || {}) });
+      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, ...ifDefined("key", i.key), ...ifDefined("setKey", i.setKey), setName: i.name, propNames: Object.keys(i.props || {}) });
     }
   });
   const dsCollByKey = /* @__PURE__ */ new Map();
@@ -638,7 +643,7 @@ function crossCheck(input) {
     for (const c of screenColls) {
       if (c.key && dsCollByKey.has(c.key)) continue;
       const twin = dsCollByName.get(norm(c.name));
-      foreign.push({ name: c.name, key: c.key, twinKey: twin && twin.key, twinName: twin && twin.name });
+      foreign.push({ name: c.name, ...ifDefined("key", c.key), ...ifDefined("twinKey", twin && twin.key), ...ifDefined("twinName", twin && twin.name) });
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
@@ -717,7 +722,7 @@ function crossCheck(input) {
       }
       for (const sv of list) {
         if (sameResolution(sv, dv) === false) {
-          collisions.push({ name, key: sv.key, twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+          collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
         }
       }
     }
@@ -732,7 +737,7 @@ function crossCheck(input) {
       for (const cand of dsByNorm.get(norm(name)) || []) {
         for (const sv of list) {
           if (sameResolution(sv, cand.v) === false) {
-            collisions.push({ name, key: sv.key, twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+            collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
           }
         }
       }
@@ -745,7 +750,7 @@ function crossCheck(input) {
         "token-name-collision",
         // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
         `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
-        { token: c.name, key: c.key, alsoKnownAs: c.alsoKnownAs, screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
+        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
       );
     }
     if (variables && varScope !== "union") {
@@ -827,7 +832,7 @@ function crossCheck(input) {
         coverage.matchedByKey++;
         const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
         if (local) coverage.matchedByLocalKey++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
         continue;
       }
       const cands = byName.get(norm(i.setName)) || [];
@@ -841,22 +846,22 @@ function crossCheck(input) {
       }
       if (best && cands.length > 1) {
         coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
       } else if (best && (best.score >= 0.5 || cands.length === 1)) {
         coverage.matchedByName++;
         coverage.entries.push({
           setName: i.setName,
-          key: i.setKey || i.key,
+          ...ifDefined("key", i.setKey || i.key),
           matchedBy: "name",
           verified: false,
           catalogName: best.c.name,
-          catalogKey: best.c.key,
+          ...ifDefined("catalogKey", best.c.key),
           propOverlap: `${best.hit}/${best.of}`,
           instances: i.count
         });
       } else {
         coverage.unmatched++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false, instances: i.count });
       }
     }
     coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
@@ -916,7 +921,7 @@ function crossCheck(input) {
         "info",
         "name-matched-components",
         `${named.length} component(s) have no key in the catalog but DO have an exact name twin there: ` + named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, \u2026` : "") + `. Mapped BY NAME, UNVERIFIED \u2014 confirm one with "Go to main component" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.`,
-        { components: named.map((e) => ({ setName: e.setName, catalogName: e.catalogName, catalogKey: e.catalogKey, propOverlap: e.propOverlap, verified: false })) }
+        { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
       );
     }
     const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
@@ -925,7 +930,7 @@ function crossCheck(input) {
         "warning",
         "ambiguous-component-name",
         `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
-        { components: amb.map((e) => ({ setName: e.setName, candidates: e.candidates })) }
+        { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
       );
     }
   }
@@ -1040,7 +1045,7 @@ function crossCheck(input) {
       instanceKeys: r.instanceKeys,
       remote: r.remote,
       catalog: r.match,
-      evidence: r.evidence,
+      ...ifDefined("evidence", r.evidence),
       tie: r.tie || null,
       alternatives: r.alternatives,
       reasons: r.reasons,

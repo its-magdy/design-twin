@@ -14,6 +14,11 @@ function isJsonObject(x) {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -192,7 +197,7 @@ function planRows(planDir) {
   for (const f of fs3.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
     const doc = readJsonOrNull(path.join(planDir, f), isPlan);
-    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, screenName: doc.screenName, nodeId: doc.nodeId, route: doc.route });
+    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
 }
@@ -201,9 +206,9 @@ function describe(row, matchedVia) {
     name: row.name,
     id: row.id,
     title: row.title || null,
-    w: row.w,
-    h: row.h,
-    nodes: row.nodes,
+    ...ifDefined("w", row.w),
+    ...ifDefined("h", row.h),
+    ...ifDefined("nodes", row.nodes),
     reference: row.reference || null,
     screenshot: row.id ? `dtwin screenshot ${row.id}` : null
   };

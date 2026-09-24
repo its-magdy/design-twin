@@ -34,6 +34,19 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
 // design-to-code/component-match.ts
 function parseVariant(s) {
   if (isJsonObject(s)) {
@@ -159,7 +172,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     }
     const verifiedOnes = scored.filter((s) => s.verified);
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
     row.reasons = best.reasons.slice();
     if (ties.length) {
@@ -169,7 +182,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
@@ -279,14 +292,6 @@ function readJson(file, guard) {
 function readJsonOrNull(file, guard) {
   const r = readJson(file, guard);
   return "doc" in r ? r.doc : null;
-}
-
-// bridge/src/json-util.ts
-function nullProto() {
-  return /* @__PURE__ */ Object.create(null);
-}
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
 // design-to-code/doc-guards.ts
@@ -569,13 +574,13 @@ if (false) {
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog3, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
     tokens: readOptionalDoc2(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc3),
-    components: readOptionalDoc2(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog3) || catalog,
+    ...ifDefined("components", readOptionalDoc2(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog3) || catalog),
     componentsLibrary: readOptionalDoc2(path.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog3),
     stylesText: readOptionalDoc2(path.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc3)
   } : void 0;
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid });
+  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
   const outBase = out || path.join("design", "audit", path.basename(files[0], ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
@@ -993,7 +998,7 @@ function buildTokens(doc, vars, ds, resolvedModes) {
     };
     if (r.via) row.aliasOf = r.via;
     if (cands.length > 1) {
-      const vals = cands.map((c) => ({ key: c.key, collection: c.collection, value: ownResolve(c).value }));
+      const vals = cands.map((c) => ({ ...ifDefined("key", c.key), ...ifDefined("collection", c.collection), value: ownResolve(c).value }));
       row.keyCandidates = vals;
       row.note = `${cands.length} variables in this screen's .vars.json are named '${name}'` + (new Set(vals.map((x) => JSON.stringify(x.value))).size > 1 ? " WITH DIFFERENT VALUES \u2014 decide which one the design means before mapping it" : " (same value) \u2014 either key describes it");
     }
@@ -1058,10 +1063,10 @@ function buildComponents(doc, catalog, library, mapKeys) {
     const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
     if (k) {
       const c = catKeys.get(k);
-      match = { by: "key", id: c.id, key: c.key, name: c.name };
+      match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
     } else if (byName.has(i.name) && byName.get(i.name).match) {
       const r = byName.get(i.name);
-      match = { by: r.evidence || "name+signature", id: r.match.id, key: r.match.key, name: r.match.name, confirmed: false };
+      match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
     }
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
     const row = {
@@ -1228,7 +1233,7 @@ function main(argv) {
     mapKeys = mapKeysOf(m.doc);
   }
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
-  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
+  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");

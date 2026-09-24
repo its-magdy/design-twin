@@ -54,6 +54,7 @@ import type {
   AuditCrossFile, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
   TokenMap, TokensDoc, VariableCollection,
 } from "./types.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
@@ -138,7 +139,7 @@ interface Root { tree: IrNode; label: string; manifest?: Manifest }
 function labelledRoots(doc: unknown, label: string): Root[] {
   const exp = isScreenExport(doc) ? doc : null;
   const manifest = exp ? exp.manifest : isLayerFile(doc) ? doc.manifest : undefined;
-  return screenRoots(doc).map((tree) => ({ tree, label: (exp && exp.screen) || tree.name || label, manifest }));
+  return screenRoots(doc).map((tree) => ({ tree, label: (exp && exp.screen) || tree.name || label, ...ifDefined("manifest", manifest) }));
 }
 
 const r1 = (v: number): number => Math.round(v * 100) / 100;
@@ -219,10 +220,12 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const catalog: CatalogComponent[] = (opts.catalog && Array.isArray(opts.catalog.components)) ? opts.catalog.components : [];
 
   const findings: AuditFinding[] = [];
+  // typed on its own: spread inline in the Object.assign below, oxlint-tsgolint reads the result as `any`
+  const placeOf = (ctx: Here): Pick<AuditFinding, "screen" | "path"> => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
   const add = (severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number => findings.push(Object.assign(
     { severity, code, message },
     node ? { nodeId: node.id, nodeName: node.name } : {},
-    ctx ? { screen: ctx.label, path: ctx.path } : {},
+    ctx ? placeOf(ctx) : {},
     extra || {}
   ));
 
@@ -241,7 +244,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' — confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk(root.tree, [], { label: root.label, rootBox: root.tree.box });
+    walk(root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
   }
 
   function walk(node: IrNode | null | undefined, ancestors: Ancestor[], ctx: WalkCtx): void {
@@ -252,7 +255,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
 
     // Designer intent the agent must read, collected verbatim.
-    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: a.label || a.markdown });
+    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
 
     // Drawn states (a layer called "Loading" or a hidden "Error toast") — evidence the state was designed.
@@ -281,7 +284,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       const mc: Partial<MainComponentRef> = node.mainComponent || {};
       const name = mc.setName || node.component;
       const key = mc.setKey || mc.key || name;
-      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, key: mc.setKey || mc.key, remote: !!mc.remote, nodeId: node.id });
+      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), remote: !!mc.remote, nodeId: node.id });
     }
     if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance — map it back to the component unless the detach was deliberate`, node, here);
     if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load — the recorded family/weight may not match the render; confirm the font files and license`, node, here);
@@ -357,7 +360,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       }
     }
     if (node.type === "TEXT") {
-      const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ font: node.font, tokens: node.textTokens, textStyle: node.styles && node.styles.text }];
+      const runs: RunLike[] = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
       for (const r of runs) {
         const typoBound = !!(r.textStyle || (node.styles && node.styles.text) || (r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight)) || (node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily)));
         tally("typography", typoBound);
@@ -432,7 +435,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       const beneath: Paint[] = [];
       // Only what descendants read off an ancestor. The walk is synchronous and nothing keeps
       // `ancestors`, so `beneath` is shared, not copied — it grows only after the child returns.
-      const self: Ancestor = { name: node.name, hidden: node.hidden, fills: node.fills, __tappable: tappable, __beneath: beneath };
+      const self: Ancestor = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: beneath };
       const chain = [...ancestors, self];
       for (const child of node.children) {
         self.__beneath = stacks || child.absolute ? beneath : [];
@@ -801,7 +804,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const designSystem: AuditDesignSystem | undefined = dsDir
     ? {
         tokens: readOptionalDoc(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
-        components: readOptionalDoc(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog,
+        ...ifDefined("components", readOptionalDoc(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog),
         componentsLibrary: readOptionalDoc(path.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
         stylesText: readOptionalDoc(path.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc),
       }
@@ -810,7 +813,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid });
+  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
   // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
   // skill invented one each time (`positions`/`job-roles`/`global-policies`/`System_Configurations`
