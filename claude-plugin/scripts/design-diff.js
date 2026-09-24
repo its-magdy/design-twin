@@ -99,6 +99,11 @@ function readDocFile(file, what, guard, hint) {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -498,12 +503,12 @@ function diffTokens(oldDoc, newDoc) {
     const a = pk !== void 0 ? A.get(pk) : null;
     if (!a) continue;
     const modes = [.../* @__PURE__ */ new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
-    if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
+    if (modes.length) changed.push({ name: label(b), ...ifDefined("collection", b.collection), ...ifDefined("key", b.key), modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
   }
   const collNames = /* @__PURE__ */ new Map();
   for (const c of [...oldDoc.collections || [], ...newDoc.collections || []]) collNames.set(c.name, (collNames.get(c.name) || /* @__PURE__ */ new Set()).add(c.key || c.name));
   const colLabel = (c) => collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
-  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
+  const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
   for (const id of /* @__PURE__ */ new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
@@ -511,7 +516,7 @@ function diffTokens(oldDoc, newDoc) {
 function diffCatalog(oldDoc, newDoc) {
   const keyed = (doc) => new Map((doc.components || []).map((c) => [String(c.key || c.id), c]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief1 = (c) => ({ key: c.key, id: c.id, name: c.name, type: c.type });
+  const brief1 = (c) => ({ ...ifDefined("key", c.key), ...ifDefined("id", c.id), name: c.name, type: c.type });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, c]) => brief1(c)), removed = [...A].filter(([k]) => !B.has(k)).map(([, c]) => brief1(c)), changed = [];
   for (const [k, b] of B) {
     const a = A.get(k);
@@ -530,7 +535,7 @@ var STYLE_IGNORED = /* @__PURE__ */ new Set(["key", "id"]);
 function diffStyles(oldDoc, newDoc) {
   const keyed = (doc) => new Map((doc.styles || []).map((s) => [styleKey(s), s]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief2 = (s) => ({ key: s.key, id: s.id, name: s.name });
+  const brief2 = (s) => ({ ...ifDefined("key", s.key), ...ifDefined("id", s.id), name: s.name });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief2(s));
   const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief2(s));
   const changed = [];

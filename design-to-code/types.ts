@@ -639,7 +639,7 @@ type VerifyCoverage = NonNullable<VerifyReport["coverage"]>;
 export interface VerifyCoverageV2 extends VerifyCoverage {
   nodesNotMeasured: number; nodesMatchedByComponentPath: number; fieldsNotMeasured: number;
   fieldsNeverMeasured: NonNullable<VerifyCoverage["fieldsNeverMeasured"]>; valuesNotComparable: number; valuesUnverifiable: number;
-  hiddenLayersSkipped: VerifyCoverage["hiddenLayersSkipped"] | undefined; instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
+  instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
   interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
 }
 /**

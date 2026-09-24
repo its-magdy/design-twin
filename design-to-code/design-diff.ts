@@ -46,7 +46,7 @@ import { readJsonFile } from "./catalog-input.ts";
 import { isComponentsCatalog, isStringRecord, isTokensDoc } from "./doc-guards.ts";
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
-import { isStringArray } from "../bridge/src/json-util.ts";
+import { ifDefined, isStringArray } from "../bridge/src/json-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
@@ -218,7 +218,7 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
     const a = pk !== undefined ? A.get(pk) : null;
     if (!a) continue;
     const modes = [...new Set([...Object.keys(a.values || {}), ...Object.keys(b.values || {})])].filter((m) => !same((a.values || {})[m], (b.values || {})[m]));
-    if (modes.length) changed.push({ name: label(b), collection: b.collection, key: b.key, modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
+    if (modes.length) changed.push({ name: label(b), ...ifDefined("collection", b.collection), ...ifDefined("key", b.key), modes: modes.map((m) => ({ mode: m, before: brief((a.values || {})[m]), after: brief((b.values || {})[m]) })) });
   }
   // A new or renamed MODE changes every themed token at once, yet no single variable says so.
   // Collections too are keyed by key where there is one: the same export holds TWO collections called
@@ -226,7 +226,7 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
   const collNames = new Map<string, Set<string>>();
   for (const c of [...(oldDoc.collections || []), ...(newDoc.collections || [])]) collNames.set(c.name, (collNames.get(c.name) || new Set<string>()).add(c.key || c.name));
   const colLabel = (c: VariableCollection): string => (collNames.get(c.name)!.size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
-  const cols = (doc: TokensDoc) => new Map((doc.collections || []).map((c): [string, { label: string; v: { modes: string[]; default?: string } }] => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, default: c.default } }]));
+  const cols = (doc: TokensDoc) => new Map((doc.collections || []).map((c): [string, { label: string; v: { modes: string[]; default?: string } }] => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections: FieldDiff[] = [];
   for (const id of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id))!.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
@@ -238,7 +238,7 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
 function diffCatalog(oldDoc: ComponentsCatalog, newDoc: ComponentsCatalog): CatalogDiff {
   const keyed = (doc: ComponentsCatalog): Map<string, CatalogComponent> => new Map((doc.components || []).map((c): [string, CatalogComponent] => [String(c.key || c.id), c]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief1 = (c: CatalogComponent): CatalogBrief => ({ key: c.key, id: c.id, name: c.name, type: c.type });
+  const brief1 = (c: CatalogComponent): CatalogBrief => ({ ...ifDefined("key", c.key), ...ifDefined("id", c.id), name: c.name, type: c.type });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, c]) => brief1(c)), removed = [...A].filter(([k]) => !B.has(k)).map(([, c]) => brief1(c)), changed: CatalogDiff["changed"] = [];
   for (const [k, b] of B) {
     const a = A.get(k);
@@ -266,7 +266,7 @@ const STYLE_IGNORED = new Set(["key", "id"]);
 function diffStyles(oldDoc: StylesDoc, newDoc: StylesDoc): StylesDiff {
   const keyed = (doc: StylesDoc): Map<string, AnyStyle> => new Map((doc.styles || []).map((s): [string, AnyStyle] => [styleKey(s), s]));
   const A = keyed(oldDoc), B = keyed(newDoc);
-  const brief = (s: AnyStyle): StyleBrief => ({ key: s.key, id: s.id, name: s.name });
+  const brief = (s: AnyStyle): StyleBrief => ({ ...ifDefined("key", s.key), ...ifDefined("id", s.id), name: s.name });
   const added = [...B].filter(([k]) => !A.has(k)).map(([, s]) => brief(s));
   const removed = [...A].filter(([k]) => !B.has(k)).map(([, s]) => brief(s));
   const changed: StylesDiff["changed"] = [];

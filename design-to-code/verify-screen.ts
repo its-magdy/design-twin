@@ -47,6 +47,7 @@ import type {
   NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ---------------------------------------------------------------- tolerances
@@ -247,8 +248,8 @@ export interface ExpectedSpec extends VerifySpec { __notComparable?: NotComparab
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
  */
 function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): ExpectedSpec {
-  const ctx: ExpectContext = typeof ctxOrPath === "string" || ctxOrPath == null ? { path: ctxOrPath == null ? undefined : ctxOrPath } : ctxOrPath;
-  const spec: ExpectedSpec = { nodeId: n.id, name: n.name, type: n.type, path: ctx.path };
+  const ctx: ExpectContext = ctxOrPath == null ? {} : typeof ctxOrPath === "string" ? { path: ctxOrPath } : ctxOrPath;
+  const spec: ExpectedSpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
 
@@ -256,7 +257,7 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
   if (n.text != null) spec.text = n.text;
 
   if (n.font) {
-    spec.fontFamily = n.font.family;
+    if (n.font.family !== undefined) spec.fontFamily = n.font.family;
     if (typeof n.font.size === "number") spec.fontSize = n.font.size;
     const w = normWeight(n.font.weight);
     if (w != null) spec.fontWeight = w;
@@ -378,7 +379,6 @@ type LegacyReaction = Omit<Reaction, "trigger"> & { trigger?: ReactionTrigger | 
 export type Expectation = Partial<VerifyExpectation>;
 /** What buildExpectation() returns: every field present (frame's own fields still depend on the export having a root). */
 export interface BuiltExpectation extends VerifyExpectation {
-  frames: VerifyExpectation["frames"] | undefined;
   exportContentSha256: string;
   counts: NonNullable<VerifyExpectation["counts"]>;
   nodes: VerifySpec[];
@@ -408,7 +408,7 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
     for (const root of screenRoots(doc)) {
       if (!reference && root.reference) reference = root.reference;
       const b: Partial<Box> = root.box || {};
-      const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, w: b.w, h: b.h, x: b.x, y: b.y, clip: root.clip === true };
+      const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
       frames.push(frame);
       const frameId = frames.length > 1 ? root.id : undefined;
       const stateOf = new WeakMap<IrNode, InheritedState>(); // node -> inherited drawn-state { state, why, from }
@@ -427,7 +427,7 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
         const inherited = c.parent ? stateOf.get(c.parent) : undefined;
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
-        const spec = expectNode(n, { path: c.path, frame, inheritedState: inherited, frameId });
+        const spec = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
         notComparable.push(...spec.__notComparable!);
@@ -437,9 +437,9 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
             nodeId: n.id,
             name: n.name,
             setName: n.mainComponent.setName || n.mainComponent.name,
-            setKey: n.mainComponent.setKey || n.mainComponent.key,
-            variant: n.mainComponent.variant,
-            props: n.props || undefined,
+            ...ifDefined("setKey", n.mainComponent.setKey || n.mainComponent.key),
+            ...ifDefined("variant", n.mainComponent.variant),
+            ...ifDefined("props", n.props || undefined),
           });
         }
         // The interaction graph is already in the export, keyed by node id — the richest input in the
@@ -457,9 +457,9 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
               nodeId: n.id,
               name: n.name,
               trigger: String(trigger).toLowerCase(),
-              action: a.navigation || a.type,
-              destinationId: a.destinationId,
-              destination: a.destination,
+              ...ifDefined("action", a.navigation || a.type),
+              ...ifDefined("destinationId", a.destinationId),
+              ...ifDefined("destination", a.destination),
             });
           }
         }
@@ -468,16 +468,18 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
   }
 
   const f0: Partial<VerifyFrame> = frames[0] || {};
+  // expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
+  const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip) });
   return {
     schema: EXPECTATION_SCHEMA,
-    screen,
-    exportedAt,
+    ...ifDefined("screen", screen),
+    ...ifDefined("exportedAt", exportedAt),
     // P2b round 2 (finding 314): the design's identity without the pull's timestamps, so a no-change
     // re-pull (only `exportedAt` differs) is recognised as the same design by content, not by clock.
     exportContentSha256: exportContentSha256(docs.map((d) => d.doc)),
     reference,
-    frame: { nodeId: f0.nodeId, name: f0.name, w: f0.w, h: f0.h, clip: f0.clip },
-    frames: frames.length > 1 ? frames.map((f) => ({ nodeId: f.nodeId, name: f.name, w: f.w, h: f.h, clip: f.clip })) : undefined,
+    frame: rootFrame(f0),
+    ...(frames.length > 1 ? { frames: frames.map(rootFrame) } : {}),
     coordinates: COORDINATES,
     note:
       "Generated from the export — do NOT retype these numbers into code comments. Every row is the " +
@@ -680,7 +682,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0;
   const gap = (spec: VerifySpec, field: string, why: string): number => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
   const push = (spec: VerifySpec, field: string, severity: DeltaSeverity, bad: Bad, extra?: Partial<VerifyDelta>): number => deltas.push(Object.assign({
-    severity, nodeId: spec.nodeId, name: spec.name, path: spec.path, field,
+    severity, nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field,
     expected: bad.want, actual: bad.got, delta: bad.delta,
   }, extra));
 
@@ -692,7 +694,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (alt) { m = byId.get(alt); matchedBy = `shared-component-path (${alt})`; nodesMatchedByComponentPath++; }
     }
     if (!m) {
-      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, path: spec.path, why: "no measurement for this node id" });
+      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why: "no measurement for this node id" });
       continue;
     }
     nodesMeasured++;
@@ -758,9 +760,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       const bad = compareField(f, want, have);
       if (bad) {
         push(spec, f.label, f.high ? "high" : "medium", bad, {
-          unit: f.unit, token: tokenFor(spec, f.key), measuredIn: measuredIn !== "rest" ? measuredIn : undefined,
-          matchedBy: matchedBy !== "id" ? matchedBy || undefined : undefined,
-          note: f.key === "borderRadius" && spec.borderRadius !== want ? `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` : undefined,
+          ...ifDefined("unit", f.unit), ...ifDefined("token", tokenFor(spec, f.key)), ...(measuredIn !== "rest" ? { measuredIn } : {}),
+          ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
+          ...(f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` } : {}),
         });
       }
     }
@@ -778,7 +780,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           fieldsChecked++;
           const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
           const d = Math.abs(want - have);
-          if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", token: tokenFor(spec, "radius." + k) });
+          if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) });
         });
       }
     }
@@ -791,8 +793,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         fieldsChecked++;
         const bad = comparePadding(spec.padding, got.padding);
         const allZero = got.padding.every((v) => Number(v) === 0);
-        if (bad) push(spec, "padding", "medium", bad, { unit: "px", token: tokenFor(spec, "padding"),
-          note: allZero && !got.tag ? "measured 0 on every side — if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" : undefined });
+        if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")),
+          ...(allZero && !got.tag ? { note: "measured 0 on every side — if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" } : {}) });
       }
     }
     if (spec.placeholderText !== undefined) {
@@ -818,8 +820,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
           const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
           push(spec, "text", caseOnly || extraGlyphs ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
-            note: caseOnly ? "differs only in case — check for a text-transform, which Figma applies at render time while storing the original"
-              : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : undefined,
+            ...ifDefined("note", caseOnly ? "differs only in case — check for a text-transform, which Figma applies at render time while storing the original"
+              : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : undefined),
           });
         }
         if (/ /.test(String(spec.text))) {
@@ -848,7 +850,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (num(bx.x) && bx.x + w > fr.w + tol) out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`);
       if (num(bx.x) && bx.x < -tol) out.push(`left edge at x=${r2(bx.x)}`);
       if (inDesign && out.length && !(zeroAtRest)) {
-        deltas.push({ severity: "high", nodeId: spec.nodeId, name: spec.name, path: spec.path, field: "placement", expected: "inside the frame", actual: out.join(", "), note: "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
+        deltas.push({ severity: "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "), note: "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
       }
     }
   }
@@ -859,7 +861,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (FIELDS.some((f) => f.key === key && f.optional)) continue; // listed under `unverifiable` instead
     if (c.expected > 0 && c.present === 0) {
       const hinted = [...unknownKeys.keys()].filter((k) => KEY_HINTS[k] === key);
-      fieldsNeverMeasured.push({ field: key, expectedOn: c.expected, measuredOn: 0, probeSent: hinted.length ? hinted : undefined });
+      fieldsNeverMeasured.push({ field: key, expectedOn: c.expected, measuredOn: 0, ...(hinted.length ? { probeSent: hinted } : {}) });
     }
   }
 
@@ -875,7 +877,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   for (const i of expectation.instances || []) {
     if (hiddenSet.has(String(i.nodeId))) continue;
     const k = i.setName || i.name;
-    if (!bySet.has(k)) bySet.set(k, { setName: k, setKey: i.setKey, nodeIds: [], instances: 0 });
+    if (!bySet.has(k)) bySet.set(k, { setName: k, ...ifDefined("setKey", i.setKey), nodeIds: [], instances: 0 });
     bySet.get(k)!.instances++;
     bySet.get(k)!.nodeIds.push(i.nodeId);
   }
@@ -889,7 +891,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const componentsAbsent: VerifyReportV2["componentsAbsent"] = [];
   for (const c of comps.filter((c) => c && c.present === false)) {
     const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || (c.nodeId !== undefined && v.nodeIds.includes(c.nodeId)));
-    if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, detail: c.detail || c.note });
+    if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, ...ifDefined("detail", c.detail || c.note) });
   }
 
   // ---- interactions: the export says what each control does; did it? Three states, not two:
@@ -906,17 +908,17 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   }
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
-    const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, action: i.action, destinationId: i.destinationId };
+    const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId) };
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
-    if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, detail: hit.detail });
-    if (hit.ok === false) return Object.assign(row, { result: "fail" as const, detail: hit.detail, selector: hit.selector });
+    if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail) });
+    if (hit.ok === false) return Object.assign(row, { result: "fail" as const, ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector) });
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
     if (!hit.selector || !(count >= 1)) {
       return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${!hit.selector ? "no selector named" : `selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`}${hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     }
-    return Object.assign(row, { result: "pass" as const, detail: hit.detail, selector: hit.selector, selectorCount: count });
+    return Object.assign(row, { result: "pass" as const, ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count });
   });
   const unexpectedInteractionEvidence = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase())).length;
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
@@ -929,13 +931,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // ---- what the evidence is tied to (findings 153/166/190)
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
-    expectationSha256: opts.expectationSha256,
-    measuredSha256: opts.measuredSha256,
-    measuredAgainst: measured.expectationSha256 || undefined,
+    ...ifDefined("expectationSha256", opts.expectationSha256),
+    ...ifDefined("measuredSha256", opts.measuredSha256),
+    ...ifDefined("measuredAgainst", measured.expectationSha256 || undefined),
     // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
     // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
-    exportContentSha256: expectation.exportContentSha256 || undefined,
-    code: opts.code || undefined,
+    ...ifDefined("exportContentSha256", expectation.exportContentSha256 || undefined),
+    ...ifDefined("code", opts.code || undefined),
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -971,7 +973,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     fieldsNeverMeasured,
     valuesNotComparable: (expectation.notComparable || []).length,
     valuesUnverifiable: unverifiable.length,
-    hiddenLayersSkipped: (expectation.counts && expectation.counts.hidden) || undefined,
+    ...ifDefined("hiddenLayersSkipped", (expectation.counts && expectation.counts.hidden) || undefined),
     instanceSets: bySet.size,
     instanceSetsWithEvidence: bySet.size - untaggedInstanceSets.length,
     instanceSetsViaSharedPath: setsViaSharedPath,
@@ -990,11 +992,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
 
   return {
     schema: REPORT_SCHEMA,
-    screen: expectation.screen,
-    exportedAt: expectation.exportedAt,
+    ...ifDefined("screen", expectation.screen),
+    ...ifDefined("exportedAt", expectation.exportedAt),
     measuredAt: measured.measuredAt || new Date().toISOString(),
     renderer: measured.renderer || "unknown",
-    viewport: measured.viewport,
+    ...ifDefined("viewport", measured.viewport),
     artifacts: artifactCheck || (Array.isArray(measured.artifacts) ? measured.artifacts : []),
     inputs,
     verdict,
@@ -1228,7 +1230,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
     const exists = !!p && fs.existsSync(p);
-    return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : undefined };
+    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : undefined) };
   });
   // Finding 317: tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
@@ -1253,7 +1255,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
         : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
   }
-  const rep = compare(expectation, measured, { interactions: extra, expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, code });
+  const rep = compare(expectation, measured, { ...ifDefined("interactions", extra), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code) });
   const md = reportToMarkdown(rep);
   // Same rule as --expect (P3 #152): default to the EXPECTATION file's own basename (stripping the
   // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`

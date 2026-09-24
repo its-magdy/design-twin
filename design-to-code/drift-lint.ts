@@ -29,7 +29,7 @@ import type {
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { nullProto } from "../bridge/src/json-util.ts";
+import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 
 const stripSuffix = (k: string): string => String(k).split("#")[0]; // "Size#12:3" -> "Size"
 
@@ -61,7 +61,7 @@ function checkFreshness(catalog: { exportedAt?: string | null; file?: string } |
   }
   if (problem === "unparseable") {
     const w: FreshnessWarning = { code: "unknown-freshness", message: `design-system.json's \`exportedAt\` ('${exportedAt}') is not a parseable timestamp — freshness cannot be verified.` };
-    push(warnings, w.code, w.message, { exportedAt });
+    push(warnings, w.code, w.message, { ...ifDefined("exportedAt", exportedAt) });
     return w;
   }
   if (typeof ageMs === "number" && ageMs > maxAgeMs) {
@@ -71,7 +71,7 @@ function checkFreshness(catalog: { exportedAt?: string | null; file?: string } |
       code: "stale-snapshot",
       message: `STALE SNAPSHOT: design-system.json was exported ${ageH}h ago (max-age ${maxH}h)${catalog && catalog.file ? ` from '${catalog.file}'` : ""}. Every finding below is checked against that on-disk snapshot, NOT the live Figma file — re-run dtwin / the export tool before trusting them.`,
     };
-    push(warnings, w.code, w.message, { exportedAt, ageMs, maxAgeMs });
+    push(warnings, w.code, w.message, { ...ifDefined("exportedAt", exportedAt), ageMs, maxAgeMs });
     return w;
   }
   return undefined;
@@ -134,7 +134,7 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
       const suggestedKey = sameName && sameName.length === 1 ? sameName[0].key : undefined;
       push(errors, "orphaned-entry",
         `map entry '${mapKey}' (was '${f.name || "?"}'${f.id ? ", id " + f.id : ""}) has no matching component in Figma — deleted, moved, or unpublished${suggestedKey ? ` (a component named '${f.name}' exists with key ${suggestedKey} — verify before re-pointing)` : ""}`,
-        { mapKey, suggestedKey });
+        { mapKey, ...ifDefined("suggestedKey", suggestedKey) });
       continue;
     }
     if (comp.key) mappedIds.add(comp.key);
@@ -178,7 +178,7 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
     catalogComponents++;
     if ((c.key && mappedIds.has(c.key)) || (c.id && mappedIds.has(c.id))) continue;
-    push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished — no key)"} has no map entry`, { key: c.key, name: c.name });
+    push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished — no key)"} has no map entry`, { ...ifDefined("key", c.key), name: c.name });
   }
 
   return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
@@ -321,7 +321,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   }
   if (!isCodeConnectMap(mapRaw)) process.exit(1); // unreachable: validateMap just passed (isCodeConnectMap IS that check)
   const map = mapRaw;
-  const res = driftLint(map, catalog, { maxAgeMs });
+  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;

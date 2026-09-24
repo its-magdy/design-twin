@@ -58,7 +58,7 @@ import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import { normHex, clampOpacityPct } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
-import { nullProto } from "../bridge/src/json-util.ts";
+import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
@@ -1036,7 +1036,7 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
   for (const [collName, groupVars] of groups) {
     const c = declared.get(collName);
     const label = collName || "tokens"; // variables with no collection still need a set name
-    const sub: TokensDoc = { colorProfile: ds.colorProfile, collections, variables: groupVars };
+    const sub: TokensDoc = { ...ifDefined("colorProfile", ds.colorProfile), collections, variables: groupVars };
 
     // Base set: the SAME values toDTCG puts in $value (baseValue), so the two outputs agree by
     // construction rather than by two parallel implementations.
@@ -1293,7 +1293,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== undefined) {
-    const n = toNative(ds, native, { package: kotlinPackage || undefined });
+    const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || undefined) });
     fs.writeFileSync(path.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;

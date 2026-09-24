@@ -53,6 +53,7 @@ import type {
   MatchInstance, VariableType,
 } from "./types.ts";
 import { parseHex, formatHex, composeAlpha } from "./color.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
@@ -284,7 +285,7 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     if (cands.length > 1) {
       // Two variables with ONE name in the screen's own slice: the node JSON binds by name only, so the
       // key cannot be derived. Say so rather than pick one.
-      const vals = cands.map((c) => ({ key: c.key, collection: c.collection, value: ownResolve(c).value }));
+      const vals = cands.map((c) => ({ ...ifDefined("key", c.key), ...ifDefined("collection", c.collection), value: ownResolve(c).value }));
       row.keyCandidates = vals;
       row.note = `${cands.length} variables in this screen's .vars.json are named '${name}'` +
         (new Set(vals.map((x) => JSON.stringify(x.value))).size > 1 ? " WITH DIFFERENT VALUES — decide which one the design means before mapping it" : " (same value) — either key describes it");
@@ -357,10 +358,10 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
   return insts.map((i) => {
     let match: PlanComponentMatch | null = null;
     const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
-    if (k) { const c = catKeys.get(k)!; match = { by: "key", id: c.id, key: c.key, name: c.name }; }
+    if (k) { const c = catKeys.get(k)!; match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }; }
     else if (byName.has(i.name) && byName.get(i.name)!.match) {
       const r = byName.get(i.name)!;
-      match = { by: r.evidence || "name+signature", id: r.match!.id, key: r.match!.key, name: r.match!.name, confirmed: false };
+      match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match!.id), ...ifDefined("key", r.match!.key), name: r.match!.name, confirmed: false };
     }
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
     const row: PlanComponentRow = {
@@ -548,7 +549,7 @@ function main(argv: string[]): number {
     mapKeys = mapKeysOf(m.doc);
   }
   const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
-  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
+  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), ...ifDefined("route", route), indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");

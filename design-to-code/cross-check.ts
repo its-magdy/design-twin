@@ -47,6 +47,7 @@ import type {
   CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
@@ -154,7 +155,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const label = s.label || screenExportOf(s.doc)?.screen || "screen";
     for (const i of visibleInstances(s.doc, label)) {
       visible.push(i);
-      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, key: i.key, setKey: i.setKey, setName: i.name, propNames: Object.keys(i.props || {}) });
+      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, ...ifDefined("key", i.key), ...ifDefined("setKey", i.setKey), setName: i.name, propNames: Object.keys(i.props || {}) });
     }
   });
 
@@ -183,7 +184,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     for (const c of screenColls) {
       if (c.key && dsCollByKey.has(c.key)) continue;
       const twin = dsCollByName.get(norm(c.name));
-      foreign.push({ name: c.name, key: c.key, twinKey: twin && twin.key, twinName: twin && twin.name });
+      foreign.push({ name: c.name, ...ifDefined("key", c.key), ...ifDefined("twinKey", twin && twin.key), ...ifDefined("twinName", twin && twin.name) });
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
@@ -299,7 +300,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       // last-one-wins pick between them.
       for (const sv of list) {
         if (sameResolution(sv, dv) === false) {
-          collisions.push({ name, key: sv.key, twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+          collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
         }
       }
     }
@@ -317,7 +318,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       for (const cand of dsByNorm.get(norm(name)) || []) {
         for (const sv of list) {
           if (sameResolution(sv, cand.v) === false) {
-            collisions.push({ name, key: sv.key, twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+            collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
           }
         }
       }
@@ -342,7 +343,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " — no mode name is shared and the two value sets are disjoint. ") +
           `Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.` +
           twinNote + scopeNote,
-        { token: c.name, key: c.key, alsoKnownAs: c.alsoKnownAs, screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
+        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
       );
     }
     // The union's own ambiguity, when it is NOT this screen's: said once, as a note naming the other
@@ -455,7 +456,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         coverage.matchedByKey++;
         const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
         if (local) coverage.matchedByLocalKey++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
         continue;
       }
       // Name+structure fallback. Never authoritative: a name match is a CANDIDATE, carried with
@@ -478,22 +479,22 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       // is carried only as a suggestion.
       if (best && cands.length > 1) {
         coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
       } else if (best && (best.score >= 0.5 || cands.length === 1)) {
         coverage.matchedByName++;
         coverage.entries.push({
           setName: i.setName,
-          key: i.setKey || i.key,
+          ...ifDefined("key", i.setKey || i.key),
           matchedBy: "name",
           verified: false,
           catalogName: best.c.name,
-          catalogKey: best.c.key,
+          ...ifDefined("catalogKey", best.c.key),
           propOverlap: `${best.hit}/${best.of}`,
           instances: i.count,
         });
       } else {
         coverage.unmatched++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false, instances: i.count });
       }
     }
     coverage.pct = Math.round((coverage.matchedByKey / coverage.distinct) * 100);
@@ -603,7 +604,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, …` : "") +
           `. Mapped BY NAME, UNVERIFIED — confirm one with "Go to main component" before reusing any of their code; ` +
           `if that one instance points at the catalog's file, the rest almost certainly do too.`,
-        { components: named.map((e) => ({ setName: e.setName, catalogName: e.catalogName, catalogKey: e.catalogKey, propOverlap: e.propOverlap, verified: false })) }
+        { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
       );
     }
     const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
@@ -615,7 +616,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
           `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
           `binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
-        { components: amb.map((e) => ({ setName: e.setName, candidates: e.candidates })) }
+        { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
       );
     }
   }
@@ -764,7 +765,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     componentProposals: rekey && coverage.rekey && coverage.rekey.rekeyed
       ? rekey.proposals.map((r) => ({
           name: r.name, instances: r.instances, screens: r.screens, instanceKeys: r.instanceKeys, remote: r.remote,
-          catalog: r.match, evidence: r.evidence, tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
+          catalog: r.match, ...ifDefined("evidence", r.evidence), tie: r.tie || null, alternatives: r.alternatives, reasons: r.reasons, confirmed: false,
         }))
       : [],
     componentResidual: rekey && coverage.rekey && coverage.rekey.rekeyed ? rekey.rows.filter((r) => !r.match).map((r) => ({ name: r.name, instances: r.instances, reasons: r.reasons })) : [],

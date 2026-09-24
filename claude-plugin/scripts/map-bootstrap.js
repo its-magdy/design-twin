@@ -91,6 +91,11 @@ function nullProto() {
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
 
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
@@ -232,8 +237,8 @@ function visibleInstances(doc, label) {
         nodeId: n.id,
         layer: n.name,
         name: mc.setName || mc.name || n.name,
-        key: mc.key,
-        setKey: mc.setKey,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
         remote: mc.remote === true,
         variant: parseVariant(n.component) || parseVariant(mc.variant),
         props: n.props && typeof n.props === "object" ? n.props : {}

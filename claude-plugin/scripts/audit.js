@@ -83,6 +83,16 @@ function screenExportOf(doc) {
   return isScreenExport(doc) ? doc : null;
 }
 
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+function ifDefined(key, v) {
+  const o = {};
+  if (v !== void 0) o[key] = v;
+  return o;
+}
+
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
@@ -96,8 +106,8 @@ function visibleInstances(doc, label) {
         nodeId: n.id,
         layer: n.name,
         name: mc.setName || mc.name || n.name,
-        key: mc.key,
-        setKey: mc.setKey,
+        ...ifDefined("key", mc.key),
+        ...ifDefined("setKey", mc.setKey),
         remote: mc.remote === true,
         variant: parseVariant(n.component) || parseVariant(mc.variant),
         props: n.props && typeof n.props === "object" ? n.props : {}
@@ -232,7 +242,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     }
     const verifiedOnes = scored.filter((s) => s.verified);
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
-    row.match = { id: best.c.id, key: best.c.key, name: best.c.name, type: best.c.type, page: best.c.page };
+    row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
     row.reasons = best.reasons.slice();
     if (ties.length) {
@@ -242,7 +252,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     } else if (scored.length > 1) {
       row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
     }
-    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ id: s.c.id, key: s.c.key, page: s.c.page, score: s.score }));
+    row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
@@ -348,11 +358,6 @@ function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   if (guard(doc)) return doc;
   console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
   process.exit(2);
-}
-
-// bridge/src/json-util.ts
-function isStringArray(x) {
-  return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
 // design-to-code/doc-guards.ts
@@ -637,7 +642,7 @@ function crossCheck(input) {
     const label = s.label || screenExportOf(s.doc)?.screen || "screen";
     for (const i of visibleInstances(s.doc, label)) {
       visible.push(i);
-      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, key: i.key, setKey: i.setKey, setName: i.name, propNames: Object.keys(i.props || {}) });
+      instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, ...ifDefined("key", i.key), ...ifDefined("setKey", i.setKey), setName: i.name, propNames: Object.keys(i.props || {}) });
     }
   });
   const dsCollByKey = /* @__PURE__ */ new Map();
@@ -660,7 +665,7 @@ function crossCheck(input) {
     for (const c of screenColls) {
       if (c.key && dsCollByKey.has(c.key)) continue;
       const twin = dsCollByName.get(norm(c.name));
-      foreign.push({ name: c.name, key: c.key, twinKey: twin && twin.key, twinName: twin && twin.name });
+      foreign.push({ name: c.name, ...ifDefined("key", c.key), ...ifDefined("twinKey", twin && twin.key), ...ifDefined("twinName", twin && twin.name) });
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
@@ -739,7 +744,7 @@ function crossCheck(input) {
       }
       for (const sv of list) {
         if (sameResolution(sv, dv) === false) {
-          collisions.push({ name, key: sv.key, twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+          collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, screen: flatten(sv), designSystem: flatten(dv), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
         }
       }
     }
@@ -754,7 +759,7 @@ function crossCheck(input) {
       for (const cand of dsByNorm.get(norm(name)) || []) {
         for (const sv of list) {
           if (sameResolution(sv, cand.v) === false) {
-            collisions.push({ name, key: sv.key, twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
+            collisions.push({ name, ...ifDefined("key", sv.key), twins: list, sv, alsoKnownAs: cand.name, screen: flatten(sv), designSystem: flatten(cand.v), usedAt: (usedTokenNames.get(name) || []).slice(0, 3) });
           }
         }
       }
@@ -767,7 +772,7 @@ function crossCheck(input) {
         "token-name-collision",
         // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
         `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
-        { token: c.name, key: c.key, alsoKnownAs: c.alsoKnownAs, screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
+        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
       );
     }
     if (variables && varScope !== "union") {
@@ -849,7 +854,7 @@ function crossCheck(input) {
         coverage.matchedByKey++;
         const local = !!byKeyHit.key && localKeys.has(byKeyHit.key);
         if (local) coverage.matchedByLocalKey++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: "key", scope: local ? "local" : "library", verified: true, catalogName: byKeyHit.name, instances: i.count });
         continue;
       }
       const cands = byName.get(norm(i.setName)) || [];
@@ -863,22 +868,22 @@ function crossCheck(input) {
       }
       if (best && cands.length > 1) {
         coverage.ambiguousName++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, ambiguous: true, candidates: cands.length, instances: i.count });
       } else if (best && (best.score >= 0.5 || cands.length === 1)) {
         coverage.matchedByName++;
         coverage.entries.push({
           setName: i.setName,
-          key: i.setKey || i.key,
+          ...ifDefined("key", i.setKey || i.key),
           matchedBy: "name",
           verified: false,
           catalogName: best.c.name,
-          catalogKey: best.c.key,
+          ...ifDefined("catalogKey", best.c.key),
           propOverlap: `${best.hit}/${best.of}`,
           instances: i.count
         });
       } else {
         coverage.unmatched++;
-        coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
+        coverage.entries.push({ setName: i.setName, ...ifDefined("key", i.setKey || i.key), matchedBy: null, verified: false, instances: i.count });
       }
     }
     coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
@@ -938,7 +943,7 @@ function crossCheck(input) {
         "info",
         "name-matched-components",
         `${named.length} component(s) have no key in the catalog but DO have an exact name twin there: ` + named.slice(0, 10).map((e) => `'${e.setName}' (props ${e.propOverlap})`).join(", ") + (named.length > 10 ? `, \u2026` : "") + `. Mapped BY NAME, UNVERIFIED \u2014 confirm one with "Go to main component" before reusing any of their code; if that one instance points at the catalog's file, the rest almost certainly do too.`,
-        { components: named.map((e) => ({ setName: e.setName, catalogName: e.catalogName, catalogKey: e.catalogKey, propOverlap: e.propOverlap, verified: false })) }
+        { components: named.map((e) => ({ setName: e.setName, ...ifDefined("catalogName", e.catalogName), ...ifDefined("catalogKey", e.catalogKey), ...ifDefined("propOverlap", e.propOverlap), verified: false })) }
       );
     }
     const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
@@ -947,7 +952,7 @@ function crossCheck(input) {
         "warning",
         "ambiguous-component-name",
         `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
-        { components: amb.map((e) => ({ setName: e.setName, candidates: e.candidates })) }
+        { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
       );
     }
   }
@@ -1062,7 +1067,7 @@ function crossCheck(input) {
       instanceKeys: r.instanceKeys,
       remote: r.remote,
       catalog: r.match,
-      evidence: r.evidence,
+      ...ifDefined("evidence", r.evidence),
       tie: r.tie || null,
       alternatives: r.alternatives,
       reasons: r.reasons,
@@ -1308,7 +1313,7 @@ function controlKind(name) {
 function labelledRoots(doc, label) {
   const exp = isScreenExport(doc) ? doc : null;
   const manifest = exp ? exp.manifest : isLayerFile(doc) ? doc.manifest : void 0;
-  return screenRoots(doc).map((tree) => ({ tree, label: exp && exp.screen || tree.name || label, manifest }));
+  return screenRoots(doc).map((tree) => ({ tree, label: exp && exp.screen || tree.name || label, ...ifDefined("manifest", manifest) }));
 }
 var r1 = (v) => Math.round(v * 100) / 100;
 var hasTok = (node, ...keys) => !!(node.tokens && keys.some((k) => node.tokens[k] != null));
@@ -1343,10 +1348,11 @@ function audit(input, opts = {}) {
   const roots = docs.flatMap((d) => labelledRoots(d.doc, d.label));
   const catalog = opts.catalog && Array.isArray(opts.catalog.components) ? opts.catalog.components : [];
   const findings = [];
+  const placeOf = (ctx) => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
   const add = (severity, code, message, node, ctx, extra) => findings.push(Object.assign(
     { severity, code, message },
     node ? { nodeId: node.id, nodeName: node.name } : {},
-    ctx ? { screen: ctx.label, path: ctx.path } : {},
+    ctx ? placeOf(ctx) : {},
     extra || {}
   ));
   const binding = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
@@ -1366,14 +1372,14 @@ function audit(input, opts = {}) {
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
       add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
-    walk2(root.tree, [], { label: root.label, rootBox: root.tree.box });
+    walk2(root.tree, [], { label: root.label, ...ifDefined("rootBox", root.tree.box) });
   }
   function walk2(node, ancestors, ctx) {
     if (!node || typeof node !== "object") return;
     const path3 = [...ancestors.map((a) => a.name), node.name].join(" > ");
     const here = { label: ctx.label, path: path3 };
     const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
-    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: a.label || a.markdown });
+    if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
     for (const state of STATE_KEYS) {
       const re = STATE_WORDS[state];
@@ -1391,7 +1397,7 @@ function audit(input, opts = {}) {
       const mc = node.mainComponent || {};
       const name = mc.setName || node.component;
       const key = mc.setKey || mc.key || name;
-      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, key: mc.setKey || mc.key, remote: !!mc.remote, nodeId: node.id });
+      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), remote: !!mc.remote, nodeId: node.id });
     }
     if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance \u2014 map it back to the component unless the detach was deliberate`, node, here);
     if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load \u2014 the recorded family/weight may not match the render; confirm the font files and license`, node, here);
@@ -1447,7 +1453,7 @@ function audit(input, opts = {}) {
       }
     }
     if (node.type === "TEXT") {
-      const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ font: node.font, tokens: node.textTokens, textStyle: node.styles && node.styles.text }];
+      const runs = Array.isArray(node.runs) && node.runs.length ? node.runs : [{ ...ifDefined("font", node.font), ...ifDefined("tokens", node.textTokens), ...ifDefined("textStyle", node.styles && node.styles.text) }];
       for (const r of runs) {
         const typoBound = !!(r.textStyle || node.styles && node.styles.text || r.tokens && (r.tokens.fontSize || r.tokens.fontFamily || r.tokens.lineHeight) || node.textTokens && (node.textTokens.fontSize || node.textTokens.fontFamily));
         tally("typography", typoBound);
@@ -1509,7 +1515,7 @@ function audit(input, opts = {}) {
     if (Array.isArray(node.children)) {
       const stacks = !node.layout || node.layout.mode === "absolute";
       const beneath = [];
-      const self = { name: node.name, hidden: node.hidden, fills: node.fills, __tappable: tappable, __beneath: beneath };
+      const self = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: beneath };
       const chain = [...ancestors, self];
       for (const child of node.children) {
         self.__beneath = stacks || child.absolute ? beneath : [];
@@ -1844,13 +1850,13 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
     tokens: readOptionalDoc(path2.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(path2.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog,
+    ...ifDefined("components", readOptionalDoc(path2.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog),
     componentsLibrary: readOptionalDoc(path2.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
     stylesText: readOptionalDoc(path2.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc)
   } : void 0;
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid });
+  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
   const outBase = out || path2.join("design", "audit", path2.basename(files[0], ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {

@@ -39,6 +39,7 @@ import path from "node:path";
 import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts";
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
@@ -78,7 +79,7 @@ function planRows(planDir: string | null | undefined): PlanRow[] {
   for (const f of fs.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
     const doc = readJsonOrNull(path.join(planDir, f), isPlan);
-    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, screenName: doc.screenName, nodeId: doc.nodeId, route: doc.route });
+    if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
 }
@@ -94,9 +95,9 @@ function describe(row: IndexRow, matchedVia?: string[]): ScreenCandidate {
     name: row.name,
     id: row.id,
     title: row.title || null,
-    w: row.w,
-    h: row.h,
-    nodes: row.nodes,
+    ...ifDefined("w", row.w),
+    ...ifDefined("h", row.h),
+    ...ifDefined("nodes", row.nodes),
     reference: row.reference || null,
     screenshot: row.id ? `dtwin screenshot ${row.id}` : null,
   };
