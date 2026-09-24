@@ -194,7 +194,7 @@ const textNode = {
   componentPropertyReferences: { characters: "Label#1:0" }, // prop-driven text
   getStyledTextSegments: () => ([
     { characters: "Hello ", fontName: { family: "Inter", style: "Regular" }, fontSize: 24, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "NONE", fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], hyperlink: null, listOptions: { type: "NONE" }, boundVariables: {} },
-    { characters: "World", fontName: { family: "Inter", style: "Bold" }, fontSize: 24, fontWeight: 700, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
+    { characters: "World", fontName: { family: "Inter", style: "Bold", variationSettings: { wght: 600 } }, fontSize: 24, fontWeight: 700, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
   ]),
 };
 const gradientRect = {
@@ -282,7 +282,16 @@ const scrollFrame = {
     effects: { 0: { OFFSET_Y: { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 0.6, tracks: [{ id: "aek", keyframeOperation: "OFFSET", keyframes: [
       { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
   },
-  animationStyles: [{ styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0 }],
+  animationStyles: [{
+    id: "applied1", styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0,
+    // AnimationStyleConfiguration.props (AnimationStylePropValue = string|number|boolean|MotionEasing|VariableAlias):
+    // a plain number, a MotionEasing, and a VariableAlias-bound value.
+    props: {
+      distance: 24,
+      easing: { type: "EASE_OUT" },
+      color: { type: "VARIABLE_ALIAS", id: "VariableID:2" },
+    },
+  }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
   explicitVariableModes: { c_sem: "m_dark" }, // this subtree pinned to the Dark theme
@@ -411,6 +420,11 @@ const sandbox = context as unknown as Sandbox;
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
   ok("text run numeric weight from segment fontWeight", txt.runs![1].font.weightValue === 700);
+  // FontName.variationSettings (Update 138): a segment's variable font axis values are carried on
+  // its run's font; a segment/node without them must not have the key at all.
+  ok("text run variationSettings carried when the segment's fontName has them", JSON.stringify(txt.runs![1].font.variationSettings) === '{"wght":600}');
+  ok("text run without variationSettings has no such key", !("variationSettings" in txt.runs![0].font));
+  ok("node-level font has no variationSettings (fontName carries none)", !("variationSettings" in txt.font!));
   ok("text run underline decoration", txt.runs![1].font.decoration === "underline");
   ok("text run href", txt.runs![1].href === "https://x.com");
   ok("lineHeight unit carried (percent)", !!(txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent"));
@@ -673,6 +687,12 @@ const sandbox = context as unknown as Sandbox;
   ok("motion keyframe track: base + keyframes + values", !!(m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100));
   ok("motion keyframe custom cubic-bezier easing carried", !!(m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4));
   ok("motion applied animation style captured", !!(m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3));
+  ok("motion applied animation style carries the applied instance id", !!(m3 && m3.styles![0].id === "applied1"));
+  ok("motion applied animation style props: number value carried verbatim", !!(m3 && m3.styles![0].props && m3.styles![0].props.distance === 24));
+  ok("motion applied animation style props: MotionEasing value converted like a keyframe easing",
+    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.easing) === '{"type":"ease_out"}');
+  ok("motion applied animation style props: VariableAlias value emits {type:\"variable_alias\", id}",
+    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.color) === '{"type":"variable_alias","id":"VariableID:2"}');
   ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
     m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
     m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90));
@@ -872,6 +892,17 @@ const sandbox = context as unknown as Sandbox;
     fontName: { family: "Proxima Nova", style: "Regular" }, fontSize: 12, hasMissingFont: true, getStyledTextSegments: () => [] };
   const legacy = await sandbox.serialize(legacyText, 0, false);
   ok("missing font flagged on text node", legacy.missingFont === true);
+
+  // FontName.variationSettings (Update 138) on a UNIFORM (single-run) text node — the node-level
+  // fontName read, not a styled-text segment.
+  const variableFontText = { type: "TEXT", name: "Variable", visible: true, id: "t:varfont", characters: "x", width: 50,
+    fontName: { family: "Roboto Flex", style: "Regular", variationSettings: { wght: 600 } }, fontSize: 12, getStyledTextSegments: () => [] };
+  const varFont = await sandbox.serialize(variableFontText, 0, false);
+  ok("uniform text node's fontName.variationSettings emitted on font", JSON.stringify(varFont.font!.variationSettings) === '{"wght":600}');
+  const staticFontText = { type: "TEXT", name: "Static", visible: true, id: "t:staticfont", characters: "x", width: 50,
+    fontName: { family: "Roboto", style: "Regular" }, fontSize: 12, getStyledTextSegments: () => [] };
+  const staticFont = await sandbox.serialize(staticFontText, 0, false);
+  ok("uniform text node without variationSettings has no such key", !("variationSettings" in staticFont.font!));
 
   // --- FIX: css auto-on is bounded — a LARGE single selection keeps the per-node oracle OFF ---
   const bigKids = [];
@@ -1207,6 +1238,25 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:other" ? otherPage : null);
   const pageKids = await sandbox.listChildren("page:other");
   ok("[CHILDREN] a non-current page is loaded before its children are read", pageKids.children.length === 1 && pageKids.children[0].id === "opf:1");
+
+  // The CURRENT page is not exempt either — the migration guide is explicit: "If you are accessing the
+  // current page using an expression like figma.root.children[x], then you will be required to call
+  // loadAsync()". loadPageSafely must run unconditionally for a PAGE node, even when it IS
+  // figma.currentPage (a no-op there, but the call must still happen).
+  let currentPageLoadCalls = 0;
+  const currentPageFrame = { id: "cpf:1", name: "Current Frame", type: "FRAME", width: 10, height: 10 };
+  const fakeCurrentPage = {
+    type: "PAGE", id: "page:current", name: "Current Page",
+    loadAsync: async () => { currentPageLoadCalls++; },
+    children: [currentPageFrame],
+  };
+  const prevCurrentPage4 = sandbox.figma.currentPage;
+  sandbox.figma.currentPage = fakeCurrentPage as unknown as typeof sandbox.figma.currentPage;
+  sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:current" ? fakeCurrentPage : null);
+  const currentKids = await sandbox.listChildren("page:current");
+  ok("[CHILDREN] the current page is still loaded (not skipped) before its children are read",
+    currentPageLoadCalls === 1 && currentKids.children.length === 1 && currentKids.children[0].id === "cpf:1");
+  sandbox.figma.currentPage = prevCurrentPage4;
 
   // listChildren("0:0") — the DOCUMENT node: its children are PageNodes, and reading `hasChildren` on
   // each of THEM has the identical dynamic-page rule, so every page must be loaded first too.

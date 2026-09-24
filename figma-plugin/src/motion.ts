@@ -3,6 +3,7 @@
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
 import type {
   JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, MotionIndexedTracks, MotionPaintTrack, MotionEffectTracks, NodeMotion,
+  MotionStylePropValue,
 } from "../../bridge/src/doc-types.ts";
 import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
 
@@ -86,13 +87,22 @@ function animationTrack(binding: KeyframeBinding | undefined): MotionAnimation |
   if (isList(binding.tracks) && binding.tracks.length) {
     o.tracks = binding.tracks.map((t) => {
       const to: NonNullable<MotionAnimation["tracks"]>[number] = {};
-      if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+      if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
       const kf = keyframes(t.keyframes);
       if (kf) to.keyframes = kf;
       return to;
     });
   }
   return o;
+}
+
+// AnimationStyleConfiguration.props value -> its compact form: a string/number/boolean value passes
+// through verbatim; a MotionEasing / VariableAlias value goes through the same conversion as a
+// keyframe's easing (motionEasing above).
+function stylePropValue(v: AnimationStylePropValue | undefined): MotionStylePropValue | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === "object") return motionEasing(v);
+  return v;
 }
 
 // One binding -> its compact form (manualTrack / animationTrack).
@@ -189,9 +199,17 @@ export function collectMotion(node: SceneNode): NodeMotion | undefined {
   }
   if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
     out.styles = node.animationStyles.map((s) => {
-      const o: NonNullable<NodeMotion["styles"]>[number] = { name: s.name, styleId: s.styleId };
+      const o: NonNullable<NodeMotion["styles"]>[number] = { id: s.id, name: s.name, styleId: s.styleId };
       if (typeof s.duration === "number") o.duration = round(s.duration);
       if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+      if (s.props) {
+        const props: Record<string, MotionStylePropValue> = {};
+        for (const [key, v] of Object.entries(s.props)) {
+          const converted = stylePropValue(v);
+          if (converted !== undefined) props[key] = converted;
+        }
+        if (Object.keys(props).length) o.props = props;
+      }
       return o;
     });
   }

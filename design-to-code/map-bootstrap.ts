@@ -38,6 +38,7 @@ const clone = <T>(o: T): T => structuredClone(o);
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 function safeAssign<T extends object, U extends object, V extends object>(target: T, source1: U, source2: V): T & U & V {
   for (const src of [source1, source2]) {
+    if (src === undefined || src === null) continue; // Object.assign skips null/undefined sources; mirror that
     for (const k of Object.keys(src)) {
       if (UNSAFE_KEYS.has(k)) continue;
       (target as Record<string, unknown>)[k] = (src as Record<string, unknown>)[k];
