@@ -90,12 +90,17 @@ async function resolveHolder(): Promise<Holder> {
 const bridge = {
   // Typed per command (commands.ts): the reply is what the plugin sends for `cmd`, checked on arrival
   // by server-core — whether this process holds the bridge or a daemon does.
-  // `onProgress` is honoured only when this process holds the bridge: the daemon socket's protocol is
-  // one request frame -> one reply frame, so a daemon-routed export sends no progress.
+  // `onProgress` is honoured either way. Holding the bridge, server-core calls it per plugin tick.
+  // Routed through a daemon, the listener opts the socket request into progress frames (daemon.ts
+  // protocol note): the daemon relays each tick ahead of its reply, so withProgress still sends every
+  // notifications/progress (MCP spec 2025-06-18, basic/utilities/progress) before the tool result. A
+  // daemon from before progress frames sends none — that export simply reports no progress. Each
+  // relayed tick also re-arms the socket's outer timeout, so a long export that keeps ticking is not
+  // cut off by the `timeoutMs + 30000` guard; the daemon's own `timeoutMs` still bounds the command.
   async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void): Promise<Commands[C]["reply"]> {
     const h = await holder();
     if ("own" in h) return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
-    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000);
+    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000, onProgress);
   },
   async listClients(): Promise<ClientRow[]> {
     const h = await holder();
@@ -167,8 +172,9 @@ const wlog = (m: string) => console.error("[figma-mcp] " + m);
 // running tick count (the plugin's own counters can reset per page), the message says where the walk
 // is. No token, no listener: nothing is sent to a client that did not ask.
 //
-// Ordering: the bridge hands a tick to the callback synchronously from the socket's message handler,
-// so a tick and the reply that lands in the same event-loop turn would otherwise race — the tool
+// Ordering: the bridge hands a tick to the callback synchronously from the socket's message handler
+// (the WebSocket's when this process holds the bridge; the daemon socket's reader, frame by frame and
+// always ahead of the reply frame, when a daemon does), so a tick and the reply that lands in the same event-loop turn would otherwise race — the tool
 // result could reach stdout before the last notification, which the client then drops (it no longer
 // knows the token). The SDK's own progressExample.js `await`s each sendNotification; a callback cannot,
 // so `withProgress` collects every send and awaits them all before the tool result is returned (the

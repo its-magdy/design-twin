@@ -867,7 +867,11 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   if (d) {
     // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
     // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000);
+    // An export opts into the daemon's progress frames (daemon.ts): each tick re-arms the outer guard
+    // below, so a long walk that is still reporting is not cut off by a budget sized for silence —
+    // the daemon's own per-command `timeoutMs` still bounds the whole command, as the bridge path's
+    // does. The ticks themselves are not printed (the plugin window shows them); this is liveness only.
+    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000, isExportCmd ? () => {} : undefined);
   } else {
     const b = createBridge();
     bridge = b;
