@@ -651,6 +651,17 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   //   target                          -> exact connId, then exact fileKey, then case-insensitive
   //                                      substring of the file name. A substring matching several
   //                                      files is refused rather than resolved to the first.
+  // The target rules above, as data: which live entries a target names. resolveClient turns the
+  // outcome into the routed entry or the error; waitForClient polls it (a `none` may become a `one`
+  // while a second plugin window is still redialling).
+  function matchClient(live: ClientEntry[], t: string): ClientEntry[] {
+    const byId = live.find((e) => e.connId === t);
+    if (byId) return [byId];
+    const byKey = live.find((e) => e.fileKey && e.fileKey === t);
+    if (byKey) return [byKey];
+    const lower = t.toLowerCase();
+    return live.filter((e) => e.file && e.file.toLowerCase().includes(lower));
+  }
   function resolveClient(target?: unknown): ClientEntry {
     const live = liveClients();
     if (!live.length) {
@@ -665,19 +676,32 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       );
     }
     const t = String(target);
-    const byId = live.find((e) => e.connId === t);
-    if (byId) return byId;
-    const byKey = live.find((e) => e.fileKey && e.fileKey === t);
-    if (byKey) return byKey;
-    const lower = t.toLowerCase();
-    const byName = live.filter((e) => e.file && e.file.toLowerCase().includes(lower));
-    if (byName.length === 1) return byName[0];
-    if (byName.length > 1) {
+    const matched = matchClient(live, t);
+    if (matched.length === 1) return matched[0];
+    if (matched.length > 1) {
       throw new Error(
-        `'${t}' matches ${byName.length} connected files — be more specific, or use the connId.\n${list()}`
+        `'${t}' matches ${matched.length} connected files — be more specific, or use the connId.\n${list()}`
       );
     }
     throw new Error(`no connected Figma file matches '${t}'. Connected:\n${list()}`);
+  }
+
+  // Wait for a target to name at least one live client. A named file's plugin window may not have
+  // redialled yet: every open window retries the bridge on its own 3 s clock (figma-plugin ui.html),
+  // so with two files open, whichever lands first is all resolveClient can see for a moment — observed
+  // live, `--client "Design System"` failed at once with only the other file listed, and that file
+  // connected two seconds later. Resolves as soon as the target matches (one OR several — an
+  // ambiguity is the caller's to hear about, from resolveClient) or when the window runs out; never
+  // throws, so the request path's own resolveClient still reports whatever is connected then.
+  function waitForClient(target: string, timeoutMs: number, pollMs = 100): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const start = Date.now();
+      (function poll() {
+        if (matchClient(liveClients(), target).length) return resolve();
+        if (Date.now() - start > timeoutMs) return resolve();
+        setTimeout(poll, pollMs);
+      })();
+    });
   }
 
   // Server-side half of the whoami probe. The plugin reports who IT is (instanceId, file, fileKey);
@@ -845,7 +869,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     try { server.close(); } catch { /* not listening */ }
   }
 
-  return { request, requestWithClient, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port, listening };
+  return { request, requestWithClient, isConnected, waitForConnection, waitForIdentified, waitForClient, connectionInfo, listClients, resolveClient, close, port, listening };
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.

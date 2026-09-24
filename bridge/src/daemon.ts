@@ -18,6 +18,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { errMsg } from "./errmsg.ts";
+import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
 import type { ClientRow, ConnectionInfo } from "./server-core.ts";
@@ -121,6 +122,8 @@ export interface DaemonBridge {
   request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
   /** The same, also naming the client the command went to (server-core has it; a fake may not). */
   requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<{ reply: unknown; client: ClientRow }>;
+  /** Waits (bounded) for a named target to match a live client; never throws (server-core has it; a fake may not). */
+  waitForClient?(target: string, timeoutMs: number): Promise<void>;
   close(): void;
   listClients?: () => ClientRow[];
   connectionInfo?: () => ConnectionInfo;
@@ -282,6 +285,12 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         queue = queue.then(async () => {
           try {
             if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection);
+            // A named client (not a c<N> connId) whose window has not redialled yet: same bounded wait
+            // as the CLI's own bridge path (figma-pull.ts), so `--client <name>` under a daemon does
+            // not fail on the first file that happened to reconnect after a Figma restart.
+            if (msg.waitForConnection && typeof msg.client === "string" && msg.client && !/^c\d+$/.test(msg.client) && bridge.waitForClient) {
+              await bridge.waitForClient(msg.client, Math.min(msg.waitForConnection, NAMED_CLIENT_WAIT_MS));
+            }
             // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
             // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
             // The client the bridge picked rides back on the reply (a fake bridge without

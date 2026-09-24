@@ -180,7 +180,7 @@ import * as LAYOUT from "./project-layout.ts";
 // staleness notes: parseArgs and formatClients are pure and test-driven, and importing this module must
 // NOT load server-core (token resolution; a process.exit on a bad FIGMA_BRIDGE_PORT). cli() loads
 // server-core itself, after routing and the --token-file pre-scan.
-import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
@@ -892,8 +892,14 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
       // listClients: no plugin ever connected within the window — a genuine "none", not a failure.
     }
     // A name/fileKey target (not a bare c<N> connId, which never depends on identification) can lose
-    // the race against the plugin's `hello` — see waitForIdentified's comment (finding 216).
-    if (client && !/^c\d+$/.test(client)) await b.waitForIdentified();
+    // the race against the plugin's `hello` — see waitForIdentified's comment (finding 216) — and,
+    // with two files open, against the OTHER file's window: whichever redials first is the only one
+    // connected when the wait above returns (seen live). So a named target is also given a bounded
+    // window to show up before the request resolves it.
+    if (client && !/^c\d+$/.test(client)) {
+      await b.waitForIdentified();
+      await b.waitForClient(client, Math.min(connectWaitMs, NAMED_CLIENT_WAIT_MS));
+    }
     send = (cmd, args, timeoutMs) => b.requestWithClient(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to

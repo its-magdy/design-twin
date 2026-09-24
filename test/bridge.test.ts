@@ -462,6 +462,29 @@ void (async () => {
     ok("[multi] routes by file-name substring (case-insensitive)",
       (await bridge.request("ping", {}, 5000, "nera")).file === "lib");
 
+    // waitForClient: a NAMED target whose window has not redialled yet (two files open, the other
+    // one landed first — seen live) is waited for, bounded; an unknown name times out quietly and
+    // the request path's own resolveClient still says what IS connected.
+    const tw0 = Date.now();
+    await bridge.waitForClient("nobody-has-this-name", 300);
+    const tw = Date.now() - tw0;
+    ok("[multi] waitForClient for a name nobody has returns quietly after its window (no throw)", tw >= 280 && tw < 1500);
+    let stillErr: Error | undefined;
+    try { await bridge.request("ping", {}, 5000, "nobody-has-this-name"); } catch (e) { stillErr = asErr(e); }
+    ok("[multi] …and the request afterwards still gets the unchanged 'no connected Figma file matches' text",
+      !!stillErr && stillErr.message.startsWith("no connected Figma file matches 'nobody-has-this-name'. Connected:\n  c1  \"App — Base\"  fileKey KEYBASE"));
+    const waited = bridge.waitForClient("Docs", 3000);
+    let lateWs: WebSocket | undefined;
+    setTimeout(() => { void open().then((c) => { lateWs = c; identify(c, { instanceId: "fig-docs", file: "Docs File", fileKey: "KEYDOCS", page: "P" }); autoReply(c, { pong: true, page: "P", file: "docs" }); }); }, 200);
+    const tl0 = Date.now();
+    await waited;
+    const tl = Date.now() - tl0;
+    ok("[multi] waitForClient resolves as soon as the late window identifies under that name (not at the timeout)", tl >= 150 && tl < 2500);
+    ok("[multi] …and the named request then routes to it", (await bridge.request("ping", {}, 5000, "Docs")).file === "docs");
+    ok("[multi] waitForClient resolves at once for a name already connected", await (async () => { const t0 = Date.now(); await bridge.waitForClient("nera", 3000); return Date.now() - t0 < 100; })());
+    lateWs?.close();
+    await new Promise((r) => setTimeout(r, 80));
+
     // Ambiguity must REFUSE, not guess. Silently picking one would export the wrong file and look
     // entirely successful — the adb "more than one device" call.
     let ambErr: Error | undefined;
@@ -1869,6 +1892,8 @@ void (async () => {
     ] as unknown as ClientRow[], // hand-built: rows omit pluginVersion/pluginStale
     close: () => calls.push("close"),
     waitForConnection: async () => {},
+    // Records the bounded named-client wait the daemon asks for (target + window), see daemon.ts.
+    waitForClient: async (target: string, timeoutMs: number) => { calls.push(`wait:${target}:${timeoutMs}`); },
     // The daemon forwards a command frame's own fields; the fake answers each command with ITS real
     // reply shape (the daemon client checks replies against commands.ts before handing them back),
     // tagging `file` with the command so a round-trip can be told apart. It blows up on `write` (the
@@ -1968,6 +1993,19 @@ void (async () => {
   ok("[daemon] --client is forwarded through the daemon to the bridge", calls.includes("client:NERA Library"));
   ok("[daemon] and the command itself still arrives", calls.includes("whoami"));
   ok("[daemon] a bridge that cannot name the client it used leaves `client` null — never a guess", routed.client === null);
+  ok("[daemon] a named client with no connect window asks for no wait", !calls.some((c) => c.startsWith("wait:")));
+  // With a connect window (the CLI behind a daemon passes its own), a NAMED client gets the bounded
+  // waitForClient before the request — min(window, 15 s) — so the second file's window has time to
+  // redial; a bare connId never waits (it does not depend on identification).
+  calls.length = 0;
+  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+  ok("[daemon] a named client WITH a connect window is waited for, capped at 15 s", calls[0] === "wait:NERA Library:15000" && calls.includes("client:NERA Library"));
+  calls.length = 0;
+  await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 4000 }, 5000);
+  ok("[daemon] …and a shorter window is used as-is", calls[0] === "wait:NERA Library:4000");
+  calls.length = 0;
+  await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
+  ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
