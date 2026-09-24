@@ -1069,6 +1069,12 @@ const sandbox = context as unknown as Sandbox;
   VARS.v_comp_ghost = { id: "v_comp_ghost", name: "text/ghost", resolvedType: "COLOR", variableCollectionId: "c_sem",
     scopes: ["TEXT_FILL"], codeSyntax: {}, remote: false, valuesByMode: {
       m_light: { color: { type: "VARIABLE_ALIAS", id: "v_libink" }, opacity: { type: "VARIABLE_ALIAS", id: "v_gone" } } } };
+  // form 3: the UNDOCUMENTED runtime shape (figma/plugin-typings issue #375): Light = text/muted's Light,
+  // Dark = overlay/scrim's Light, each spelled as a COMPOSE_COLOR expression. Must read as the documented form.
+  VARS.v_comp_expr = { id: "v_comp_expr", name: "text/expr", resolvedType: "COLOR", variableCollectionId: "c_sem",
+    scopes: [], codeSyntax: {}, remote: false, valuesByMode: {
+      m_light: { type: "VARIABLE_EXPRESSION", expressionFunction: "COMPOSE_COLOR", expressionArguments: [{ type: "VARIABLE_ALIAS", id: "v_libink" }, 50] },
+      m_dark: { type: "VARIABLE_EXPRESSION", expressionFunction: "COMPOSE_COLOR", expressionArguments: [{ r: 0, g: 0, b: 0, a: 1 }, { type: "VARIABLE_ALIAS", id: "v_libop" }] } } };
   sandbox.figma.currentPage.selection = [libNode];
   const compSel = await sandbox.collectSelection({ css: false });
   const compVar = (n: string) => compSel.variables.variables.find((v) => v.name === n);
@@ -1083,6 +1089,10 @@ const sandbox = context as unknown as Sandbox;
   ok("[composed] both halves aliases -> both resolved to names",
     !!mutedD && typeof mutedD.color === "object" && mutedD.color.aliasOf === "brand/ink" && typeof mutedD.opacity === "object" && mutedD.opacity.aliasOf === "brand/opacity-60");
   ok("[composed] every mode of both composed variables is emitted composed", !!scrimL && !!scrimD && !!mutedL && !!mutedD);
+  const expr = compVar("text/expr");
+  ok("[composed] the COMPOSE_COLOR expression shape (issue #375) reads EXACTLY as the documented {color, opacity} shape",
+    !!expr && !!mutedL && !!scrimL && JSON.stringify(expr.values.Light) === JSON.stringify(muted!.values.Light) &&
+    JSON.stringify(expr.values.Dark) === JSON.stringify(scrim!.values.Light) && composedOf(expr.values.Light) !== undefined);
   const libOp = compVar("brand/opacity-60"), libInk = compVar("brand/ink");
   ok("[composed] library var reached ONLY via a nested OPACITY alias is pulled in (aliasTargets)",
     !!libOp && libOp.remote === true && libOp.values.Light === 60);
@@ -1097,6 +1107,7 @@ const sandbox = context as unknown as Sandbox;
   delete VARS.v_comp_raw;
   delete VARS.v_comp_alias;
   delete VARS.v_comp_ghost;
+  delete VARS.v_comp_expr;
   delete EXTRA.v_libop;
   delete EXTRA.v_libink;
   sandbox.figma.variables.getVariableByIdAsync = prevGetVar;

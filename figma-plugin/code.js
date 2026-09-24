@@ -980,6 +980,11 @@
     return l;
   }
 
+  // ../bridge/src/json-util.ts
+  function isUnknownArray(x) {
+    return Array.isArray(x);
+  }
+
   // src/variables.ts
   function isVariableAlias(v) {
     return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
@@ -1058,15 +1063,34 @@
   function isComposedColor(v) {
     return typeof v === "object" && "opacity" in v && "color" in v;
   }
+  function isRgb(x) {
+    return !!x && typeof x === "object" && "r" in x && typeof x.r === "number" && "g" in x && typeof x.g === "number" && "b" in x && typeof x.b === "number";
+  }
+  function composedFromExpression(v) {
+    const u = v;
+    if (!u || typeof u !== "object" || !("type" in u) || u.type !== "VARIABLE_EXPRESSION") return null;
+    if (!("expressionFunction" in u) || u.expressionFunction !== "COMPOSE_COLOR") return null;
+    if (!("expressionArguments" in u) || !isUnknownArray(u.expressionArguments) || u.expressionArguments.length !== 2) return null;
+    const [c, o] = u.expressionArguments;
+    if (isVariableAlias(c)) {
+      if (isVariableAlias(o) || typeof o === "number") return { color: c, opacity: o };
+      return null;
+    }
+    return isRgb(c) && isVariableAlias(o) ? { color: c, opacity: o } : null;
+  }
+  function toComposed(v) {
+    return isComposedColor(v) ? v : composedFromExpression(v);
+  }
   function colorIsAlias(v) {
     return isVariableAlias(v.color);
   }
   function aliasIds(v) {
     if (isVariableAlias(v)) return v.id ? [v.id] : [];
-    if (!isComposedColor(v)) return [];
+    const c = toComposed(v);
+    if (!c) return [];
     const out = [];
-    if (isVariableAlias(v.color) && v.color.id) out.push(v.color.id);
-    if (isVariableAlias(v.opacity) && v.opacity.id) out.push(v.opacity.id);
+    if (isVariableAlias(c.color) && c.color.id) out.push(c.color.id);
+    if (isVariableAlias(c.opacity) && c.opacity.id) out.push(c.opacity.id);
     return out;
   }
   async function aliasValue(a) {
@@ -1083,6 +1107,8 @@
     if (isVariableAlias(v)) return aliasValue(v);
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
     if (isComposedColor(v)) return composedValue(v);
+    const fromExpression = composedFromExpression(v);
+    if (fromExpression) return composedValue(fromExpression);
     if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
     return verbatimValue(v);
   }
@@ -1147,7 +1173,7 @@
       for (let i = 0; i < modeIds.length; i++) {
         const modeId = modeIds[i];
         const raw = v.valuesByMode[modeId];
-        if (isVariableAlias(raw) || isComposedColor(raw)) hasAlias = true;
+        if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
         for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
           if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
         }
