@@ -20,3 +20,12 @@ export const TIMEOUTS = { command: 120000, selection: 120000, list: 300000, expo
 // selection tier). One function so a new tier reaches every caller.
 export const exportTimeout = ({ selection, allPages }: { selection?: boolean; allPages?: boolean } = {}): number =>
   selection ? TIMEOUTS.selection : allPages ? TIMEOUTS.exportAll : TIMEOUTS.export;
+
+// How often the bridge pings each connected plugin socket, and so how long a silently dead one (a
+// laptop lid closed mid-session, a pulled cable, a renderer that vanished without a FIN) can sit in the
+// client registry looking live: a client that has not answered the PREVIOUS ping when the next tick
+// fires is terminated, so detection takes between one and two intervals. 30 s is the interval of the
+// ws README's own "How to detect and close broken connections?" example. Browsers answer pings in the
+// network stack without involving page script, so a plugin busy with a long export still answers.
+// createBridge's `heartbeatMs` option overrides it (the test suite uses a short one).
+export const HEARTBEAT_MS = 30000;

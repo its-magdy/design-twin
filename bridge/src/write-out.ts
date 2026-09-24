@@ -70,9 +70,23 @@ function assertInsideCwd(outDir?: string | null, what = "outDir"): string {
 }
 
 // quiet: layer files are written by the hundred and get ONE summary line instead of one line each.
+//
+// Written to `<name>.tmp-<pid>` beside the target and then renamed over it (token-store.ts's pattern):
+// rename(2) replaces the destination atomically on POSIX, so a run killed mid-write (Ctrl-C, OOM on a
+// big export) leaves the PREVIOUS file intact instead of a truncated JSON that every later reader
+// fails on. Same directory, so the rename never crosses a filesystem. The pid keeps two concurrent
+// writers from sharing a temp file; a failed write removes its own temp file.
 function writeJson(dir: string, name: string, obj: unknown, quiet?: boolean, log?: Log): void {
-  fs.writeFileSync(path.join(dir, name), JSON.stringify(obj, null, 2));
-  if (!quiet && log) log("wrote " + path.join(dir, name));
+  const file = path.join(dir, name);
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+    throw e;
+  }
+  if (!quiet && log) log("wrote " + file);
 }
 
 // Materialise the shared pages/ layout as real nested directories. The layout itself — bucketing,
