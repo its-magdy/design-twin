@@ -227,7 +227,15 @@ function locateAuditFile(cwd, screenFile, screenName) {
   const wantSlug = slug(screenName);
   if (wantSlug) {
     const stem = (f) => f.replace(/\.json$/, "");
-    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => stem(f).includes("__") && slug(stem(f).slice(0, stem(f).indexOf("__"))) === wantSlug);
+    const nameOf = (f) => {
+      const s = stem(f);
+      const i = s.lastIndexOf("__");
+      return i > 0 ? s.slice(0, i) : null;
+    };
+    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => {
+      const n = nameOf(f);
+      return n !== null && slug(n) === wantSlug;
+    });
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;

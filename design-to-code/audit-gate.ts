@@ -31,10 +31,14 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
     // (and "Job Roles Detail" the audit of "Job Roles") — a wrong screen's blockers gating this build.
     // Audit files are named `<LayerName>__<node-id>.json` (audit.ts --out), so the name is also
     // compared with that `__<id>` suffix stripped: "Job Roles" finds Job_Roles__9_9.json, never
-    // Job_Roles_Detail__9_9.json.
+    // Job_Roles_Detail__9_9.json. The split is at the LAST `__`: safe() turns every non-alphanumeric
+    // run in a layer name into underscores, so "Detail - Overview" is Detail___Overview__9_9 and a
+    // first-`__` split would hand the unrelated screen "Detail" its audit. The id part itself
+    // (safe("9:9") = 9_9) never contains a double underscore.
     const stem = (f: string): string => f.replace(/\.json$/, "");
+    const nameOf = (f: string): string | null => { const s = stem(f); const i = s.lastIndexOf("__"); return i > 0 ? s.slice(0, i) : null; };
     const hit = entries.find((f) => slug(stem(f)) === wantSlug)
-      ?? entries.find((f) => stem(f).includes("__") && slug(stem(f).slice(0, stem(f).indexOf("__"))) === wantSlug);
+      ?? entries.find((f) => { const n = nameOf(f); return n !== null && slug(n) === wantSlug; });
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;

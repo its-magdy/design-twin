@@ -355,6 +355,13 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[gate] the screen's OWN <Name>__<id>.json audit (audit.ts --out naming) is found by name alone",
     locateAuditFile(cwd, null, "Job Roles") === "design/audit/Job_Roles__9_9.json");
   fs.unlinkSync(path.join(cwd, "design", "audit", "Job_Roles__9_9.json"));
+  // safe() turns " - " into "___": the name part itself contains "__", so the id split must be at the LAST one.
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"), JSON.stringify({ findings: [] }));
+  check("[gate] a doubled separator in the layer name (Detail - Overview) does NOT match the screen \"Detail\"",
+    locateAuditFile(cwd, null, "Detail") === null);
+  check("[gate] …but does match its own screen \"Detail - Overview\"",
+    locateAuditFile(cwd, null, "Detail - Overview") === "design/audit/Detail___Overview__9_9.json");
+  fs.unlinkSync(path.join(cwd, "design", "audit", "Detail___Overview__9_9.json"));
   fs.writeFileSync(path.join(cwd, "design", "audit", "job-roles.json"), JSON.stringify({ findings: [] }));
   check("[gate] the exact case/punctuation-insensitive name still matches", locateAuditFile(cwd, null, "Job Roles") === "design/audit/job-roles.json");
   check("[gate] and the screen file's own basename still wins first",
