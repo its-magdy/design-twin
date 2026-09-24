@@ -497,7 +497,7 @@ const cannotRead = (what: string, file: string, error: string): number => { cons
 
 function main(argv: string[]): number {
   const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, help: { type: "boolean", short: "h" } } as const;
-  const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   const { out, map: mapFlag, route } = flags;
   if (positionals.length !== 3 || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }

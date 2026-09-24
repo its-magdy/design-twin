@@ -293,7 +293,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // --screen is repeatable: a build usually spans a screen plus its modals, and the question
   // "how much of this can I reuse" is about all of them together.
   const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
-  const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); process.exit(0); }
   let maxAgeHours: number | undefined;
   if (flags["max-age"] !== undefined) {
