@@ -85,6 +85,8 @@ how a value becomes code on your stack, see the profile.
   = start), `flexWrap:"wrap"` + `rowGap` + `alignContent`, `reverseZ` (later children paint
   underneath). Negative `gap` = overlap. `gap` is absent under `space-between`/`space-evenly`/
   `space-around` — Figma ignores the stored spacing under those modes, so there is nothing to emit.
+  Likewise `rowGap` is absent when `alignContent` is `space-between` (wrapped rows are spread by
+  dividing the free space, not by the stored row spacing).
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
 - **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout; children carry `x`/`y`. Infer a

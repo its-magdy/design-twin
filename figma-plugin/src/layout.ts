@@ -55,7 +55,11 @@ function flexIntent(src: FlexLike): LayoutSpec {
   if (src.counterAxisAlignItems && src.counterAxisAlignItems !== "MIN") l.alignItems = ALIGN[src.counterAxisAlignItems];
   if (src.layoutWrap === "WRAP") {
     l.flexWrap = "wrap";
-    if (src.counterAxisSpacing) l.rowGap = src.counterAxisSpacing;
+    // The counter-axis twin of the rule above. plugin-api.d.ts (1.139) on `counterAxisAlignContent`:
+    // "`counterAxisSpacing` is respected when `counterAxisAlignContent` is set to `"AUTO"`", and under
+    // `"SPACE_BETWEEN"` "the free space within the auto-layout frame is divided up evenly between each
+    // track" — so the stored counterAxisSpacing is slack there too, and rowGap must not be emitted.
+    if (src.counterAxisSpacing && src.counterAxisAlignContent !== "SPACE_BETWEEN") l.rowGap = src.counterAxisSpacing;
     // align-content for wrapped rows (AUTO = packed = default; SPACE_BETWEEN spreads them).
     if (src.counterAxisAlignContent && src.counterAxisAlignContent !== "AUTO") l.alignContent = ALIGN[src.counterAxisAlignContent];
   }
