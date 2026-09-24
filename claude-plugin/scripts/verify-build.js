@@ -83,12 +83,17 @@ function readFailure(e) {
   };
 }
 function readJson(file, guard) {
-  let raw;
+  let buf;
   try {
-    raw = fs.readFileSync(file, "utf8");
+    buf = fs.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
   let parsed;
   try {
     const value = JSON.parse(raw);

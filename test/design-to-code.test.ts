@@ -11,12 +11,12 @@ import { buildDesignSystemLayout } from "../bridge/src/design-system-layout.ts";
 import { check, report } from "./assert.ts";
 import type { PropDefInput, VariableInput } from "./fixtures.ts";
 import {
-  anyProp, asColor, asDimension, boolProp, catalog, codeMap, enumProp, fileAt, figmaExt, instanceProp, leafAt, malformed, modesOf, modifierOf, must, node, nodeAt, tokens,
+  FixtureError, anyProp, asColor, asDimension, boolProp, catalog, codeMap, enumProp, fileAt, figmaExt, instanceProp, leafAt, malformed, modesOf, modifierOf, must, node, nodeAt, tokens,
 } from "./fixtures.ts";
 import { bag, isJsonObject } from "../design-to-code/types.ts";
 import { isComponentsCatalog, isTokensDoc } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
-import type { CodeConnectMap, ComponentsCatalog, DesignSystemDoc, DriftFinding, TokensDoc } from "../design-to-code/types.ts";
+import type { CodeConnectMap, ComponentPropDef, ComponentsCatalog, DesignSystemDoc, DriftFinding, TokensDoc } from "../design-to-code/types.ts";
 import type { GetComponentResult } from "../design-to-code/get-component.ts";
 import type { DtcgGroup } from "../design-to-code/tokens.ts";
 import fs from "node:fs";
@@ -82,6 +82,9 @@ check("clean ds lints clean", lintTokens(ds).length === 0);
 check("[T-str-type] STRING -> $type:'string' (valid, not typeless)", (() => { const d = toDTCG(tokens({ variables: [{ name: "font/sans", type: "STRING", values: { v: "Inter" } }] })); return leafAt(d, "font.sans").$type === "string" && leafAt(d, "font.sans").$value === "Inter"; })());
 check("[T-bool-coerce] BOOLEAN -> $type:'string' + origin in $extensions (no typeless leaf)", (() => { const w: string[] = []; const d = toDTCG(tokens({ variables: [{ name: "flag/on", type: "BOOLEAN", values: { v: true } }] }), w); return leafAt(d, "flag.on").$type === "string" && leafAt(d, "flag.on").$value === "true" && figmaExt(leafAt(d, "flag.on")).originalType === "boolean" && w.some((m) => /BOOLEAN/.test(m)); })());
 check("[T-6hex] color leaf hex fallback always 6-digit, alpha split out (2025.10)", (() => { const d = toDTCG(tokens({ variables: [{ name: "scrim", type: "COLOR", values: { v: "#00000080" } }] })); return asColor(leafAt(d, "scrim").$value).hex === "#000000" && near(asColor(leafAt(d, "scrim").$value).alpha, 0.502); })());
+check("[fixtures-null] asColor(null) throws a FixtureError ('not a DTCG colour…'), not a raw TypeError", (() => {
+  try { asColor(malformed(null)); return false; } catch (e) { return e instanceof FixtureError && /^not a DTCG colour/.test(e.message); }
+})());
 
 // ---------- tokens: color hardening ----------
 console.log("tokens — color:");
@@ -479,6 +482,27 @@ check("[sec-boot-proto-key] component keyed '__proto__' is kept, not dropped", (
   const m = bootstrap(catalog([{ key: "__proto__", name: "Weird", type: "COMPONENT" }]));
   return Object.keys(m.components).includes("__proto__") && m.components["__proto__"].figma.name === "Weird";
 })());
+check("[sec-boot-figma-proto] existing entry.figma with an own '__proto__' property does not repoint the merged figma object", (() => {
+  // JSON.parse (unlike an object literal) creates a real own "__proto__" data property — exactly what a
+  // hand-edited or hostile map on disk can carry. bootstrap() must not let Object.assign turn that into
+  // a repointed prototype for the merged figma object.
+  const existingRaw: unknown = JSON.parse('{"version":1,"components":{"K":{"figma":{"key":"K","name":"Old","__proto__":{"polluted":1}},"code":{"module":"@/k","export":"B"},"status":"active"}}}');
+  const existing = malformed<CodeConnectMap>(existingRaw);
+  const m = bootstrap(catalog([{ key: "K", name: "New", type: "COMPONENT" }]), existing);
+  const figma: unknown = m.components.K.figma;
+  return Object.getPrototypeOf(figma) === Object.prototype && !("polluted" in (figma as object)) && JSON.stringify(figma) === JSON.stringify({ key: "K", name: "New" });
+})());
+check("[sec-boot-prop-proto-key] catalog prop named '__proto__' does not corrupt props", (() => {
+  // Computed key syntax (unlike a quoted string literal key) creates a real own "__proto__" property
+  // instead of setting the object literal's own prototype — the same shape JSON.parse produces. Built
+  // via malformed()+a raw literal (not the catalog()/component() fixture helpers, which themselves copy
+  // props through a plain `{}` and would trip the same hazard before bootstrap() is even reached).
+  const defs = { ["__proto__"]: { key: "__proto__", type: "BOOLEAN" } as ComponentPropDef };
+  const cat = malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: defs }] });
+  const m = bootstrap(cat);
+  const props: unknown = m.components.K.props;
+  return props !== undefined && Object.keys(props as object).includes("__proto__") && (props as Record<string, { kind?: string }>)["__proto__"]?.kind === "boolean";
+})());
 check("[sec-lint-proto-key] prop named '__proto__' is compared, not silently skipped", (() => {
   // Maps load via JSON.parse, which (unlike an object literal) creates a real own "__proto__" key.
   // A map prop '__proto__' absent on the Figma component must surface as stale-prop, not be skipped.
@@ -738,6 +762,18 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
   fs.writeFileSync(path.join(cwd, "ok.json"), JSON.stringify({ version: 1, components: {} }));
   check("[enoent-negative] an existing, valid file is unaffected by the guard",
     run("map-validate.ts", ["ok.json"]).status === 0);
+  // A UTF-8 BOM (invisible before the `{`) is real bytes JSON.parse chokes on — strip it before parsing.
+  const bomBuf = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify({ version: 1, components: {} }), "utf8")]);
+  fs.writeFileSync(path.join(cwd, "bom.json"), bomBuf);
+  check("[bom-utf8] a UTF-8 BOM'd valid map parses and passes its guard",
+    run("map-validate.ts", ["bom.json"]).status === 0);
+  // A UTF-16 file (typically saved by a Windows editor) is not valid UTF-8 at all: report it as such,
+  // one line, exit 2 — not a mangled JSON.parse SyntaxError.
+  const u16Buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(JSON.stringify({ version: 1, components: {} }), "utf16le")]);
+  fs.writeFileSync(path.join(cwd, "utf16.json"), u16Buf);
+  const u16 = run("map-validate.ts", ["utf16.json"]);
+  check("[bom-utf16] a UTF-16 file is reported as such, one line, exit 2",
+    u16.status === 2 && /is UTF-16, not UTF-8 — re-save it as UTF-8/.test(u16.stderr) && !/\n {4}at /.test(u16.stderr));
 })();
 
 // ---------- a file of the WRONG KIND is a sentence too (doc-guards.ts), not a TypeError or a quiet no-op ----------
