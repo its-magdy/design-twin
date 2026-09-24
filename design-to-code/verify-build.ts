@@ -181,7 +181,7 @@ function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, 
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance.
 function planHash(plan: Plan | null | undefined): string {
-  const copy: Plan = JSON.parse(JSON.stringify(plan || {}));
+  const copy = JSON.parse(JSON.stringify(plan || {})) as Plan; // a deep copy of a Plan is a Plan
   delete copy.status;
   if (copy.verification && typeof copy.verification === "object") {
     delete copy.verification.hook;
@@ -677,7 +677,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   // of the same sentence would bury the two things that actually block.
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
   if (undecided.length) {
-    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${row.value} (${row.kind})`).join(", ");
+    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} — fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
 
@@ -692,7 +692,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   }
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
-    const l = [...names].map(([n, v]) => `'${n}' (${v})`).join(" and ");
+    const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
     warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens — ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
   }
 
@@ -715,7 +715,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     // where every occurrence is the token's own definition line.
     const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel)
       && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
-    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${e.value} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
+    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} — use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "…"}, matched on the exact value string, or name the file that defines the tokens: {"file": "…", "reason": "…"}`);
   }
 
   const dims = arbitraryPx(source);
@@ -724,7 +724,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
     const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
-    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' — use the token (or add it to allowedLiterals with a reason)`);
+    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' — use the token (or add it to allowedLiterals with a reason)`);
   }
 
   const mapped = loadMapKeys(cwd);
@@ -1081,5 +1081,5 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // exitCode, not exit(): on macOS a pipe write is asynchronous, and exit() would cut a long --json
   // listing or the itemised block message short. stdin is paused+unref'd and the watchdog unref'd, so
   // nothing keeps the process alive once main() is done.
-  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => { console.error(`verify-build: ${(e instanceof Error && e.stack) || e}`); process.exitCode = 1; });
+  main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e: unknown) => { console.error(`verify-build: ${(e instanceof Error && e.stack) || String(e)}`); process.exitCode = 1; });
 }

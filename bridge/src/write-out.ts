@@ -166,7 +166,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   const orphans: string[] = [];
   if (prevIndexDoc && prevIndexDoc.files) {
     const now = new Set(built.files.map((f) => f.path));
-    for (const p of Object.values(prevIndexDoc.files as object)) {
+    for (const p of Object.values(prevIndexDoc.files)) {
       if (typeof p === "string" && !now.has(p) && fs.existsSync(path.join(dir, p))) orphans.push(p);
     }
   }

@@ -817,13 +817,13 @@ function main(argv) {
   try {
     doc = readJson(screenFile);
   } catch (e) {
-    console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : e}`);
+    console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : String(e)}`);
     return 1;
   }
   try {
     vars = readJson(varsFile);
   } catch (e) {
-    console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : e}`);
+    console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : String(e)}`);
     return 1;
   }
   const hasDs = dsDir && fs3.existsSync(dsDir) && fs3.statSync(dsDir).isDirectory();

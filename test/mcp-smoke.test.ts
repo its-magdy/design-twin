@@ -18,6 +18,9 @@ import type { ScreenExport } from "../bridge/src/doc-types.ts";
 // Type-only: erased before Node runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
 import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
+import type * as GetComponentMod from "../design-to-code/get-component.ts";
+import type * as DriftLintMod from "../design-to-code/drift-lint.ts";
+import { isUnknownArray } from "../bridge/src/json-util.ts";
 
 // Compile-time only. figma-mcp.ts declares its OWN view of the two design-to-code modules it loads
 // lazily (it cannot reference them: rootDir is bridge/src). Nothing else ties those local interfaces to
@@ -26,8 +29,8 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 type Assert<T extends true> = T;
 // Exported only so noUnusedLocals accepts a type whose whole job is to be checked, never referenced.
 export type McpLayerConformance = [
-  Assert<typeof import("../design-to-code/get-component.ts") extends GetComponentModule ? true : false>,
-  Assert<typeof import("../design-to-code/drift-lint.ts") extends DriftLintModule ? true : false>,
+  Assert<typeof GetComponentMod extends GetComponentModule ? true : false>,
+  Assert<typeof DriftLintMod extends DriftLintModule ? true : false>,
 ];
 
 // A tools/call JSON-RPC reply as the SDK client hands it back: a CallToolResult, or the legacy
@@ -35,8 +38,9 @@ export type McpLayerConformance = [
 type JsonRpcReply = Awaited<ReturnType<Client["callTool"]>>;
 /** The text of a reply's first content block — throws (like the untyped `r.content[0].text` did) when there is none. */
 function firstText(r: JsonRpcReply): string {
-  const c = "content" in r && Array.isArray(r.content) ? r.content[0] : undefined;
-  if (!c || c.type !== "text") throw new Error("tool reply has no text content");
+  const content: unknown = "content" in r ? r.content : undefined;
+  const c: unknown = isUnknownArray(content) ? content[0] : undefined;
+  if (typeof c !== "object" || c === null || !("type" in c) || c.type !== "text" || !("text" in c) || typeof c.text !== "string") throw new Error("tool reply has no text content");
   return c.text;
 }
 // The one bridge -> plugin frame this fake plugin reads: `{ id, cmd, args }` (server-core does not export it).
@@ -48,7 +52,8 @@ interface WrittenExport { note: string }
 
 const CWD = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-"));
 
-(async () => {
+// The suite reports its own failures (report() sets the exit code); nothing awaits the IIFE.
+void (async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],

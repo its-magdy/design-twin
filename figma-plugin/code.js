@@ -780,7 +780,7 @@
   function simplifyGrid(g) {
     if (!g) return void 0;
     const o = { pattern: g.pattern ? String(g.pattern).toLowerCase() : void 0 };
-    if (g.pattern === "GRID" && typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+    if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
     if (g.pattern !== "GRID") {
       if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
       if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
@@ -1104,7 +1104,6 @@
     return out.length ? out : void 0;
   }
   async function simplifyStrokes(node) {
-    var _a;
     if (!("strokes" in node) || !Array.isArray(node.strokes)) return void 0;
     const vis = node.strokes.filter((s) => s.visible !== false);
     if (!vis.length) return void 0;
@@ -1139,11 +1138,12 @@
     if ("strokeJoin" in node && n.strokeJoin && n.strokeJoin !== figma.mixed && n.strokeJoin !== "MITER") out.join = String(n.strokeJoin).toLowerCase();
     if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
     const vw = n.variableWidthStrokeProperties;
-    if (vw && Array.isArray((_a = vw.strokeWeightProfile) == null ? void 0 : _a.mapping) && vw.strokeWeightProfile.mapping.length) {
-      out.variableWidth = {
-        profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
-        points: vw.strokeWeightProfile.mapping.map((p) => ({ pos: round(p.position), weight: round(p.value) }))
-      };
+    if (vw && vw.widthProfile) {
+      const variableWidth = { profile: vw.widthProfile.toLowerCase() };
+      if (vw.widthProfile === "CUSTOM" && Array.isArray(vw.variableWidthPoints) && vw.variableWidthPoints.length) {
+        variableWidth.points = vw.variableWidthPoints.map((p) => ({ pos: round(p.position), width: round(p.width) }));
+      }
+      out.variableWidth = variableWidth;
     }
     return out;
   }
@@ -1375,6 +1375,11 @@
     if (a.type === "URL") {
       ao.url = a.url;
     } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
+      if (a.destinationId) {
+        ao.destinationId = a.destinationId;
+        const dn = await nodeNameLookup(a.destinationId);
+        if (dn) ao.destination = dn;
+      }
       ao.mediaAction = String(a.mediaAction).toLowerCase();
       if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
       if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;
@@ -2075,8 +2080,16 @@
         return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
       case "LINE":
         return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : void 0;
-      default:
+      case "BOOL":
+      case "TEXT_DATA":
+      case "CIRCLE_POINT":
+      case "COLOR_POINT":
         return kv.value;
+      // no transformation needed
+      default: {
+        const unknownMember = kv;
+        return unknownMember.value;
+      }
     }
   }
   function motionEasing(ez) {
@@ -2093,7 +2106,7 @@
       return o;
     });
   }
-  function trackMap(map) {
+  function manualTrackMap(map) {
     if (!map || typeof map !== "object") return void 0;
     const out = {};
     for (const field of Object.keys(map)) {
@@ -2101,9 +2114,31 @@
       if (!binding || typeof binding !== "object") continue;
       const o = {};
       if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
-      if (typeof binding.keyframeOperation === "string" && binding.keyframeOperation !== "SET") o.op = binding.keyframeOperation.toLowerCase();
       const kf = keyframes(binding.keyframes);
       if (kf) o.keyframes = kf;
+      putNonEmpty(out, field, o);
+    }
+    return nonEmpty(out);
+  }
+  function animationsMap(map) {
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const field of Object.keys(map)) {
+      const binding = map[field];
+      if (!binding || typeof binding !== "object") continue;
+      const o = {};
+      if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
+      if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+      if (Array.isArray(binding.tracks) && binding.tracks.length) {
+        const tracks = binding.tracks.map((t) => {
+          const to = {};
+          if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+          const kf = keyframes(t.keyframes);
+          if (kf) to.keyframes = kf;
+          return to;
+        });
+        if (tracks.length) o.tracks = tracks;
+      }
       putNonEmpty(out, field, o);
     }
     return nonEmpty(out);
@@ -2114,11 +2149,11 @@
       out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
     }
     if ("manualKeyframeTracks" in node) {
-      const tracks = trackMap(node.manualKeyframeTracks);
+      const tracks = manualTrackMap(node.manualKeyframeTracks);
       if (tracks) out.manualTracks = tracks;
     }
     if ("animations" in node) {
-      const anims = trackMap(node.animations);
+      const anims = animationsMap(node.animations);
       if (anims) out.animations = anims;
     }
     if ("animationStyles" in node && Array.isArray(node.animationStyles) && node.animationStyles.length) {

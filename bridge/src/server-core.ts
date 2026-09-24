@@ -608,7 +608,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
           clearTimeout(timer);
-          const node = args && (args.nodeId || args.node) ? ` (node ${args.nodeId || args.node})` : "";
+          const node = args && (args.nodeId || args.node) ? ` (node ${String(args.nodeId || args.node)})` : "";
           reject(new Error(
             `no response from the Figma plugin${node} for '${cmd}' in ${Math.round(stallMs / 1000)}s, and no progress was reported either — ` +
             `this is the shape a missing \`dtwin serve\` daemon produces (every command opens a fresh bridge and the plugin's reconnect is what actually takes ` +

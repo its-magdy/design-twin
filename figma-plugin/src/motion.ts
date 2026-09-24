@@ -1,10 +1,11 @@
 // Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are now
 // readable FREE via the Plugin API — this is a new plane the paid get_motion_context used to own.
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
-import { Obj, round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty } from "./util";
+import { type Obj, round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty } from "./util";
 
-// A KeyframeValue (discriminated on `type`) -> a compact readable value.
-// TEXT_DATA / BOOL need no transformation, so they fall through to `default` rather than restating it.
+// A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
+// the typings' union (lint: switch-exhaustiveness-check) so a new member is a compile-time prompt; the
+// `default` still carries the raw value of a runtime-only newer member rather than dropping it.
 function keyframeValue(kv: KeyframeValue | undefined | null): unknown {
   if (!kv || typeof kv !== "object") return kv;
   switch (kv.type) {
@@ -13,7 +14,15 @@ function keyframeValue(kv: KeyframeValue | undefined | null): unknown {
     case "VECTOR": return kv.value ? xy(kv.value) : undefined;
     case "CIRCLE": return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : undefined;
     case "LINE": return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : undefined;
-    default: return kv.value; // TEXT_DATA / BOOL / CIRCLE_POINT / COLOR_POINT / newer union members — carry the raw value defensively
+    case "BOOL":
+    case "TEXT_DATA":
+    case "CIRCLE_POINT":
+    case "COLOR_POINT":
+      return kv.value; // no transformation needed
+    default: {
+      const unknownMember: { value?: unknown } = kv; // `never` here; a newer runtime-only member at run time
+      return unknownMember.value;
+    }
   }
 }
 
@@ -27,23 +36,32 @@ function motionEasing(ez: MotionEasing | VariableAlias | undefined): Obj | undef
   return { type: String(ez.type).toLowerCase(), ...curve };
 }
 
-// The flat keyframe-track shape actually read below — kept as one small structural type, as before
-// this port, rather than fighting the two real nested shapes. Confirmed against
-// https://developers.figma.com/docs/plugins/api/Motion/ (fetched during this port), which agrees with
-// the typings: manualKeyframeTracks values are {baseValue, keyframes} directly (no keyframeOperation),
-// while animations values are {baseValue, timelineDuration, tracks: ManualKeyframeTrack[]} — the
-// keyframes/keyframeOperation live one level deeper, inside each track. So trackMap's `keyframeOperation`
-// read is dead for BOTH maps, and its `keyframes` read is dead for `animations` specifically (pre-existing,
-// not introduced by this port — kept byte-for-byte per the no-behaviour-change rule).
+// Confirmed against https://developers.figma.com/docs/plugins/api/Motion/ (fetched during this port)
+// and node_modules/@figma/plugin-typings/plugin-api.d.ts ~L5959-6000: manualKeyframeTracks values are
+// ManualKeyframeBinding = {id, baseValue, keyframes: ManualKeyframe[]} directly (no keyframeOperation
+// at this level), while animations values are KeyframeBinding = {baseValue, timelineDuration,
+// tracks: ManualKeyframeTrack[]} where EACH ManualKeyframeTrack carries {id, keyframeOperation,
+// keyframes: ManualKeyframe[]} one level deeper. The old flat read's `keyframeOperation` was dead for
+// BOTH maps and its `keyframes` was dead for `animations` specifically — fixed below (behaviour change,
+// not a rename): manualTracks keeps `{base, keyframes}`; animations now emits `{base, duration, tracks:
+// [{op?, keyframes}]}` so its per-track keyframes/keyframeOperation actually surface.
 interface FlatKeyframe {
   timelinePosition: number;
   value: KeyframeValue;
   easing?: MotionEasing | VariableAlias;
 }
-interface FlatKeyframeBinding {
+interface ManualBinding {
   baseValue?: KeyframeValue;
+  keyframes?: ReadonlyArray<FlatKeyframe>;
+}
+interface KeyframeTrack {
   keyframeOperation?: "SET" | "OFFSET" | "SCALE";
   keyframes?: ReadonlyArray<FlatKeyframe>;
+}
+interface AnimationBinding {
+  baseValue?: KeyframeValue;
+  timelineDuration?: number;
+  tracks?: ReadonlyArray<KeyframeTrack>;
 }
 
 function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): Obj[] | undefined {
@@ -56,8 +74,8 @@ function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): Obj[] | undef
   });
 }
 
-// A field->binding map (manualKeyframeTracks or animations) -> { field: {base?, op?, keyframes[]} }.
-function trackMap(map: Record<string, FlatKeyframeBinding | undefined> | undefined): Obj | undefined {
+// manualKeyframeTracks -> { field: {base?, keyframes[]} }.
+function manualTrackMap(map: Record<string, ManualBinding | undefined> | undefined): Obj | undefined {
   if (!map || typeof map !== "object") return undefined;
   const out: Obj = {};
   for (const field of Object.keys(map)) {
@@ -65,9 +83,33 @@ function trackMap(map: Record<string, FlatKeyframeBinding | undefined> | undefin
     if (!binding || typeof binding !== "object") continue;
     const o: Obj = {};
     if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
-    if (typeof binding.keyframeOperation === "string" && binding.keyframeOperation !== "SET") o.op = binding.keyframeOperation.toLowerCase();
     const kf = keyframes(binding.keyframes);
     if (kf) o.keyframes = kf;
+    putNonEmpty(out, field, o);
+  }
+  return nonEmpty(out);
+}
+
+// animations -> { field: {base?, duration?, tracks:[{op?, keyframes[]}]} }.
+function animationsMap(map: Record<string, AnimationBinding | undefined> | undefined): Obj | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const out: Obj = {};
+  for (const field of Object.keys(map)) {
+    const binding = map[field];
+    if (!binding || typeof binding !== "object") continue;
+    const o: Obj = {};
+    if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
+    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+    if (Array.isArray(binding.tracks) && binding.tracks.length) {
+      const tracks = binding.tracks.map((t) => {
+        const to: Obj = {};
+        if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+        const kf = keyframes(t.keyframes);
+        if (kf) to.keyframes = kf;
+        return to;
+      });
+      if (tracks.length) o.tracks = tracks;
+    }
     putNonEmpty(out, field, o);
   }
   return nonEmpty(out);
@@ -82,11 +124,11 @@ export function collectMotion(node: SceneNode): Obj | undefined {
     out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
   }
   if ("manualKeyframeTracks" in node) {
-    const tracks = trackMap(node.manualKeyframeTracks as Record<string, FlatKeyframeBinding | undefined>);
+    const tracks = manualTrackMap(node.manualKeyframeTracks);
     if (tracks) out.manualTracks = tracks;
   }
   if ("animations" in node) {
-    const anims = trackMap(node.animations as Record<string, FlatKeyframeBinding | undefined>);
+    const anims = animationsMap(node.animations);
     if (anims) out.animations = anims;
   }
   if ("animationStyles" in node && Array.isArray(node.animationStyles) && node.animationStyles.length) {

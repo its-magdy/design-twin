@@ -323,7 +323,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
     const r = spawnSync(process.execPath, [path.join(D2C, "cross-check.ts"), f, "--design-system", path.join(FX, "design-system"), "--json"], { encoding: "utf8" });
     try { return JSON.parse(r.stdout) as { findings: CrossCheckFinding[] }; } catch (e) { return { findings: [] }; }
   };
-  const blockerSet = (findings: Array<AuditFinding | CrossCheckFinding>) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${f.token || ""}|${f.key || ""}`).sort();
+  const blockerSet = (findings: Array<AuditFinding | CrossCheckFinding>) => findings.filter((f) => f.severity === "blocker" && (f.crossFile === undefined || f.crossFile)).map((f) => `${f.code}|${String(f.token || "")}|${String(f.key || "")}`).sort();
   const pos = runAudit(POS, "pos"), posCross = runCross(POS);
   const collision = (res: { findings: AuditFinding[] }, token: string) => res.findings.filter((f) => f.severity === "blocker" && f.code === "token-name-collision" && f.token === token);
   check("[311] Job Roles: the audit gate raises NO Space 4 collision blocker (its own slice has only the 24-valued key)",

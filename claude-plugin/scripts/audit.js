@@ -194,13 +194,18 @@ function isRekeyed(result) {
 
 // design-to-code/catalog-input.ts
 import fs from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+
+// design-to-code/catalog-input.ts
 function readJsonFile(file, what, hint) {
   let raw;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
     const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
     process.exit(2);
@@ -208,8 +213,7 @@ function readJsonFile(file, what, hint) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
     process.exit(2);
   }
 }
@@ -1117,7 +1121,7 @@ function audit(input, opts = {}) {
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
     if (m.assetsFailed) add("blocker", "assets-failed", `${m.assetsFailed} asset export(s) failed in '${root.label}' \u2014 those nodes have no file (look for \`geometry\` fallbacks)`, null, { label: root.label });
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
-      add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${root.tree.devStatus}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
+      add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' \u2014 confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
     walk2(root.tree, [], { label: root.label, rootBox: root.tree.box });
   }

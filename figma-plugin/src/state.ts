@@ -2,7 +2,7 @@
 // so these module-level singletons are genuinely shared across the extractor.
 
 import { errMsg } from "./util";
-import { beginRun, endRun, RunInfo } from "./progress";
+import { beginRun, endRun, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 

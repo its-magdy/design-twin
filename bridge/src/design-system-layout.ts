@@ -213,11 +213,13 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
 
 export const DESIGN_SYSTEM_DIR: string = DIR;
 
+// A type alias, not an interface: aliases carry an implicit string index signature, so
+// Object.values<string>(DESIGN_SYSTEM_FILES) types as string[] (design-diff lists the sibling files).
 /** Every file/dir name the split uses — the manifest's own name included (MANIFEST). */
-export interface DesignSystemFileNames {
+export type DesignSystemFileNames = {
   TOKENS: string; STYLES_PAINT: string; STYLES_TEXT: string; STYLES_EFFECT: string; STYLES_GRID: string;
   COMPONENTS_LOCAL: string; COMPONENTS_LIBRARY: string; COMPONENTS_DIR: string; HYGIENE: string; MANIFEST: string;
-}
+};
 export const DESIGN_SYSTEM_FILES: DesignSystemFileNames = {
   TOKENS, STYLES_PAINT, STYLES_TEXT, STYLES_EFFECT, STYLES_GRID, COMPONENTS_LOCAL, COMPONENTS_LIBRARY,
   COMPONENTS_DIR, HYGIENE, MANIFEST,

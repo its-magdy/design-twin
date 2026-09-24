@@ -31,6 +31,7 @@ import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalo
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { nullProto } from "../bridge/src/json-util.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
 export interface EmitOpts extends UnitOpts {
@@ -499,7 +500,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     // — which, unlike an object literal, creates a REAL own "__proto__" key. On a plain object
     // `modes["__proto__"] = {...}` sets the prototype instead of an own key, so the mode vanished from
     // the emitted JSON with no warning. Same hardening as toDTCG's reserved-key guard on token NAMES.
-    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = Object.create(null); for (const m of modeKeys) if (values[m] !== undefined) modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); ext.modes = modes; }
+    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) if (values[m] !== undefined) modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); ext.modes = modes; }
     // The key is the variable's identity (the name is not unique — see planIds), so it travels with
     // the token: a consumer can always get back from an emitted name to the one Figma variable.
     if (typeof v.key === "string" && v.key) ext.key = v.key;
@@ -624,7 +625,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   // which creates a real own "__proto__" key). On a plain object `perMode["__proto__"]` resolves to
   // Object.prototype — truthy, but with no .push — so this line threw an uncaught TypeError and the
   // CLI died AFTER having already written tokens.dtcg.json, leaving a half-written output pair.
-  const perMode: Record<string, Map<string, string>> = Object.create(null);
+  const perMode: Record<string, Map<string, string>> = nullProto();
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
     if (!plan.canonical.has(v)) continue;
@@ -718,7 +719,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = new Map<string, string>();
-  const perMode: Record<string, Map<string, string>> = Object.create(null);
+  const perMode: Record<string, Map<string, string>> = nullProto();
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -859,9 +860,9 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
   // Null-prototype: keyed by COLLECTION NAMES / MODE NAMES, free-form designer strings arriving via
   // JSON.parse — which creates a real own "__proto__" key that a plain object would turn into a
   // prototype write (the mode silently vanishes). Same hardening as toDTCG/toCSS.
-  const sets: Record<string, ResolverSet> = Object.create(null);
-  const modifiers: Record<string, ResolverModifier> = Object.create(null);
-  const files: Record<string, DtcgGroup> = Object.create(null);
+  const sets: Record<string, ResolverSet> = nullProto();
+  const modifiers: Record<string, ResolverModifier> = nullProto();
+  const files: Record<string, DtcgGroup> = nullProto();
   const resolutionOrder: ResolverRef[] = [];
   const modifierRefs: ResolverRef[] = [];
 
@@ -888,7 +889,7 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
     for (const v of groupVars) for (const m of Object.keys((v && v.values) || {})) if (!modes.includes(m)) modes.push(m);
     if (modes.length < 2) continue; // one context "is the equivalent of a set" — emit no modifier
 
-    const contexts: Record<string, ResolverRef[]> = Object.create(null);
+    const contexts: Record<string, ResolverRef[]> = nullProto();
     let nonEmpty = 0;
     for (const m of modes) {
       // Per-VARIABLE default mode + dedup, mirroring toCSS exactly: compare against the value actually

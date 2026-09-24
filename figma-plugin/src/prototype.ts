@@ -2,7 +2,7 @@
 // the paid get_motion_context. trigger -> action(s) -> navigation + transition/easing/duration.
 // Action/Trigger/Transition are typed exactly per @figma/plugin-typings' discriminated unions;
 // each branch below narrows on `.type` (or `.mediaAction`) before reading its fields.
-import { Obj, easingCurve, xy } from "./util";
+import { type Obj, easingCurve, xy } from "./util";
 import { varName, nodeNameLookup, getCollection } from "./state";
 
 // A prototype Transition -> compact descriptor (type/direction/duration + the exact easing curve).
@@ -47,6 +47,13 @@ async function serializeAction(a: Action | undefined | null): Promise<Obj | null
   if (a.type === "URL") {
     ao.url = a.url;
   } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
+    // destinationId is the media node the action controls (required for PLAY/PAUSE/MUTE…, optional for
+    // the SKIP_* variants) — typings 5664-5681; the same name-resolved `destination` as a NODE action.
+    if (a.destinationId) {
+      ao.destinationId = a.destinationId;
+      const dn = await nodeNameLookup(a.destinationId);
+      if (dn) ao.destination = dn;
+    }
     ao.mediaAction = String(a.mediaAction).toLowerCase();
     if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
     if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;

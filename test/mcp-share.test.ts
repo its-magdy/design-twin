@@ -40,7 +40,8 @@ function start(): McpProc {
   return p;
 }
 
-(async () => {
+// The suite reports its own failures (report() sets the exit code); nothing awaits the IIFE.
+void (async () => {
   const a = start();
   check("first server opens the bridge itself", await until(() => /Bridge listening on ws:\/\/localhost:8789/.test(a.err)));
   await until(() => /daemon listening/.test(a.err));

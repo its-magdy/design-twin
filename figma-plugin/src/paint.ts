@@ -1,21 +1,9 @@
 // Fills & strokes. Type-discriminated on Paint's `type` union.
-import { Obj, round, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty } from "./util";
+import { type Obj, round, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty } from "./util";
 import { resolveBoundMap } from "./variables";
 import { collectSourceImage } from "./assets";
 
 const FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
-
-// https://developers.figma.com/docs/plugins/api/VariableWidthStrokeProperties/ (fetched during this
-// port) documents ONLY widthProfile + variableWidthPoints[{position,width}] — no strokeWeightProfile —
-// so this `.strokeWeightProfile.mapping` read (pre-existing, not introduced by this port) does not
-// match the current officially-documented shape and is likely always undefined at runtime today; kept
-// byte-for-byte per the port's no-behaviour-change rule and flagged here rather than "fixed" silently.
-interface LegacyVariableWidthStrokeProperties {
-  strokeWeightProfile?: {
-    type?: string;
-    mapping?: ReadonlyArray<{ position: number; value: number }>;
-  };
-}
 
 // Color-adjustment filters on an image/video paint (-1..+1 each). Map straight to CSS `filter`.
 function imageFilters(f: ImagePaint | VideoPaint): Obj | undefined {
@@ -154,17 +142,20 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
   if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
   // Tapered/variable-width strokes (illustration-style hand-drawn lines) — no flat CSS equivalent, but
   // record the profile so a consumer can at least render it as an SVG path with a width gradient.
-  // @figma/plugin-typings 1.138.0 models this as PresetVariableWidthStrokeProperties |
-  // CustomVariableWidthStrokeProperties (`widthProfile` + `variableWidthPoints[{position,width}]`; see
-  // node_modules/@figma/plugin-typings/plugin-api.d.ts ~L8480-8500), but the live Plugin API also still
-  // carries the older `strokeWeightProfile: { type, mapping: [{position,value}] }` shape this reads —
-  // read it via the local shim below rather than the declared union so the runtime read is unchanged.
-  const vw = n.variableWidthStrokeProperties as LegacyVariableWidthStrokeProperties | null;
-  if (vw && Array.isArray(vw.strokeWeightProfile?.mapping) && vw.strokeWeightProfile.mapping.length) {
-    out.variableWidth = {
-      profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
-      points: vw.strokeWeightProfile.mapping.map((p) => ({ pos: round(p.position), weight: round(p.value) })),
-    };
+  // Per https://developers.figma.com/docs/plugins/api/VariableWidthStrokeProperties/ (fetched during
+  // this port) and node_modules/@figma/plugin-typings/plugin-api.d.ts ~L8669-8697, the real shape is a
+  // union: PresetVariableWidthStrokeProperties `{widthProfile}` (one of the 6 named presets, no points)
+  // or CustomVariableWidthStrokeProperties `{widthProfile:'CUSTOM', variableWidthPoints:[{position,width}]}`.
+  // The old `.strokeWeightProfile.mapping[].position/.value` read used field names that don't exist on
+  // this type and was always undefined at runtime — this is a behaviour fix, not a no-op rename: emit
+  // `profile` always, and `points` (from `variableWidthPoints`) only for the CUSTOM branch.
+  const vw = n.variableWidthStrokeProperties;
+  if (vw && vw.widthProfile) {
+    const variableWidth: Obj = { profile: vw.widthProfile.toLowerCase() };
+    if (vw.widthProfile === "CUSTOM" && Array.isArray(vw.variableWidthPoints) && vw.variableWidthPoints.length) {
+      variableWidth.points = vw.variableWidthPoints.map((p) => ({ pos: round(p.position), width: round(p.width) }));
+    }
+    out.variableWidth = variableWidth;
   }
   return out;
 }

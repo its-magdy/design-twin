@@ -1,6 +1,6 @@
 // Shadows / blur / noise / glass / texture / shader. Type-discriminated: BACKGROUND_BLUR
 // (backdrop-filter) != LAYER_BLUR (filter) != shadows.
-import { Obj, round, rgbaToHex, xy, putXY } from "./util";
+import { type Obj, round, rgbaToHex, xy, putXY } from "./util";
 import { resolveBoundMap } from "./variables";
 
 const GLASS_FIELDS: Array<keyof GlassEffect> = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];

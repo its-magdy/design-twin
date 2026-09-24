@@ -1,6 +1,6 @@
 // TEXT / TEXT_PATH serialization: node-level typographic props + either one `font` or `runs[]`
 // for mixed text. Reads defensively so TEXT_PATH (which shares most of the surface) degrades safely.
-import { Obj, round, solidFromFills } from "./util";
+import { type Obj, round, solidFromFills } from "./util";
 import { warnKind } from "./state";
 import { styleName, resolveBoundMap } from "./variables";
 

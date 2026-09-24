@@ -911,7 +911,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
   const undecided = live.filter((row) => (verdictOf(row) === "missing" || !hasToken(row)) && !row.decision);
   if (undecided.length) {
-    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${row.value} (${row.kind})`).join(", ");
+    const show = undecided.slice(0, 8).map((row) => `${row.figmaName ? `'${row.figmaName}' ` : ""}${String(row.value)} (${row.kind})`).join(", ");
     warnings.push(`${undecided.length} token row(s) have no token and no recorded decision: ${show}${undecided.length > 8 ? `, +${undecided.length - 8} more` : ""} \u2014 fill codeToken, or say what you did about it in \`decision\` (a one-off literal is a legitimate answer; say so)`);
   }
   const byCodeToken = /* @__PURE__ */ new Map();
@@ -924,7 +924,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   for (const [c, names] of byCodeToken) {
     if (names.size < 2) continue;
-    const l = [...names].map(([n, v]) => `'${n}' (${v})`).join(" and ");
+    const l = [...names].map(([n, v]) => `'${n}' (${String(v)})`).join(" and ");
     warnings.push(`code token '${c}' is mapped from ${names.size} DIFFERENT Figma tokens \u2014 ${l}. They may share a value in the exported mode, but they are separate tokens and will diverge in another mode/theme; give each its own code token named after its own Figma name`);
   }
   const colors = colorLiterals(source);
@@ -941,7 +941,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   }
   for (const [lit, e] of colourHits) {
     const where = code.filter((f) => f.text.includes(lit) && !allowedFiles.includes(f.rel) && !f.text.split("\n").filter((l) => l.includes(lit)).every((l) => e.tokens.some((t) => declaresToken(l, lit, t)))).map((f) => f.rel);
-    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${e.value} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
+    blocking.push(`raw colour ${lit} in ${where.join(", ")}, but the plan resolved ${String(e.value)} to token ${e.tokens.map((t) => `'${t}'`).join(" / ")} \u2014 use the token, not the literal (comments, prose strings and non-source files such as .svg are not scanned). A value that must stay literal goes in allowedLiterals as {"value": "${lit}", "reason": "\u2026"}, matched on the exact value string, or name the file that defines the tokens: {"file": "\u2026", "reason": "\u2026"}`);
   }
   const dims = arbitraryPx(source);
   for (const row of live) {
@@ -949,7 +949,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     const n = parseFloat(String(row.value));
     const hits = Number.isFinite(n) ? dims.get(n) || [] : [];
     const hit = hits.find((e) => kindsCompatible(e.utility, row.kind) && !isAllowed(row, e.literal) && !definedOnlyInTokenSource(e.literal, row.codeToken));
-    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${row.value} (${row.kind}) to token '${row.codeToken}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
+    if (hit) warnings.push(`arbitrary value ${hit.utility ? `${hit.utility}-${hit.literal}` : hit.literal} in built code, but the plan resolved ${String(row.value)} (${row.kind}) to token '${String(row.codeToken)}' \u2014 use the token (or add it to allowedLiterals with a reason)`);
   }
   const mapped = loadMapKeys(cwd);
   const seenModule = /* @__PURE__ */ new Set();
@@ -1294,7 +1294,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
   }, (e) => {
-    console.error(`verify-build: ${e instanceof Error && e.stack || e}`);
+    console.error(`verify-build: ${e instanceof Error && e.stack || String(e)}`);
     process.exitCode = 1;
   });
 }

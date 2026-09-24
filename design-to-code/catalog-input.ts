@@ -12,6 +12,7 @@
 // Split out from the exiting wrapper so the decision itself is testable without a subprocess.
 import fs from "node:fs";
 import type { DesignSystemManifest } from "./types.ts";
+import { errMsg } from "../bridge/src/errmsg.ts";
 
 function isManifest(doc: unknown, payloadKey: string): doc is DesignSystemManifest {
   return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) &&
@@ -47,15 +48,14 @@ function readJsonFile(file: string, what: string, hint?: string): unknown {
     const why = code === "ENOENT" ? "does not exist"
       : code === "EISDIR" ? "is a directory, not a file"
       : code === "EACCES" ? "is not readable (permission denied)"
-      : `could not be read (${code || e})`;
+      : `could not be read (${String(code || e)})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `\n       ${hint}` : ""));
     process.exit(2);
   }
   try {
     return JSON.parse(raw) as unknown;
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-    console.error(`error  ${what}: '${file}' is not valid JSON — ${message || e}`);
+    console.error(`error  ${what}: '${file}' is not valid JSON — ${errMsg(e)}`);
     process.exit(2);
   }
 }

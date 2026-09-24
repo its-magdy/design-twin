@@ -210,7 +210,8 @@ async function disconnectErr(code: number, reason: string) {
   return err;
 }
 
-(async () => {
+// The suite reports its own failures (report() sets the exit code); nothing awaits the IIFE.
+void (async () => {
   const { bridge, client } = await connectedBridge();
 
   let err: Error | undefined;

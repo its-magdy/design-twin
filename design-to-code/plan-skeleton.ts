@@ -259,7 +259,7 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     // Built in the order the plan file shows its keys; codeToken/verdict are filled last (below).
     const row: TokenRowDraft = {
       figmaName: name,
-      key: cands.length === 1 ? v!.key || null : null,
+      key: cands.length === 1 ? v.key || null : null,
       collection: v ? v.collection : null,
       kind: kindOf(v, fields),
       value: r.value,
@@ -389,7 +389,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const root: Partial<IrNode> = roots[0] || {};
   const resolvedModes = root.resolvedModes || {};
   const tokens = buildTokens(doc, vars, ds, resolvedModes);
-  const components = buildComponents(doc, catalog, library, mapKeys || new Map());
+  const components = buildComponents(doc, catalog, library, mapKeys || new Map<string, MapKeyEntry>());
   const anchors: Record<string, PlanAnchor> = {};
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = doc.nodeId || root.id || null;
@@ -509,8 +509,8 @@ function main(argv: string[]): number {
   }
   const [screenFile, varsFile, dsDir] = args;
   let doc: ScreenDoc, vars: TokensDoc;
-  try { doc = readJson<ScreenDoc>(screenFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : e}`); return 1; }
-  try { vars = readJson<TokensDoc>(varsFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : e}`); return 1; }
+  try { doc = readJson<ScreenDoc>(screenFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+  try { vars = readJson<TokensDoc>(varsFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
   const hasDs = dsDir && fs.existsSync(dsDir) && fs.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} — token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const ds = hasDs ? readJsonOr<TokensDoc | null>(path.join(dsDir, "tokens.json"), null) : null;

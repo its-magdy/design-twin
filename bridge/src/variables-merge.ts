@@ -37,6 +37,7 @@
 import type {
   VariableCollection, Variable, SliceEntry, ValueConflict, SameNameConflict, VariableConflict, VariablesDoc,
 } from "./doc-types.ts";
+import { isUnknownArray } from "./json-util.ts";
 
 /** The pull a slice came from: its screen stem, its screen file, and (optionally) when it was read. */
 export interface SliceInput {
@@ -96,8 +97,9 @@ function sameValue(a: Variable | null | undefined, b: Variable | null | undefine
 }
 
 function mergeModes(prev: unknown, next: unknown): string[] {
-  const out: string[] = Array.isArray(prev) ? prev.slice() : [];
-  for (const m of Array.isArray(next) ? next : []) if (!out.includes(m)) out.push(m);
+  // Mode lists from two exports on disk (untyped JSON): only their string entries are modes.
+  const out: string[] = isUnknownArray(prev) ? prev.filter((m): m is string => typeof m === "string") : [];
+  for (const m of isUnknownArray(next) ? next : []) if (typeof m === "string" && !out.includes(m)) out.push(m);
   return out;
 }
 

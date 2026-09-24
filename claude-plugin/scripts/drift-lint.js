@@ -66,7 +66,7 @@ function readJsonFile(file, what, hint) {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
     const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
     process.exit(2);
@@ -74,8 +74,7 @@ function readJsonFile(file, what, hint) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
     process.exit(2);
   }
 }
@@ -282,6 +281,11 @@ function isMainFallback(metaUrl) {
   }
 }
 
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+
 // design-to-code/map-validate.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
@@ -293,7 +297,7 @@ var KEYS = {
   vo: ["when", "code"],
   voCode: ["module", "export"],
   children: ["layerNamePattern", "slot"],
-  prop: Object.assign(/* @__PURE__ */ Object.create(null), {
+  prop: Object.assign(nullProto(), {
     enum: ["kind", "codeProp", "values", "default", "omitDefault"],
     boolean: ["kind", "codeProp", "default", "omitDefault"],
     string: ["kind", "codeProp"],
@@ -465,7 +469,7 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
   return void 0;
 }
 function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
-  const ambiguous = /* @__PURE__ */ new Set(), out = /* @__PURE__ */ Object.create(null);
+  const ambiguous = /* @__PURE__ */ new Set(), out = nullProto();
   for (const k of Object.keys(rawProps || {})) {
     const b = stripSuffix(k);
     if (b in out && out[b].orig !== k) {
@@ -723,7 +727,7 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
     }
     process.exit(res.errors.length || screenFail ? 1 : 0);
   };
-  run();
+  void run();
 }
 export {
   DEFAULT_MAX_AGE_MS,

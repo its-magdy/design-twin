@@ -46,7 +46,7 @@ export type {
   GradientPaint, ImageFilters, MediaPaint, PatternPaint, ShaderPaint, Paint, Strokes, EffectBase,
   ShadowEffect, BlurEffect, NoiseEffect, GlassEffect, TextureEffect, ShaderEffect, Effect, LengthSpec,
   FontSpec, TextRun, ReactionTrigger, ActionType, ActionNavigation, CubicBezier, Transition, Action, Reaction,
-  MotionKeyframe, MotionTrack, NodeMotion,
+  MotionKeyframe, MotionTrack, MotionAnimation, NodeMotion,
   MainComponentRef, ComponentPropValues, Annotation, ExportSetting, Overlay, InstanceOverride, Geometry,
   TableCell, DevResource, StyleRefs, ModeMap, TextFields, IrNode, Manifest, Measurement, ScreenExport,
   LayerFile, ScreenDoc, IndexRow, PageDirEntry, PageIndex, PrototypeFlow, PageSettings, PagesRootIndex,

@@ -238,7 +238,7 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
   const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
   const note = (l: IndexRowView) => { const key = l.sourceFile || ""; let ats = screensByFile.get(key); if (!ats) { ats = []; screensByFile.set(key, ats); } ats.push(l.exportedAt); };
   try {
-    const idx: IndexView = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8"));
+    const idx = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8")) as IndexView;
     // The root `layers[]` only ever holds what write-out.ts's writeScreen path has merged into it — a
     // whole-page pull's layers never backfill it (mergeRootIndex only appends the ONE entry its own
     // call passed). So the true, complete list is every PAGE's own index, keyed by `file` so a screen
@@ -246,7 +246,7 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
     // once — root wins that merge since it is the more recently written of the two.
     const byFile = new Map<string, IndexRowView>();
     for (const p of idx.pageDirs || []) {
-      try { const pi: IndexView = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")); for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
+      try { const pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")) as IndexView; for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
     }
     for (const l of idx.layers || []) if (l && l.file) byFile.set(l.file, l);
     for (const l of byFile.values()) note(l);

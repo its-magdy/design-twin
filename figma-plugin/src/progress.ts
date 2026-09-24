@@ -8,7 +8,7 @@
 // OUTSIDE the run (the UI's Cancel click lands on the main thread while the walk is mid-await), and
 // the only one whose whole job is to talk to the iframe. state.ts imports it — never the reverse — so
 // there is no cycle, and a collector can be unit-driven with no run bracketing it at all (see `running`).
-import { Obj } from "./util";
+import { type Obj } from "./util";
 
 // ---------------------------------------------------------------- the cancellation error
 /** The message a cancelled run fails with. The BRIDGE sees this string VERBATIM: main.ts turns a

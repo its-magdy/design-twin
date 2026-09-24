@@ -25,6 +25,7 @@ import type {
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { nullProto } from "../bridge/src/json-util.ts";
 
 const stripSuffix = (k: string): string => String(k).split("#")[0]; // "Size#12:3" -> "Size"
 
@@ -80,7 +81,7 @@ function indexPropsByBase(rawProps: Record<string, PropMap> | undefined, valKey:
 function indexPropsByBase(rawProps: Record<string, unknown> | undefined, valKey: string, subject: string, push: Push, warnings: DriftFinding[], mapKey: string): IndexedProps<{ orig: string; [k: string]: unknown }> {
   // null-prototype map: a prop whose base name is literally "__proto__"/"constructor" is indexed and
   // compared like any other, instead of silently mutating a prototype and being skipped from drift checks.
-  const ambiguous = new Set<string>(), out: Record<string, { orig: string; [k: string]: unknown }> = Object.create(null);
+  const ambiguous = new Set<string>(), out: Record<string, { orig: string; [k: string]: unknown }> = nullProto();
   for (const k of Object.keys(rawProps || {})) {
     const b = stripSuffix(k);
     if (b in out && out[b].orig !== k) {
@@ -394,5 +395,6 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     }
     process.exit(res.errors.length || screenFail ? 1 : 0);
   };
-  run();
+  // run() reports its own failures and exits; a rejection it did not catch still crashes the process.
+  void run();
 }

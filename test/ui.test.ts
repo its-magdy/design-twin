@@ -9,7 +9,7 @@ import { check, report } from "./assert.ts";
 
 const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
 const script = /<script>([\s\S]*)<\/script>/.exec(html)![1];
-const manifest: { networkAccess: { allowedDomains: string[] } } = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8")) as { networkAccess: { allowedDomains: string[] } };
 
 // Fake DOM element / WebSocket / timer shapes — only what ui.html's script touches.
 interface FakeEl {

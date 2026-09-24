@@ -89,7 +89,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     process.stdout.write(JSON.stringify(res.detail, null, 2) + "\n");
   } catch (e) {
     const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`error  ${message}`);
+    console.error(`error  ${String(message)}`);
     process.exit(2);
   }
 }

@@ -20,6 +20,7 @@ import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalo
 import { visibleInstances } from "./component-match.ts";
 import { validateMap } from "./map-validate.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { nullProto } from "../bridge/src/json-util.ts";
 
 const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
 
@@ -67,7 +68,7 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
   // components is a string-keyed map; use a null-prototype object so a component whose key/id is
   // literally "__proto__"/"constructor" becomes a real own entry instead of silently vanishing
   // (which would violate the "never destroys human work" contract). Serializes to JSON normally.
-  const out: CodeConnectMap = { version: 1, components: Object.create(null) };
+  const out: CodeConnectMap = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev: Record<string, MapEntry> = (existing && existing.components) || {};
   // Index prev entries by EVERY identifier they carry (their map key + figma.key + figma.id), so a
@@ -135,7 +136,7 @@ export interface ProposalsReport { confirmed: number; added: number; kept: numbe
 // Never auto-accepts: an entry without `confirmed: true` is skipped. Never overwrites: an existing
 // entry under the same key is kept as it is.
 function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null | undefined, catalog: ComponentsCatalog | null | undefined, existing?: CodeConnectMap | null): { map: CodeConnectMap; report: ProposalsReport } {
-  const out: CodeConnectMap = { version: 1, components: Object.create(null) };
+  const out: CodeConnectMap = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev: Record<string, MapEntry> = (existing && existing.components) || {};
   for (const pk of Object.keys(prev)) out.components[pk] = clone(prev[pk]);
