@@ -711,7 +711,7 @@ const sandbox = context as unknown as Sandbox;
   ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5));
   ok("motion keyframe track: base + keyframes + values", !!(m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100));
   const tx1Easing = m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing;
-  ok("motion keyframe custom cubic-bezier easing carried", !!(tx1Easing && "cubicBezier" in tx1Easing && tx1Easing.cubicBezier!.x1 === 0.4));
+  ok("motion keyframe custom cubic-bezier easing carried", !!(tx1Easing && "cubicBezier" in tx1Easing && tx1Easing.cubicBezier.x1 === 0.4));
   ok("motion applied animation style captured", !!(m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3));
   ok("motion applied animation style carries the applied instance id", !!(m3 && m3.styles![0].id === "applied1"));
   ok("motion applied animation style props: number value carried verbatim", !!(m3 && m3.styles![0].props && m3.styles![0].props.distance === 24));

@@ -11,7 +11,7 @@ import { ok, report } from "./assert.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage, Progress } from "@modelcontextprotocol/sdk/types.js";
 // "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { RawData } from "ws";
@@ -132,7 +132,7 @@ void (async () => {
     // the plugin's relayed ticks as notifications/progress, with a strictly increasing `progress`.
     kids = 3;
     ticks = 2;
-    const seen: Array<{ progress: number; message?: string }> = [];
+    const seen: Progress[] = [];
     const withProgress = await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen.push(p) });
     ok("export tools forward the plugin's progress as notifications/progress (increasing, with a message)",
       !withProgress.isError && seen.length === 2 && seen[0].progress < seen[1].progress && seen[1].message === "pages, page 2 of 2 (P2), 20 nodes");
@@ -149,7 +149,7 @@ void (async () => {
       prev?.(m);
     };
     for (let i = 0; i < 5; i++) await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
-    transport.onmessage = prev;
+    if (prev) transport.onmessage = prev; else delete transport.onmessage;
     ok("…and with ticks and the reply sent in ONE turn, every notifications/progress is on the wire before its result (5 runs)",
       wire.join(",") === Array(5).fill("progress,progress,result").join(","));
     burst = false;
@@ -172,7 +172,7 @@ void (async () => {
     const client2 = new Client({ name: "mcp-smoke-2", version: "0.0.0" });
     try {
       await client2.connect(transport2);
-      const seen2: Array<{ progress: number; message?: string }> = [];
+      const seen2: Progress[] = [];
       const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
       ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
         !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0].children?.length === 3
@@ -186,7 +186,7 @@ void (async () => {
         prev2?.(m);
       };
       for (let i = 0; i < 3; i++) await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
-      transport2.onmessage = prev2;
+      if (prev2) transport2.onmessage = prev2; else delete transport2.onmessage;
       ok("…and with ticks and the reply sent in ONE turn, every daemon-relayed notifications/progress is on the wire before its result (3 runs)",
         wire2.join(",") === Array(3).fill("progress,progress,result").join(","));
       burst = false;

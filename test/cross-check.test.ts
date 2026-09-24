@@ -13,6 +13,7 @@ import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-ch
 import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver } from "../design-to-code/color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import { catalog, codeMap, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
@@ -116,7 +117,7 @@ console.log("cross-check — two libraries, one name, two values:");
     collections: [{ name: "Sem", key: "screen-sem", modes: ["Dark"], default: "Dark" }],
     variables: [{ name: "Text/Main", collection: "Sem", key: "s1", type: "COLOR", values: { Dark: { aliasOf: "Gray/900" } } }],
   });
-  const ds = tokens({ collections: DS_TOKENS.collections, variables: [{ name: "Text/Main", collection: "Sem", key: "d1", type: "COLOR", values: { Dark: { aliasOf: "Gray/900" }, Light: { aliasOf: "Gray/0" } } }] });
+  const ds = tokens({ ...ifDefined("collections", DS_TOKENS.collections), variables: [{ name: "Text/Main", collection: "Sem", key: "d1", type: "COLOR", values: { Dark: { aliasOf: "Gray/900" }, Light: { aliasOf: "Gray/0" } } }] });
   const res = crossCheck({ screens: [screen("S", [])], variables: vars, tokens: ds });
   ok("[collision] two libraries that alias the same target are NOT a conflict", !has(res, "token-name-collision"));
 }
@@ -296,7 +297,7 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   ok("[composed] a composed text colour resolves in the derived mode, so its contrast is checked",
     has(res, "derived-mode-contrast") && get(res, "derived-mode-contrast").pairs?.[0]?.fg === "Fg");
   const gone = tokens({
-    collections: vars.collections,
+    ...ifDefined("collections", vars.collections),
     variables: (vars.variables || []).filter((v) => v.name !== "Op"),
   });
   ok("[composed] an opacity alias that does not resolve leaves the pair unchecked (null, not a guess)",
