@@ -784,7 +784,12 @@
     CENTER: "center",
     MAX: "flex-end",
     SPACE_BETWEEN: "space-between",
-    BASELINE: "baseline"
+    SPACE_EVENLY: "space-evenly",
+    SPACE_AROUND: "space-around",
+    BASELINE: "baseline",
+    // AUTO is never looked up (counterAxisAlignContent skips it via the `!== "AUTO"` check below); the
+    // value exists only to make this Record total over AlignKey.
+    AUTO: "flex-start"
   };
   function flexIntent(src) {
     const l = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };

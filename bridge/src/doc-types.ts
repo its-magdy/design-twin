@@ -49,7 +49,7 @@ export interface Pin { h: PinMode; v: PinMode }
 // ---- layout (layout.ts). ONE interface, not a discriminated union: every consumer reads it as an
 // optional bag (`node.layout.mode === "absolute"`, `node.layout.padding`, …) without narrowing first.
 // Flex: display:"flex" + flexDirection; grid: display:"grid"; no auto-layout: mode:"absolute" + width/height.
-export type FlexAlign = "flex-start" | "center" | "flex-end" | "space-between" | "baseline";
+export type FlexAlign = "flex-start" | "center" | "flex-end" | "space-between" | "space-evenly" | "space-around" | "baseline";
 export interface GridTrack { type?: "flex" | "fixed" | "hug"; value?: number }
 export interface LayoutSpec {
   display?: "flex" | "grid";

@@ -69,6 +69,25 @@ console.log("verify-screen — the spec as data:");
   ok("[expect] the file says out loud not to retype these numbers", /do NOT retype/i.test(exp.note!));
 }
 {
+  // primaryAxisAlignItems SPACE_EVENLY/SPACE_AROUND distribute the frame's free space along the
+  // primary axis just like SPACE_BETWEEN, ignoring itemSpacing — so a stored gap is slack there too,
+  // not a real gap (see the comment above the justifyContent check in verify-screen.ts).
+  const evenlyExp = buildExpectation([
+    doc([{ type: "FRAME", id: "3:1", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-evenly" }, box: { w: 300, h: 40 },
+      children: [{ type: "FRAME", id: "3:11", name: "a" }, { type: "FRAME", id: "3:12", name: "b" }] }]),
+  ]);
+  const evenlyRow = evenlyExp.nodes.find((n) => n.nodeId === "3:1")!;
+  ok("[expect] space-evenly: the stored gap is excluded, not treated as a real gap",
+    !("gap" in evenlyRow) && evenlyExp.notComparable.some((n) => n.nodeId === "3:1" && n.field === "gap"));
+  const aroundExp = buildExpectation([
+    doc([{ type: "FRAME", id: "3:2", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-around" }, box: { w: 300, h: 40 },
+      children: [{ type: "FRAME", id: "3:21", name: "a" }, { type: "FRAME", id: "3:22", name: "b" }] }]),
+  ]);
+  const aroundRow = aroundExp.nodes.find((n) => n.nodeId === "3:2")!;
+  ok("[expect] space-around: the stored gap is excluded, not treated as a real gap",
+    !("gap" in aroundRow) && aroundExp.notComparable.some((n) => n.nodeId === "3:2" && n.field === "gap"));
+}
+{
   // Hidden nodes are not rendered, so measuring them is a false failure waiting to happen. The export
   // marks them `hidden: true` — NOT `visible: false` (finding 34), and a hidden parent hides its subtree.
   const exp = buildExpectation([doc([
