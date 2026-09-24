@@ -33,6 +33,7 @@ import * as daemon from "./daemon.ts";
 import type { DaemonStatusView } from "./daemon.ts";
 import { readSnapshotInfo } from "./snapshot-meta.ts";
 import { errMsg } from "./errmsg.ts";
+import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { isOurMcpEntry } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
@@ -84,8 +85,8 @@ export interface PluginProbe {
 }
 
 const ok = (id: CheckId, title: string, detail: string): Check => ({ id, title, status: "ok", detail });
-const warn = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "warn", detail, next });
-const fail = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "fail", detail, next });
+const warn = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "warn", detail, ...ifDefined("next", next) });
+const fail = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "fail", detail, ...ifDefined("next", next) });
 
 // ---------------------------------------------------------------- pure checks
 
@@ -165,7 +166,7 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   if (daemonStale.length) nexts.push(...daemonStale);
   return {
     detail: bits.length ? bits[0] : detail,
-    next: nexts.length ? nexts.join("; ") : undefined,
+    ...(nexts.length ? { next: nexts.join("; ") } : {}),
   };
 }
 
@@ -472,7 +473,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");
       add(pluginCheck);
     } else if (!probe.free) {
-      pluginCheck = checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, next: probe.holder === "websocket" ? "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" : undefined });
+      pluginCheck = checkPlugin({ skipped: `port ${port} is held by something else, and probing it would disturb it`, ...(probe.holder === "websocket" ? { next: "if that is the MCP server, ask Claude Code to call figma_status — it reports the plugin connection" } : {}) });
       add(pluginCheck);
     } else if (tok.activeSource === "ephemeral") {
       pluginCheck = checkPlugin({ skipped: "there is no token yet, and doctor never creates one", next: "run `dtwin init`, paste the token into the plugin, then run doctor again" });

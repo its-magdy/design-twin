@@ -20,3 +20,16 @@ export function isUnknownArray(x: unknown): x is unknown[] {
 export function isStringArray(x: unknown): x is string[] {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
+
+/**
+ * `{ [key]: v }` when `v` is defined, `{}` when it is not — for spreading an optional key into an object
+ * literal (`{ a, ...ifDefined("b", b), c }`) under exactOptionalPropertyTypes, where `b: undefined` no
+ * longer type-checks against `b?: T`. Output is byte-identical to writing `b: b`: JSON.stringify already
+ * drops an undefined-valued key, and the spread sits where the key was, so the key order is unchanged.
+ * Only `undefined` is dropped — `null`, `""`, `0` and `false` are kept, exactly as JSON.stringify keeps them.
+ */
+export function ifDefined<K extends string, V>(key: K, v: V | undefined): Partial<Record<K, V>> {
+  const o: Partial<Record<K, V>> = {};
+  if (v !== undefined) o[key] = v;
+  return o;
+}

@@ -23,6 +23,7 @@
 // plugin bundle — it type-checks under the plugin's tsconfig as well as the bridge's.
 
 import type { LayerFile, IndexRow, PageDirEntry, PageIndex, PagesRootIndex, LayersDoc } from "./doc-types.ts";
+import { ifDefined } from "./json-util.ts";
 
 /** One file a layout builder emits: where it lands (joined with the caller's separator — emit this
  *  verbatim) and its contents as an object (the caller decides how to stringify it). */
@@ -209,7 +210,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
       // from `dir` — a consumer rebuilding `pages/<dir>/index.json` would be right on exactly one of
       // the two layouts. Emitting the real relative path on both makes the rule uniform: open
       // `<outDir>/<index>` verbatim, whichever layout you were handed.
-      bucket = { page: pageName, pageId: l.pageId, dir, index: join(dir, "index.json"), entries: [] };
+      bucket = { page: pageName, ...ifDefined("pageId", l.pageId), dir, index: join(dir, "index.json"), entries: [] };
       byPage.set(key, bucket);
       pages.push(bucket);
     }
@@ -221,7 +222,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
     const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
     layerFiles.push({
       path: join(bucket.dir, base),
-      data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources },
+      data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) },
     });
     // title/texts come from THIS layer's own tree (findings 16/17/70/90/120) — computed here, once,
     // so both the per-page index and the root index (below) carry the same values for the same layer.
@@ -233,7 +234,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
   // difference between them would be the disambiguating "_2" on a directory name, which is a
   // filesystem artefact, not identity. Omitted (not null) on pre-pageId exports: JSON.stringify drops
   // an undefined value, so the field's ABSENCE means "this export predates page ids", not "no page".
-  const pageDirs: PageDirEntry[] = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+  const pageDirs: PageDirEntry[] = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
   // A consumer is told to read the ROOT index (extract/SKILL.md), not walk every pageDirs.index one
   // hop down (finding 16) — so the root carries the same per-screen rows the per-page index does,
   // flattened across every page. Additive: pageDirs keeps its own shape/consumers (doctor.ts et al).
@@ -243,7 +244,7 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
   // The per-page index CONTENTS, not just its path — same reasoning as layerFiles. Both writers used
   // to spell `{ page, layers: entries }` out themselves, which put the one shape this module exists to
   // single-source back into two files; now they only stringify and write.
-  const indexFiles: Array<PageLayoutFile<PageIndex>> = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
+  const indexFiles: Array<PageLayoutFile<PageIndex>> = pages.map((b) => ({ path: b.index, data: { page: b.page, ...ifDefined("pageId", b.pageId), layers: b.entries } }));
   // `pages`/`byPage` stay BUILD STATE, deliberately not returned: the same page list is already public
   // as meta.pageDirs (dir + index + layer count), and returning a second view of it invited each writer
   // to pick a different one — three shapes to keep in sync for one list. Writers mkdir from pageDirs.

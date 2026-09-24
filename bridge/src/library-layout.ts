@@ -26,6 +26,7 @@
 // browser-download writer emit the identical set of files.
 
 import type { PageLayoutFile } from "./pages-layout.ts";
+import { ifDefined } from "./json-util.ts";
 import type {
   TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc, HygieneDoc, CatalogComponent,
   ComponentsCatalog, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts, LibraryManifest,
@@ -90,7 +91,9 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
   // are handed; `source` is additive and tells a consumer this is a library catalog, not a design
   // file's — a distinction that is otherwise invisible, because inside the library file every object
   // is local and `remote` is therefore false on all of them.
-  const stamp: LibraryStamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile, source: d.source };
+  const stamp: LibraryStamp = {
+    ...ifDefined("exportedAt", d.exportedAt), ...ifDefined("file", d.file), ...ifDefined("colorProfile", d.colorProfile), ...ifDefined("source", d.source),
+  };
 
   const variables = Array.isArray(d.variables) ? d.variables : [];
   const collections = Array.isArray(d.collections) ? d.collections : [];
@@ -155,7 +158,7 @@ export function buildLibraryLayout(ds: DesignSystemDoc | null | undefined, sep: 
       hygiene: join(HYGIENE),
     },
     counts,
-    publish: Object.keys(publishCounts).length ? publishCounts : undefined,
+    ...(Object.keys(publishCounts).length ? { publish: publishCounts } : {}),
   });
   files.push({ path: join(INDEX), data: manifest });
 
@@ -180,13 +183,13 @@ export function mergeLibrariesIndex(prev: unknown, built: LibraryLayout): Librar
   const source = m.source;
   const row: LibrariesIndexRow = {
     dir: built.dirName,
-    libraryName: (source && source.libraryName) || m.file,
-    file: m.file,
-    fileKey: source && source.fileKey,
-    collectionKeys: source && source.collectionKeys,
-    exportedAt: m.exportedAt,
+    ...ifDefined("libraryName", (source && source.libraryName) || m.file),
+    ...ifDefined("file", m.file),
+    ...ifDefined("fileKey", source && source.fileKey),
+    ...ifDefined("collectionKeys", source && source.collectionKeys),
+    ...ifDefined("exportedAt", m.exportedAt),
     counts: m.counts,
-    publish: m.publish,
+    ...ifDefined("publish", m.publish),
     index: built.dirName + "/" + INDEX,
   };
   const i = rows.findIndex((r) => dirOf(r) === built.dirName);

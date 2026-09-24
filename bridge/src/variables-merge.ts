@@ -37,7 +37,7 @@
 import type {
   VariableCollection, Variable, SliceEntry, ValueConflict, SameNameConflict, VariableConflict, VariablesDoc,
 } from "./doc-types.ts";
-import { isUnknownArray } from "./json-util.ts";
+import { ifDefined, isUnknownArray } from "./json-util.ts";
 
 /** The pull a slice came from: its screen stem, its screen file, and (optionally) when it was read. */
 export interface SliceInput {
@@ -189,11 +189,11 @@ export function mergeVariablesDoc(prevRaw: unknown, next: VariablesDoc | null | 
     }
     stats.conflicts.push({
       name: v.name,
-      collection: v.collection,
-      key: v.key,
+      ...ifDefined("collection", v.collection),
+      ...ifDefined("key", v.key),
       was: before.values,
       now: v.values,
-      from: slice && slice.screen,
+      ...ifDefined("from", slice && slice.screen),
     });
     variables[at] = v;
     stats.updated++;
@@ -259,10 +259,10 @@ export function sameNameConflicts(variables: Variable[], slices: SliceEntry[] | 
     out.push({
       kind: "same-name",
       name: list[0].name,
-      collection: list[0].collection,
+      ...ifDefined("collection", list[0].collection),
       sameValue: list.every((v) => resolvesAlike(v, list[0])),
       variants: list.map((v) => ({
-        key: v.key,
+        ...ifDefined("key", v.key),
         values: v.values,
         screens: (slices || []).filter((s) => Array.isArray(s.keys) && v.key !== undefined && s.keys.includes(v.key)).map((s) => s.screen),
       })),
@@ -307,7 +307,7 @@ function sliceEntry(slice: SliceInput, doc: { variables?: Variable[]; collection
   const vars = doc && Array.isArray(doc.variables) ? doc.variables : [];
   return {
     screen: slice.screen,
-    file: slice.file,
+    ...ifDefined("file", slice.file),
     at: slice.at || new Date().toISOString(),
     variables: vars.length,
     collections: doc && Array.isArray(doc.collections) ? doc.collections.length : 0,

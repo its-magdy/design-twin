@@ -1,6 +1,16 @@
 // GENERATED from src/*.ts by build.js — do not edit by hand. Run `npm run build`.
 "use strict";
 (() => {
+  // ../bridge/src/json-util.ts
+  function isUnknownArray(x) {
+    return Array.isArray(x);
+  }
+  function ifDefined(key, v) {
+    const o = {};
+    if (v !== void 0) o[key] = v;
+    return o;
+  }
+
   // ../bridge/src/pages-layout.ts
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
@@ -94,7 +104,7 @@
       let bucket = byPage.get(key);
       if (!bucket) {
         const dir = uniqueDir(pageName);
-        bucket = { page: pageName, pageId: l.pageId, dir, index: join(dir, "index.json"), entries: [] };
+        bucket = { page: pageName, ...ifDefined("pageId", l.pageId), dir, index: join(dir, "index.json"), entries: [] };
         byPage.set(key, bucket);
         pages.push(bucket);
       }
@@ -102,15 +112,15 @@
       const src = layersDoc && layersDoc.sourceFile ? { sourceFile: layersDoc.sourceFile } : {};
       layerFiles.push({
         path: join(bucket.dir, base),
-        data: { name: l.name, id: l.id, page: l.page, pageId: l.pageId, ...src, tree: l.tree, reference: l.reference, devResources: l.devResources }
+        data: { name: l.name, id: l.id, ...ifDefined("page", l.page), ...ifDefined("pageId", l.pageId), ...src, tree: l.tree, ...ifDefined("reference", l.reference), ...ifDefined("devResources", l.devResources) }
       });
       const title = l.tree ? deriveTitle(l.tree) : void 0;
       const texts = l.tree ? collectTexts(l.tree) : void 0;
       bucket.entries.push({ ...(index || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
     });
-    const pageDirs = pages.map((b) => ({ page: b.page, pageId: b.pageId, dir: b.dir, index: b.index, layers: b.entries.length }));
+    const pageDirs = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
     const meta = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });
-    const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, pageId: b.pageId, layers: b.entries } }));
+    const indexFiles = pages.map((b) => ({ path: b.index, data: { page: b.page, ...ifDefined("pageId", b.pageId), layers: b.entries } }));
     return { meta, layerFiles, indexFiles, rootIndex: join("index.json") };
   }
 
@@ -223,7 +233,7 @@
   function buildDesignSystemLayout(ds, sep) {
     const d = ds || {};
     const join = (name) => DIR + (sep || "/") + name;
-    const stamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
+    const stamp = { ...ifDefined("exportedAt", d.exportedAt), ...ifDefined("file", d.file), ...ifDefined("colorProfile", d.colorProfile) };
     const components = Array.isArray(d.components) ? d.components : [];
     const rawLocal = components.filter((c) => !isLibraryEntry(c));
     const library = components.filter(isLibraryEntry);
@@ -248,7 +258,7 @@
         const detailPath2 = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName2 + ".json";
         componentFiles.push({
           path: detailPath2,
-          data: { ...stamp, id: c.id, key: c.key, name: c.name, node }
+          data: { ...stamp, ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name, node }
         });
         return { ...rest, nodeFile: detailPath2 };
       }
@@ -264,7 +274,7 @@
       const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
       componentFiles.push({
         path: detailPath,
-        data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants }
+        data: { ...stamp, ...ifDefined("setId", c.id), ...ifDefined("setKey", c.key), name: c.name, variants: c.variants }
       });
       return { ...c, variants: slimVariants, variantsFile: detailPath };
     });
@@ -274,7 +284,7 @@
     const stylesEffect = Array.isArray(styles.effect) ? styles.effect : [];
     const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
     const files = [
-      { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
+      { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
       { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
       { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
       { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },
@@ -978,11 +988,6 @@
     const l = flexIntent(n);
     if ("itemReverseZIndex" in node && n.itemReverseZIndex) l.reverseZ = true;
     return l;
-  }
-
-  // ../bridge/src/json-util.ts
-  function isUnknownArray(x) {
-    return Array.isArray(x);
   }
 
   // src/variables.ts

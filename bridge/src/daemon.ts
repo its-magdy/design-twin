@@ -18,6 +18,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { errMsg } from "./errmsg.ts";
+import { ifDefined } from "./json-util.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
@@ -120,7 +121,7 @@ const isProgressShaped = (x: unknown): x is Record<string, unknown> => isRecord(
 
 function parseDaemonReply(x: unknown): DaemonReply | null {
   if (!isRecord(x)) return null;
-  if (x.ok === true) return { ok: true, result: x.result, client: isClientRow(x.client) ? x.client : undefined };
+  if (x.ok === true) return { ok: true, result: x.result, ...(isClientRow(x.client) ? { client: x.client } : {}) };
   if (x.ok === false) return { ok: false, error: typeof x.error === "string" ? x.error : "daemon error" };
   return null;
 }
@@ -342,13 +343,13 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
               : undefined;
             if (typeof bridge.requestWithClient === "function") {
               const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress);
-              reply(conn, { ok: true, id: msg.id, result: o.reply, client: o.client });
+              reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, client: o.client });
             } else {
               const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
-              reply(conn, { ok: true, id: msg.id, result });
+              reply(conn, { ok: true, ...ifDefined("id", msg.id), result });
             }
           } catch (e) {
-            reply(conn, { ok: false, id: msg.id, error: errMsg(e) });
+            reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(e) });
           } finally {
             inFlight--;
             touch(); // the idle clock starts when work FINISHES, not when it was requested
@@ -359,7 +360,7 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
 
     // The daemon's own three commands — answered here, never forwarded to the bridge.
     function control(conn: net.Socket, msg: DaemonControlRequest): void {
-      if (msg.cmd === "__ping") return reply(conn, { ok: true, id: msg.id, result: { daemon: true, pid: process.pid, port: bridge.port } });
+      if (msg.cmd === "__ping") return reply(conn, { ok: true, ...ifDefined("id", msg.id), result: { daemon: true, pid: process.pid, port: bridge.port } });
       if (msg.cmd === "__status") {
         const result: DaemonStatus = {
           daemon: true, pid: process.pid, port: bridge.port, pluginConnected: bridge.isConnected(),
@@ -378,10 +379,10 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
           idleMs: idleMs || null,
           idleForMs: Date.now() - lastActivity,
         };
-        return reply(conn, { ok: true, id: msg.id, result });
+        return reply(conn, { ok: true, ...ifDefined("id", msg.id), result });
       }
       // "__shutdown"
-      reply(conn, { ok: true, id: msg.id, result: { stopped: true } });
+      reply(conn, { ok: true, ...ifDefined("id", msg.id), result: { stopped: true } });
       shutdown();
     }
 

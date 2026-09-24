@@ -21,6 +21,7 @@ import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-
 import { mergeVariablesDoc } from "./variables-merge.ts";
 import { sha1Hex, normalizeForCompare } from "./asset-compare.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
+import { ifDefined } from "./json-util.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
 
@@ -460,20 +461,20 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   const entry: ScreenIndexRow = {
     name,
     id,
-    type: root.type,
+    ...ifDefined("type", root.type),
     page: paths.page,
     pageId: paths.pageId,
     title,
     texts,
-    exportedAt: r.screen && r.screen.exportedAt,
-    sourceFile: r.sourceFile || undefined,
+    ...ifDefined("exportedAt", r.screen && r.screen.exportedAt),
+    ...ifDefined("sourceFile", r.sourceFile || undefined),
     file: paths.screen,
-    variables: r.variables ? paths.variables : undefined,
-    assets: assetIndex ? paths.assets : undefined,
-    reference: root.reference,
-    nodes: (r.screen.manifest && r.screen.manifest.nodes) || undefined,
-    w: root.box && root.box.w,
-    h: root.box && root.box.h,
+    ...ifDefined("variables", r.variables ? paths.variables : undefined),
+    ...ifDefined("assets", assetIndex ? paths.assets : undefined),
+    ...ifDefined("reference", root.reference),
+    ...ifDefined("nodes", (r.screen.manifest && r.screen.manifest.nodes) || undefined),
+    ...ifDefined("w", root.box && root.box.w),
+    ...ifDefined("h", root.box && root.box.h),
   };
   const pageIndex = mergeScreenIndex(readJsonOr(path.join(dir, paths.index), null), Object.assign({}, entry, { page: paths.page, pageId: paths.pageId }));
   writeJson(dir, paths.index, pageIndex, true);

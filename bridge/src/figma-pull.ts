@@ -211,7 +211,7 @@ import type { ReadOptName } from "./read-opts.ts";
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
 import { translate, VerbError, verbHelp, distance } from "./verbs.ts";
-import { isUnknownArray } from "./json-util.ts";
+import { ifDefined, isUnknownArray } from "./json-util.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // --help / -h: print the usage header above and exit 0. Handled in cli() BEFORE server-core is loaded,
@@ -1023,7 +1023,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // it sits next to, so it gets its own branch rather than joining their print-only one.
   if (screenshotId) {
     console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-    const { reply: r } = await send("screenshot", { nodeId: screenshotId, scale }, exportTimeoutMs);
+    const { reply: r } = await send("screenshot", { nodeId: screenshotId, ...ifDefined("scale", scale) }, exportTimeoutMs);
     for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
     // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
     // string: those disagreed for a whole release (live-test findings 20/31) and a printed path that
@@ -1075,11 +1075,11 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
     // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
-    const { reply: r } = await send("exportLibrary", { asLibrary, variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
+    const { reply: r } = await send("exportLibrary", { asLibrary, ...ifDefined("variantVisuals", readOpts.variantVisuals) }, exportTimeoutMs);
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else if (designSystemOnly) {
-    const { reply: r } = await send("exportDesignSystem", { variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
+    const { reply: r } = await send("exportDesignSystem", ifDefined("variantVisuals", readOpts.variantVisuals), exportTimeoutMs);
     // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
     // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
     // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
@@ -1088,7 +1088,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else {
-    const r = stampSource(await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs));
+    const r = stampSource(await send("exportFull", { allPages, ...(pageSel.length ? { page: pageSel } : {}), ...readOpts }, exportTimeoutMs));
     // Route through the SAME split writer the MCP export tools use (write-out.ts's writeExport), so a
     // CLI pull and an MCP pull land in identical shape. The CLI used to write r.designSystem flat to
     // design-system.json here — undocumented drift from the split described in this file's own header
