@@ -2163,8 +2163,8 @@
   }
   function motionEasing(ez) {
     if (!ez || !ez.type) return void 0;
-    const curve = ez.type === "VARIABLE_ALIAS" ? {} : easingCurve(ez);
-    return { type: String(ez.type).toLowerCase(), ...curve };
+    if (ez.type === "VARIABLE_ALIAS") return { type: "variable_alias", id: ez.id };
+    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
   }
   function keyframes(list) {
     if (!isList(list) || !list.length) return void 0;
@@ -2175,42 +2175,75 @@
       return o;
     });
   }
-  function manualTrackMap(map) {
+  function manualTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
+    const kf = keyframes(binding.keyframes);
+    if (kf) o.keyframes = kf;
+    return o;
+  }
+  function animationTrack(binding) {
+    if (!binding || typeof binding !== "object") return void 0;
+    const o = {};
+    if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
+    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+    if (isList(binding.tracks) && binding.tracks.length) {
+      o.tracks = binding.tracks.map((t) => {
+        const to = {};
+        if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+        const kf = keyframes(t.keyframes);
+        if (kf) to.keyframes = kf;
+        return to;
+      });
+    }
+    return o;
+  }
+  function isPropertyBindings(t) {
+    return "properties" in t;
+  }
+  function bindingMap(map, conv) {
     if (!map || typeof map !== "object") return void 0;
     const out = {};
-    for (const field of Object.keys(map)) {
-      const binding = map[field];
-      if (!binding || typeof binding !== "object") continue;
-      const o = {};
-      if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
-      const kf = keyframes(binding.keyframes);
-      if (kf) o.keyframes = kf;
-      putNonEmpty(out, field, o);
+    for (const [key, binding] of Object.entries(map)) putNonEmpty(out, key, conv(binding));
+    return nonEmpty(out);
+  }
+  function paintMap(map, conv) {
+    if (!map || typeof map !== "object") return void 0;
+    const out = {};
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      if (isPropertyBindings(entry)) {
+        const properties = bindingMap(entry.properties, conv);
+        if (properties) out[index] = { properties };
+      } else {
+        putNonEmpty(out, index, conv(entry));
+      }
     }
     return nonEmpty(out);
   }
-  function animationsMap(map) {
+  function effectMap(map, conv) {
+    var _a;
     if (!map || typeof map !== "object") return void 0;
     const out = {};
-    for (const field of Object.keys(map)) {
-      const binding = map[field];
-      if (!binding || typeof binding !== "object") continue;
-      const o = {};
-      if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
-      if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-      if (isList(binding.tracks) && binding.tracks.length) {
-        const tracks = binding.tracks.map((t) => {
-          const to = {};
-          if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
-          const kf = keyframes(t.keyframes);
-          if (kf) to.keyframes = kf;
-          return to;
-        });
-        if (tracks.length) o.tracks = tracks;
-      }
-      putNonEmpty(out, field, o);
+    for (const [index, entry] of Object.entries(map)) {
+      if (!entry || typeof entry !== "object") continue;
+      const { properties, ...fields } = entry;
+      const extra = {};
+      putNonEmpty(extra, "properties", bindingMap(properties, conv));
+      putNonEmpty(out, index, Object.assign((_a = bindingMap(fields, conv)) != null ? _a : {}, extra));
     }
     return nonEmpty(out);
+  }
+  function motionMap(map, conv) {
+    var _a;
+    if (!map || typeof map !== "object") return void 0;
+    const { fills, strokes, effects, ...scalars } = map;
+    const indexed = {};
+    putNonEmpty(indexed, "fills", paintMap(fills, conv));
+    putNonEmpty(indexed, "strokes", paintMap(strokes, conv));
+    putNonEmpty(indexed, "effects", effectMap(effects, conv));
+    return nonEmpty(Object.assign((_a = bindingMap(scalars, conv)) != null ? _a : {}, indexed));
   }
   function collectMotion(node) {
     const out = {};
@@ -2218,11 +2251,11 @@
       out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
     }
     if ("manualKeyframeTracks" in node) {
-      const tracks = manualTrackMap(node.manualKeyframeTracks);
+      const tracks = motionMap(node.manualKeyframeTracks, manualTrack);
       if (tracks) out.manualTracks = tracks;
     }
     if ("animations" in node) {
-      const anims = animationsMap(node.animations);
+      const anims = motionMap(node.animations, animationTrack);
       if (anims) out.animations = anims;
     }
     if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {

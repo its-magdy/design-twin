@@ -1,7 +1,9 @@
 // Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are now
 // readable FREE via the Plugin API — this is a new plane the paid get_motion_context used to own.
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
-import type { JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, NodeMotion } from "../../bridge/src/doc-types.ts";
+import type {
+  JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, MotionIndexedTracks, MotionPaintTrack, MotionEffectTracks, NodeMotion,
+} from "../../bridge/src/doc-types.ts";
 import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
@@ -33,44 +35,29 @@ function keyframeValue(kv: KeyframeValue | undefined | null): JsonValue | undefi
 }
 
 // MotionEasing -> compact (mirrors the prototype-transition easing surface: named curve + exact params).
-// `easing` on a keyframe is `MotionEasing | VariableAlias` (Motion supports binding easing to an EASING
-// variable) — a VariableAlias has only {type:'VARIABLE_ALIAS', id}, so it falls through with no curve
-// params, same as an unrecognised MotionEasing would.
+// `easing` on a keyframe is `MotionEasing | VariableAlias` (ManualKeyframe.easing — Motion supports binding
+// easing to an EASING variable). A VariableAlias carries only {type:'VARIABLE_ALIAS', id}, so the id is
+// what identifies the easing: emit it. The variable's NAME would need the async varName memo and this
+// collector is synchronous, so a consumer resolves the id against the variables dump.
 function motionEasing(ez: MotionEasing | VariableAlias | undefined): MotionKeyframe["easing"] {
   if (!ez || !ez.type) return undefined;
-  const curve = ez.type === "VARIABLE_ALIAS" ? {} : easingCurve(ez);
-  return { type: String(ez.type).toLowerCase(), ...curve };
+  if (ez.type === "VARIABLE_ALIAS") return { type: "variable_alias", id: ez.id };
+  return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
 }
 
-// Confirmed against https://developers.figma.com/docs/plugins/api/Motion/ (fetched during this port)
-// and node_modules/@figma/plugin-typings/plugin-api.d.ts ~L5959-6000: manualKeyframeTracks values are
-// ManualKeyframeBinding = {id, baseValue, keyframes: ManualKeyframe[]} directly (no keyframeOperation
-// at this level), while animations values are KeyframeBinding = {baseValue, timelineDuration,
-// tracks: ManualKeyframeTrack[]} where EACH ManualKeyframeTrack carries {id, keyframeOperation,
-// keyframes: ManualKeyframe[]} one level deeper. The old flat read's `keyframeOperation` was dead for
-// BOTH maps and its `keyframes` was dead for `animations` specifically — fixed below (behaviour change,
-// not a rename): manualTracks keeps `{base, keyframes}`; animations now emits `{base, duration, tracks:
-// [{op?, keyframes}]}` so its per-track keyframes/keyframeOperation actually surface.
-interface FlatKeyframe {
-  timelinePosition: number;
-  value: KeyframeValue;
-  easing?: MotionEasing | VariableAlias;
-}
-interface ManualBinding {
-  baseValue?: KeyframeValue;
-  keyframes?: ReadonlyArray<FlatKeyframe>;
-}
-interface KeyframeTrack {
-  keyframeOperation?: "SET" | "OFFSET" | "SCALE";
-  keyframes?: ReadonlyArray<FlatKeyframe>;
-}
-interface AnimationBinding {
-  baseValue?: KeyframeValue;
-  timelineDuration?: number;
-  tracks?: ReadonlyArray<KeyframeTrack>;
-}
-
-function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): MotionKeyframe[] | undefined {
+// Confirmed against https://developers.figma.com/docs/plugins/api/Motion/ and
+// node_modules/@figma/plugin-typings/plugin-api.d.ts (ManualKeyframeTracks / Animations, ~L6084-6134):
+// - a scalar field (KeyframePropertyFieldName: TRANSLATION_X, OPACITY, …) maps to ONE binding;
+// - `fills` / `strokes` map a paint INDEX to a PaintManualKeyframeTrack / PaintKeyframeBinding — either one
+//   binding for the whole paint, or `{properties: {shaderPropId: binding}}` for a shader paint;
+// - `effects` maps an effect INDEX to `{EffectKeyframeFieldName: binding, properties?: {shaderPropId: binding}}`.
+// manualKeyframeTracks bindings are ManualKeyframeBinding = {id, baseValue, keyframes: ManualKeyframe[]}
+// (no keyframeOperation at this level); animations bindings are KeyframeBinding = {baseValue,
+// timelineDuration, tracks: ManualKeyframeTrack[]} where EACH track carries {id, keyframeOperation,
+// keyframes} one level deeper. manualTracks emits `{base, keyframes}`; animations emits `{base, duration,
+// tracks: [{op?, keyframes}]}`. The pre-fix read treated fills/strokes/effects as one binding each, so
+// their index-keyed tracks came out empty and were dropped.
+function keyframes(list: ReadonlyArray<ManualKeyframe> | undefined): MotionKeyframe[] | undefined {
   if (!isList(list) || !list.length) return undefined;
   return list.map((k) => {
     const o: MotionKeyframe = { t: round(k.timelinePosition), value: keyframeValue(k.value) }; // t = timeline position (s)
@@ -80,45 +67,108 @@ function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): MotionKeyfram
   });
 }
 
-// manualKeyframeTracks -> { field: {base?, keyframes[]} }.
-function manualTrackMap(map: Record<string, ManualBinding | undefined> | undefined): Record<string, MotionTrack> | undefined {
+// ManualKeyframeBinding -> {base?, keyframes[]}.
+function manualTrack(binding: ManualKeyframeBinding | undefined): MotionTrack | undefined {
+  if (!binding || typeof binding !== "object") return undefined;
+  const o: MotionTrack = {};
+  if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
+  const kf = keyframes(binding.keyframes);
+  if (kf) o.keyframes = kf;
+  return o;
+}
+
+// KeyframeBinding -> {base?, duration?, tracks:[{op?, keyframes[]}]}.
+function animationTrack(binding: KeyframeBinding | undefined): MotionAnimation | undefined {
+  if (!binding || typeof binding !== "object") return undefined;
+  const o: MotionAnimation = {};
+  if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
+  if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
+  if (isList(binding.tracks) && binding.tracks.length) {
+    o.tracks = binding.tracks.map((t) => {
+      const to: NonNullable<MotionAnimation["tracks"]>[number] = {};
+      if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+      const kf = keyframes(t.keyframes);
+      if (kf) to.keyframes = kf;
+      return to;
+    });
+  }
+  return o;
+}
+
+// One binding -> its compact form (manualTrack / animationTrack).
+type Convert<B, O> = (binding: B | undefined) => O | undefined;
+// The typings' input shapes, generic over the binding type so ManualKeyframeTracks (ManualKeyframeBinding)
+// and Animations (KeyframeBinding) share one reader.
+// - PaintManualKeyframeTrack / PaintKeyframeBinding's shader-property member:
+interface PropertyBindings<B> { readonly properties: Partial<Record<string, B>> }
+// - EffectManualKeyframeTracks / EffectKeyframeBindings:
+type EffectBindings<B> = Partial<Record<EffectKeyframeFieldName, B>> & { readonly properties?: Partial<Record<string, B>> };
+// - ManualKeyframeTracks / Animations:
+type MotionBindings<B> = Partial<Record<KeyframePropertyFieldName, B>> & {
+  readonly fills?: Partial<Record<number, B | PropertyBindings<B>>>;
+  readonly strokes?: Partial<Record<number, B | PropertyBindings<B>>>;
+  readonly effects?: Partial<Record<number, EffectBindings<B>>>;
+};
+
+// A plain binding (ManualKeyframeBinding / KeyframeBinding) never has a `properties` member, so its
+// presence is the discriminant between the two PaintManualKeyframeTrack / PaintKeyframeBinding members.
+function isPropertyBindings<B extends object>(t: B | PropertyBindings<B>): t is PropertyBindings<B> {
+  return "properties" in t;
+}
+
+// { key: binding } -> { key: converted }, empty entries dropped (scalar fields, shader properties, effect fields).
+function bindingMap<B, O extends object>(map: Partial<Record<string, B>> | undefined, conv: Convert<B, O>): Record<string, O> | undefined {
   if (!map || typeof map !== "object") return undefined;
-  const out: Record<string, MotionTrack> = {};
-  for (const field of Object.keys(map)) {
-    const binding = map[field];
-    if (!binding || typeof binding !== "object") continue;
-    const o: MotionTrack = {};
-    if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
-    const kf = keyframes(binding.keyframes);
-    if (kf) o.keyframes = kf;
-    putNonEmpty(out, field, o);
+  const out: Record<string, O> = {};
+  for (const [key, binding] of Object.entries(map)) putNonEmpty(out, key, conv(binding));
+  return nonEmpty(out);
+}
+
+// fills / strokes: { index: binding | {properties: {propId: binding}} } -> { "index": track | {properties} }.
+function paintMap<B extends object, O extends object>(
+  map: Partial<Record<number, B | PropertyBindings<B>>> | undefined, conv: Convert<B, O>,
+): Record<string, MotionPaintTrack<O>> | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const out: Record<string, MotionPaintTrack<O>> = {};
+  for (const [index, entry] of Object.entries(map)) {
+    if (!entry || typeof entry !== "object") continue;
+    if (isPropertyBindings(entry)) {
+      const properties = bindingMap(entry.properties, conv);
+      if (properties) out[index] = { properties };
+    } else {
+      putNonEmpty(out, index, conv(entry));
+    }
   }
   return nonEmpty(out);
 }
 
-// animations -> { field: {base?, duration?, tracks:[{op?, keyframes[]}]} }.
-function animationsMap(map: Record<string, AnimationBinding | undefined> | undefined): Record<string, MotionAnimation> | undefined {
+// effects: { index: {EffectKeyframeFieldName: binding, properties?: {propId: binding}} } -> the same, converted.
+function effectMap<B, O extends object>(
+  map: Partial<Record<number, EffectBindings<B>>> | undefined, conv: Convert<B, O>,
+): Record<string, MotionEffectTracks<O>> | undefined {
   if (!map || typeof map !== "object") return undefined;
-  const out: Record<string, MotionAnimation> = {};
-  for (const field of Object.keys(map)) {
-    const binding = map[field];
-    if (!binding || typeof binding !== "object") continue;
-    const o: MotionAnimation = {};
-    if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
-    if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-    if (isList(binding.tracks) && binding.tracks.length) {
-      const tracks = binding.tracks.map((t) => {
-        const to: NonNullable<MotionAnimation["tracks"]>[number] = {};
-        if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
-        const kf = keyframes(t.keyframes);
-        if (kf) to.keyframes = kf;
-        return to;
-      });
-      if (tracks.length) o.tracks = tracks;
-    }
-    putNonEmpty(out, field, o);
+  const out: Record<string, MotionEffectTracks<O>> = {};
+  for (const [index, entry] of Object.entries(map)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { properties, ...fields } = entry;
+    const extra: { properties?: Record<string, O> } = {};
+    putNonEmpty(extra, "properties", bindingMap(properties, conv));
+    putNonEmpty(out, index, Object.assign(bindingMap(fields, conv) ?? {}, extra));
   }
   return nonEmpty(out);
+}
+
+// A whole ManualKeyframeTracks / Animations map -> scalar fields (source order), then fills/strokes/effects.
+function motionMap<B extends object, O extends object>(
+  map: MotionBindings<B> | undefined, conv: Convert<B, O>,
+): (Record<string, O> & MotionIndexedTracks<O>) | undefined {
+  if (!map || typeof map !== "object") return undefined;
+  const { fills, strokes, effects, ...scalars } = map;
+  const indexed: MotionIndexedTracks<O> = {};
+  putNonEmpty(indexed, "fills", paintMap(fills, conv));
+  putNonEmpty(indexed, "strokes", paintMap(strokes, conv));
+  putNonEmpty(indexed, "effects", effectMap(effects, conv));
+  return nonEmpty(Object.assign(bindingMap(scalars, conv) ?? {}, indexed));
 }
 
 // The whole motion surface on a node -> compact { timelines?, manualTracks?, animations?, styles? }.
@@ -130,11 +180,11 @@ export function collectMotion(node: SceneNode): NodeMotion | undefined {
     out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
   }
   if ("manualKeyframeTracks" in node) {
-    const tracks = manualTrackMap(node.manualKeyframeTracks);
+    const tracks = motionMap(node.manualKeyframeTracks, manualTrack);
     if (tracks) out.manualTracks = tracks;
   }
   if ("animations" in node) {
-    const anims = animationsMap(node.animations);
+    const anims = motionMap(node.animations, animationTrack);
     if (anims) out.animations = anims;
   }
   if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {

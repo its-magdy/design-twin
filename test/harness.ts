@@ -240,11 +240,44 @@ const scrollFrame = {
   inferredVariables: { fills: [[{ type: "VARIABLE_ALIAS", id: "v_primary" }]] }, // suggestion for an unbound field
   // Motion plane (Plugin API Update 130) — opt-in via {motion:true}.
   timelines: [{ id: "tl1", duration: 0.5 }],
-  manualKeyframeTracks: { TRANSLATION_X: { id: "trk1", baseValue: { type: "FLOAT", value: 0 }, keyframes: [{ id: "k1", timelinePosition: 0, value: { type: "FLOAT", value: 0 }, easing: { type: "EASE_OUT" } }, { id: "k2", timelinePosition: 0.5, value: { type: "FLOAT", value: 100 }, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } } }] } },
+  manualKeyframeTracks: { TRANSLATION_X: { id: "trk1", baseValue: { type: "FLOAT", value: 0 }, keyframes: [{ id: "k1", timelinePosition: 0, value: { type: "FLOAT", value: 0 }, easing: { type: "EASE_OUT" } }, { id: "k2", timelinePosition: 0.5, value: { type: "FLOAT", value: 100 }, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } } }] },
+    // Indexed collections (d.ts ManualKeyframeTracks): fills/strokes keyed by paint index — a plain
+    // ManualKeyframeBinding, or {properties:{shaderPropId: binding}} for a shader paint; effects keyed by
+    // effect index -> {EffectKeyframeFieldName: binding, properties?}.
+    fills: {
+      0: { id: "trkF0", baseValue: { type: "COLOR", value: { r: 1, g: 0, b: 0, a: 1 } }, keyframes: [
+        { id: "kf1", timelinePosition: 0, value: { type: "COLOR", value: { r: 1, g: 0, b: 0, a: 1 } }, easing: { type: "LINEAR" } },
+        { id: "kf2", timelinePosition: 1, value: { type: "COLOR", value: { r: 0, g: 0, b: 1, a: 1 } }, easing: { type: "VARIABLE_ALIAS", id: "VariableID:1" } }] },
+      1: { properties: { "shader:speed": { id: "trkF1s", baseValue: { type: "FLOAT", value: 1 }, keyframes: [
+        { id: "kfs1", timelinePosition: 0, value: { type: "FLOAT", value: 1 }, easing: { type: "LINEAR" } },
+        { id: "kfs2", timelinePosition: 2, value: { type: "FLOAT", value: 3 }, easing: { type: "LINEAR" } }] } } },
+    },
+    strokes: { 0: { id: "trkS0", baseValue: { type: "FLOAT", value: 0 }, keyframes: [
+      { id: "ks1", timelinePosition: 0.25, value: { type: "FLOAT", value: 0.5 }, easing: { type: "EASE_IN" } }] } },
+    effects: { 0: {
+      RADIUS: { id: "trkE0r", baseValue: { type: "FLOAT", value: 4 }, keyframes: [
+        { id: "ke1", timelinePosition: 0, value: { type: "FLOAT", value: 4 }, easing: { type: "LINEAR" } },
+        { id: "ke2", timelinePosition: 0.5, value: { type: "FLOAT", value: 12 }, easing: { type: "LINEAR" } }] },
+      properties: { "shader:glow": { id: "trkE0p", baseValue: { type: "FLOAT", value: 0 }, keyframes: [
+        { id: "kep1", timelinePosition: 1, value: { type: "FLOAT", value: 0.8 }, easing: { type: "LINEAR" } }] } },
+    } },
+  },
   // animations = KeyframeBinding {baseValue, timelineDuration, tracks:[ManualKeyframeTrack{keyframeOperation,keyframes}]}
   // — one level deeper than manualKeyframeTracks; see https://developers.figma.com/docs/plugins/api/Motion/.
   animations: { ROTATION: { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 1.2,
-    tracks: [{ id: "atrk1", keyframeOperation: "OFFSET", keyframes: [{ id: "ak1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "ak2", timelinePosition: 1, value: { type: "FLOAT", value: 90 } }] }] } },
+    tracks: [{ id: "atrk1", keyframeOperation: "OFFSET", keyframes: [{ id: "ak1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "ak2", timelinePosition: 1, value: { type: "FLOAT", value: 90 } }] }] },
+    // Same indexed layout as manualKeyframeTracks, with KeyframeBinding values (d.ts Animations).
+    fills: {
+      0: { baseValue: { type: "FLOAT", value: 1 }, timelineDuration: 0.8, tracks: [{ id: "afk", keyframeOperation: "SCALE", keyframes: [
+        { id: "afk1", timelinePosition: 0, value: { type: "FLOAT", value: 1 } }, { id: "afk2", timelinePosition: 0.8, value: { type: "FLOAT", value: 0.5 } }] }] },
+      2: { properties: { "shader:phase": { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 3, tracks: [{ id: "afp", keyframeOperation: "SET", keyframes: [
+        { id: "afp1", timelinePosition: 3, value: { type: "FLOAT", value: 6 } }] }] } } },
+    },
+    strokes: { 1: { baseValue: { type: "FLOAT", value: 2 }, timelineDuration: 0.4, tracks: [{ id: "ask", keyframeOperation: "OFFSET", keyframes: [
+      { id: "ask1", timelinePosition: 0.4, value: { type: "FLOAT", value: 3 } }] }] } },
+    effects: { 0: { OFFSET_Y: { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 0.6, tracks: [{ id: "aek", keyframeOperation: "OFFSET", keyframes: [
+      { id: "aek1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "aek2", timelinePosition: 0.6, value: { type: "FLOAT", value: 8 } }] }] } } },
+  },
   animationStyles: [{ styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0 }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -590,6 +623,41 @@ const sandbox = context as unknown as Sandbox;
   ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
     m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
     m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90));
+  // Indexed collections (fills/strokes keyed by paint index, effects by effect index) used to come out
+  // empty — every value was read as one binding — and were dropped. Pin each shape.
+  const mt = m3!.manualTracks!;
+  ok("motion scalar track output unchanged (TRANSLATION_X, byte-identical)", JSON.stringify(mt.TRANSLATION_X) ===
+    '{"base":0,"keyframes":[{"t":0,"value":0,"easing":{"type":"ease_out"}},{"t":0.5,"value":100,"easing":{"type":"custom_cubic_bezier","cubicBezier":{"x1":0.4,"y1":0,"x2":0.2,"y2":1}}}]}');
+  const f0 = mt.fills?.["0"];
+  ok("motion manualTracks.fills[\"0\"]: base + 2 keyframes", !!(f0 && !("properties" in f0) && f0.base === "#ff0000" &&
+    f0.keyframes!.length === 2 && f0.keyframes![1].value === "#0000ff" && f0.keyframes![1].t === 1));
+  ok("motion keyframe easing bound to a variable emits the alias id",
+    JSON.stringify(f0 && !("properties" in f0) && f0.keyframes![1].easing) === '{"type":"variable_alias","id":"VariableID:1"}');
+  const f1 = mt.fills?.["1"];
+  ok("motion manualTracks.fills shader track under properties", !!(f1 && "properties" in f1 &&
+    f1.properties["shader:speed"].base === 1 && f1.properties["shader:speed"].keyframes![1].value === 3));
+  const s0 = mt.strokes?.["0"];
+  ok("motion manualTracks.strokes[\"0\"] track", !!(s0 && !("properties" in s0) && s0.base === 0 &&
+    s0.keyframes!.length === 1 && s0.keyframes![0].value === 0.5 && s0.keyframes![0].easing!.type === "ease_in"));
+  const e0 = mt.effects?.["0"];
+  ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0 && e0.RADIUS.base === 4 && e0.RADIUS.keyframes!.length === 2 && e0.RADIUS.keyframes![1].value === 12));
+  ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0 && e0.properties && e0.properties["shader:glow"].keyframes![0].value === 0.8));
+  const an = m3!.animations!;
+  ok("motion animations scalar output unchanged (ROTATION, byte-identical)", JSON.stringify(an.ROTATION) ===
+    '{"base":0,"duration":1.2,"tracks":[{"op":"offset","keyframes":[{"t":0,"value":0},{"t":1,"value":90}]}]}');
+  const af0 = an.fills?.["0"];
+  ok("motion animations.fills[\"0\"]: base + duration + op track", !!(af0 && !("properties" in af0) && af0.base === 1 && af0.duration === 0.8 &&
+    af0.tracks![0].op === "scale" && af0.tracks![0].keyframes![1].value === 0.5));
+  const af2 = an.fills?.["2"];
+  ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2 && "properties" in af2 &&
+    af2.properties["shader:phase"].duration === 3 && af2.properties["shader:phase"].tracks![0].op === undefined &&
+    af2.properties["shader:phase"].tracks![0].keyframes![0].value === 6));
+  const as1 = an.strokes?.["1"];
+  ok("motion animations.strokes[\"1\"] track", !!(as1 && !("properties" in as1) && as1.tracks![0].op === "offset" && as1.tracks![0].keyframes![0].value === 3));
+  const ae0 = an.effects?.["0"];
+  ok("motion animations.effects[\"0\"].OFFSET_Y track", !!(ae0 && ae0.OFFSET_Y.duration === 0.6 && ae0.OFFSET_Y.tracks![0].keyframes![1].value === 8));
+  ok("motion indexed collections follow the scalar fields", JSON.stringify(Object.keys(mt)) === '["TRANSLATION_X","fills","strokes","effects"]' &&
+    JSON.stringify(Object.keys(an)) === '["ROTATION","fills","strokes","effects"]');
 
   // --- sharedData (cross-plugin, e.g. Tokens Studio applied tokens) is OPT-IN ---
   ok("sharedData off by default", tree.sharedData === undefined);
