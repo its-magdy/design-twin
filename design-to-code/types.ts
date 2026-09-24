@@ -38,7 +38,7 @@
 // deliberate addition here.
 
 import type {
-  JsonValue, JsonObject, IrNodeType, TokenMap, ComponentPropValues, IndexRow,
+  JsonValue, JsonObject, IrNodeType, TokenMap, ComponentPropValues, IndexRow, IrNode, LayerFile, ScreenExport,
 } from "../bridge/src/doc-types.ts";
 export type {
   JsonPrimitive, JsonValue, JsonObject, IrNodeType, TokenMap, XY, Box, RenderBox, RadiusCorners, SizeLimits,
@@ -49,7 +49,7 @@ export type {
   MotionKeyframe, MotionTrack, MotionAnimation, NodeMotion,
   MainComponentRef, ComponentPropValues, Annotation, ExportSetting, Overlay, InstanceOverride, Geometry,
   TableCell, DevResource, StyleRefs, ModeMap, TextFields, IrNode, Manifest, Measurement, ScreenExport,
-  LayerFile, ScreenDoc, IndexRow, PageDirEntry, PageIndex, PrototypeFlow, PageSettings, PagesRootIndex,
+  LayerFile, IndexRow, PageDirEntry, PageIndex, PrototypeFlow, PageSettings, PagesRootIndex,
   DesignSystemStamp, DesignSystemManifest, VariableType, VariableAlias, VariableValue, VariableCollection,
   Variable, SliceEntry, ValueConflict, SameNameConflict, VariableConflict, TokensDoc, VariablesDoc, StyleMeta,
   PaintStyle, TextStyle, EffectStyle, GridStyle, StylesDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc,
@@ -58,6 +58,16 @@ export type {
   LayersDocLayer, LayersDocIndexRow, LayersDoc, DesignSystemStyles, DesignSystemDoc, LibraryStamp, LibraryCounts,
   LibraryManifest, LibrariesIndexRow, LibrariesIndex,
 } from "../bridge/src/doc-types.ts";
+
+// ================================================================ the screen documents a reader accepts
+
+/**
+ * Any screen document a design-to-code reader accepts: a `--node` pull ({nodes}), a page-walk layer file
+ * ({tree}) or a bare node tree. A real union — narrow with export-shape.ts (isScreenExport / isLayerFile /
+ * isIrNode), and get the roots with screenRoots(). (bridge/src/doc-types.ts keeps its own `ScreenDoc`,
+ * a wide optional bag, for the bridge side; it is deliberately NOT re-exported here.)
+ */
+export type ScreenDoc = ScreenExport | LayerFile | IrNode;
 
 // ================================================================ codeconnect.local.json (map-validate.js is THE source of truth)
 
@@ -156,8 +166,59 @@ export type CrossCheckFindingCode =
   | "font-family-stray" | "font-not-in-design-system" | "text-style-near-miss" | "text-style-absent"
   | "sentinel-token-value" | "single-mode-export" | "derived-mode-contrast";
 
-/** One finding. `extra` is per-code (`{size, min}` on small-touch-target, `{coverage}` on catalog-covers-nothing, …). */
-export interface Finding<Code extends string = string> {
+/** One sentinel token value (cross-check's sentinel-token-value). */
+export interface SentinelTokenValue { name: string; collection: string | undefined; mode: string; value: number }
+/** One text/background token pair below WCAG AA in a mode nobody rendered (cross-check's derived-mode-contrast). */
+export interface ContrastFailure { mode: string; fg: string; bg: string; ratio: number; nodes: string[]; sample: string }
+/**
+ * The extra fields a finding carries beside severity/code/message, by the code that writes them (the
+ * writers are audit.ts `add(…, extra)` and cross-check.ts `push(…, extra)`; a finding of any other code
+ * carries none). Typed optional fields rather than an open `[extra: string]` bag, so a reader gets the
+ * real type — and a misspelt field is a compile error, not an `unknown`.
+ */
+export interface FindingExtras {
+  // ---- audit.ts
+  /** self-inconsistent-geometry */
+  statedH?: number; expectedH?: number | null; heightMode?: string;
+  /** small-touch-target */
+  size?: { w: number; h: number }; min?: number;
+  /** low-contrast */
+  ratio?: number; required?: number;
+  /** missing-component-states */
+  component?: string; missing?: ControlState[];
+  /** low-token-binding */
+  category?: AuditCategory;
+  /** near-duplicate-colors (the hexes, as the export spells them) */
+  colors?: string[];
+  // ---- cross-check.ts
+  /** foreign-token-library: the screen's collections the design system does not have */
+  collections?: Array<{ name: string; key?: string; twinKey?: string; twinName?: string }>;
+  /** token-name-collision */
+  token?: string; key?: string; alsoKnownAs?: string; screenValue?: Record<string, string>; designSystemValue?: Record<string, string>;
+  usedAt?: Array<{ screen: string; nodeId: string; field: string }>; scope?: string;
+  /** token-name-collision-elsewhere */
+  keys?: Array<string | undefined>; mine?: Array<string | undefined>;
+  /** unresolvable-token: names; token-absent-from-design-system: {name, near}; sentinel-token-value: the values */
+  tokens?: string[] | Array<{ name: string; near: string | null }> | SentinelTokenValue[];
+  /** catalog-rekeyed */
+  rekey?: MatchSummary; proposals?: number;
+  /** catalog-covers-nothing / partial-catalog-coverage */
+  coverage?: { distinct: number; byLocalKey: number; byKey: number; byName: number; ambiguousName?: number; localPct: number | null };
+  /** name-matched-components / ambiguous-component-name */
+  components?: Array<{ setName: string; catalogName?: string; catalogKey?: string; propOverlap?: string; verified?: false; candidates?: number }>;
+  /** font-family-stray */
+  families?: Array<{ family: string; count: number }>;
+  /** font-not-in-design-system */
+  fonts?: string[]; designSystemFonts?: string[];
+  /** text-style-absent: names; text-style-near-miss: {name, near} */
+  styles?: string[] | Array<{ name: string; near: string }>;
+  /** derived-mode-contrast */
+  mode?: string; pairs?: ContrastFailure[];
+  /** single-mode-export */
+  collection?: string; exportedMode?: string; modes?: string[];
+}
+/** One finding: severity/code/message, where it is, and its code's extras (FindingExtras). */
+export interface Finding<Code extends string = string> extends FindingExtras {
   severity: Severity;
   code: Code;
   message: string;
@@ -165,7 +226,6 @@ export interface Finding<Code extends string = string> {
   nodeName?: string;
   screen?: string;
   path?: string;
-  [extra: string]: unknown;
 }
 export type CrossCheckFinding = Finding<CrossCheckFindingCode>;
 /** audit.js findings: its own codes, plus cross-check's (merged in with `crossFile: true`). */
@@ -275,7 +335,9 @@ export type TokenKind =
 export type PlanTokenVerdict = "hidden-only" | "resolved" | "missing" | (string & {});
 export type PlanComponentVerdict = "reused" | "new" | "missing" | (string & {});
 export interface PlanTokenRow {
-  figmaName: string;
+  /** the Figma variable's name — plan-skeleton always writes it; older hand-written plans (and raw
+   *  unbound values: `null`) have none, and no row without one is compared for token identity */
+  figmaName?: string | null;
   key?: string | null;
   collection?: string | null;
   kind: TokenKind | (string & {});
@@ -284,12 +346,13 @@ export interface PlanTokenRow {
   bindings?: string[];
   sites?: { visible: number; hidden: number };
   aliasOf?: string;
-  keyCandidates?: Array<{ key?: string; collection: string; value: JsonValue }>;
+  /** `collection` is absent when the export could not name the variable's collection (variables.ts) */
+  keyCandidates?: Array<{ key?: string; collection?: string; value: JsonValue }>;
   note?: string;
   designSystem?: { match: "key" | "name"; key: string | null; value: JsonValue; agrees: boolean } | null;
-  // filled by the model / a person
+  // filled by the model / a person (plan-skeleton writes both as null; a hand-written row may omit them)
   codeToken: string | null;
-  verdict: PlanTokenVerdict | null;
+  verdict?: PlanTokenVerdict | null;
   decision?: string;
 }
 export interface PlanComponentMatch { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
@@ -303,7 +366,8 @@ export interface PlanComponentRow {
   props?: ComponentPropValues;
   catalog?: PlanComponentMatch | null;
   mapped?: { module: string | null; export: string | null; status: MapStatus | null } | null;
-  mapModule?: string;
+  /** a person's answer: the module that renders it (`null`/absent: not decided, or new) */
+  mapModule?: string | null;
   verdict?: PlanComponentVerdict | null;
   decision?: string;
   insideInstance?: string;
@@ -317,16 +381,18 @@ export interface PlanComponentRow {
 export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string }
 export interface PlanHiddenRoot { id: string; name: string; type: IrNodeType; nodes: number }
 export interface PlanDeviation { id?: string; nodeId?: string; nodeIds?: string[]; field?: string; designed?: JsonValue; built?: JsonValue; reason?: string; what?: string }
-export interface AllowedLiteral { value?: string; file?: string; reason: string }
+/** A person's exemption. Only one WITH a reason counts (verify-build.ts ignores a reasonless entry — so it may lack one). */
+export interface AllowedLiteral { value?: string; file?: string; reason?: string }
 /** Pre-filled from an audit with blockers (finding 136); overridden/reason/decidedBy/decidedAt are a person's. */
 export interface PlanAuditGate {
   auditFile: string | null;
   verdict: "blocked" | (string & {});
-  blockers: string[];
-  overridden: string[];
-  reason: string | null;
-  decidedBy: string | null;
-  decidedAt: string | null;
+  /** plan-skeleton writes every field below; a person edits them, so any may be missing (verify-build reads them defensively) */
+  blockers?: string[];
+  overridden?: string[];
+  reason?: string | null;
+  decidedBy?: string | null;
+  decidedAt?: string | null;
 }
 /** verify-build.js writes this; never `plan.status`. */
 export interface PlanHookRecord {
@@ -349,7 +415,8 @@ export interface PlanVerification {
   verifyScreenVerdict?: string | { verdict?: string };
   verdict?: string | { verdict?: string };
   hook?: PlanHookRecord;
-  [extra: string]: unknown;
+  // A model-written verification block often carries more (interactionScript, typecheck, dataDtNode,
+  // interactions, …): nothing reads those, and the hook's rewrite carries them through untouched.
 }
 export interface Plan {
   schema?: "designtwin/plan@2" | (string & {});
@@ -374,7 +441,8 @@ export interface Plan {
   counts?: { tokens: number; tokensVisible: number; instances: number; anchors: number; hiddenNodes: number };
   allowedLiterals?: AllowedLiteral[];
   verification?: PlanVerification;
-  [extra: string]: unknown;
+  // A filled plan often carries more (layout, states, assets, openQuestions, componentCatalog, …): no
+  // reader looks at those, and merge() / the hook's rewrite carry them through untouched.
 }
 
 // ================================================================ verify-screen.js

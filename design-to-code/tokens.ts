@@ -27,8 +27,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableType, VariableValue } from "./types.ts";
-import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { isTokensDoc } from "./doc-guards.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
+import { normHex } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
@@ -45,8 +49,12 @@ export interface EmitOpts extends UnitOpts {
 
 // ---- the DTCG tree this file emits (tokens.dtcg.json and every resolver set file)
 export interface DtcgDimension { value: number; unit: "px" }
+/** The DTCG Color Module colour spaces this emitter writes (the export's colorProfile decides). */
+export type DtcgColorSpace = "srgb" | "display-p3";
 /** DTCG Color Module 2025.10 structured color. */
-export interface DtcgColor { colorSpace: string; components: number[]; alpha?: number; hex?: string }
+export interface DtcgColor { colorSpace: DtcgColorSpace; components: number[]; alpha?: number; hex?: string }
+/** The DTCG 2025.10 $types this emitter writes (BOOLEAN is coerced to "string"; a length FLOAT is "dimension"). */
+export type DtcgType = "color" | "number" | "string" | "dimension";
 export type DtcgLeafValue = string | number | boolean | DtcgDimension | DtcgColor;
 export interface DtcgFigmaExtension {
   modes?: Record<string, DtcgLeafValue>;
@@ -56,7 +64,7 @@ export interface DtcgFigmaExtension {
   codeSyntax?: Variable["codeSyntax"];
   originalType?: "boolean";
 }
-export interface DtcgLeaf { $type: string; $value: DtcgLeafValue; $description?: string; $extensions?: { "figma.com": DtcgFigmaExtension } }
+export interface DtcgLeaf { $type: DtcgType; $value: DtcgLeafValue; $description?: string; $extensions?: { "figma.com": DtcgFigmaExtension } }
 export interface DtcgGroup { [key: string]: DtcgGroup | DtcgLeaf }
 /** A node in the tree is a leaf iff it carries a $value (a group never does). */
 const isLeaf = (n: DtcgGroup | DtcgLeaf | undefined): n is DtcgLeaf => n !== undefined && n.$value !== undefined;
@@ -65,7 +73,8 @@ const isLeaf = (n: DtcgGroup | DtcgLeaf | undefined): n is DtcgLeaf => n !== und
 export interface ResolverRef { $ref: string }
 export interface ResolverSet { description: string; sources: ResolverRef[]; $extensions: { "figma.com": { collection: string | null } } }
 export interface ResolverModifier { description: string; contexts: Record<string, ResolverRef[]>; default: string; $extensions: { "figma.com": { collection: string | null; defaultMode: string } } }
-export interface ResolverDoc { $schema: string; name?: string; version?: string; sets?: Record<string, ResolverSet>; modifiers?: Record<string, ResolverModifier>; resolutionOrder?: ResolverRef[] }
+/** toResolver()'s document: version, sets and resolutionOrder are always written; modifiers only when some collection has 2+ modes. */
+export interface ResolverDoc { $schema: string; name?: string; version: typeof RESOLVER_VERSION; sets: Record<string, ResolverSet>; modifiers?: Record<string, ResolverModifier>; resolutionOrder: ResolverRef[] }
 
 export interface TailwindResult { text: string; utilities: number; tokens: number; warnings: string[] }
 export interface EmitResult {
@@ -224,7 +233,7 @@ function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | und
   const pick = pool[0];
   if (warn) {
     warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' ` +
-      `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + c.collection + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+      `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
   }
   return pick;
 }
@@ -292,15 +301,9 @@ function isSentinel(v: Variable | null | undefined, raw: unknown): boolean {
 }
 const webNumber = (v: Variable, raw: VariableValue): VariableValue => (isSentinel(v, raw) ? WEB_FULL_ROUND : raw);
 
-// --- color: accept #rgb / #rgba / #rrggbb / #rrggbbaa; normalize to 6- or 8-digit lowercase. ---
-function normHex(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const h = v.replace(/^#/, "");
-  if (!/^[0-9a-fA-F]+$/.test(h)) return null;
-  const e = (h.length === 3 || h.length === 4) ? h.split("").map((c) => c + c).join("") : h;
-  return (e.length === 6 || e.length === 8) ? e.toLowerCase() : null;
-}
+// --- color: color.ts normHex (optional #, 3/4/6/8 digits -> "#rrggbb" / "#rrggbbaa"). ---
 const isHexish = (v: unknown): v is string => typeof v === "string" && /^#/.test(v);
+const isScalar = (v: unknown): v is string | number | boolean => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
 
 // --- CSS string safety. A custom-property value is a token stream, so a STRING token can break out of
@@ -357,21 +360,29 @@ function cssEscapeText(s: string): string {
   return out;
 }
 
+// The plugin writes Figma's documentColorProfile lowercased: "display_p3" (underscore — the Plugin API's
+// DISPLAY_P3). "display-p3" (DTCG's own spelling) is accepted too, for hand-written token files.
+const isP3 = (colorProfile: string | undefined): boolean => colorProfile === "display_p3" || colorProfile === "display-p3";
 function hexToColorValue(hex: unknown, colorProfile?: string): DtcgColor | null {
   const e = normHex(hex);
   if (!e) return null;
   const n = (i: number): number => parseInt(e.slice(i, i + 2), 16) / 255;
-  const value: DtcgColor = { colorSpace: colorProfile === "display-p3" ? "display-p3" : "srgb", components: [round(n(0)), round(n(2)), round(n(4))] };
+  const value: DtcgColor = { colorSpace: isP3(colorProfile) ? "display-p3" : "srgb", components: [round(n(1)), round(n(3)), round(n(5))] };
   // DTCG Color Module 2025.10: opacity lives in `alpha`; the `hex` fallback MUST be 6-digit
   // ("to avoid conflicts with the provided alpha value"). An 8-digit hex fallback is non-conformant.
-  if (e.length === 8) value.alpha = round(n(6));
-  value.hex = "#" + e.slice(0, 6);
+  if (e.length === 9) value.alpha = round(n(7));
+  value.hex = e.slice(0, 7);
   return value;
 }
 
 // DTCG 2025.10 $type mapping. `string` became a primitive type in 2025.10 (so STRING is no longer
 // typeless). BOOLEAN has NO DTCG type — handled separately (a typeless token is INVALID per spec).
-const DTCG_TYPE: Partial<Record<VariableType, string>> = { COLOR: "color", FLOAT: "number", STRING: "string" };
+const DTCG_TYPE: Partial<Record<VariableType, DtcgType>> = { COLOR: "color", FLOAT: "number", STRING: "string" };
+// The variable types every emitter here writes. Anything else — EASING / TIMING variables, whose
+// per-mode values are motion OBJECTS, not scalars — is skipped: toDTCG/toResolver say so (a warning
+// per token), toCSS/theme.css leave it out, tokens-native.ts skips it with its own warning.
+const EMITTED_TYPES: ReadonlySet<string> = new Set<VariableType>(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
+const emitted = (v: Variable): boolean => EMITTED_TYPES.has(v.type);
 
 // Returns a string by its own contract (`modes[0]` — "any present mode"); a variable with no values at
 // all yields undefined at runtime exactly as the JS did, and every caller tolerates that lookup.
@@ -393,8 +404,10 @@ function baseValue(variable: Variable, collections: VariableCollection[] | undef
 
 // `dimension`: the FLOAT is a length (see unitDecision) — DTCG 2025.10 requires the object form
 // {value, unit:"px"|"rem"} for $type "dimension"; a bare number there is non-conformant.
-function dtcgValue(raw: VariableValue, colorProfile: string | undefined, dimension: boolean, ref?: (name: string) => string): DtcgLeafValue {
+// Only a scalar or an alias has a DTCG value here: an object (a motion value) is null — never "[object Object]".
+function dtcgValue(raw: VariableValue, colorProfile: string | undefined, dimension: boolean, ref?: (name: string) => string): DtcgLeafValue | null {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
+  if (!isScalar(raw)) return null;
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
     return Number.isFinite(n) ? { value: n, unit: "px" } : raw;
@@ -439,6 +452,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
   };
   for (const v of (designSystem && designSystem.variables) || []) {
     if (!segs(v.name).length) { warn(`variable with empty/degenerate name skipped: '${v.name}'`); continue; }
+    if (!emitted(v)) { warn(`token '${v.name}' is a ${v.type} variable — its values are not colours, numbers or strings, so no DTCG token is emitted for it (skipped)`); continue; }
     if (!plan.canonical.has(v)) continue; // the same variable twice, or an identical twin — emitted once, reported by planIds
     const path = plan.id(v)!.split(DTCG_SEP); // canonical ⇒ planned ⇒ it has an id
     // Reserved keys would let a token name walk into / write onto Object.prototype (prototype pollution)
@@ -478,7 +492,9 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
     const aliasRef = ref(v);
-    let value = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    const dv = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    if (dv === null) { warn(`token '${v.name}' has a non-scalar value ${JSON.stringify(bv)} — skipped`); continue; }
+    let value = dv;
     if (v.type === "BOOLEAN") {
       // DTCG 2025.10 has no boolean type, and a token with no resolvable $type is INVALID. Coerce to a
       // string token ("true"/"false"); the origin is recorded under $extensions so it round-trips.
@@ -500,7 +516,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     // — which, unlike an object literal, creates a REAL own "__proto__" key. On a plain object
     // `modes["__proto__"] = {...}` sets the prototype instead of an own key, so the mode vanished from
     // the emitted JSON with no warning. Same hardening as toDTCG's reserved-key guard on token NAMES.
-    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) if (values[m] !== undefined) modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); ext.modes = modes; }
+    if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) { const mv = values[m] === undefined ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); if (mv !== null) modes[m] = mv; } ext.modes = modes; }
     // The key is the variable's identity (the name is not unique — see planIds), so it travels with
     // the token: a consumer can always get back from an emitted name to the one Figma variable.
     if (typeof v.key === "string" && v.key) ext.key = v.key;
@@ -590,7 +606,7 @@ function numberUnit(variable: Variable, opts?: UnitOpts): string {
 function cssValue(raw: VariableValue, unit: string, ref?: (name: string) => string): string {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
   const e = isHexish(raw) ? normHex(raw) : null;
-  if (e) return "#" + e;
+  if (e) return e;
   const fmtNum = (s: string): string => (s === "0" ? "0" : unit ? s + unit : s); // 0 stays unitless; String(0) === "0"
   if (typeof raw === "number") return fmtNum(String(raw));
   if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw)) return fmtNum(raw); // string-number FLOAT
@@ -628,6 +644,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   const perMode: Record<string, Map<string, string>> = nullProto();
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
+    if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
     if (!plan.canonical.has(v)) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
@@ -695,7 +712,7 @@ function twName(v: Variable, opts?: EmitOpts): string {
 const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
 function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test(String(v.collection) + "/" + v.name) ? "fontFamily" : null;
+  if (v.type === "STRING") return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
   if (v.type !== "FLOAT") return null;
   if (unitDecision(v, opts) !== "px") return null; // unitless: opacity/weight — no Tailwind namespace fits
   const scopes = v.scopes || [];
@@ -703,7 +720,7 @@ function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
-  if (!narrowed && /font.?size|text.?size|type.?size/i.test(String(v.collection) + "/" + v.name)) return "fontSize";
+  if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
   return "dimension";
 }
 
@@ -723,6 +740,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
+    if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
     if (!plan.canonical.has(v)) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
@@ -920,12 +938,14 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
   // override any tokens that came before them".
   for (const r of modifierRefs) resolutionOrder.push(r);
 
-  const resolver: ResolverDoc = { $schema: RESOLVER_SCHEMA };
-  if (ds.file) resolver.name = String(ds.file); // optional, but the filename alone rarely says which Figma file
-  resolver.version = RESOLVER_VERSION; // REQUIRED, MUST be "2025.10"
-  resolver.sets = sets;
-  if (Object.keys(modifiers).length) resolver.modifiers = modifiers; // omitted rather than empty: nothing to condition on
-  resolver.resolutionOrder = resolutionOrder; // REQUIRED
+  const resolver: ResolverDoc = {
+    $schema: RESOLVER_SCHEMA,
+    ...(ds.file ? { name: String(ds.file) } : {}), // optional, but the filename alone rarely says which Figma file
+    version: RESOLVER_VERSION, // REQUIRED, MUST be "2025.10"
+    sets,
+    ...(Object.keys(modifiers).length ? { modifiers } : {}), // omitted rather than empty: nothing to condition on
+    resolutionOrder, // REQUIRED
+  };
   return { resolver, files };
 }
 
@@ -1027,7 +1047,7 @@ function emitTokens(designSystem: TokensDoc | null | undefined, opts?: EmitOpts)
 export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, TW_PREFIX, WEB_FULL_ROUND };
 // tokens-native.ts must agree with this file on names, default modes, aliases and units, so it is
 // built FROM these helpers (see the note at its top on why it does not import this file back).
-const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel });
+const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel });
 export { toNative, platformOf, PLATFORMS };
 
 // CLI: node design-to-code/tokens.ts <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]
@@ -1038,35 +1058,30 @@ export { toNative, platformOf, PLATFORMS };
 // and has no `variables` array (see bridge/design-system-layout.js).
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const args = process.argv.slice(2);
-  const flag = (name: string): string | undefined => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined ? "" : v; };
-  const native = flag("--native");
-  const web = flag("--web");
-  const kotlinPackage = flag("--package");
-  const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
-  const input = args[0];
-  const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.ts <design-system/tokens.json | design/variables.json> [outDir]\n" +
+  const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]\n` +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
     "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +
     "       Without a target flag, only the generic set is written (unchanged).";
-  if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
-  const stray = args.filter((a) => a.startsWith("-"));
-  if (stray.length) { console.error(`tokens: unknown flag ${stray.join(", ")}\n${USAGE}`); process.exit(1); }
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, () => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); process.exit(0); }
+  const { native, web, package: kotlinPackage } = flags;
+  const alsoGeneric = !!flags["also-generic"];
+  const input = positionals[0];
+  const outDir = positionals[1] || ".";
   if (!input) { console.error(USAGE); process.exit(1); }
   if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
   const WEB_TARGETS: Record<string, string> = { tailwind: "theme.css", "web-tailwind": "theme.css" }; // build-screen's profile name works too
   if (web !== undefined && !WEB_TARGETS[web]) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); process.exit(1); }
-  const doc = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
-  assertNotManifest(doc, input, "variables", "design-system/tokens.json");
-  // Past the manifest guard the file is one this repo's own writers produced (design-system/tokens.json
-  // or a merged variables.json), so it is read as the shape it was written in — the emitters tolerate
-  // a missing `variables`/`collections` exactly as the JS did.
-  const ds = doc as TokensDoc;
+  // The SPLIT token file (or a merged variables.json): the manifest is refused with its own message, and
+  // anything else that is not a token catalog is a one-line error — never an empty token set.
+  const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
   // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
   // across every output it touches, naming the screen(s) each colliding variable came from.
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: sourcesOf(ds, input, fs, path) });
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: sourcesOf(ds, input) });
   // finding 225: a --web/--native target used to get the generic set (dtcg/css/resolver/tokens/)
   // written on top of it unconditionally, with no indication of which file the app actually
   // consumes. Now: a target selected -> ONLY that target's file(s) are written to outDir, unless

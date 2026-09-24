@@ -9,8 +9,11 @@
 //
 // Resolution mirrors drift-lint's identity rule (key is the stable identity, then id, then name) so the
 // same handle that drift-lint or map-bootstrap printed for a component also works here.
-import fs from "node:fs";
 import path from "node:path";
+import { isComponentDetailFile, isComponentsCatalog } from "./doc-guards.ts";
+import type { DocGuard } from "./doc-guards.ts";
+import { anyJson, readJson } from "./read-json.ts";
+import { scriptCmd } from "./cli-args.ts";
 import { assertNotManifest } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
@@ -50,11 +53,21 @@ function resolveVariantsFile(catalogFile: string, variantsFile: string): string 
   return path.join(root, variantsFile);
 }
 
+// Throws a one-line Error for a file that is missing, not JSON, or not the kind of document it should
+// be (the CLI prints it; the MCP server's design_get_component returns it as the tool error).
+function readOrThrow<T>(file: string, guard: DocGuard<T>): T {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  throw new Error(`'${file}' ${r.error}`);
+}
+
 function getComponent(catalogFile: string, handle: string): GetComponentResult {
-  // Both files are this repo's own writer's output (bridge/design-system-layout.js), read as the shape
-  // they were written in; assertNotManifest refuses the one wrong file people pass here.
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8")) as ComponentsCatalog;
-  assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
+  // assertNotManifest refuses the one wrong file people pass here, with its own explanation, before
+  // the catalog's shape is checked.
+  const raw = readOrThrow(catalogFile, anyJson);
+  assertNotManifest(raw, catalogFile, "components", "design-system/components.local.json");
+  if (!isComponentsCatalog(raw)) throw new Error(`'${catalogFile}' is not ${isComponentsCatalog.expected}`);
+  const catalog = raw;
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
   // A standalone COMPONENT's node tree lives under nodeFile (no variants array to hang it off);
@@ -62,7 +75,7 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
   const pointer = comp.variantsFile || comp.nodeFile;
   if (!pointer) return { found: true, component: comp, detail: null }; // no exported node tree for this entry
   const detailPath = resolveVariantsFile(catalogFile, pointer);
-  const detail = JSON.parse(fs.readFileSync(detailPath, "utf8")) as ComponentDetailFile;
+  const detail = readOrThrow(detailPath, isComponentDetailFile);
   return { found: true, component: comp, detail, detailPath };
 }
 
@@ -72,7 +85,7 @@ export { getComponent, findComponent, resolveVariantsFile };
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
-    console.error("usage: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>");
+    console.error(`usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`);
     process.exit(2);
   }
   try {

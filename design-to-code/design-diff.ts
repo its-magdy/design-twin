@@ -40,8 +40,15 @@ import type {
   EffectStyle, FieldDiff, GridStyle, HygieneDiff, HygieneDoc, IrNode, ManifestDiff, PaintStyle, ScreenDiff, ScreenDoc, StyleBrief, StylesDiff,
   StylesDoc, TextStyle, TokensDiff, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
-import { bag } from "./types.ts";
+import { bag, isJsonObject } from "./types.ts";
+import { isLayerFile, isScreenExport, manifestOf, screenRoots } from "./export-shape.ts";
 import { readJsonFile } from "./catalog-input.ts";
+import { isComponentsCatalog, isStringRecord, isTokensDoc } from "./doc-guards.ts";
+import type { DocGuard } from "./doc-guards.ts";
+import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { isStringArray } from "../bridge/src/json-util.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -63,11 +70,12 @@ const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"],
 };
-// Object.entries widens CATEGORY's keys to string; they are the DiffCategory keys declared just above.
-const CATEGORY_OF = new Map((Object.entries(CATEGORY) as Array<[DiffCategory, string[]]>).flatMap(([cat, fields]) => fields.map((f): [string, DiffCategory] => [f, cat])));
+// Object.keys widens CATEGORY's keys to string; the guard narrows them back (each IS a key of CATEGORY).
+const isDiffCategory = (k: string): k is DiffCategory => Object.hasOwn(CATEGORY, k);
+const CATEGORY_OF = new Map<string, DiffCategory>();
+for (const cat of Object.keys(CATEGORY)) if (isDiffCategory(cat)) for (const f of CATEGORY[cat] || []) CATEGORY_OF.set(f, cat);
 const IGNORED = new Set(["children", "box", "renderBox", "id", "css", "measurements", "pluginData", "sharedData"]);
 
-const roots = (doc: ScreenDoc): IrNode[] => (Array.isArray(doc.nodes) ? doc.nodes : doc.tree && typeof doc.tree === "object" ? [doc.tree] : []);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const brief = (v: unknown): string | undefined => { const s = typeof v === "string" ? v : JSON.stringify(v); return s === undefined ? undefined : s.length > 160 ? s.slice(0, 157) + "…" : s; };
 
@@ -103,7 +111,7 @@ function index(doc: ScreenDoc): Map<string, IndexEntry> {
     out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
     for (const k of kids) walk(k, String(node.id), here);
   };
-  for (const r of roots(doc)) walk(r, null, []);
+  for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
 }
 
@@ -164,7 +172,7 @@ function diffScreens(oldDoc: ScreenDoc, newDoc: ScreenDoc, opts: { redrawn?: Set
     if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, bag(oldDoc)[key], bag(newDoc)[key], "document"));
   }
   const warnings: string[] = [];
-  const trunc = truncatedOf(newDoc.manifest);
+  const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) — anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
   return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
 }
@@ -302,28 +310,37 @@ function diffManifest(oldDoc: DesignSystemManifest | null | undefined, newDoc: D
   return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
 }
 
-// The kind sniffers take the parsed file as `unknown` (a user-named path) and narrow it to the document
-// type its shape proves; each is the same duck-type test the JS ran.
-const isTokens = (doc: unknown): doc is TokensDoc => !!doc && typeof doc === "object" && "variables" in doc && Array.isArray(doc.variables);
-const isCatalog = (doc: unknown): doc is ComponentsCatalog => !!doc && typeof doc === "object" && "components" in doc && Array.isArray(doc.components);
+// Which kind of file is this? Each sniffer is the same "has the payload array" test the JS ran; the
+// matching doc-guards.ts guard then checks the payload, so a token file with a broken row is reported as
+// exactly that — not as "nothing here can be diffed" and not as a TypeError inside the diff.
+const hasArray = (doc: unknown, key: string): boolean => isJsonObject(doc) && Array.isArray(doc[key]);
 // Checked AFTER tokens/catalog/styles/hygiene (none of which this can also match — none of THEM carry
 // both `counts` and `files` as plain objects) so ordering is safe either way, but kept last among the
 // design-system kinds since it is the least specific shape (an object with two nested objects).
-const isManifest = (doc: unknown): doc is DesignSystemManifest => !!doc && typeof doc === "object"
-  && "counts" in doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts)
-  && "files" in doc && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
-const isStyles = (doc: unknown): doc is StylesDoc => !!doc && typeof doc === "object" && "styles" in doc && Array.isArray(doc.styles);
-const isHygiene = (doc: unknown): doc is HygieneDoc => !!doc && typeof doc === "object" && "hygiene" in doc && Array.isArray(doc.hygiene);
-const isScreen = (doc: unknown): doc is ScreenDoc => !!doc && typeof doc === "object" && (("nodes" in doc && Array.isArray(doc.nodes)) || ("tree" in doc && !!doc.tree && typeof doc.tree === "object"));
+const isManifest = (doc: unknown): doc is DesignSystemManifest => isJsonObject(doc) && isJsonObject(doc.counts) && isJsonObject(doc.files);
+const isStyles = (doc: unknown): doc is StylesDoc => isJsonObject(doc) && Array.isArray(doc.styles) && doc.styles.every((st) => isJsonObject(st) && typeof st.name === "string");
+isStyles.expected = "a style sheet: an object with a `styles` array of {name, key?, …}";
+const isHygiene = (doc: unknown): doc is HygieneDoc => isJsonObject(doc) && isStringArray(doc.hygiene);
+isHygiene.expected = "hygiene.json: an object with a `hygiene` array of strings";
+// A screen export or a layer file — NOT a bare node tree: every other kind here is also "an object with
+// an id and a type" often enough (a catalog variant's node) that a bare tree is not diffed as a screen.
+const isScreen = (doc: unknown): doc is ScreenDoc => isScreenExport(doc) || isLayerFile(doc);
+isScreen.expected = "a screen export: an object whose `nodes` is an array of nodes {id, type, …}, or a layer file whose `tree` is one";
+// The sniffed kind's guard, or a one-line reason.
+function checked<T>(doc: unknown, guard: DocGuard<T>): T {
+  if (guard(doc)) return doc;
+  throw new Error(`is not ${guard.expected || "a document of that kind"}`);
+}
 function diffDocs(oldDoc: unknown, newDoc: unknown, opts?: { redrawn?: Set<string> }): DiffReport {
-  // The baseline is read as the kind the CURRENT file proved to be — the JS duck-typed both sides the
-  // same way (a baseline of another kind simply diffs as "everything added"), so it is cast, not re-sniffed.
-  if (isTokens(newDoc)) return diffTokens(oldDoc as TokensDoc, newDoc);
-  if (isCatalog(newDoc)) return diffCatalog(oldDoc as ComponentsCatalog, newDoc);
-  if (isStyles(newDoc)) return diffStyles(oldDoc as StylesDoc, newDoc);
-  if (isHygiene(newDoc)) return diffHygiene(oldDoc as HygieneDoc, newDoc);
-  if (isScreen(newDoc)) return diffScreens(oldDoc as ScreenDoc, newDoc, opts);
-  if (isManifest(newDoc)) return diffManifest(oldDoc as DesignSystemManifest, newDoc);
+  // The baseline is read as the kind the CURRENT file proved to be. A baseline of another kind (or none
+  // at all — a null, a truncated file) diffs as "everything added", as the header promises: each branch
+  // hands the diff an EMPTY document of the current kind rather than casting whatever the baseline was.
+  if (hasArray(newDoc, "variables")) return diffTokens(isTokensDoc(oldDoc) ? oldDoc : {}, checked(newDoc, isTokensDoc));
+  if (hasArray(newDoc, "components")) return diffCatalog(isComponentsCatalog(oldDoc) ? oldDoc : { components: [] }, checked(newDoc, isComponentsCatalog));
+  if (hasArray(newDoc, "styles")) return diffStyles(isStyles(oldDoc) ? oldDoc : { styles: [] }, checked(newDoc, isStyles));
+  if (hasArray(newDoc, "hygiene")) return diffHygiene(isHygiene(oldDoc) ? oldDoc : { hygiene: [] }, checked(newDoc, isHygiene));
+  if (hasArray(newDoc, "nodes") || (isJsonObject(newDoc) && isJsonObject(newDoc.tree))) return diffScreens(isScreen(oldDoc) ? oldDoc : { nodes: [] }, checked(newDoc, isScreen), opts);
+  if (isManifest(newDoc)) return diffManifest(isManifest(oldDoc) ? oldDoc : null, newDoc);
   throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) — nothing here can be diffed");
 }
 function markdown(d: DiffReport, label: string): string {
@@ -400,7 +417,7 @@ function hashAssetBytes(fileName: string, buf: Buffer | string): string {
 function assetPaths(doc: ScreenDoc): string[] {
   const out = new Set<string>();
   const walk = (n: IrNode): void => { if (!n || typeof n !== "object") return; if (typeof n.asset === "string") out.add(n.asset); for (const k of Array.isArray(n.children) ? n.children : []) walk(k); };
-  for (const r of roots(doc)) walk(r);
+  for (const r of screenRoots(doc)) walk(r);
   return [...out];
 }
 // Asset paths are relative to the export root (design/), which may be several directories above a page file.
@@ -440,12 +457,18 @@ function redrawnAssets(file: string, newDoc: ScreenDoc, prev: Baseline, cwd: str
 
 // See the header: drop a baseline that IS the current export, then the most recent one wins.
 function previous(file: string, against: string | undefined, cwd: string = process.cwd(), current: unknown = null): Baseline | null {
-  if (against) return { doc: JSON.parse(fs.readFileSync(against, "utf8")) as unknown, source: against, kind: "file", notes: [] };
+  if (against) {
+    // A baseline the user NAMED must be there and be JSON: exit-2 one-liner otherwise (catalog-input.ts).
+    return { doc: readJsonFile(against, "baseline (--against)"), source: against, kind: "file", notes: [] };
+  }
   const found: Array<Omit<Baseline, "notes">> = [];
   const snap = snapshotPath(file, cwd);
   if (fs.existsSync(snap)) {
-    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json", "utf8")) as Record<string, string>; } catch { /* older snapshot, or no assets */ }
-    found.push({ doc: JSON.parse(fs.readFileSync(snap, "utf8")) as unknown, source: path.relative(cwd, snap), kind: "snapshot", assets });
+    const assets = readJsonOrNull(snap + ".assets.json", isStringRecord); // null: an older snapshot, or no assets
+    const r = readJson(snap, anyJson);
+    // The snapshot is the baseline this command exists for: a corrupt one is said, not diffed as "no baseline".
+    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} — re-take it with --snapshot --force, or pass --against <an older copy>`);
+    found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
   // Finding 322: `--snapshot --force` keeps the baseline it is about to replace as `<name>.prev`
   // (design-to-code/design-diff.ts's own --snapshot handler) specifically so it stays available as a
@@ -456,13 +479,15 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   // baseline — leaving `.prev` (B0) as the only genuinely older copy, which used to go unmentioned and
   // unused ("There is no OLDER export to compare against" while it sat right there).
   if (fs.existsSync(snap + ".prev")) {
-    let assets: Record<string, string> | null = null; try { assets = JSON.parse(fs.readFileSync(snap + ".assets.json.prev", "utf8")) as Record<string, string>; } catch { /* no assets sidecar was kept */ }
-    try { found.push({ doc: JSON.parse(fs.readFileSync(snap + ".prev", "utf8")) as unknown, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); } catch { /* corrupt .prev — ignore rather than fail the whole diff */ }
+    const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord); // null: no assets sidecar was kept
+    const r = readJson(snap + ".prev", anyJson);
+    if ("doc" in r) found.push({ doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets }); // a corrupt .prev is ignored rather than failing the whole diff
   }
   try {
     const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
-    found.push({ doc: JSON.parse(text) as unknown, source: "git HEAD", kind: "git" });
+    const doc: unknown = JSON.parse(text);
+    found.push({ doc, source: "git HEAD", kind: "git" });
   } catch { /* not a repo, or not committed */ }
   if (!found.length) return null;
   // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged
@@ -543,14 +568,13 @@ function siblingFilesOf(f: string): string[] {
 }
 
 function main(argv: string[]): void {
-  const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
+  const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json>... [--force]\n       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); process.exit(argv.length ? 0 : 2); }
-  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
-  const unknown = argv.filter((a) => a.startsWith("-") && !KNOWN.includes(a));
-  if (unknown.length) { console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})\n${USAGE}`); process.exit(2); }
-  if (argv[0] === "--snapshot") {
-    const force = argv.includes("--force");
-    const requested = argv.slice(1).filter((a) => a !== "--force");
+  const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.snapshot) {
+    const force = !!flags.force;
+    const requested = positionals;
     if (!requested.length) { console.error(USAGE); process.exit(2); }
     // Finding 206: a snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
     // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
@@ -600,36 +624,37 @@ function main(argv: string[]): void {
       // pages/index.json or a .vars.json/.assets.json copy is JSON but has none, and would otherwise
       // get a spurious empty "<name>.assets.json" sidecar written beside its own real content.
       try {
-        const parsed: unknown = JSON.parse(fs.readFileSync(f, "utf8"));
-        if (isScreen(parsed)) {
+        const parsed = readJsonOrNull(f, isScreen); // not a screen, or not JSON we understand: no sidecar
+        if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
           fs.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
-      } catch { /* not JSON we understand — the copy is still the snapshot */ }
+      } catch { /* the sidecar could not be written — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
     if (refused) process.exitCode = 1; // exitCode, not exit(): let every already-printed line flush first
     return;
   }
-  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i < 0) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
-  const against = take("--against"), out = take("--out");
-  const json = argv.includes("--json");
-  const file = argv.find((a) => !a.startsWith("--"));
+  const { against, out } = flags;
+  const json = !!flags.json;
+  const file = positionals[0];
   if (!file) { console.error(USAGE); process.exit(2); }
   const current = readJsonFile(file, "export");
-  const prev = previous(file, against, process.cwd(), current);
+  const failed = (e: unknown): never => {
+    // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
+    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
+    console.error(`design-diff: ${file}: ${String(message)}`); process.exit(2);
+  };
+  let prev: Baseline | null = null;
+  try { prev = previous(file, against, process.cwd(), current); } catch (e) { failed(e); }
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against — no snapshot in design/.sync/, and it is not committed in git.\nNext time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
     process.exit(2);
   }
   let diff: DiffReport;
   try { diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : new Set() }); }
-  catch (e) {
-    // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
-    const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-    console.error(`design-diff: ${file}: ${String(message)}`); process.exit(2);
-  }
+  catch (e) { return failed(e); }
   diff.warnings = [...prev.notes, ...(diff.warnings || [])];
   // `warned`/`baseline` let a script decide "should I trust this diff" without re-parsing the markdown
   // or counting `warnings.length` itself — the same two facts `tokens.json`'s human-readable warnings

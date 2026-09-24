@@ -1,30 +1,53 @@
 // GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.
 
 
-// design-to-code/catalog-input.ts
+// design-to-code/cli-args.ts
+var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+
+// design-to-code/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
-// design-to-code/catalog-input.ts
-function readJsonFile(file, what, hint) {
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
   let raw;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-    process.exit(2);
+    return readFailure(e);
   }
+  let parsed;
   try {
-    return JSON.parse(raw);
+    const value = JSON.parse(raw);
+    parsed = value;
   } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
-    process.exit(2);
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
   }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  process.exit(2);
 }
 
 // bridge/src/is-main.ts
@@ -179,9 +202,10 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
+isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const file = process.argv[2];
-  const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
+  const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
   if (file === "--help" || file === "-h") {
     console.log(USAGE);
     process.exit(0);

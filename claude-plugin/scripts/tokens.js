@@ -3,17 +3,53 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 
-// design-to-code/catalog-input.ts
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    return readFailure(e);
+  }
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
 // design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
-  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
 function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
   if (isManifest(doc, payloadKey)) {
@@ -26,43 +62,187 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
   }
 }
 function readJsonFile(file, what, hint) {
-  let raw;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-    process.exit(2);
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
-    process.exit(2);
-  }
+  process.exit(2);
+}
+function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const doc = readJsonFile(file, what, hint);
+  assertNotManifest(doc, file, payloadKey, wantFile);
+  if (guard(doc)) return doc;
+  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
+  process.exit(2);
 }
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+function isVerifyMeasured(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cli-args.ts
+import { parseArgs } from "node:util";
+var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+function errCode(e) {
+  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  try {
+    return parse();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args: argv, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
+  }
+}
+
+// design-to-code/tokens.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
 // design-to-code/slice-sources.ts
-function sourcesOf(doc, docPath, fs4, path2) {
+import path from "node:path";
+function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
     if (typeof key !== "string" || !key || !screen) return;
-    if (!out.has(key)) out.set(key, []);
-    if (!out.get(key).includes(screen)) out.get(key).push(screen);
+    const list = out.get(key) || [];
+    if (!list.includes(screen)) list.push(screen);
+    out.set(key, list);
   };
-  const base = docPath ? path2.dirname(docPath) : ".";
+  const base = docPath ? path.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
-    if (typeof sl.file === "string" && fs4 && path2) {
-      try {
-        const slice = JSON.parse(fs4.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
-        for (const v of slice.variables || []) add(v && v.key, sl.screen);
+    if (typeof sl.file === "string") {
+      const slice = readJsonOrNull(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      if (slice) {
+        for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
-      } catch (_) {
       }
     }
     if (!read) for (const k of Array.isArray(sl.keys) ? sl.keys : []) add(k, sl.screen);
@@ -71,14 +251,24 @@ function sourcesOf(doc, docPath, fs4, path2) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v && v.key, path2.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path.basename(docPath, ".vars.json"));
   }
   return out;
 }
 
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const m = HEX.exec(v.trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
-function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2 }) {
+function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2 }) {
   const PLATFORMS2 = {
     swiftui: { file: "DesignTokens.swift" },
     compose: { file: "DesignTokens.kt" },
@@ -103,7 +293,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
   function isFontSize(v) {
     const scopes = v.scopes || [];
     if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-    return /font.?size|text.?size|type.?size/i.test(v.collection + "/" + v.name);
+    return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
   }
   function kindOf(v, opts) {
     if (v.type === "COLOR") return "color";
@@ -112,11 +302,12 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
     if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
     return null;
   }
+  const isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
   function resolve(byName, collections, v, mode, seen) {
     const values = v.values || {};
     let raw = values[mode];
     if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
-    if (!isAlias2(raw)) return raw;
+    if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
     const target = byName.get(raw.aliasOf);
     if (!target || seen && seen.has(target.name)) return void 0;
     const next = new Set(seen || []).add(v.name);
@@ -133,20 +324,24 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
       const mine = vars.filter((v) => v.collection === c.name);
       const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
       if (!mine.length || !modeNames.length) continue;
-      let type = pascal([c.name]) + "Tokens";
-      for (let n = 2; typeNames.has(type); n++) type = pascal([c.name]) + "Tokens" + n;
+      let type = `${pascal([c.name])}Tokens`;
+      for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
       typeNames.add(type);
       const ids = /* @__PURE__ */ new Set();
       const fields = [];
       const cands = [];
       for (const v of mine) {
         const kind = kindOf(v, opts);
-        if (!kind || !segs2(v.name).length) continue;
+        if (!segs2(v.name).length) continue;
+        if (!kind) {
+          warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
+          continue;
+        }
         const values = {};
         let ok = true;
         for (const m of modeNames) {
           const r = resolve(byName, collections, v, m);
-          if (r === void 0 || kind === "color" && !normHex2(r)) {
+          if (r === void 0 || kind === "color" && !normHex(r)) {
             ok = false;
             break;
           }
@@ -220,9 +415,14 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
   };
   const str = (raw) => JSON.stringify(String(raw));
   const bool = (raw) => String(raw === true || raw === "true");
+  const hexOf = (raw) => {
+    const h = normHex(raw);
+    if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`);
+    return h;
+  };
   const argb = (raw) => {
-    const h = normHex2(raw);
-    return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase();
+    const h = hexOf(raw);
+    return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase();
   };
   const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json \u2014 do not edit by hand; re-run after a token pull.";
   function compose(cols, opts) {
@@ -267,8 +467,8 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
     const lit = (k, r) => {
       if (r === FULL) return ".infinity";
       if (k === "color") {
-        const h = normHex2(r);
-        return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`;
+        const h = hexOf(r);
+        return `Color(.sRGB, red: ${chan(h, 1)}, green: ${chan(h, 3)}, blue: ${chan(h, 5)}, opacity: ${h.length === 9 ? chan(h, 7) : "1"})`;
       }
       return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
     };
@@ -352,7 +552,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
   }
   function reactNative(cols) {
     const T = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-    const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str("#" + normHex2(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+    const lit = (k, r) => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
     const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
     for (const c of cols) {
       const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
@@ -403,11 +603,6 @@ function isMainFallback(metaUrl) {
   } catch {
     return false;
   }
-}
-
-// bridge/src/json-util.ts
-function nullProto() {
-  return /* @__PURE__ */ Object.create(null);
 }
 
 // design-to-code/tokens.ts
@@ -509,7 +704,7 @@ function aliasTarget(plan, name, referrer, warn) {
   const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
   const pick = pool[0];
   if (warn) {
-    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + c.collection + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
   }
   return pick;
 }
@@ -556,14 +751,8 @@ function isSentinel(v, raw) {
   return Number.isFinite(n) && Math.abs(n) >= SENTINEL_MIN && isRadiusVar(v);
 }
 var webNumber = (v, raw) => isSentinel(v, raw) ? WEB_FULL_ROUND : raw;
-function normHex(v) {
-  if (typeof v !== "string") return null;
-  const h = v.replace(/^#/, "");
-  if (!/^[0-9a-fA-F]+$/.test(h)) return null;
-  const e = h.length === 3 || h.length === 4 ? h.split("").map((c) => c + c).join("") : h;
-  return e.length === 6 || e.length === 8 ? e.toLowerCase() : null;
-}
 var isHexish = (v) => typeof v === "string" && /^#/.test(v);
+var isScalar = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
 var CSS_UNSAFE = /[\\\n\r\f;{}]/g;
 var hexEsc = (c) => "\\" + c.codePointAt(0).toString(16) + " ";
@@ -590,16 +779,19 @@ function cssEscapeText(s) {
   if (cssUnbalanced(raw)) out = out.replace(/[()"']/g, hexEsc);
   return out;
 }
+var isP3 = (colorProfile) => colorProfile === "display_p3" || colorProfile === "display-p3";
 function hexToColorValue(hex, colorProfile) {
   const e = normHex(hex);
   if (!e) return null;
   const n = (i) => parseInt(e.slice(i, i + 2), 16) / 255;
-  const value = { colorSpace: colorProfile === "display-p3" ? "display-p3" : "srgb", components: [round(n(0)), round(n(2)), round(n(4))] };
-  if (e.length === 8) value.alpha = round(n(6));
-  value.hex = "#" + e.slice(0, 6);
+  const value = { colorSpace: isP3(colorProfile) ? "display-p3" : "srgb", components: [round(n(1)), round(n(3)), round(n(5))] };
+  if (e.length === 9) value.alpha = round(n(7));
+  value.hex = e.slice(0, 7);
   return value;
 }
 var DTCG_TYPE = { COLOR: "color", FLOAT: "number", STRING: "string" };
+var EMITTED_TYPES = /* @__PURE__ */ new Set(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
+var emitted = (v) => EMITTED_TYPES.has(v.type);
 function defaultModeName(variable, collections) {
   const c = (collections || []).find((x) => x.name === variable.collection);
   const modes = variable.values ? Object.keys(variable.values) : [];
@@ -615,6 +807,7 @@ function baseValue(variable, collections, def) {
 }
 function dtcgValue(raw, colorProfile, dimension, ref) {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
+  if (!isScalar(raw)) return null;
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
     return Number.isFinite(n) ? { value: n, unit: "px" } : raw;
@@ -652,9 +845,13 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       warn(`variable with empty/degenerate name skipped: '${v.name}'`);
       continue;
     }
+    if (!emitted(v)) {
+      warn(`token '${v.name}' is a ${v.type} variable \u2014 its values are not colours, numbers or strings, so no DTCG token is emitted for it (skipped)`);
+      continue;
+    }
     if (!plan.canonical.has(v)) continue;
-    const path2 = plan.id(v).split(DTCG_SEP);
-    if (path2.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    const path3 = plan.id(v).split(DTCG_SEP);
+    if (path3.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
     }
@@ -665,25 +862,25 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       continue;
     }
     let node = root, collided = false;
-    for (let i = 0; i < path2.length - 1; i++) {
-      let child = node[path2[i]];
-      if (child === void 0) child = node[path2[i]] = {};
+    for (let i = 0; i < path3.length - 1; i++) {
+      let child = node[path3[i]];
+      if (child === void 0) child = node[path3[i]] = {};
       else if (isLeaf(child)) {
-        warn(`token '${v.name}' collides with token '${path2.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
+        warn(`token '${v.name}' collides with token '${path3.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
         collided = true;
         break;
       }
       node = child;
     }
     if (collided) continue;
-    const leafKey = path2[path2.length - 1];
+    const leafKey = path3[path3.length - 1];
     const existing = node[leafKey];
     if (existing !== void 0 && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name \u2014 skipped`);
       continue;
     }
     if (existing !== void 0) {
-      warn(`token '${v.name}' lands on '${path2.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
+      warn(`token '${v.name}' lands on '${path3.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
       continue;
     }
     let type = DTCG_TYPE[v.type];
@@ -691,7 +888,12 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
     const aliasRef = ref(v);
-    let value = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    const dv = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
+    if (dv === null) {
+      warn(`token '${v.name}' has a non-scalar value ${JSON.stringify(bv)} \u2014 skipped`);
+      continue;
+    }
+    let value = dv;
     if (v.type === "BOOLEAN") {
       type = "string";
       if (!isAlias(bv)) value = String(value);
@@ -712,7 +914,10 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     const ext = {};
     if (modeKeys.length > 1) {
       const modes = nullProto();
-      for (const m of modeKeys) if (values[m] !== void 0) modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef);
+      for (const m of modeKeys) {
+        const mv = values[m] === void 0 ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef);
+        if (mv !== null) modes[m] = mv;
+      }
       ext.modes = modes;
     }
     if (typeof v.key === "string" && v.key) ext.key = v.key;
@@ -758,7 +963,7 @@ function numberUnit(variable, opts) {
 function cssValue(raw, unit, ref) {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
   const e = isHexish(raw) ? normHex(raw) : null;
-  if (e) return "#" + e;
+  if (e) return e;
   const fmtNum = (s) => s === "0" ? "0" : unit ? s + unit : s;
   if (typeof raw === "number") return fmtNum(String(raw));
   if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw)) return fmtNum(raw);
@@ -791,6 +996,7 @@ function toCSS(designSystem, opts, notes) {
   const perMode = nullProto();
   for (const v of vars) {
     if (!segs(v.name).length) continue;
+    if (!emitted(v)) continue;
     if (!plan.canonical.has(v)) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
@@ -826,7 +1032,7 @@ function twName(v, opts) {
 var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
 function twKind(v, opts) {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test(String(v.collection) + "/" + v.name) ? "fontFamily" : null;
+  if (v.type === "STRING") return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
   if (v.type !== "FLOAT") return null;
   if (unitDecision(v, opts) !== "px") return null;
   const scopes = v.scopes || [];
@@ -834,7 +1040,7 @@ function twKind(v, opts) {
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
-  if (!narrowed && /font.?size|text.?size|type.?size/i.test(String(v.collection) + "/" + v.name)) return "fontSize";
+  if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
   return "dimension";
 }
 function toTailwind(designSystem, opts, notes) {
@@ -856,6 +1062,7 @@ function toTailwind(designSystem, opts, notes) {
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
+    if (!emitted(v)) continue;
     if (!plan.canonical.has(v)) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
@@ -982,12 +1189,18 @@ function toResolver(designSystem, warnings, opts) {
     modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
   }
   for (const r of modifierRefs) resolutionOrder.push(r);
-  const resolver = { $schema: RESOLVER_SCHEMA };
-  if (ds.file) resolver.name = String(ds.file);
-  resolver.version = RESOLVER_VERSION;
-  resolver.sets = sets;
-  if (Object.keys(modifiers).length) resolver.modifiers = modifiers;
-  resolver.resolutionOrder = resolutionOrder;
+  const resolver = {
+    $schema: RESOLVER_SCHEMA,
+    ...ds.file ? { name: String(ds.file) } : {},
+    // optional, but the filename alone rarely says which Figma file
+    version: RESOLVER_VERSION,
+    // REQUIRED, MUST be "2025.10"
+    sets,
+    ...Object.keys(modifiers).length ? { modifiers } : {},
+    // omitted rather than empty: nothing to condition on
+    resolutionOrder
+    // REQUIRED
+  };
   return { resolver, files };
 }
 function lintTokens(designSystem, opts) {
@@ -1046,33 +1259,24 @@ function emitTokens(designSystem, opts) {
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
-var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel });
+var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel });
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const args = process.argv.slice(2);
-  const flag = (name) => {
-    const i = args.indexOf(name);
-    if (i < 0) return void 0;
-    const v = args[i + 1];
-    args.splice(i, 2);
-    return v === void 0 ? "" : v;
-  };
-  const native = flag("--native");
-  const web = flag("--web");
-  const kotlinPackage = flag("--package");
-  const alsoGeneric = args.includes("--also-generic") ? (args.splice(args.indexOf("--also-generic"), 1), true) : false;
-  const input = args[0];
-  const outDir = args[1] || ".";
-  const USAGE = "usage: node design-to-code/tokens.ts <design-system/tokens.json | design/variables.json> [outDir]\n       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n       Without a target flag, only the generic set is written (unchanged).";
-  if (args.includes("--help") || args.includes("-h")) {
+  const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]
+       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
+       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
+       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).
+       Without a target flag, only the generic set is written (unchanged).`;
+  const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, () => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) {
     console.log(USAGE);
     process.exit(0);
   }
-  const stray = args.filter((a) => a.startsWith("-"));
-  if (stray.length) {
-    console.error(`tokens: unknown flag ${stray.join(", ")}
-${USAGE}`);
-    process.exit(1);
-  }
+  const { native, web, package: kotlinPackage } = flags;
+  const alsoGeneric = !!flags["also-generic"];
+  const input = positionals[0];
+  const outDir = positionals[1] || ".";
   if (!input) {
     console.error(USAGE);
     process.exit(1);
@@ -1088,21 +1292,26 @@ ${USAGE}`);
 ${USAGE}`);
     process.exit(1);
   }
-  const doc = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead.");
-  assertNotManifest(doc, input, "variables", "design-system/tokens.json");
-  const ds = doc;
+  const ds = readSplitFile(
+    input,
+    "token catalog",
+    isTokensDoc,
+    "variables",
+    "design-system/tokens.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead."
+  );
   fs3.mkdirSync(outDir, { recursive: true });
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input, fs3, path) });
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input) });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs3.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs3.writeFileSync(path.join(outDir, "tokens.css"), css);
-    fs3.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path2.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path2.join(outDir, "tokens.css"), css);
+    fs3.writeFileSync(path2.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
-      const dest = path.join(outDir, ...rel.split("/"));
-      fs3.mkdirSync(path.dirname(dest), { recursive: true });
+      const dest = path2.join(outDir, ...rel.split("/"));
+      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
       fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
@@ -1110,14 +1319,14 @@ ${USAGE}`);
   if (web !== void 0) {
     const tw = tailwind;
     const file = WEB_TARGETS[web];
-    fs3.writeFileSync(path.join(outDir, file), tw.text);
+    fs3.writeFileSync(path2.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { package: kotlinPackage || void 0 });
-    fs3.writeFileSync(path.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path2.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }

@@ -12,11 +12,12 @@
 // Split out from the exiting wrapper so the decision itself is testable without a subprocess.
 import fs from "node:fs";
 import type { DesignSystemManifest } from "./types.ts";
-import { errMsg } from "../bridge/src/errmsg.ts";
+import { isJsonObject } from "./types.ts";
+import { anyJson, readJson } from "./read-json.ts";
+import type { DocGuard } from "./doc-guards.ts";
 
 function isManifest(doc: unknown, payloadKey: string): doc is DesignSystemManifest {
-  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) &&
-    !Array.isArray((doc as Record<string, unknown>)[payloadKey]));
+  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
 
 function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, wantFile: string): void {
@@ -37,27 +38,38 @@ function assertNotManifest(doc: unknown, givenPath: string, payloadKey: string, 
 // simply not there. A `--node`/single-screen pull legitimately produces no `design/design-system/`
 // at all, so "that file does not exist" is a NORMAL outcome of a normal workflow and deserves a
 // sentence, not a stack. `hint` says what to do about it.
-// Returns the parsed JSON as `unknown`: the path is one the user typed, so nothing about its shape is
-// known here — callers narrow (isManifest/assertNotManifest, a type guard) before reading fields.
+// Returns the parsed JSON as `unknown`: callers narrow (isManifest/assertNotManifest, a type guard)
+// before reading fields — or use readDocFile, which checks a doc-guards.ts guard as it reads.
 function readJsonFile(file: string, what: string, hint?: string): unknown {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : undefined;
-    const why = code === "ENOENT" ? "does not exist"
-      : code === "EISDIR" ? "is a directory, not a file"
-      : code === "EACCES" ? "is not readable (permission denied)"
-      : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `\n       ${hint}` : ""));
-    process.exit(2);
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON — ${errMsg(e)}`);
-    process.exit(2);
-  }
+  return readDocFile(file, what, anyJson, hint);
+}
+
+// readJsonFile plus the document's shape: a file that is not the kind of document `guard` describes
+// is the same one-line, exit-2 error as a missing file — never a TypeError three calls later.
+function readDocFile<T>(file: string, what: string, guard: DocGuard<T>, hint?: string): T {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  // A read failure ends in a period (and may carry the caller's hint); a parse/shape failure is a phrase.
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `\n       ${hint}` : ""));
+  process.exit(2);
+}
+
+// An OPTIONAL input (a design-system split file a single-screen pull does not have): absent is null,
+// present-but-broken is the same fail-loud exit as readDocFile — a malformed tokens.json must not read as
+// "there is no design system".
+function readOptionalDoc<T>(file: string, what: string, guard: DocGuard<T>): T | null {
+  return fs.existsSync(file) ? readDocFile(file, what, guard) : null;
+}
+
+// A design-system SPLIT file the user named (a catalog, a token file): refuse the manifest with its own
+// explanation first (the one wrong file people actually pass), then check the payload's shape.
+function readSplitFile<T>(file: string, what: string, guard: DocGuard<T>, payloadKey: string, wantFile: string, hint?: string): T {
+  const doc = readJsonFile(file, what, hint);
+  assertNotManifest(doc, file, payloadKey, wantFile);
+  if (guard(doc)) return doc;
+  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
+  process.exit(2);
 }
 
 // The one reason design/design-system/ is usually missing, stated once: a --node/single-screen pull
@@ -67,4 +79,4 @@ const NO_DESIGN_SYSTEM_HINT =
   "A single-screen pull (`dtwin pull --node <id>`) exports only that screen — it does not\n" +
   "       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
-export { assertNotManifest, isManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT };
+export { assertNotManifest, isManifest, readJsonFile, readDocFile, readOptionalDoc, readSplitFile, NO_DESIGN_SYSTEM_HINT };

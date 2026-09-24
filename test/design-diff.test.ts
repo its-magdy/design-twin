@@ -6,26 +6,32 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
+import { malformed, manifest, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
+import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
+// design-diff --json: the diff result; only its kind/summary/warnings/against/changed are read here.
+const isDiffResult = (x: unknown): x is DiffResult => isJsonObject(x) && typeof x.kind === "string" && isJsonObject(x.summary) && Array.isArray(x.warnings);
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
-import { bag } from "../design-to-code/types.ts";
+import { bag, isJsonObject } from "../design-to-code/types.ts";
 import type {
-  Box, CatalogComponent, DesignSystemManifest, DiffResult, EffectStylesDoc, HygieneDoc, IrNode, Manifest, Paint, ScreenDoc,
-  StylesDoc, TextStylesDoc, TokensDoc, Variable,
+  Box, CatalogComponent, DesignSystemManifest, DiffResult, EffectStylesDoc, HygieneDoc, IrNode, LayerFile, Manifest, Paint,
+  StylesDoc, TokensDoc, Variable,
 } from "../design-to-code/types.ts";
 
 const CLI = path.join(import.meta.dirname, "..", "design-to-code", "design-diff.ts");
-const clone = <T,>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
-// The hand-built screen, as the checks below index into it: every node has a full box and the root has
-// children (they mutate them in place); one check adds a root-level `flows` fact. The manifest carries
-// only `nodes` (the producer's other counters are never read here), hence the one cast in screen().
+const clone = <T,>(o: T): T => structuredClone(o);
+// The hand-built screen, as the checks below index into it: a page-walk layer file ({tree}) whose every
+// node has a full box and whose root has children (the checks mutate them in place). Two test-local
+// additions a real layer file does not carry: `exportedAt` (the freshness stamp the CLI's baseline choice
+// reads) and, in one check, a root-level `flows` fact.
 interface FxNode extends IrNode { box: Required<Box>; children?: FxNode[] }
-interface FxScreen extends ScreenDoc { tree: FxNode & { children: FxNode[] }; manifest: Manifest; flows?: Array<{ name: string; startNodeId: string }> }
-const screen = (): FxScreen => ({ exportedAt: "2026-01-01", manifest: { nodes: 5 }, tree: { id: "1:1", name: "Login", type: "FRAME", box: { w: 390, h: 844, x: 0, y: 0 }, layout: { display: "flex", gap: 16 }, children: [
+interface FxScreen extends LayerFile { exportedAt: string; tree: FxNode & { children: FxNode[] }; manifest: Manifest; flows?: Array<{ name: string; startNodeId: string }> }
+const screen = (): FxScreen => ({ name: "Login", id: "1:1", exportedAt: "2026-01-01", manifest: manifest({ nodes: 5 }), tree: { id: "1:1", name: "Login", type: "FRAME", box: { w: 390, h: 844, x: 0, y: 0 }, layout: { display: "flex", gap: 16 }, children: [
   { id: "1:2", name: "Title", type: "TEXT", text: "Welcome", font: { size: 24 }, widthMode: "hug", heightMode: "hug", box: { w: 120, h: 32, x: 24, y: 80 } },
   { id: "1:3", name: "Card", type: "FRAME", box: { w: 342, h: 200, x: 24, y: 128 }, fills: [{ type: "solid", color: "#ffffff" }], children: [
     { id: "1:4", name: "Label", type: "TEXT", text: "Email", widthMode: "hug", heightMode: "hug", box: { w: 40, h: 16, x: 40, y: 144 } }] },
   { id: "1:5", name: "Button", type: "INSTANCE", props: { Variant: "primary" }, box: { w: 342, h: 48, x: 24, y: 344 } },
-] } }) as unknown as FxScreen; // hand-built fixture (see FxScreen)
+] } });
 
 console.log("screen diff:");
 check("identical exports → nothing, even with a new exportedAt/manifest", (() => { const b = screen(); b.exportedAt = "2026-09-21"; b.manifest.nodes = 9; const s = diffScreens(screen(), b).summary; return s.added + s.removed + s.changed + s.reordered! + s.positionOnly! === 0; })());
@@ -57,11 +63,10 @@ check("a {nodes:[…]} multi-root document is walked too", diffScreens({ nodes: 
 check("markdown: says so when nothing changed; lists fields when something did", /Nothing changed/.test(markdown(diffScreens(screen(), screen()), "x")) && (() => { const b = screen(); b.tree.children[0].text = "Hi"; return /`text`: Welcome → Hi/.test(markdown(diffScreens(screen(), b), "x")); })());
 
 console.log("token diff:");
-// Hand-built token files: variables carry name/collection/values only (no type/tier) — hence the casts.
 type FxTokens = TokensDoc & { variables: Variable[] };
-const tok = (): FxTokens => ({ variables: [{ name: "color/primary", collection: "Theme", values: { Light: "#111111", Dark: { aliasOf: "blue/200" } } }, { name: "space/md", collection: "Space", values: { M: 16 } }] }) as unknown as FxTokens;
+const tok = (): FxTokens => ({ variables: [variable({ name: "color/primary", type: "COLOR", collection: "Theme", values: { Light: "#111111", Dark: { aliasOf: "blue/200" } } }), variable({ name: "space/md", type: "FLOAT", collection: "Space", values: { M: 16 } })] });
 check("a value change names the token and the MODE that changed", (() => {
-  const b = tok(); b.variables[0].values.Dark = { aliasOf: "blue/300" }; b.variables.push({ name: "space/lg", values: { M: 24 } } as unknown as Variable); b.variables.splice(1, 1);
+  const b = tok(); b.variables[0].values.Dark = { aliasOf: "blue/300" }; b.variables.push(variable({ name: "space/lg", type: "FLOAT", values: { M: 24 } })); b.variables.splice(1, 1);
   const d = diffTokens(tok(), b);
   return d.changed.length === 1 && d.changed[0].name === "color/primary" && d.changed[0].modes.length === 1 && d.changed[0].modes[0].mode === "Dark" && d.added[0] === "space/lg" && d.removed[0] === "space/md";
 })());
@@ -79,7 +84,7 @@ check("snapshot → overwrite → diff finds the change; no snapshot and no git 
   fs.writeFileSync(path.join(root, rel), JSON.stringify(b));
   const d = run(rel, "--json");
   return none.status === 2 && /--snapshot/.test(none.stderr) && snap.status === 0 && fs.existsSync(path.join(root, "design", ".sync", "pages__home__login.json"))
-    && snapshotPath(rel, root).endsWith("pages__home__login.json") && d.status === 0 && (JSON.parse(d.stdout) as DiffResult).summary.changed === 1;
+    && snapshotPath(rel, root).endsWith("pages__home__login.json") && d.status === 0 && parseAs(d.stdout, isDiffResult, "design-diff --json").summary.changed === 1;
 })());
 
 // Finding 205: `--snapshot` used to be an unconditional fs.copyFileSync — running step 2 of the
@@ -169,7 +174,7 @@ check("snapshotting a screen file also snapshots its .vars.json/.assets.json and
 
 console.log("regressions from the 2026-09-21 execution audit:");
 check("a change deep inside a long nested value names the LEAF — never two identical truncated blobs", (() => {
-  const grad = (c: string): Paint[] => [{ type: "gradient", gradientType: "linear", angle: 90, opacity: 1, blendMode: "normal", visible: true, transform: [[1, 0, 0], [0, 1, 0]], stops: [{ pos: 0, color: "#112233ff" }, { pos: 0.25, color: "#223344ff" }, { pos: 0.5, color: "#445566ff" }, { pos: 0.75, color: "#556677ff" }, { pos: 1, color: c }] }] as unknown as Paint[]; // hand-built: `gradientType`, no `kind`
+  const grad = (c: string): Paint[] => malformed<Paint[]>([{ type: "gradient", gradientType: "linear", angle: 90, opacity: 1, blendMode: "normal", visible: true, transform: [[1, 0, 0], [0, 1, 0]], stops: [{ pos: 0, color: "#112233ff" }, { pos: 0.25, color: "#223344ff" }, { pos: 0.5, color: "#445566ff" }, { pos: 0.75, color: "#556677ff" }, { pos: 1, color: c }] }]); // `gradientType`, no `kind`: not a producer paint, on purpose
   const a = screen(), b = screen(); a.tree.children[1].fills = grad("#778899ff"); b.tree.children[1].fills = grad("#ff0000ff");
   const f = diffScreens(a, b).changed[0].fields;
   return f.length === 1 && f[0].field === "fills[0].stops[4].color" && f[0].before === "#778899ff" && f[0].after === "#ff0000ff" && f[0].category === "paint";
@@ -181,37 +186,61 @@ check("a variant swap is ONE change — the regenerated I…;… sublayers are c
 })());
 check("a truncated NEW export warns that removals may be false", (() => { const b = screen(); b.manifest.truncated = 2; b.tree.children.pop(); const d = diffScreens(screen(), b); return d.removed.length === 1 && d.warnings.length === 1 && /truncated/.test(markdown(d, "x")); })());
 check("root-level facts beside the tree (a new prototype flow) are a change", (() => { const b = screen(); b.flows = [{ name: "Onboarding", startNodeId: "1:1" }]; const d = diffScreens(screen(), b); return d.summary.changed === 1 && d.document[0].field === "flows" && /Beside the tree/.test(markdown(d, "x")); })());
-const anon = (): FxNode => ({ name: "anon" }) as unknown as FxNode; // deliberately id-less (and type-less)
+const anon = (): FxNode => malformed<FxNode>({ name: "anon" }); // deliberately id-less (and type-less)
 check("children without ids don't crash the reorder report", (() => { const a = screen(), b = screen(); a.tree.children.push(anon()); b.tree.children.unshift(anon()); try { diffScreens(a, b); return true; } catch { return false; } })());
 check("tokens: the same NAME in two collections is two tokens", (() => {
-  const t = (v: number) => ({ variables: [{ name: "size/md", collection: "Space", values: { M: v } }, { name: "size/md", collection: "Type", values: { M: 14 } }] }) as unknown as TokensDoc; // ts-port: hand-built fixture
+  const t = (v: number) => tokens({ variables: [{ name: "size/md", type: "FLOAT", collection: "Space", values: { M: v } }, { name: "size/md", type: "FLOAT", collection: "Type", values: { M: 14 } }] });
   const d = diffTokens(t(16), t(20));
   return d.changed.length === 1 && d.changed[0].name === "Space / size/md" && d.changed[0].modes[0].after === "20";
 })());
 check("tokens: a new MODE on a collection is reported", (() => {
-  const t = (modes: string[]) => ({ collections: [{ name: "Theme", modes, default: "Light" }], variables: [] }) as unknown as TokensDoc; // ts-port: hand-built fixture
+  const t = (modes: string[]) => tokens({ collections: [{ name: "Theme", modes, default: "Light" }], variables: [] });
   const d = diffTokens(t(["Light", "Dark"]), t(["Light", "Dark", "High contrast"]));
   return d.summary.changed === 1 && d.collections[0].field === "Theme.modes[2]" && /Collections \/ modes/.test(markdown(d, "x"));
 })());
 check("catalog: removed / added components and a new variant option are all seen (it used to say 'Nothing changed')", (() => {
   const cat = (): { components: Array<CatalogComponent & { variantProps?: Record<string, string[]> }> } => ({ components: [{ key: "k1", id: "1:1", name: "Button", type: "COMPONENT_SET", page: "DS", variantProps: { State: ["default", "pressed"] } }, { key: "k2", id: "1:2", name: "Chip", type: "COMPONENT" }] });
-  const b = cat(); b.components[0].variantProps!.State.push("loading"); b.components[0].page = "Moved"; b.components.splice(1, 1); b.components.push({ key: "k3", id: "1:3", name: "Badge", type: "COMPONENT" });
+  const b = cat(); b.components[0].variantProps?.State.push("loading"); b.components[0].page = "Moved"; b.components.splice(1, 1); b.components.push({ key: "k3", id: "1:3", name: "Badge", type: "COMPONENT" });
   const d = diffDocs(cat(), b);
   return d.kind === "catalog" && d.removed[0].name === "Chip" && d.added[0].name === "Badge" && d.changed.length === 1 && d.changed[0].fields.length === 1 && d.changed[0].fields[0].field === "variantProps.State[2]" && /every built screen/.test(markdown(d, "x"));
 })());
 check("a catalog-sized catalog: dropping 3 components is 3 removals", (() => { const real: { components: Array<CatalogComponent & { variantProps?: Record<string, string[]> }> } = { components: Array.from({ length: 40 }, (_, i) => ({ key: "k" + i, id: "1:" + i, name: "Component " + i, type: i % 3 ? "COMPONENT" : "COMPONENT_SET", page: "DS", ...(i % 3 ? {} : { variantProps: { State: ["default", "pressed"] } }) })) }; const b = clone(real); b.components = b.components.slice(3); return diffCatalog(real, b).removed.length === 3; })());
+check("[baseline] a baseline that is null / of another kind diffs as 'everything added' — never a TypeError", (() => {
+  const now = tokens({ variables: [{ name: "a", type: "COLOR", values: { v: "#000000" } }] });
+  try {
+    const d1 = diffDocs(null, now), d2 = diffDocs({ components: [] }, now);
+    return d1.kind === "tokens" && d1.summary.added === 1 && d2.kind === "tokens" && d2.summary.added === 1;
+  } catch { return false; }
+})());
+check("[shape] a token file whose variable has no values is refused with the token-file shape, not diffed into a crash", (() => {
+  try { diffDocs(null, { variables: [{ name: "a" }] }); return false; } catch (e) { return e instanceof Error && /is not a token catalog/.test(e.message) && !(e instanceof TypeError); }
+})());
 check("a file that is none of the three kinds is refused, not reported as unchanged", (() => { try { diffDocs({ a: 1 }, { a: 2 }); return false; } catch (e) { return e instanceof Error && /nothing here can be diffed/.test(e.message); } })());
 
 console.log("CLI — baseline choice, asset bytes, flags:");
+check("[shape] a corrupt snapshot is ONE line naming it (exit 2), not a SyntaxError stack", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-corrupt-"));
+  fs.mkdirSync(path.join(root, "design", ".sync"), { recursive: true });
+  fs.writeFileSync(path.join(root, "design", "login.json"), JSON.stringify(screen()));
+  fs.writeFileSync(path.join(root, "design", ".sync", "login.json"), "{ truncated");
+  const r = spawnSync(process.execPath, [CLI, "design/login.json"], { cwd: root, encoding: "utf8" });
+  return r.status === 2 && /the snapshot design\/\.sync\/login\.json is not valid JSON/.test(r.stderr) && !/\n {4}at /.test(r.stderr);
+})());
+check("[args] `--out --json` is '--out needs a value', not a diff written to a file named --json", (() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-args-"));
+  const r = spawnSync(process.execPath, [CLI, "x.json", "--out", "--json"], { cwd: root, encoding: "utf8" });
+  return r.status === 2 && /design-diff: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(root, "--json"));
+})());
 const git = (root: string, ...a: string[]) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: root, encoding: "utf8" });
 const project = () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-")); fs.mkdirSync(path.join(root, "design", "assets"), { recursive: true }); return root; };
 const put = (root: string, text: string, at: string, extra?: Partial<IrNode>) => { const s = screen(); s.exportedAt = at; s.tree.children[0].text = text; Object.assign(s.tree.children[2], extra || {}); fs.writeFileSync(path.join(root, "design", "login.json"), JSON.stringify(s)); };
 type ScreenResult = Extract<DiffResult, { kind: "screen" }>;
+const isScreenResult = (x: unknown): x is ScreenResult => isDiffResult(x) && x.kind === "screen";
 const cli = (root: string, ...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { cwd: root, encoding: "utf8" });
 check("a snapshot taken AFTER the re-pull is recognised as the same export; git HEAD is used instead", (() => {
   const root = project(); git(root, "init", "-q"); put(root, "v1", "2026-01-01T00:00:00Z"); git(root, "add", "-A"); git(root, "commit", "-qm", "v1");
   put(root, "v2", "2026-02-01T00:00:00Z"); cli(root, "--snapshot", "design/login.json");
-  const d = JSON.parse(cli(root, "design/login.json", "--json").stdout) as DiffResult;
+  const d = parseAs(cli(root, "design/login.json", "--json").stdout, isDiffResult, "design-diff --json");
   return d.against === "git HEAD" && d.summary.changed === 1 && d.warnings.some((w) => /SAME export/.test(w));
 })());
 check("…and with no older copy anywhere it says so instead of a bare 'Nothing changed'", (() => {
@@ -222,7 +251,7 @@ check("…and with no older copy anywhere it says so instead of a bare 'Nothing 
 check("a stale snapshot does not shadow a newer committed export (v1 snapshot, v2 HEAD, v3 on disk → v2 → v3)", (() => {
   const root = project(); git(root, "init", "-q"); put(root, "v1", "2026-01-01T00:00:00Z"); cli(root, "--snapshot", "design/login.json");
   put(root, "v2", "2026-02-01T00:00:00Z"); git(root, "add", "-A"); git(root, "commit", "-qm", "v2"); put(root, "v3", "2026-03-01T00:00:00Z");
-  const d = JSON.parse(cli(root, "design/login.json", "--json").stdout) as ScreenResult;
+  const d = parseAs(cli(root, "design/login.json", "--json").stdout, isScreenResult, "design-diff --json");
   return d.against === "git HEAD" && d.changed[0].fields[0].before === "v2" && d.changed[0].fields[0].after === "v3";
 })());
 check("a re-drawn icon (same node id, same path, different bytes) is a change", (() => {
@@ -230,7 +259,7 @@ check("a re-drawn icon (same node id, same path, different bytes) is a change", 
   fs.writeFileSync(icon, "<svg>old</svg>"); put(root, "v1", "2026-01-01T00:00:00Z", { asset: "assets/1_5.svg" });
   const snap = cli(root, "--snapshot", "design/login.json");
   fs.writeFileSync(icon, "<svg>new</svg>"); put(root, "v1", "2026-02-01T00:00:00Z", { asset: "assets/1_5.svg" });
-  const d = JSON.parse(cli(root, "design/login.json", "--json").stdout) as ScreenResult;
+  const d = parseAs(cli(root, "design/login.json", "--json").stdout, isScreenResult, "design-diff --json");
   return /1 asset hash/.test(snap.stdout) && d.summary.changed === 1 && d.changed[0].fields[0].field === "asset bytes" && d.changed[0].categories[0] === "asset";
 })());
 check("an unknown flag is an error, not a silently different command", (() => { const root = project(); put(root, "v1", "2026-01-01T00:00:00Z"); const r = cli(root, "design/login.json", "--agains", "x.json"); return r.status === 2 && /unknown flag --agains/.test(r.stderr); })());
@@ -244,44 +273,47 @@ check("a file of an unknown kind exits 2 with the reason", (() => { const root =
 // REAL design-system files from the livetest-4 export (test/fixtures/livetest4/design-system/).
 console.log("style + hygiene diffs (finding 312, real design-system fixtures):");
 const FIX_DS = path.join(import.meta.dirname, "fixtures", "livetest4", "design-system");
-// Real design-system files this repo's exporter wrote — read as the type the file name says.
-const readFix = <T,>(n: string): T => JSON.parse(fs.readFileSync(path.join(FIX_DS, n), "utf8")) as T;
+// Real design-system files this repo's exporter wrote — checked against the guard for their kind.
+const readFix = <T,>(n: string, guard: DocGuard<T>): T => readFixture(path.join(FIX_DS, n), guard);
+const isStyleSheet = (x: unknown): x is StylesDoc & EffectStylesDoc => isJsonObject(x) && Array.isArray(x.styles) && x.styles.every((st) => isJsonObject(st) && typeof st.name === "string");
+const isHygieneDoc = (x: unknown): x is HygieneDoc => isJsonObject(x) && Array.isArray(x.hygiene) && x.hygiene.every((h) => typeof h === "string");
+const isDsManifest = (x: unknown): x is DesignSystemManifest => isJsonObject(x) && isJsonObject(x.files) && isJsonObject(x.counts);
 check("styles.text.json: a real design-system file is recognised and diffs cleanly (isStyles)", (() => {
-  const a = readFix<TextStylesDoc>("styles.text.json"), b = clone(a);
+  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a);
   const d = diffDocs(a, b);
   return d.kind === "styles" && d.summary.added === 0 && d.summary.removed === 0 && d.summary.changed === 0;
 })());
 check("styles.text.json: a changed field on an existing style is reported, keyed by style key", (() => {
-  const a = readFix<TextStylesDoc>("styles.text.json"), b = clone(a);
+  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a);
   b.styles[0].size = b.styles[0].size! + 8;
   const d = diffStyles(a, b);
   return d.summary.changed === 1 && d.changed[0].key === a.styles[0].key && d.changed[0].fields.some((f) => f.field === "size");
 })());
 check("styles.text.json: a removed style and an added one are both seen", (() => {
-  const a = readFix<TextStylesDoc>("styles.text.json"), b = clone(a);
-  const removedName = b.styles.pop()!.name;
+  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a);
+  const removedName = b.styles.pop()?.name;
   b.styles.push({ name: "Brand New Style", size: 12, font: "Poppins", weight: "Regular", key: "brandnewkey123", id: "S:brandnewkey123," });
   const d = diffStyles(a, b);
   return d.removed.length === 1 && d.removed[0].name === removedName && d.added.length === 1 && d.added[0].name === "Brand New Style";
 })());
 check("styles.effect.json: an effect array change is a field diff, not a blob", (() => {
-  const a = readFix<EffectStylesDoc>("styles.effect.json"), b = clone(a);
+  const a = readFix("styles.effect.json", isStyleSheet), b = clone(a);
   bag(b.styles[0].effects![0]).radius = 999;
   const d = diffStyles(a, b);
   return d.summary.changed === 1 && d.changed[0].fields.some((f) => /effects/.test(f.field));
 })());
 check("styles.paint.json / styles.grid.json (empty `styles: []` in this real export): recognised, 'Nothing changed'", (() => {
-  const paint = readFix<StylesDoc>("styles.paint.json"), grid = readFix<StylesDoc>("styles.grid.json");
+  const paint = readFix("styles.paint.json", isStyleSheet), grid = readFix("styles.grid.json", isStyleSheet);
   const dp = diffDocs(paint, clone(paint)), dg = diffDocs(grid, clone(grid));
   return dp.kind === "styles" && /Nothing changed/.test(markdown(dp, "x")) && dg.kind === "styles" && /Nothing changed/.test(markdown(dg, "x"));
 })());
 check("hygiene.json: a real hygiene file is recognised (isHygiene) and 'nothing changed' when identical", (() => {
-  const a = readFix<HygieneDoc>("hygiene.json");
+  const a = readFix("hygiene.json", isHygieneDoc);
   const d = diffDocs(a, clone(a));
   return d.kind === "hygiene" && d.summary.added === 0 && d.summary.removed === 0;
 })());
 check("hygiene.json: a new warning line is 'added', a resolved one is 'removed' — order doesn't matter", (() => {
-  const a = readFix<HygieneDoc>("hygiene.json"), b = clone(a);
+  const a = readFix("hygiene.json", isHygieneDoc), b = clone(a);
   const resolved = b.hygiene.shift(); // the first line is no longer a problem
   b.hygiene.push("ALL_SCOPES on 'Brand New Variable' (pollutes every picker)"); // a new one appeared
   b.hygiene.reverse(); // order is not meaningful — must not read as N changes
@@ -289,9 +321,9 @@ check("hygiene.json: a new warning line is 'added', a resolved one is 'removed' 
   return d.added.length === 1 && d.added[0].includes("Brand New Variable") && d.removed.length === 1 && d.removed[0] === resolved;
 })());
 check("markdown renders styles/hygiene kinds without throwing, and names the right sections", (() => {
-  const a = readFix<TextStylesDoc>("styles.text.json"), b = clone(a); b.styles[0].size! += 1;
+  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a); b.styles[0].size! += 1;
   const md1 = markdown(diffStyles(a, b), "styles.text.json");
-  const h = readFix<HygieneDoc>("hygiene.json"), hb = clone(h); hb.hygiene.push("new line");
+  const h = readFix("hygiene.json", isHygieneDoc), hb = clone(h); hb.hygiene.push("new line");
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");
   return /Styles changed/.test(md1) && /New warning/.test(md2);
 })());
@@ -335,7 +367,7 @@ check("CLI end to end: ALL NINE of sync-design step 4's design-system diff comma
   return allOk && snap.status === 0 && !spuriousNotFound && allDiffOk;
 })());
 check("diffManifest: a counts/files change is a keyed field diff, exportedAt is ignored", (() => {
-  const a = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "livetest4", "design-system.json"), "utf8")) as DesignSystemManifest;
+  const a = readFixture(path.join(import.meta.dirname, "fixtures", "livetest4", "design-system.json"), isDsManifest);
   const b = clone(a);
   b.exportedAt = "2099-01-01T00:00:00Z"; // must NOT show up as a change on its own
   b.counts.hygiene = a.counts.hygiene + 3;

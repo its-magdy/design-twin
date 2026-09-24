@@ -12,6 +12,7 @@
 //
 // Returns { ok, errors:[{path,message}] }; never throws on bad data.
 import type { CodeConnectMap, MapValidationResult } from "./types.ts";
+import { scriptCmd } from "./cli-args.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
@@ -148,13 +149,14 @@ function validateProp(p: unknown, at: string, err: Err): void {
 function isCodeConnectMap(x: unknown): x is CodeConnectMap {
   return validateMap(x).ok;
 }
+isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
 
 export { validateMap, isCodeConnectMap };
 
 // CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const file = process.argv[2];
-  const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
+  const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
   if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }
   if (!file || file.startsWith("-")) { console.error((file ? `map-validate: unknown flag ${file}\n` : "") + USAGE); process.exit(1); }
   const res = validateMap(readJsonFile(file, "component map"));

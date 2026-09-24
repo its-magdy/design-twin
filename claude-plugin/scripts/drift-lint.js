@@ -2,7 +2,7 @@
 
 
 // design-to-code/kinds.ts
-var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance" };
+var TYPE_TO_KIND = { VARIANT: "enum", BOOLEAN: "boolean", TEXT: "string", INSTANCE_SWAP: "instance", SLOT: "instance" };
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
@@ -45,10 +45,42 @@ function walkWithHidden(root, fn, opts) {
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
-// design-to-code/catalog-input.ts
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/read-json.ts
 import fs from "node:fs";
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (e) {
+    return readFailure(e);
+  }
+  let parsed;
+  try {
+    const value = JSON.parse(raw);
+    parsed = value;
+  } catch (e) {
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+
+// design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
-  return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
+  return isJsonObject(doc) && isJsonObject(doc.files) && !Array.isArray(doc[payloadKey]);
 }
 function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
   if (isManifest(doc, payloadKey)) {
@@ -61,29 +93,193 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
   }
 }
 function readJsonFile(file, what, hint) {
-  let raw;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
        ${hint}` : ""));
-    process.exit(2);
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
-    process.exit(2);
-  }
+  process.exit(2);
+}
+function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
+  const doc = readJsonFile(file, what, hint);
+  assertNotManifest(doc, file, payloadKey, wantFile);
+  if (guard(doc)) return doc;
+  console.error(`error  ${what}: '${file}' is not ${guard.expected || "the expected kind of document"}`);
+  process.exit(2);
 }
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+function isVerifyMeasured(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cli-args.ts
+import { parseArgs } from "node:util";
+var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+function errCode(e) {
+  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  try {
+    return parse();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args: argv, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
+  }
+}
+
+// design-to-code/drift-lint.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
 
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
-  const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
+  const roots = screenRoots(doc);
   const walk = (n) => {
     if (!n || typeof n !== "object" || n.hidden === true) return;
     if (n.type === "INSTANCE" && n.mainComponent) {
@@ -106,7 +302,10 @@ function visibleInstances(doc, label) {
   return out;
 }
 function parseVariant(s) {
-  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s) : null;
+  if (isJsonObject(s)) {
+    const out2 = Object.fromEntries(Object.entries(s).filter((e) => typeof e[1] === "string"));
+    return Object.keys(out2).length ? out2 : null;
+  }
   if (!s || typeof s !== "string" || !s.includes("=")) return null;
   const out = {};
   for (const part of s.split(/,\s*(?=[^,=]+=)/)) {
@@ -263,11 +462,6 @@ function isRekeyed(result) {
   return s.names > 0 && s.byKey / s.names <= 0.05 && s.proposedWithSignature >= REKEY_MIN_PROPOSALS && s.withCandidates > 0 && s.proposedWithSignature / s.withCandidates >= REKEY_MIN_SHARE;
 }
 
-// design-to-code/types.ts
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
-}
-
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -279,11 +473,6 @@ function isMainFallback(metaUrl) {
   } catch {
     return false;
   }
-}
-
-// bridge/src/json-util.ts
-function nullProto() {
-  return /* @__PURE__ */ Object.create(null);
 }
 
 // design-to-code/map-validate.ts
@@ -306,7 +495,7 @@ var KEYS = {
 };
 var PROP_KINDS = Object.keys(KEYS.prop);
 var isStr = (v) => typeof v === "string";
-var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var isObj2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var isBool = (v) => typeof v === "boolean";
 var noExtra = (obj, allowed, at, err) => {
   if (!Array.isArray(allowed)) return;
@@ -318,39 +507,39 @@ var optStrings = (obj, keys, at, err) => {
 function validateMap(map) {
   const errors = [];
   const err = (path2, message) => errors.push({ path: path2, message });
-  if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
+  if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
   if (map.figmaFileKey !== void 0 && !isStr(map.figmaFileKey)) err("figmaFileKey", "must be a string");
-  if (!isObj(map.components)) {
+  if (!isObj2(map.components)) {
     err("components", "must be an object");
     return { ok: false, errors };
   }
   for (const key of Object.keys(map.components)) {
     const e = map.components[key];
     const at = `components.${key}`;
-    if (!isObj(e)) {
+    if (!isObj2(e)) {
       err(at, "entry must be an object");
       continue;
     }
     noExtra(e, KEYS.entry, at, err);
-    if (!isObj(e.figma)) err(`${at}.figma`, "required object");
+    if (!isObj2(e.figma)) err(`${at}.figma`, "required object");
     else {
       noExtra(e.figma, KEYS.figma, `${at}.figma`, err);
       if (!isStr(e.figma.name)) err(`${at}.figma.name`, "required string");
       optStrings(e.figma, ["key", "id"], `${at}.figma`, err);
       if (e.figma.unstable !== void 0 && !isBool(e.figma.unstable)) err(`${at}.figma.unstable`, "must be a boolean");
     }
-    if (!isObj(e.code)) err(`${at}.code`, "required object");
+    if (!isObj2(e.code)) err(`${at}.code`, "required object");
     else {
       noExtra(e.code, KEYS.code, `${at}.code`, err);
       if (!isStr(e.code.module)) err(`${at}.code.module`, "required string");
       if (!isStr(e.code.export)) err(`${at}.code.export`, "required string");
       if (e.code.targets !== void 0) {
-        if (!isObj(e.code.targets)) err(`${at}.code.targets`, "must be an object");
+        if (!isObj2(e.code.targets)) err(`${at}.code.targets`, "must be an object");
         else for (const t of Object.keys(e.code.targets)) {
           const tv = e.code.targets[t], ta = `${at}.code.targets.${t}`;
-          if (!isObj(tv)) err(ta, "must be an object");
+          if (!isObj2(tv)) err(ta, "must be an object");
           else {
             noExtra(tv, KEYS.target, ta, err);
             optStrings(tv, ["module", "export"], ta, err);
@@ -360,21 +549,21 @@ function validateMap(map) {
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
     if (e.props !== void 0) {
-      if (!isObj(e.props)) err(`${at}.props`, "must be an object");
+      if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
     }
     if (e.variantOverrides !== void 0) {
       if (!Array.isArray(e.variantOverrides)) err(`${at}.variantOverrides`, "must be an array");
       else e.variantOverrides.forEach((vo, i) => {
         const va = `${at}.variantOverrides[${i}]`;
-        if (!isObj(vo)) {
+        if (!isObj2(vo)) {
           err(va, "must be an object");
           return;
         }
         noExtra(vo, KEYS.vo, va, err);
-        if (!isObj(vo.when)) err(`${va}.when`, "required object");
+        if (!isObj2(vo.when)) err(`${va}.when`, "required object");
         else for (const wk of Object.keys(vo.when)) if (!isStr(vo.when[wk])) err(`${va}.when.${wk}`, "value must be a string");
-        if (!isObj(vo.code)) err(`${va}.code`, "required object");
+        if (!isObj2(vo.code)) err(`${va}.code`, "required object");
         else {
           noExtra(vo.code, KEYS.voCode, `${va}.code`, err);
           if (!isStr(vo.code.module)) err(`${va}.code.module`, "required string");
@@ -383,7 +572,7 @@ function validateMap(map) {
       });
     }
     if (e.childrenByLayer !== void 0) {
-      if (!isObj(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
+      if (!isObj2(e.childrenByLayer)) err(`${at}.childrenByLayer`, "must be an object");
       else {
         noExtra(e.childrenByLayer, KEYS.children, `${at}.childrenByLayer`, err);
         optStrings(e.childrenByLayer, ["layerNamePattern", "slot"], `${at}.childrenByLayer`, err);
@@ -393,7 +582,7 @@ function validateMap(map) {
   return { ok: errors.length === 0, errors };
 }
 function validateProp(p, at, err) {
-  if (!isObj(p)) {
+  if (!isObj2(p)) {
     err(at, "prop must be an object");
     return;
   }
@@ -407,8 +596,8 @@ function validateProp(p, at, err) {
   if (p.kind === "instance" && p.codeProp !== void 0 && !isStr(p.codeProp)) err(`${at}.codeProp`, "must be a string");
   if (p.kind === "instance" && p.slot !== void 0 && !isStr(p.slot)) err(`${at}.slot`, "must be a string");
   if (p.kind === "enum") {
-    if (p.values !== void 0 && !isObj(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
-    else if (isObj(p.values)) for (const k of Object.keys(p.values)) {
+    if (p.values !== void 0 && !isObj2(p.values)) err(`${at}.values`, "must be an object (VARIANT option -> code value)");
+    else if (isObj2(p.values)) for (const k of Object.keys(p.values)) {
       const t = typeof p.values[k];
       if (p.values[k] !== null && !["string", "number", "boolean"].includes(t)) err(`${at}.values.${k}`, "value must be string|number|boolean|null");
     }
@@ -417,9 +606,13 @@ function validateProp(p, at, err) {
   if (p.kind === "boolean" && p.default !== void 0 && !isBool(p.default)) err(`${at}.default`, "must be a boolean");
   if ((p.kind === "enum" || p.kind === "boolean") && p.omitDefault !== void 0 && !isBool(p.omitDefault)) err(`${at}.omitDefault`, "must be a boolean");
 }
+function isCodeConnectMap(x) {
+  return validateMap(x).ok;
+}
+isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
 if (false) {
   const file = process.argv[2];
-  const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
+  const USAGE = `usage: ${scriptCmd2("map-validate")} <map.json>`;
   if (file === "--help" || file === "-h") {
     console.log(USAGE);
     process.exit(0);
@@ -555,9 +748,10 @@ function driftLint(map, catalog, opts) {
   }
   return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
 }
+var LIVE_META_TIMEOUT_MS = 1e4;
 async function checkLiveFreshness(fileKey, token, exportedAt) {
   if (!fileKey || !token) return null;
-  const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token } });
+  const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token }, signal: AbortSignal.timeout(LIVE_META_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`GET /v1/files/${fileKey}/meta -> ${res.status} ${res.statusText}`);
   const body = await res.json();
   const lastModified = isJsonObject(body) && isJsonObject(body.file) && typeof body.file.last_modified === "string" ? body.file.last_modified : void 0;
@@ -577,8 +771,7 @@ function screenCoverage(map, catalog, screenDocs) {
   const catKeys = new Set((catalog && catalog.components || []).map((c) => c.key).filter((k) => !!k));
   const used = /* @__PURE__ */ new Map();
   for (const doc of screenDocs || []) {
-    const roots = doc && Array.isArray(doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc] : [];
-    for (const r of roots) walkWithHidden(r, (n, c) => {
+    for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
       if (n.type !== "INSTANCE" || !n.mainComponent) return;
       const mc = n.mainComponent;
       const id = mc.setKey || mc.key;
@@ -610,23 +803,22 @@ function screenCoverage(map, catalog, screenDocs) {
     unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances }))
   };
 }
-function isCatalogLike(x) {
-  return isJsonObject(x) && (x.components === void 0 || Array.isArray(x.components));
-}
-function isScreenDocLike(x) {
-  return isJsonObject(x);
-}
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const maxAgeIdx = argv.indexOf("--max-age");
+  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
+  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, () => parseArgs2({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   let maxAgeHours;
-  if (maxAgeIdx !== -1) {
-    maxAgeHours = Number(argv[maxAgeIdx + 1]);
+  if (flags["max-age"] !== void 0) {
+    maxAgeHours = Number(flags["max-age"]);
     if (!(maxAgeHours > 0)) {
       console.error("--max-age expects a positive number of hours");
       process.exit(2);
     }
-    argv.splice(maxAgeIdx, 2);
   } else if (process.env.DRIFT_MAX_AGE_HOURS) {
     maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
     if (!(maxAgeHours > 0)) {
@@ -635,26 +827,20 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     }
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 36e5 : void 0;
-  const screenFiles = [];
-  for (; ; ) {
-    const i = argv.indexOf("--screen");
-    if (i === -1) break;
-    const v = argv[i + 1];
-    if (!v) {
-      console.error("--screen expects a path to a screen export");
-      process.exit(2);
-    }
-    screenFiles.push(v);
-    argv.splice(i, 2);
-  }
-  const [mapFile, catalogFile] = argv;
+  const screenFiles = flags.screen || [];
+  const [mapFile, catalogFile] = positionals;
   if (!mapFile || !catalogFile) {
-    console.error("usage: node design-to-code/drift-lint.ts <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]");
+    console.error(USAGE);
     process.exit(2);
   }
-  const catalogRaw = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalogRaw, catalogFile, "components", "design-system/components.local.json");
-  const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
+  const catalog = readSplitFile(
+    catalogFile,
+    "component catalog",
+    isComponentsCatalog,
+    "components",
+    "design-system/components.local.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
+  );
   const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
   const valid = validateMap(mapRaw);
   if (!valid.ok) {
@@ -663,6 +849,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 ${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 fix it, or check it with \`map-validate.js ${mapFile}\`.`);
     process.exit(1);
   }
+  if (!isCodeConnectMap(mapRaw)) process.exit(1);
   const map = mapRaw;
   const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
@@ -673,10 +860,7 @@ ${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
   let screenFail = false;
   if (screenFiles.length) {
-    const docs = screenFiles.map((f) => {
-      const d = readJsonFile(f, "screen export");
-      return isScreenDocLike(d) ? d : null;
-    });
+    const docs = screenFiles.map((f) => readDocFile(f, "screen export", isScreenDoc));
     const cov = screenCoverage(map, catalog, docs);
     if (!cov.distinct) {
       console.error(`
@@ -719,8 +903,8 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
   const run = async () => {
     if (fileKey && token) {
       try {
-        const live = await checkLiveFreshness(fileKey, token, catalog && catalog.exportedAt);
-        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog && catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
+        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
+        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
       } catch (e) {
         console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
       }

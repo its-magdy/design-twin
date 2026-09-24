@@ -40,6 +40,13 @@ import { matchByNameAndSignature, parseVariant } from "./component-match.ts";
 import { walkWithHidden } from "./hidden.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
+import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
+import { isComponentsCatalog, isPageIndex, isPagesRootIndex, isTokensDoc, parsePlan } from "./doc-guards.ts";
+import type { DocGuard } from "./doc-guards.ts";
+import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { isCodeConnectMap } from "./map-validate.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import type {
   CodeConnectMap, ComponentsCatalog, IndexRow, IrNode, JsonObject, JsonValue, MapStatus, MatchRow, ModeMap, PageIndex, PagesRootIndex, Plan,
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
@@ -48,7 +55,7 @@ import type {
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
-  "usage: node plan-skeleton.js <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]",
+  `usage: ${scriptCmd("plan-skeleton")} <screen.json> <screen.vars.json> <design-system dir> [--out <plan.json>] [--map <codeconnect.local.json>] [--route <route>]`,
   "",
   "  Emits the build-screen plan skeleton for one screen, derived from the export:",
   "    tokens[]      every bound variable (keyed by Figma key, value in the frame's mode, design-system match)",
@@ -70,22 +77,6 @@ const USAGE = [
   "  --route <route>      the app route this screen will live at (else left null for you to fill).",
 ].join("\n");
 
-// Every file read here is one this repo's own writers produced (a screen export, a .vars.json, the
-// design-system split files, a plan, an index), so it is parsed as the shape it was written in.
-const readJson = <T,>(f: string): T => JSON.parse(fs.readFileSync(f, "utf8")) as T;
-const readJsonOr = <T,>(f: string, fallback: T): T => { try { return readJson<T>(f); } catch { return fallback; } };
-
-// The screen doc's roots, in any of the shapes the exporter writes (single-screen pull: `nodes[]`;
-// page-walk layer file: `tree`; or a bare node).
-function rootsOf(doc: ScreenDoc | null | undefined): IrNode[] {
-  if (!doc) return [];
-  if (Array.isArray(doc.nodes)) return doc.nodes;
-  if (doc.tree) return [doc.tree];
-  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
-  if (doc.id || doc.type) return [doc as IrNode];
-  return [];
-}
-
 /** What walkNodes hands its visitor beside the node. */
 export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoot: boolean; insideInstance: string | null }
 
@@ -94,7 +85,7 @@ export interface NodeContext { parent: IrNode | null; hidden: boolean; hiddenRoo
 // above the node — its internals belong to that component.
 function walkNodes(doc: ScreenDoc | null | undefined, visit: (n: IrNode, ctx: NodeContext) => void): void {
   const instAbove = new Map<IrNode, string | null>();
-  for (const r of rootsOf(doc)) {
+  for (const r of screenRoots(doc)) {
     walkWithHidden(r, (n, c) => {
       const above = c.parent ? (c.parent.type === "INSTANCE" ? c.parent.id : instAbove.get(c.parent) || null) : null;
       instAbove.set(n, above);
@@ -124,7 +115,7 @@ function visibility(doc: ScreenDoc | null | undefined): Visibility {
     if (r) count.get(r)!.nodes++;
     for (const c of n.children || []) tally(c, r);
   };
-  for (const r of rootsOf(doc)) tally(r, null);
+  for (const r of screenRoots(doc)) tally(r, null);
   return { visible, hidden, hiddenRoots };
 }
 
@@ -183,11 +174,12 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
   const modeFor = (v: Variable): string => {
     const vals = v.values || {};
     const keys = Object.keys(vals);
-    const want: string | undefined = resolvedModes[v.collection];
+    // A variable whose collection the export could not name has no frame mode and no collection default.
+    const want: string | undefined = v.collection === undefined ? undefined : resolvedModes[v.collection];
     if (want !== undefined && want in vals) return want;
     // case-only differences ("desktop" vs "Desktop") are the same mode
     if (want !== undefined) { const k = keys.find((x) => x.toLowerCase() === String(want).toLowerCase()); if (k) return k; }
-    const c = collections.get(v.collection);
+    const c = v.collection === undefined ? undefined : collections.get(v.collection);
     if (c && c.default && c.default in vals) return c.default;
     return keys[0];
   };
@@ -225,7 +217,7 @@ function normValue(type: VariableType | undefined, raw: string | number | boolea
 }
 
 /** A token row as the skeleton writes it: `sites` is always present here (PlanTokenRow leaves it optional). */
-export interface SkeletonTokenRow extends PlanTokenRow { sites: { visible: number; hidden: number } }
+export interface SkeletonTokenRow extends PlanTokenRow { figmaName: string; sites: { visible: number; hidden: number } }
 /** The same row while buildTokens is still filling it (codeToken/verdict come last). */
 type TokenRowDraft = Omit<SkeletonTokenRow, "codeToken" | "verdict"> & { codeToken?: string | null; verdict?: PlanTokenVerdict | null };
 
@@ -260,7 +252,7 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     const row: TokenRowDraft = {
       figmaName: name,
       key: cands.length === 1 ? v.key || null : null,
-      collection: v ? v.collection : null,
+      collection: (v && v.collection) ?? null, // null: no variable, or the export could not name its collection
       kind: kindOf(v, fields),
       value: r.value,
       mode: r.mode,
@@ -305,12 +297,10 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
 /** One codeconnect.local.json entry as loadMap() flattens it, keyed by figma.key and by map key. */
 export interface MapKeyEntry { name: string; module: string | null; export: string | null; status: MapStatus | null }
 
-function loadMap(file: string): Map<string, MapKeyEntry> {
-  const map = readJsonOr<CodeConnectMap | null>(file, null);
+function mapKeysOf(map: CodeConnectMap): Map<string, MapKeyEntry> {
   const keys = new Map<string, MapKeyEntry>();
-  for (const [name, e] of Object.entries((map && map.components) || {})) {
-    if (!e || !e.figma) continue;
-    const entry: MapKeyEntry = { name: e.figma.name || name, module: (e.code && e.code.module) || null, export: (e.code && e.code.export) || null, status: e.status || null };
+  for (const [name, e] of Object.entries(map.components)) {
+    const entry: MapKeyEntry = { name: e.figma.name, module: e.code.module, export: e.code.export, status: e.status || null };
     if (e.figma.key) keys.set(e.figma.key, entry);
     if (!keys.has(name)) keys.set(name, entry);
   }
@@ -381,26 +371,29 @@ export interface SkeletonInput {
 export interface SkeletonPlan extends Plan {
   tokens: SkeletonTokenRow[]; components: PlanComponentRow[]; anchors: Record<string, PlanAnchor>; hidden: PlanHiddenRoot[];
   counts: NonNullable<Plan["counts"]>;
+  /** the skeleton writes every auditGate field (a person edits them later) */
+  auditGate: Required<PlanAuditGate> | null;
 }
 
 function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, route, indexRow }: SkeletonInput): SkeletonPlan {
   const vis = visibility(doc);
-  const roots = rootsOf(doc);
-  const root: Partial<IrNode> = roots[0] || {};
-  const resolvedModes = root.resolvedModes || {};
+  const roots = screenRoots(doc);
+  const root: IrNode | undefined = roots[0];
+  const exp = screenExportOf(doc);
+  const resolvedModes = (root && root.resolvedModes) || {};
   const tokens = buildTokens(doc, vars, ds, resolvedModes);
   const components = buildComponents(doc, catalog, library, mapKeys || new Map<string, MapKeyEntry>());
   const anchors: Record<string, PlanAnchor> = {};
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
-  const nodeId = doc.nodeId || root.id || null;
+  const nodeId = (exp && exp.nodeId) || (root && root.id) || null;
   const title = indexRow && indexRow.title;
   const rel = screenFile ? path.relative(cwd || process.cwd(), path.resolve(screenFile)).split(path.sep).join("/") : null;
-  const screenName = String(title || doc.screen || root.name || "").trim() || null;
+  const screenName = String(title || (exp && exp.screen) || (root && root.name) || "").trim() || null;
   // finding 136: pre-fill a first-class auditGate from an existing audit with blockers, so the model
   // (or a person) has somewhere to record "acknowledged and overridden, here is why" instead of the
   // build silently proceeding past a Blocked verdict. overridden/reason/decidedBy/decidedAt are left
   // for a person to fill; a re-run of this script never clears what was already decided (see merge()).
-  let auditGate: PlanAuditGate | null = null;
+  let auditGate: Required<PlanAuditGate> | null = null;
   try {
     const g = auditGateStatus(cwd || process.cwd(), screenFile, screenName);
     if (g.auditFile && g.blockers.length) {
@@ -417,7 +410,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
     nodeId,
     route: route || null,
     file: rel,
-    exportedAt: doc.exportedAt || null,
+    exportedAt: (exp && exp.exportedAt) || null,
     status: "pending",
     target: null,
     architecture: null,
@@ -454,12 +447,14 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     exportedAt: fresh.exportedAt,
     hidden: fresh.hidden,
     // Never clear a decided auditGate; only fill one in if the plan never had one.
-    auditGate: (prev.auditGate && typeof prev.auditGate === "object") ? prev.auditGate : fresh.auditGate,
+    auditGate: prev.auditGate || fresh.auditGate,
     counts: fresh.counts,
   });
   const dropped = { tokens: 0, components: 0, anchors: 0 };
-  const tk = (t: PlanTokenRow): string => t.key || t.figmaName;
-  const prevTok = new Map((Array.isArray(prev.tokens) ? prev.tokens : []).map((t): [string, PlanTokenRow] => [tk(t), t]));
+  // A row's identity: its key, else its Figma name. A hand-written row with neither matches nothing
+  // (identity "") and is counted as dropped — no fresh row has an empty identity.
+  const tk = (t: PlanTokenRow): string => t.key || t.figmaName || "";
+  const prevTok = new Map((prev.tokens || []).map((t): [string, PlanTokenRow] => [tk(t), t]));
   out.tokens = fresh.tokens.map((t) => {
     const p = prevTok.get(tk(t)) || prevTok.get(t.figmaName);
     const row: PlanTokenRow = Object.assign({}, t);
@@ -467,7 +462,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     return row;
   });
   dropped.tokens = [...prevTok.keys()].filter((k) => !fresh.tokens.some((t) => tk(t) === k || t.figmaName === k)).length;
-  const prevComp = new Map((Array.isArray(prev.components) ? prev.components : []).filter((c): c is PlanComponentRow & { nodeId: string } => !!(c && c.nodeId)).map((c): [string, PlanComponentRow] => [c.nodeId, c]));
+  const prevComp = new Map((prev.components || []).filter((c): c is PlanComponentRow & { nodeId: string } => !!(c && c.nodeId)).map((c): [string, PlanComponentRow] => [c.nodeId, c]));
   out.components = fresh.components.map((c) => {
     const p = prevComp.get(c.nodeId!);
     const row: PlanComponentRow = Object.assign({}, c);
@@ -475,7 +470,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
     return row;
   });
   dropped.components = [...prevComp.keys()].filter((id) => !fresh.components.some((c) => c.nodeId === id)).length;
-  const pa: Record<string, PlanAnchor> = prev.anchors && typeof prev.anchors === "object" ? prev.anchors : {};
+  const pa: Record<string, PlanAnchor> = prev.anchors || {};
   out.anchors = {};
   for (const [id, a] of Object.entries(fresh.anchors)) {
     const p = pa[id];
@@ -485,48 +480,64 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
   return { plan: out, dropped };
 }
 
+const isIndexDoc = (x: unknown): x is PagesRootIndex | PageIndex => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile: string, nodeId: string | undefined): IndexRow | null {
-  // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json
+  // pages/<Page>/<Screen>__id.json → ../../pages/index.json or ../index.json (best effort: the title only)
   const dir = path.dirname(path.resolve(screenFile));
   for (const idx of [path.join(dir, "..", "index.json"), path.join(dir, "index.json")]) {
-    const d = readJsonOr<PagesRootIndex | PageIndex | null>(idx, null);
-    const rows = d && Array.isArray(d.layers) ? d.layers : [];
-    const hit = rows.find((r) => r.id === nodeId);
+    const d = readJsonOrNull(idx, isIndexDoc);
+    const hit = ((d && d.layers) || []).find((r) => r.id === nodeId);
     if (hit) return hit;
   }
   return null;
 }
 
+// One line for a file that is there but cannot be used; `what` names it the way the messages always have.
+const cannotRead = (what: string, file: string, error: string): number => { console.error(`plan-skeleton: cannot read ${what} ${file}: ${error}`); return 1; };
+
 function main(argv: string[]): number {
-  const args = argv.slice();
-  if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); return 0; }
-  const take = (flag: string): string | undefined => { const i = args.indexOf(flag); if (i === -1) return undefined; const v = args[i + 1]; args.splice(i, 2); return v; };
-  const out = take("--out"), mapFlag = take("--map"), route = take("--route");
-  const stray = args.filter((a) => a.startsWith("-"));
-  if (stray.length || args.length !== 3 || [out, mapFlag, route].some((v) => v === "" )) {
-    console.error((stray.length ? `plan-skeleton: unknown flag ${stray.join(", ")}\n` : "") + USAGE);
-    return 2;
-  }
-  const [screenFile, varsFile, dsDir] = args;
-  let doc: ScreenDoc, vars: TokensDoc;
-  try { doc = readJson<ScreenDoc>(screenFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen JSON ${screenFile}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
-  try { vars = readJson<TokensDoc>(varsFile); } catch (e) { console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+  const OPTIONS = { out: { type: "string" }, map: { type: "string" }, route: { type: "string" }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); return 0; }
+  const { out, map: mapFlag, route } = flags;
+  if (positionals.length !== 3 || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }
+  const [screenFile, varsFile, dsDir] = positionals;
+  const screen = readJson(screenFile, isScreenDoc);
+  if (!("doc" in screen)) return cannotRead("the screen JSON", screenFile, screen.error);
+  const varsRead = readJson(varsFile, isTokensDoc);
+  if (!("doc" in varsRead)) return cannotRead("the screen's variables", varsFile, varsRead.error);
+  const doc = screen.doc, vars = varsRead.doc;
   const hasDs = dsDir && fs.existsSync(dsDir) && fs.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} — token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
-  const ds = hasDs ? readJsonOr<TokensDoc | null>(path.join(dsDir, "tokens.json"), null) : null;
-  const catalog = hasDs ? readJsonOr<ComponentsCatalog | null>(path.join(dsDir, "components.local.json"), null) : null;
-  const library = hasDs ? readJsonOr<ComponentsCatalog | null>(path.join(dsDir, "components.library.json"), null) : null;
+  // A split file that is absent is fine (a partial design system); one that is there but broken is not.
+  const optional = <T,>(file: string, guard: DocGuard<T>): { doc: T | null } | { error: string } => {
+    if (!hasDs) return { doc: null };
+    const r = readJson(path.join(dsDir, file), guard);
+    return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
+  };
+  const dsRead = optional("tokens.json", isTokensDoc), catRead = optional("components.local.json", isComponentsCatalog), libRead = optional("components.library.json", isComponentsCatalog);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path.join(dsDir, "tokens.json"), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path.join(dsDir, "components.local.json"), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path.join(dsDir, "components.library.json"), libRead.error);
   const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs.existsSync(f));
-  const mapKeys = mapFile ? loadMap(mapFile) : new Map<string, MapKeyEntry>();
-  const root0: Partial<IrNode> = rootsOf(doc)[0] || {};
-  const nodeId = doc.nodeId || root0.id;
-  const fresh = skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
+  let mapKeys = new Map<string, MapKeyEntry>();
+  if (mapFile) {
+    const m = readJson(mapFile, isCodeConnectMap);
+    if (!("doc" in m)) return cannotRead("the component map", mapFile, m.error);
+    mapKeys = mapKeysOf(m.doc);
+  }
+  const nodeId = screenExportOf(doc)?.nodeId || screenRoots(doc)[0]?.id;
+  const fresh = skeleton({ doc, vars, ds: dsRead.doc, catalog: catRead.doc, library: libRead.doc, mapKeys, screenFile, cwd: process.cwd(), route, indexRow: findIndexRow(screenFile, nodeId) });
   const c = fresh.counts;
   if (!out) {
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
-    const prev = fs.existsSync(out) ? readJsonOr<Plan | undefined>(out, undefined) : null;
-    if (prev === undefined) { console.error(`plan-skeleton: ${out} exists but is not valid JSON — refusing to overwrite it`); return 1; }
+    // An existing plan is MERGED into — so one that cannot be read (or is not a plan) is refused, untouched.
+    const prevRead = readJson(out, anyJson);
+    const parsed = "doc" in prevRead ? parsePlan(prevRead.doc) : null; // parsePlan names the field that is wrong
+    const why = !("doc" in prevRead) ? (prevRead.missing ? null : prevRead.error) : parsed && "error" in parsed ? parsed.error : null;
+    if (why) { console.error(`plan-skeleton: ${out} exists but ${why} — refusing to overwrite it`); return 1; }
+    const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
     fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
     fs.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
@@ -536,7 +547,7 @@ function main(argv: string[]): number {
   return 0;
 }
 
-export { skeleton, merge, visibility, walkNodes, rootsOf, bindingsOf, buildTokens, buildComponents, USAGE };
+export { skeleton, merge, visibility, walkNodes, bindingsOf, buildTokens, buildComponents, USAGE };
 
 // exitCode, not exit(): exit() would cut a large plan off mid-write when stdout is a pipe.
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
