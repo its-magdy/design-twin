@@ -81,14 +81,15 @@ function normColor(v: unknown): string | null {
   const s = String(v).trim().toLowerCase();
   const key = colorKey(s); // color.ts: every hex spelling -> "#rrggbbaa"
   if (key) return key;
-  const m = /^rgba?\(([^)]+)\)$/.exec(s);
-  if (m) {
-    const p = m[1].split(/[,\s/]+/).filter(Boolean).map(Number);
-    if (p.length < 3 || p.some((n) => Number.isNaN(n))) return s;
-    const a = p.length > 3 ? p[3] : 1;
+  const inner = /^rgba?\(([^)]+)\)$/.exec(s)?.[1]; // the group is not optional: set whenever the regex matched
+  if (inner !== undefined) {
+    const p = inner.split(/[,\s/]+/).filter(Boolean).map(Number);
+    const [r, g, b, a0] = p;
+    if (r === undefined || g === undefined || b === undefined || p.some((n) => Number.isNaN(n))) return s;
+    const a = a0 ?? 1;
     if (a === 0) return "transparent"; // rgba(0,0,0,0) is "no background", whatever the channels say
     const hex = (n: number): string => Math.round(n).toString(16).padStart(2, "0");
-    return "#" + hex(p[0]) + hex(p[1]) + hex(p[2]) + hex(Math.round(a * 255));
+    return "#" + hex(r) + hex(g) + hex(b) + hex(Math.round(a * 255));
   }
   if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
   return s;
@@ -113,7 +114,8 @@ function normWeight(v: unknown): number | null {
 // honest comparison — the fallbacks are the builder's business.
 function normFamily(v: unknown): string | null {
   if (v == null) return null;
-  return String(v).split(",")[0].trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+  // ?? "": split() always returns at least one piece, so the fallback never applies
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 
 // ts-port: legacy/producer-mismatch read kept as-is (item 4). The producer writes a LengthSpec
@@ -171,8 +173,8 @@ interface DrawnStateOf { state: DrawnState; why: string }
 function drawnStateOf(n: IrNode): DrawnStateOf | null {
   const fillTok = (n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills) ||
     (Array.isArray(n.fills) && n.fills.map((f) => f && f.tokens && f.tokens.color).find((t): t is string => typeof t === "string")) || null;
-  let m = fillTok && STATE_WORD.exec(fillTok);
-  if (m) return { state: normState(m[1]), why: `its fill is bound to '${fillTok}'` };
+  const word = fillTok ? STATE_WORD.exec(fillTok)?.[1] : undefined; // the group is not optional: set whenever the regex matched
+  if (word !== undefined) return { state: normState(word), why: `its fill is bound to '${fillTok}'` };
   for (const [k, v] of Object.entries(n.props || {})) {
     if (typeof v === "string" && /^\s*(hover(?:ed)?|pressed|focus(?:ed)?)\s*$/i.test(v)) return { state: normState(v.trim()), why: `variant ${k}=${v}` };
   }
@@ -302,9 +304,10 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
   if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
-    const c = (["tl", "tr", "br", "bl"] as const).map((k) => { const v = rc[k]; return num(v) ? v : 0; });
-    if (c.every((v) => v === c[0])) spec.borderRadius = c[0];
-    else spec.radiusCorners = { tl: c[0], tr: c[1], br: c[2], bl: c[3] };
+    const corner = (v: unknown): number => (num(v) ? v : 0);
+    const c = { tl: corner(rc.tl), tr: corner(rc.tr), br: corner(rc.br), bl: corner(rc.bl) };
+    if (c.tr === c.tl && c.br === c.tl && c.bl === c.tl) spec.borderRadius = c.tl;
+    else spec.radiusCorners = c;
   }
 
   const L: LegacyLayout | undefined = n.layout;
@@ -596,13 +599,22 @@ function comparePadding(want: unknown, got: unknown): Bad | null {
 }
 
 // A measured radius as four corners [tl,tr,br,bl]: a number, an array, or a CSS shorthand string.
-function radiusCorners(v: unknown): number[] | null {
+function radiusCorners(v: unknown): [number, number, number, number] | null {
   if (v == null) return null;
   if (num(v)) return [v, v, v, v];
-  if (Array.isArray(v)) { const a: number[] = v.map(Number); return a.length === 4 && a.every(Number.isFinite) ? a : a.length === 1 && Number.isFinite(a[0]) ? [a[0], a[0], a[0], a[0]] : null; }
+  if (Array.isArray(v)) {
+    const a: number[] = v.map(Number);
+    const [a0, a1, a2, a3] = a;
+    if (a.length === 4 && a.every(Number.isFinite) && a0 !== undefined && a1 !== undefined && a2 !== undefined && a3 !== undefined) return [a0, a1, a2, a3];
+    return a.length === 1 && a0 !== undefined && Number.isFinite(a0) ? [a0, a0, a0, a0] : null;
+  }
   const p = String(v).trim().split(/\s+/).map(parseFloat);
-  if (!p.length || p.some(Number.isNaN)) return null;
-  return p.length === 1 ? [p[0], p[0], p[0], p[0]] : p.length === 2 ? [p[0], p[1], p[0], p[1]] : p.length === 3 ? [p[0], p[1], p[2], p[1]] : p.slice(0, 4);
+  const [p0, p1, p2, p3] = p;
+  if (p0 === undefined || p.some(Number.isNaN)) return null;
+  if (p1 === undefined) return [p0, p0, p0, p0];
+  if (p2 === undefined) return [p0, p1, p0, p1];
+  if (p3 === undefined) return [p0, p1, p2, p1];
+  return [p0, p1, p2, p3];
 }
 // CSS clamps a radius at half the shorter side, and so does Figma: `radius: 500` on a 36px box and
 // `rounded-full` (33554400px) are both a circle (finding 194). Compare the radius each side can ACTUALLY
@@ -671,7 +683,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const sfx = suffix(id);
     if (sfx) foreignBySuffix.set(sfx, (foreignBySuffix.get(sfx) || []).concat(id));
   }
-  const viaSharedPath = (id: string): string | null => { const sfx = suffix(String(id)); const c = sfx && foreignBySuffix.get(sfx); return c && c.length === 1 ? c[0] : null; };
+  const viaSharedPath = (id: string): string | null => { const sfx = suffix(String(id)); const c = sfx && foreignBySuffix.get(sfx); const only = c && c.length === 1 ? c[0] : undefined; return only ?? null; };
 
   const deltas: VerifyDelta[] = [];
   const notMeasured: VerifyReportV2["notMeasured"] = []; // node specs with NO measurement at all — one row per node, never per field
@@ -776,9 +788,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-        (["tl", "tr", "br", "bl"] as const).forEach((k, i) => {
+        const [ctl, ctr, cbr, cbl] = c;
+        const measured = { tl: ctl, tr: ctr, br: cbr, bl: cbl };
+        (["tl", "tr", "br", "bl"] as const).forEach((k) => {
           fieldsChecked++;
-          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
+          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(measured[k], W, H);
           const d = Math.abs(want - have);
           if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) });
         });
@@ -1013,7 +1027,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     unverifiable,
     notComparable: expectation.notComparable || [],
     probe: {
-      unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, canonical: KEY_HINTS[key] })),
+      unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
@@ -1163,7 +1177,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   };
 
   if (doExpect) {
-    if (!files.length) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
+    const firstFile = files[0];
+    if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
     const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
     const exp = buildExpectation(docs);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
@@ -1172,7 +1187,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.js) —
     // means two runs against the same export file always land on the same name, whatever string the
     // caller typed on the command line.
-    const outBase = out || path.join("design", "verify", path.basename(files[0], ".json"));
+    const outBase = out || path.join("design", "verify", path.basename(firstFile, ".json"));
     // Findings 153/181: re-running --expect replaced the file in place and left a measurement and a
     // report from the OLD expectation beside it, undated. The file itself stays byte-deterministic
     // (finding 154) — the notice goes to stderr, and every report records the sha it was computed on.
@@ -1248,8 +1263,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
       if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
     }
-    if (hits.length === 1) {
-      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    const onlyHit = hits.length === 1 ? hits[0] : undefined;
+    if (onlyHit) {
+      code = { plan: path.join(planDir, onlyHit.f).split(path.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
         : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");

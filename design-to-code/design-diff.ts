@@ -489,7 +489,8 @@ function previous(file: string, against: string | undefined, cwd: string = proce
     const doc: unknown = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
   } catch { /* not a repo, or not committed */ }
-  if (!found.length) return null;
+  const firstFound = found[0];
+  if (firstFound === undefined) return null;
   // The freshness signal for a screen export is `exportedAt`, stamped once by the plugin. A merged
   // `variables.json` (bridge/variables-merge.js) has no single `exportedAt` that means anything — it is
   // the union of every screen ever pulled into this project — so `at()` used to fall through to `null`
@@ -514,10 +515,11 @@ function previous(file: string, against: string | undefined, cwd: string = proce
   const now = at(current), notes: string[] = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) — ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
-  if (!useful.length) return { ...found[0], notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
-  useful.sort((x, y) => String(at(y.doc) || "").localeCompare(String(at(x.doc) || "")));
-  if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} — used the newer one, so changes already applied are not listed again.`);
-  return { ...useful[0], notes };
+  useful.sort((x, y) => String(at(y.doc) || "").localeCompare(String(at(x.doc) || ""))); // (a no-op when empty)
+  const [newest, older] = useful;
+  if (newest === undefined) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
+  if (older !== undefined && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} — used the newer one, so changes already applied are not listed again.`);
+  return { ...newest, notes };
 }
 
 // Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file

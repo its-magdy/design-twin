@@ -62,7 +62,7 @@ function parseVariant(s) {
   }
   return Object.keys(out).length ? out : null;
 }
-var baseProp = (p) => String(p).split("#")[0];
+var baseProp = (p) => String(p).split("#")[0] ?? "";
 var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
 function signature(inst, cand) {
   const props = {};
@@ -82,7 +82,10 @@ function signature(inst, cand) {
       score += known.length ? 10 : -15;
       reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
     }
-    const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
+    const bad = Object.entries(variant).filter(([k, val]) => {
+      const d = props[k];
+      return d && d.type === "VARIANT" && !(d.options || []).includes(val);
+    }).map(([k]) => k);
     if (known.length && !bad.length) {
       score += 25;
       reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
@@ -134,8 +137,9 @@ function matchByNameAndSignature(instances, catalog, library) {
   const libNames = new Set((library && library.components || []).map((c) => c.name));
   const groups = /* @__PURE__ */ new Map();
   for (const inst of instances) {
-    if (!groups.has(inst.name)) groups.set(inst.name, []);
-    groups.get(inst.name).push(inst);
+    const group = groups.get(inst.name);
+    if (group) group.push(inst);
+    else groups.set(inst.name, [inst]);
   }
   const rows = [];
   for (const [name, list] of groups) {
@@ -160,17 +164,21 @@ function matchByNameAndSignature(instances, catalog, library) {
       rows.push(row);
       continue;
     }
+    const [firstInst, ...otherInsts] = list;
     const scored = cands.map((c) => {
-      const per = list.map((i) => signature(i, c));
-      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+      const first = signature(firstInst, c);
+      const per = [first, ...otherInsts.map((i) => signature(i, c))];
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
     }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
     const best = scored[0];
+    if (best === void 0) throw new Error("component-match: a non-empty candidate list scored to nothing");
     if (!best.verified) {
       row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
       rows.push(row);
       continue;
     }
     const verifiedOnes = scored.filter((s) => s.verified);
+    const runnerUp = verifiedOnes[1];
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
     row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
@@ -180,7 +188,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
       row.tie = identical ? "duplicate-definitions" : "different-signatures";
     } else if (scored.length > 1) {
-      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
     }
     row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
@@ -213,7 +221,7 @@ function walkWithHidden(root, fn, opts) {
     const hidden = isHidden(node, parentHidden);
     fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path3 ? path3 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -225,9 +233,9 @@ import path from "node:path";
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
   if (typeof v !== "string") return null;
-  const m = HEX.exec(v.trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
 function colorKey(v) {
@@ -410,6 +418,7 @@ function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
     if (tok === "--") {
       out.push(...argv.slice(i));
       break;
@@ -485,7 +494,7 @@ if (false) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
@@ -552,7 +561,8 @@ if (false) {
     console.log(USAGE2);
     process.exit(0);
   }
-  if (!files.length) {
+  const firstFile = files[0];
+  if (firstFile === void 0) {
     console.error(USAGE2);
     process.exit(2);
   }
@@ -570,7 +580,7 @@ if (false) {
   const ctx = variablesContext2(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog3, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
     tokens: readOptionalDoc2(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc3),
@@ -582,7 +592,7 @@ if (false) {
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path.join("design", "audit", path.basename(files[0], ".json"));
+  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
     const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {
@@ -849,8 +859,9 @@ function visibility(doc) {
     if (ctx.hidden) {
       hidden.add(n.id);
       if (ctx.hiddenRoot) {
-        hiddenRoots.push({ id: n.id, name: n.name, type: n.type, nodes: 0 });
-        count.set(n.id, hiddenRoots[hiddenRoots.length - 1]);
+        const root = { id: n.id, name: n.name, type: n.type, nodes: 0 };
+        hiddenRoots.push(root);
+        count.set(n.id, root);
       }
     } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
   });
@@ -920,7 +931,7 @@ function resolver(sources, resolvedModes) {
   function resolve(v, depth) {
     if (!v || depth > 10) return { value: null, mode: null };
     const mode = modeFor(v);
-    const raw = (v.values || {})[mode];
+    const raw = mode === void 0 ? void 0 : (v.values || {})[mode];
     if (isAlias(raw)) {
       const target = byName.get(raw.aliasOf);
       const r = resolve(target, depth + 1);
@@ -987,12 +998,13 @@ function buildTokens(doc, vars, ds, resolvedModes) {
     const r = v ? ownResolve(v) : { value: null, mode: null };
     const row = {
       figmaName: name,
-      key: cands.length === 1 ? v.key || null : null,
+      key: cands.length === 1 && v ? v.key || null : null,
+      // v is cands[0] here
       collection: (v && v.collection) ?? null,
       // null: no variable, or the export could not name its collection
       kind: kindOf(v, fields),
       value: r.value,
-      mode: r.mode,
+      ...ifDefined("mode", r.mode),
       bindings: fields,
       sites: { visible: u.visible, hidden: u.hidden }
     };
@@ -1011,7 +1023,7 @@ function buildTokens(doc, vars, ds, resolvedModes) {
     }
     if (!dv && dsByName.has(name)) {
       const same = dsByName.get(name).filter((x) => !v || x.collection === v.collection);
-      dv = (same.length ? same : dsByName.get(name))[0];
+      dv = (same.length ? same : dsByName.get(name))[0] ?? null;
       how = "name";
     }
     if (dv && how) {
@@ -1204,11 +1216,11 @@ function main(argv) {
     return 0;
   }
   const { out, map: mapFlag, route } = flags;
-  if (positionals.length !== 3 || [out, mapFlag, route].some((v) => v === "")) {
+  const [screenFile, varsFile, dsDir] = positionals;
+  if (positionals.length !== 3 || screenFile === void 0 || varsFile === void 0 || dsDir === void 0 || [out, mapFlag, route].some((v) => v === "")) {
     console.error(USAGE);
     return 2;
   }
-  const [screenFile, varsFile, dsDir] = positionals;
   const screen = readJson(screenFile, isScreenDoc);
   if (!("doc" in screen)) return cannotRead("the screen JSON", screenFile, screen.error);
   const varsRead = readJson(varsFile, isTokensDoc);

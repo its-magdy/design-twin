@@ -60,7 +60,7 @@ export interface NativeOpts extends UnitOpts {
 export interface NativeHelpers {
   segs: (name: string | null | undefined) => string[];
   isAlias: (v: unknown) => v is VariableAlias;
-  defaultModeName: (variable: Variable, collections: VariableCollection[] | undefined) => string;
+  defaultModeName: (variable: Variable, collections: VariableCollection[] | undefined) => string | undefined;
   baseValue: (variable: Variable, collections: VariableCollection[] | undefined, def?: string) => VariableValue | undefined;
   unitDecision: (variable: Variable, opts?: UnitOpts) => UnitDecision;
   isSentinel: (v: Variable | null | undefined, raw: unknown) => boolean;
@@ -75,7 +75,7 @@ interface NativeMode { name: string; id: string }
 interface NativeField { id: string; kind: NativeKind; source: string; values: Record<string, Concrete> }
 /** The generated type's name: `<Collection>Tokens`, or `<Collection>Tokens<n>` when two collections fold onto one. */
 type NativeTypeName = `${string}Tokens` | `${string}Tokens${number}`;
-interface NativeCollection { name: string; type: NativeTypeName; modes: NativeMode[]; default: string; defaultId: string; fields: NativeField[] }
+interface NativeCollection { name: string; type: NativeTypeName; modes: [NativeMode, ...NativeMode[]]; default: string; defaultId: string; fields: NativeField[] }
 interface Candidate { v: Variable; kind: NativeKind; values: Record<string, Concrete>; id: string; final?: string }
 type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
 export interface NativeFile { file: string; text: string; warnings: string[] }
@@ -142,6 +142,8 @@ function resolve(byName: Map<string, Variable>, collections: VariableCollection[
     const target = byName.get(a.aliasOf);
     if (!target || (seen && seen.has(target.name))) return undefined;
     const tMode = target.values && target.values[mode] !== undefined ? mode : defaultModeName(target, collections);
+    // no mode at all: the target has no values, so resolving it yields undefined, as it always did
+    if (tMode === undefined) return undefined;
     return resolve(byName, collections, target, tMode, next);
   };
   // A composed colour (doc-types ComposedColor) folds into ONE hex: each half a literal or an alias
@@ -175,7 +177,8 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
   for (const c of collections) {
     const mine = vars.filter((v) => v.collection === c.name);
     const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
-    if (!mine.length || !modeNames.length) continue;
+    const [firstModeName, ...otherModeNames] = modeNames;
+    if (!mine.length || firstModeName === undefined) continue;
     let type: NativeTypeName = `${pascal([c.name])}Tokens`;
     for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
     typeNames.add(type);
@@ -218,11 +221,11 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
     // Figma variable it is. A bare counter (`space42`) said nothing and read as a number.
     const tag = (v: Variable): string | null => (v.key ? String(v.key).slice(0, 8).toLowerCase() : null);
     const label = (x: Candidate): string => `${x.v.name}${x.v.key ? ` (key ${tag(x.v)}…)` : ""} = ${JSON.stringify(x.v.values || {})}`;
-    const byId = new Map<string, Candidate[]>();
-    for (const x of cands) { if (!byId.has(x.id)) byId.set(x.id, []); byId.get(x.id)!.push(x); }
+    const byId = new Map<string, [Candidate, ...Candidate[]]>();
+    for (const x of cands) { const list = byId.get(x.id); if (list) list.push(x); else byId.set(x.id, [x]); }
     for (const [id, list] of byId) {
-      const distinct: Candidate[] = [];
-      for (const x of list) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
+      const distinct: [Candidate, ...Candidate[]] = [list[0]]; // the first is always distinct
+      for (const x of list.slice(1)) if (!distinct.some((d) => JSON.stringify(d.values) === JSON.stringify(x.values))) distinct.push(x);
       if (list.length > distinct.length) warnings.push(`${list.map(label).join(" and ")}: identical in every mode, so "${id}" in ${type} is emitted once`);
       if (distinct.length === 1) { distinct[0].final = id; continue; }
       // Different NAMES on one identifier (`Space 3` vs `(Space 3)`): the name that spells the identifier
@@ -257,14 +260,15 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
     const units = fields.reduce((n, f) => n + (f.kind === "color" || f.kind === "fontSize" ? 2 : 1), 0) + Math.ceil(fields.length / 32) + 2;
     if (modeNames.length > 1 && units > 255) warnings.push(`${c.name}: ${fields.length} tokens in one multi-mode collection need ${units} JVM parameter units (Color and TextUnit count double) — over the 255 limit, so the Compose data class will not compile; split the collection in Figma`);
     const modeIds = new Set<string>();
-    const modes = modeNames.map((name): NativeMode => {
+    const modeOf = (name: string): NativeMode => {
       let id = camel([name]);
       if (ids.has(id)) id += "Mode"; // a token literally named "light" must not collide with the Light instance
       for (let n = 2, base = id; modeIds.has(id); n++) id = base + n;
       modeIds.add(id);
       return { name, id };
-    });
-    const def = modeNames.includes(String(c.default)) ? String(c.default) : modeNames[0];
+    };
+    const modes: [NativeMode, ...NativeMode[]] = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
+    const def = modeNames.includes(String(c.default)) ? String(c.default) : firstModeName;
     out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def)!.id, fields });
   }
   return out;
@@ -277,6 +281,9 @@ const bool = (raw: unknown): string => String(raw === true || raw === "true"); /
 // (a value that fails it drops the whole field) — so a null here is a bug in this file, said loudly.
 const hexOf = (raw: unknown): string => { const h = normHex(raw); if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`); return h; };
 const argb = (raw: unknown): string => { const h = hexOf(raw); return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase(); };
+// model() drops any field that fails to resolve in one of its collection's modes, so every field has a
+// value for every mode — a miss here is a bug in this file, said loudly (as hexOf does).
+const valueIn = (f: NativeField, mode: string): Concrete => { const r = f.values[mode]; if (r === undefined) throw new Error(`tokens-native: field ${f.id} has no value for mode ${JSON.stringify(mode)}`); return r; };
 const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json — do not edit by hand; re-run after a token pull.";
 
 // ------------------------------------------------------------------------------------ compose
@@ -289,11 +296,11 @@ function compose(cols: NativeCollection[], opts?: NativeOpts): string {
   for (const c of cols) {
     L.push("", `// Figma collection "${c.name}"`);
     if (c.modes.length === 1) {
-      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
+      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
       continue;
     }
     L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
-    for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, f.values[m.name])},`), ")");
+    for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
     L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default)!.id])}) { … }`,
       `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`);
   }
@@ -322,7 +329,7 @@ function swiftui(cols: NativeCollection[]): string {
   for (const c of cols) {
     L.push("", `// Figma collection "${c.name}"`);
     if (c.modes.length === 1) {
-      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, f.values[c.modes[0].name])} // ${f.source}`), "}");
+      L.push(`public enum ${c.type} {`, ...c.fields.map((f) => `    public static let ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
       continue;
     }
     // Sendable: the `static let` modes below are globals, which Swift 6 rejects for a non-Sendable type
@@ -331,7 +338,7 @@ function swiftui(cols: NativeCollection[]): string {
     // internal — a DesignSystem package's consumer could not build a variant theme (preview, white-label).
     L.push(`public struct ${c.type}: Sendable, Equatable {`, ...c.fields.map((f) => `    public let ${f.id}: ${T[f.kind]} // ${f.source}`), "",
       `    public init(${c.fields.map((f) => `${f.id}: ${T[f.kind]}`).join(", ")}) {`, ...c.fields.map((f) => `        self.${f.id} = ${f.id}`), "    }");
-    for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, f.values[m.name])}`).join(",\n"), "    )");
+    for (const m of c.modes) L.push("", `    public static let ${m.id} = ${c.type}(`, c.fields.map((f) => `        ${f.id}: ${lit(f.kind, valueIn(f, m.name))}`).join(",\n"), "    )");
     const env = c.type.charAt(0).toLowerCase() + c.type.slice(1);
     const defId = c.defaultId;
     L.push("}", "", `private struct ${c.type}Key: EnvironmentKey { static let defaultValue = ${c.type}.${defId} }`,
@@ -350,13 +357,13 @@ function flutter(cols: NativeCollection[]): string {
   for (const c of cols) {
     L.push("", `/// Figma collection "${c.name}"`);
     if (c.modes.length === 1) {
-      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, f.values[c.modes[0].name])}; // ${f.source}`), "}");
+      L.push(`abstract final class ${c.type} {`, ...c.fields.map((f) => `  static const ${T[f.kind]} ${f.id} = ${lit(f.kind, valueIn(f, c.modes[0].name))}; // ${f.source}`), "}");
       continue;
     }
     L.push(`/// Register per theme: ThemeData(extensions: [${c.type}.${c.modes[0].id}]); read: Theme.of(context).extension<${c.type}>()!`, "@immutable",
       `class ${c.type} extends ThemeExtension<${c.type}> {`, `  const ${c.type}({`, ...c.fields.map((f) => `    required this.${f.id},`), "  });", "",
       ...c.fields.map((f) => `  final ${T[f.kind]} ${f.id}; // ${f.source}`));
-    for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  );");
+    for (const m of c.modes) L.push("", `  static const ${m.id} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  );");
     L.push("", "  @override", `  ${c.type} copyWith({`, ...c.fields.map((f) => `    ${T[f.kind]}? ${f.id},`), "  }) {", `    return ${c.type}(`,
       ...c.fields.map((f) => `      ${f.id}: ${f.id} ?? this.${f.id},`), "    );", "  }", "", "  @override",
       `  ${c.type} lerp(ThemeExtension<${c.type}>? other, double t) {`, `    if (other is! ${c.type}) return this;`, `    return ${c.type}(`,
@@ -374,13 +381,13 @@ function reactNative(cols: NativeCollection[]): string {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);
     L.push("", `/** Figma collection "${c.name}" */`);
     if (c.modes.length === 1) {
-      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, f.values[c.modes[0].name])}, // ${f.source}`), "} as const;");
+      L.push(`export const ${v} = {`, ...c.fields.map((f) => `  ${f.id}: ${lit(f.kind, valueIn(f, c.modes[0].name))}, // ${f.source}`), "} as const;");
       continue;
     }
     L.push(`export interface ${c.type} {`, ...c.fields.map((f) => `  ${f.id}: ${T[f.kind]}; // ${f.source}`), "}", "",
       `export type ${c.type}Mode = ${c.modes.map((m) => str(m.id)).join(" | ")};`, `export const ${v}DefaultMode: ${c.type}Mode = ${str(c.defaultId)};`, "",
       `export const ${v}: Record<${c.type}Mode, ${c.type}> = {`);
-    for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, f.values[m.name])},`), "  },");
+    for (const m of c.modes) L.push(`  ${m.id}: {`, ...c.fields.map((f) => `    ${f.id}: ${lit(f.kind, valueIn(f, m.name))},`), "  },");
     L.push("};");
   }
   return L.join("\n") + "\n";
@@ -400,7 +407,11 @@ function toNative(designSystem: TokensDoc | null | undefined, platform: unknown,
   if (!p) throw new Error(`unknown native platform "${String(platform)}" — use one of: ${Object.keys(PLATFORMS).join(", ")}`);
   const warnings: string[] = [];
   const cols = model(designSystem, warnings, opts);
-  return { file: PLATFORMS[p].file, text: EMIT[p](cols, opts), warnings };
+  // platformOf accepted p by a truthiness test on PLATFORMS, and EMIT has the same keys (and the same
+  // inherited ones), so this never fires
+  const target = PLATFORMS[p], emit = EMIT[p];
+  if (target === undefined || emit === undefined) throw new Error(`tokens-native: platform "${p}" has no emitter`);
+  return { file: target.file, text: emit(cols, opts), warnings };
 }
 
 return { toNative, platformOf, PLATFORMS };

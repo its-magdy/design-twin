@@ -279,7 +279,9 @@ function colorLiterals(source: string): Map<string, string> {
   for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
   // Compose / Flutter `Color(0xFF5B5FC7)` — AARRGGBB (alpha FIRST), or bare 0xRRGGBB.
   for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
-    const h = m[1].toLowerCase();
+    const g = m[1];
+    if (g === undefined) continue; // the group is not optional: set whenever the regex matched
+    const h = g.toLowerCase();
     add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
   for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
@@ -335,7 +337,7 @@ function arbitraryPx(source: string): Map<number, PxHit[]> {
   const found = new Map<number, PxHit[]>();
   for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry: PxHit = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const entry: PxHit = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null }; // ?? null: the group is not optional, so it never applies
     const list = found.get(px) || [];
     if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
     found.set(px, list);
@@ -354,7 +356,10 @@ function arbitraryPx(source: string): Map<number, PxHit[]> {
 function importsOf(text: string): string[] {
   const out: string[] = [];
   const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
-  for (const m of text.matchAll(re)) out.push(m[1] || m[2] || m[3] || m[4]);
+  for (const m of text.matchAll(re)) {
+    const spec = m[1] || m[2] || m[3] || m[4]; // each alternative captures a non-empty specifier, so one is always set
+    if (spec !== undefined) out.push(spec);
+  }
   return out;
 }
 
@@ -365,7 +370,8 @@ const SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart
 function moduleSegments(spec: unknown): string[] {
   let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
   const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
-  if (segs.length && /^[@~#]$/.test(segs[0])) segs.shift();
+  const [first] = segs;
+  if (first !== undefined && /^[@~#]$/.test(first)) segs.shift();
   return segs;
 }
 
@@ -384,7 +390,10 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
   const suffixMatch = (have: string[]): boolean => {
     const k = Math.min(have.length, want.length);
     if (!k) return false;
-    for (let i = 1; i <= k; i++) if (have[have.length - i].toLowerCase() !== want[want.length - i].toLowerCase()) return false;
+    for (let i = 1; i <= k; i++) {
+      const h = have[have.length - i], w = want[want.length - i]; // i <= k <= both lengths, so both are set
+      if (h === undefined || w === undefined || h.toLowerCase() !== w.toLowerCase()) return false;
+    }
     return true;
   };
   const wantAbs = moduleSegments(path.relative(cwd, path.resolve(cwd, String(mapModule))));

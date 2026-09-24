@@ -27,6 +27,7 @@ function joinNegativeValues(argv: string[], options: ParseArgsOptionsConfig): st
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === undefined) continue; // i < argv.length, so never
     if (tok === "--") { out.push(...argv.slice(i)); break; }
     const name = tok.startsWith("--") ? tok.slice(2) : undefined;
     if (name !== undefined && next !== undefined && options[name]?.type === "string" && /^-\d/.test(next)) { out.push(`${tok}=${next}`); i++; }

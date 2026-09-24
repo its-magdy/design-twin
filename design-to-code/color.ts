@@ -22,9 +22,9 @@ const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 /** "#abc" / "ABCD" / "#aabbcc" / "aabbccdd" -> "#aabbcc" / "#aabbccdd" (lowercase, alpha kept); anything else -> null. */
 export function normHex(v: unknown): string | null {
   if (typeof v !== "string") return null;
-  const m = HEX.exec(v.trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
+  const g = HEX.exec(v.trim())?.[1]; // the group is not optional: set whenever the regex matched
+  if (g === undefined) return null;
+  const h = g.toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
 
@@ -104,6 +104,7 @@ export function luminance(c: Rgba): number {
 }
 /** WCAG contrast ratio, 1–21, whichever of the two is lighter. */
 export function contrastRatio(a: Rgba, b: Rgba): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  const la = luminance(a), lb = luminance(b);
+  const hi = Math.max(la, lb), lo = Math.min(la, lb);
   return (hi + 0.05) / (lo + 0.05);
 }

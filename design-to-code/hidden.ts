@@ -46,7 +46,7 @@ function walkWithHidden(root: IrNode | null | undefined, fn: WalkVisitor, opts?:
     const hidden = isHidden(node, parentHidden);
     fn(node, { hidden, parentHidden: !!parentHidden, path, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path ? path + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path ? path + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 

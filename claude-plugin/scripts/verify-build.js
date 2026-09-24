@@ -56,7 +56,7 @@ function walkWithHidden(root, fn, opts) {
     const hidden = isHidden(node, parentHidden);
     fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path4 ? path4 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -68,9 +68,9 @@ import path from "node:path";
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
   if (typeof v !== "string") return null;
-  const m = HEX.exec(v.trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
 function colorKey(v) {
@@ -268,7 +268,7 @@ if (false) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
@@ -335,7 +335,8 @@ if (false) {
     console.log(USAGE3);
     process.exit(0);
   }
-  if (!files.length) {
+  const firstFile = files[0];
+  if (firstFile === void 0) {
     console.error(USAGE3);
     process.exit(2);
   }
@@ -353,7 +354,7 @@ if (false) {
   const ctx = variablesContext2(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog3, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
     tokens: readOptionalDoc2(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc3),
@@ -365,7 +366,7 @@ if (false) {
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path.join("design", "audit", path.basename(files[0], ".json"));
+  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
     const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {
@@ -631,8 +632,9 @@ function visibility(doc) {
     if (ctx.hidden) {
       hidden.add(n.id);
       if (ctx.hiddenRoot) {
-        hiddenRoots.push({ id: n.id, name: n.name, type: n.type, nodes: 0 });
-        count.set(n.id, hiddenRoots[hiddenRoots.length - 1]);
+        const root = { id: n.id, name: n.name, type: n.type, nodes: 0 };
+        hiddenRoots.push(root);
+        count.set(n.id, root);
       }
     } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
   });
@@ -900,7 +902,9 @@ function colorLiterals(source) {
   };
   for (const m of source.matchAll(/#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g)) add(colorKey(m[1]), m[0]);
   for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
-    const h = m[1].toLowerCase();
+    const g = m[1];
+    if (g === void 0) continue;
+    const h = g.toLowerCase();
     add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
   for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
@@ -951,7 +955,7 @@ function arbitraryPx(source) {
   const found = /* @__PURE__ */ new Map();
   for (const m of source.matchAll(/(?:^|[\s"'`{(])([a-z-]+)-\[(-?\d+(?:\.\d+)?)(px|rem)\]/g)) {
     const px = Number(m[2]) * (m[3] === "rem" ? 16 : 1);
-    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] };
+    const entry = { literal: `[${m[2]}${m[3]}]`, utility: m[1] ?? null };
     const list = found.get(px) || [];
     if (!list.some((e) => e.utility === entry.utility)) list.push(entry);
     found.set(px, list);
@@ -965,14 +969,18 @@ function arbitraryPx(source) {
 function importsOf(text) {
   const out = [];
   const re = /\bimport\s+(?:[^'"`;]*?\sfrom\s+)?["'`]([^"'`]+)["'`]|\bexport\s+[^'"`;]*?\sfrom\s+["'`]([^"'`]+)["'`]|\b(?:require|import)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|@import\s+(?:url\()?["']([^"']+)["']/g;
-  for (const m of text.matchAll(re)) out.push(m[1] || m[2] || m[3] || m[4]);
+  for (const m of text.matchAll(re)) {
+    const spec = m[1] || m[2] || m[3] || m[4];
+    if (spec !== void 0) out.push(spec);
+  }
   return out;
 }
 var SRC_EXT_RE = /\.(tsx?|jsx?|mjs|cjs|vue|svelte|astro|css|scss|swift|kt|dart)$/i;
 function moduleSegments(spec) {
   let s = String(spec || "").trim().replace(/\\/g, "/").replace(SRC_EXT_RE, "").replace(/\/index$/i, "");
   const segs = s.split("/").filter((x) => x && x !== "." && x !== "..");
-  if (segs.length && /^[@~#]$/.test(segs[0])) segs.shift();
+  const [first] = segs;
+  if (first !== void 0 && /^[@~#]$/.test(first)) segs.shift();
   return segs;
 }
 function moduleImported(mapModule, byFile, cwd) {
@@ -981,7 +989,10 @@ function moduleImported(mapModule, byFile, cwd) {
   const suffixMatch = (have) => {
     const k = Math.min(have.length, want.length);
     if (!k) return false;
-    for (let i = 1; i <= k; i++) if (have[have.length - i].toLowerCase() !== want[want.length - i].toLowerCase()) return false;
+    for (let i = 1; i <= k; i++) {
+      const h = have[have.length - i], w = want[want.length - i];
+      if (h === void 0 || w === void 0 || h.toLowerCase() !== w.toLowerCase()) return false;
+    }
     return true;
   };
   const wantAbs = moduleSegments(path3.relative(cwd, path3.resolve(cwd, String(mapModule))));

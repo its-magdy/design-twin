@@ -107,7 +107,7 @@ function visibility(doc: ScreenDoc | null | undefined): Visibility {
     if (!n.id) return;
     if (ctx.hidden) {
       hidden.add(n.id);
-      if (ctx.hiddenRoot) { hiddenRoots.push({ id: n.id, name: n.name, type: n.type, nodes: 0 }); count.set(n.id, hiddenRoots[hiddenRoots.length - 1]); }
+      if (ctx.hiddenRoot) { const root: PlanHiddenRoot = { id: n.id, name: n.name, type: n.type, nodes: 0 }; hiddenRoots.push(root); count.set(n.id, root); }
     } else visible.set(n.id, { node: n, parentId: ctx.parent ? ctx.parent.id : null, insideInstance: ctx.insideInstance });
   });
   // how many nodes each hidden root hides (itself included)
@@ -162,7 +162,8 @@ function kindOf(variable: Variable | null | undefined, fields: string[]): TokenK
 
 const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
 
-interface Resolved { value: JsonValue | null; mode: string | null; via?: string }
+// mode is undefined for a variable with no values at all (no mode to name), as it always was at runtime
+interface Resolved { value: JsonValue | null; mode: string | null | undefined; via?: string }
 
 // A variable's value in the mode this frame renders. The frame's `resolvedModes` names a mode per
 // COLLECTION; an alias hops to another collection, whose own mode is looked up the same way.
@@ -173,7 +174,7 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
     for (const v of (src && src.variables) || []) if (v && v.name && !byName.has(v.name)) byName.set(v.name, v);
     for (const c of (src && src.collections) || []) if (c && c.name && !collections.has(c.name)) collections.set(c.name, c);
   }
-  const modeFor = (v: Variable): string => {
+  const modeFor = (v: Variable): string | undefined => {
     const vals = v.values || {};
     const keys = Object.keys(vals);
     // A variable whose collection the export could not name has no frame mode and no collection default.
@@ -188,7 +189,7 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
   function resolve(v: Variable | null | undefined, depth: number): Resolved {
     if (!v || depth > 10) return { value: null, mode: null };
     const mode = modeFor(v);
-    const raw = (v.values || {})[mode];
+    const raw = mode === undefined ? undefined : (v.values || {})[mode]; // no mode: no values to read
     if (isAlias(raw)) {
       const target = byName.get(raw.aliasOf);
       const r = resolve(target, depth + 1);
@@ -273,11 +274,11 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     // Built in the order the plan file shows its keys; codeToken/verdict are filled last (below).
     const row: TokenRowDraft = {
       figmaName: name,
-      key: cands.length === 1 ? v.key || null : null,
+      key: cands.length === 1 && v ? v.key || null : null, // v is cands[0] here
       collection: (v && v.collection) ?? null, // null: no variable, or the export could not name its collection
       kind: kindOf(v, fields),
       value: r.value,
-      mode: r.mode,
+      ...ifDefined("mode", r.mode),
       bindings: fields,
       sites: { visible: u.visible, hidden: u.hidden },
     };
@@ -296,7 +297,7 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     for (const c of cands) if (c.key && dsByKey.has(c.key)) { dv = dsByKey.get(c.key)!; how = "key"; break; }
     if (!dv && dsByName.has(name)) {
       const same = dsByName.get(name)!.filter((x) => !v || x.collection === v.collection);
-      dv = (same.length ? same : dsByName.get(name)!)[0];
+      dv = (same.length ? same : dsByName.get(name)!)[0] ?? null; // ?? null: every dsByName list has an entry (built by push), and dv is only tested for truthiness
       how = "name";
     }
     if (dv && how) {
@@ -522,8 +523,9 @@ function main(argv: string[]): number {
   const { values: flags, positionals } = cliParse("plan-skeleton", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   const { out, map: mapFlag, route } = flags;
-  if (positionals.length !== 3 || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }
   const [screenFile, varsFile, dsDir] = positionals;
+  // (three positionals means all three are set; the undefined tests only let the type see it)
+  if (positionals.length !== 3 || screenFile === undefined || varsFile === undefined || dsDir === undefined || [out, mapFlag, route].some((v) => v === "")) { console.error(USAGE); return 2; }
   const screen = readJson(screenFile, isScreenDoc);
   if (!("doc" in screen)) return cannotRead("the screen JSON", screenFile, screen.error);
   const varsRead = readJson(varsFile, isTokensDoc);

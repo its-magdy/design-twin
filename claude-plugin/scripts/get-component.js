@@ -198,7 +198,8 @@ function findComponent(catalog, handle) {
   const byId = comps.find((c) => c.id === handle);
   if (byId) return byId;
   const byName = comps.filter((c) => c.name === handle);
-  if (byName.length === 1) return byName[0];
+  const only = byName.length === 1 ? byName[0] : void 0;
+  if (only) return only;
   if (byName.length > 1) {
     const err = new Error(`'${handle}' matches ${byName.length} components by name \u2014 use its key or id instead (${byName.map((c) => c.key || c.id).join(", ")})`);
     err.code = "ambiguous-name";

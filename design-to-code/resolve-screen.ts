@@ -128,7 +128,8 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   // Stage 1: node id. Evaluated ALONE — an id is unique and never joins the name/title union below.
   if (NODE_ID_RE.test(q)) {
     const idMatches = rows.filter((r) => r.id === q);
-    if (idMatches.length === 1) return { status: "resolved", row: idMatches[0], stage: "node id" };
+    const only = idMatches.length === 1 ? idMatches[0] : undefined;
+    if (only) return { status: "resolved", row: only, stage: "node id" };
     // idMatches.length > 1 cannot legitimately happen (ids are unique in one export) and 0 falls
     // through to the union below on the off chance the query is BOTH id-shaped and a real name.
   }
@@ -152,8 +153,8 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
     if (planIds.has(r.id)) join(r, "plan screenName/route");
   }
   const unionRows = [...union.values()];
-  if (unionRows.length === 1) {
-    const only = unionRows[0];
+  const only = unionRows.length === 1 ? unionRows[0] : undefined;
+  if (only) {
     return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
   }
   if (unionRows.length > 1) {
@@ -198,7 +199,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const listCandidates = (candidates: ScreenCandidate[]): void => {
     for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}${c.matchedVia ? ` [matched: ${c.matchedVia.join(", ")}]` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
   };
-  const res = resolveScreen(exportDir, query, { planDir });
+  const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");

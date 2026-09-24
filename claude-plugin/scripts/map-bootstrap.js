@@ -490,8 +490,8 @@ function freshEntry(c) {
   const entry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
   const props = nullProto();
   const defs = c.props || {};
-  for (const pn of Object.keys(defs)) {
-    const pe = propEntry(pn, defs[pn]);
+  for (const [pn, def] of Object.entries(defs)) {
+    const pe = propEntry(pn, def);
     if (pe) props[pn] = pe;
   }
   if (Object.keys(props).length) entry.props = props;
@@ -502,9 +502,9 @@ function bootstrap(catalog, existing) {
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev = existing && existing.components || {};
   const prevByIdent = /* @__PURE__ */ new Map();
-  for (const pk of Object.keys(prev)) {
+  for (const [pk, pe] of Object.entries(prev)) {
     if (!prevByIdent.has(pk)) prevByIdent.set(pk, pk);
-    const pf = prev[pk].figma || {};
+    const pf = pe.figma || {};
     if (pf.key && !prevByIdent.has(pf.key)) prevByIdent.set(pf.key, pk);
     if (pf.id && !prevByIdent.has(pf.id)) prevByIdent.set(pf.id, pk);
   }
@@ -527,8 +527,8 @@ function bootstrap(catalog, existing) {
       if (entry.props) Object.assign(props, entry.props);
       entry.props = props;
       const defs = c.props || {};
-      for (const pn of Object.keys(defs)) {
-        const cdef = defs[pn], kind = TYPE_TO_KIND[cdef.type], ex = props[pn];
+      for (const [pn, cdef] of Object.entries(defs)) {
+        const kind = TYPE_TO_KIND[cdef.type], ex = props[pn];
         if (!ex || kind && ex.kind && ex.kind !== kind) {
           const pe = propEntry(pn, cdef);
           if (pe) props[pn] = pe;
@@ -540,14 +540,14 @@ function bootstrap(catalog, existing) {
       out.components[id] = freshEntry(c);
     }
   }
-  for (const pk of Object.keys(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(prev[pk]);
+  for (const [pk, pe] of Object.entries(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(pe);
   return out;
 }
 function bootstrapFromProposals(proposals, catalog, existing) {
   const out = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev = existing && existing.components || {};
-  for (const pk of Object.keys(prev)) out.components[pk] = clone(prev[pk]);
+  for (const [pk, pe] of Object.entries(prev)) out.components[pk] = clone(pe);
   const comps = catalog && catalog.components || [];
   const report = { confirmed: 0, added: 0, kept: 0, skipped: [] };
   for (const p of proposals || []) {
@@ -587,29 +587,32 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   let outFile = null, proposalsFile = null, screenFile = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
-    proposalsFile = argv[pi + 1];
-    if (!proposalsFile || proposalsFile.startsWith("--")) {
+    const next = argv[pi + 1];
+    if (!next || next.startsWith("--")) {
       console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage);
       process.exit(1);
     }
+    proposalsFile = next;
     argv.splice(pi, 2);
   }
   const si = argv.indexOf("--screen");
   if (si !== -1) {
-    screenFile = argv[si + 1];
-    if (!screenFile || screenFile.startsWith("--")) {
+    const next = argv[si + 1];
+    if (!next || next.startsWith("--")) {
       console.error("--screen needs a screen export .json\n" + usage);
       process.exit(1);
     }
+    screenFile = next;
     argv.splice(si, 2);
   }
   const o = argv.indexOf("--out");
   if (o !== -1) {
-    outFile = argv[o + 1];
-    if (!outFile || outFile.startsWith("--")) {
+    const next = argv[o + 1];
+    if (!next || next.startsWith("--")) {
       console.error("--out needs a file path\n" + usage);
       process.exit(1);
     }
+    outFile = next;
     argv.splice(o, 2);
   }
   const unknown = argv.find((a) => a.startsWith("--"));
