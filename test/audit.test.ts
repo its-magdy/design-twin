@@ -145,6 +145,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   check("[shape] a --variables file that is not a token catalog -> exit 2, one line",
     oneLine(run([login, "--variables", put("vars.json", { collections: {} }), "--json"]), /variables: '.*vars\.json' is not a token catalog/));
   check("[grid] `--grid abc` is refused (was: silently the 4px default)", oneLine(run([login, "--grid", "abc", "--json"]), /--grid must be a positive number of px, got "abc"/));
+  check("[grid] `--grid -1` (space form) reaches the same message, not '--grid needs a value'", oneLine(run([login, "--grid", "-1", "--json"]), /--grid must be a positive number of px, got "-1"/));
   check("[args] `--out --json` is '--out needs a value', never a report written to a file named --json", (() => {
     const r = run([login, "--out", "--json"]);
     return r.status === 2 && /audit: --out needs a value/.test(r.stderr) && !fs.existsSync(path.join(tmp, "--json.json"));

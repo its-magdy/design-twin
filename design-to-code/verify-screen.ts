@@ -1140,7 +1140,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); process.exit(argv.length ? 0 : 2); }
 
   const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
-  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   const { out, interactions: interactionsFile } = flags;
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
   if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); process.exit(2); }

@@ -961,7 +961,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const OPTIONS = {
     "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
-  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); process.exit(0); }
   if (!files.length) { console.error(USAGE); process.exit(2); }
   const { "design-system": dsDir, variables: varsFile, out } = flags;

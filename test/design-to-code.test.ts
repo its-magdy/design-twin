@@ -783,6 +783,10 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
     const r = run("drift-lint.ts", ["map.json", goodCat, "--scren", "x", "--max-agee", "1"]);
     return r.status === 2 && /unknown flag --scren, --max-agee/.test(r.stderr);
   })());
+  check("[args] drift-lint: `--max-age -5` (space form) is refused as not positive, not as '--max-age needs a value'", (() => {
+    const r = run("drift-lint.ts", ["map.json", goodCat, "--max-age", "-5"]);
+    return r.status === 2 && /--max-age expects a positive number of hours/.test(r.stderr);
+  })());
   check("[usage] the usage line names the installed command (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js), not a repo path",
     /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/drift-lint\.js"/.test(run("drift-lint.ts", []).stderr)
     && /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/tokens\.js"/.test(run("tokens.ts", ["--help"]).stdout));

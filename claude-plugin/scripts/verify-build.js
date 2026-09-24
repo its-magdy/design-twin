@@ -249,7 +249,7 @@ if (false) {
     gate: { type: "boolean" },
     help: { type: "boolean", short: "h" }
   };
-  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE3, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE3, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE3);
     process.exit(0);
@@ -325,7 +325,7 @@ if (false) {
     force: { type: "boolean" },
     help: { type: "boolean", short: "h" }
   };
-  const { values: flags, positionals: files } = cliParse2("audit", argv, OPTIONS, USAGE3, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals: files } = cliParse2("audit", argv, OPTIONS, USAGE3, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE3);
     process.exit(0);

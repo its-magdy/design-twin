@@ -1064,7 +1064,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "       additionally write the generic set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/).\n" +
     "       Without a target flag, only the generic set is written (unchanged).";
   const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
-  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, () => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs({ args: a, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); process.exit(0); }
   const { native, web, package: kotlinPackage } = flags;
   const alsoGeneric = !!flags["also-generic"];
