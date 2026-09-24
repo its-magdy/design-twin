@@ -8,6 +8,7 @@ import type {
 import { round, lower, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty, isList } from "./util";
 import { resolveBoundMap, resolveVar, isVariableAlias } from "./variables";
 import { collectSourceImage } from "./assets";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 const FILTER_KEYS: Array<keyof IrImageFilters & keyof ImageFilters> = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
 
@@ -33,7 +34,7 @@ function paintExtras<T extends IrPaintBase>(f: Paint, o: T): T {
 // IMAGE and VIDEO paints share the same shape (scaleMode, tile scale, rotation, crop transform,
 // color filters) — only the hash/transform source fields differ. One helper keeps them in lockstep.
 function mediaPaint(f: ImagePaint | VideoPaint, type: IrMediaPaint["type"], hash: string | null | undefined, transform: Transform | undefined): IrMediaPaint {
-  const o = paintExtras<IrMediaPaint>(f, { type, scaleMode: f.scaleMode ? lower(f.scaleMode) : undefined });
+  const o = paintExtras<IrMediaPaint>(f, { type, ...ifDefined("scaleMode", f.scaleMode ? lower(f.scaleMode) : undefined) });
   if (hash) o.hash = hash; // correlates the fill to an exported asset
   if (f.scaleMode === "TILE" && typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
   if (typeof f.rotation === "number" && f.rotation) o.rotation = f.rotation;

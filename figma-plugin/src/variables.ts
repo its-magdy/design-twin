@@ -6,7 +6,7 @@ import type {
 } from "../../bridge/src/doc-types.ts";
 import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
-import { isUnknownArray } from "../../bridge/src/json-util.ts";
+import { isUnknownArray, ifDefined } from "../../bridge/src/json-util.ts";
 
 // The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
 // places (bound-variable maps, valuesByMode entries, nested per-property binding objects).
@@ -371,7 +371,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // status — a variable can be CURRENT inside a collection that has never been published).
   if (pendingPublish.length) {
     const st = await Promise.all(pendingPublish.map((p) => publishOf(p.obj)));
-    for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
+    for (let i = 0; i < pendingPublish.length; i++) { const s = st[i]; if (s) pendingPublish[i].rec.publish = s; }
   }
   const collPublish: Record<string, string> = {};
   if (asLibrary) {
@@ -386,15 +386,15 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       name: c.name,
       modes: c.modes.map((m) => m.name),
       // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
-      default: modeName[c.defaultModeId] || undefined,
+      ...ifDefined("default", modeName[c.defaultModeId] || undefined),
       theming: c.modes.length > 1,
       // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
       // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
       // resolution (mode.parentModeId -> root mode) is deferred.
-      extended: c.isExtension === true ? true : undefined,
-      hiddenFromPublishing: c.hiddenFromPublishing === true ? true : undefined,
-      key: c.key || undefined, // durable cross-file collection identity
-      publish: collPublish[c.id] || undefined, // library mode only
+      ...ifDefined<"extended", true>("extended", c.isExtension === true ? true : undefined),
+      ...ifDefined<"hiddenFromPublishing", true>("hiddenFromPublishing", c.hiddenFromPublishing === true ? true : undefined),
+      ...ifDefined("key", c.key || undefined), // durable cross-file collection identity
+      ...ifDefined("publish", collPublish[c.id] || undefined), // library mode only
     })),
     variables,
     hygiene,

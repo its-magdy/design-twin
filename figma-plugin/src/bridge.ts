@@ -8,6 +8,7 @@ import { type RunInfo } from "./progress";
 // exhaustive over `Cmd`, each branch sees that command's own `args`, and its reply type is what the
 // bridge's `request()` promises its callers. esbuild inlines the module like read-opts.ts.
 import { parseCommandRequest } from "../../bridge/src/commands.ts";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 import type {
   Cmd, CommandRequest, Commands, PingReply, WhoamiReply,
 } from "../../bridge/src/commands.ts";
@@ -122,7 +123,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     case "screenshot": {
       const a = req.args;
       // `scale` is a number or absent (parseCommandRequest); a value <= 0 still means "default" in collectReference.
-      return serializeRun(() => collectScreenshot(a.nodeId, { scale: a.scale }), bridgeRun(req.cmd));
+      return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd));
     }
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));

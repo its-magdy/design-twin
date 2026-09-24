@@ -1,5 +1,6 @@
 // Writes (code -> design): minimal, EXPLICIT, safe command set (no eval).
 import { errMsg } from "./util";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // Handle 3/4/6/8-digit hex (CSS Color L4). Shorthand expands by doubling each digit; the optional
 // 4th pair is alpha, which Figma carries as paint.opacity (not in .color).
@@ -12,7 +13,7 @@ function parseHex(hex: string): { color: RGB; opacity?: number } {
   };
   return {
     color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-    opacity: h.length >= 8 ? chan(h.slice(6, 8)) : undefined,
+    ...ifDefined("opacity", h.length >= 8 ? chan(h.slice(6, 8)) : undefined),
   };
 }
 
@@ -53,20 +54,22 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
 
 // Args for the small explicit write-op set above (no eval — see file header). Only the fields each
 // op actually reads are listed; the bridge/CLI callers assemble these from JSON.
+// Optionals are `T | undefined` to accept bridge/src/commands.ts WriteOp (zod-parsed, same widening);
+// applyWrite tests each for truthiness / `!= null`, so absent and undefined behave the same.
 export interface WriteOp {
   op: string;
-  parentId?: string;
-  name?: string;
-  width?: number;
-  height?: number;
-  layoutMode?: "HORIZONTAL" | "VERTICAL";
-  itemSpacing?: number;
-  padding?: [number, number, number, number];
-  fill?: string;
-  text?: string;
-  fontSize?: number;
-  nodeId?: string;
-  color?: string;
+  parentId?: string | undefined;
+  name?: string | undefined;
+  width?: number | undefined;
+  height?: number | undefined;
+  layoutMode?: "HORIZONTAL" | "VERTICAL" | undefined;
+  itemSpacing?: number | undefined;
+  padding?: [number, number, number, number] | undefined;
+  fill?: string | undefined;
+  text?: string | undefined;
+  fontSize?: number | undefined;
+  nodeId?: string | undefined;
+  color?: string | undefined;
 }
 
 async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
@@ -107,7 +110,7 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
       (nd as GeometryMixin).fills = [solidPaint(op.color || "")];
-      return { id: op.nodeId };
+      return ifDefined("id", op.nodeId);
     }
     case "setText": {
       const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
@@ -115,7 +118,7 @@ async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
       nd.characters = op.text || "";
-      return { id: op.nodeId };
+      return ifDefined("id", op.nodeId);
     }
     default:
       throw new Error("unknown write op: " + op.op);

@@ -8,6 +8,7 @@
 // OUTSIDE the run (the UI's Cancel click lands on the main thread while the walk is mid-await), and
 // the only one whose whole job is to talk to the iframe. state.ts imports it — never the reverse — so
 // there is no cycle, and a collector can be unit-driven with no run bracketing it at all (see `running`).
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // ---------------------------------------------------------------- what this module posts to the UI
 /** The page the walk is on: 1-based `index` of `of` pages walked. `pageId` is the identity (page names
@@ -141,12 +142,12 @@ export function progress(phase: Phase, extra?: ProgressCounters, force?: boolean
   const now = Date.now();
   if (!force && now - lastPost < MIN_INTERVAL_MS) return;
   lastPost = now;
-  post({ type: "progress", phase, source: running.source, label: running.label, page, ...extra });
+  post({ type: "progress", phase, source: running.source, label: running.label, ...ifDefined("page", page), ...extra });
 }
 
 /** Cross a page boundary: remember the page and emit an UNTHROTTLED frame for it. `index` is 1-based
  *  so the UI can render it as "page 3 of 25" without doing arithmetic on the wire format. */
 export function enterPage(phase: Phase, index: number, of: number, name: string, pageId?: string, extra?: ProgressCounters): void {
-  page = { index, of, name, pageId };
+  page = { index, of, name, ...ifDefined("pageId", pageId) };
   progress(phase, extra, true);
 }
