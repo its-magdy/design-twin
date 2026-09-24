@@ -10,7 +10,7 @@ import path from "node:path";
 import { ok, report } from "./assert.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-// "ws" has no types of its own; see bridge/src/ws.d.ts for the ambient shim.
+// "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { RawData } from "ws";
 import type { RequestArgs } from "../bridge/src/server-core.ts";

@@ -17,5 +17,5 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts", "../design-to-code/**/*.ts", "../bridge/src/ws.d.ts"]
+  "include": ["./**/*.ts", "../design-to-code/**/*.ts"]
 }
