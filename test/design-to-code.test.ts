@@ -503,6 +503,15 @@ check("[sec-boot-prop-proto-key] catalog prop named '__proto__' does not corrupt
   const props: unknown = m.components.K.props;
   return props !== undefined && Object.keys(props as object).includes("__proto__") && (props as Record<string, { kind?: string }>)["__proto__"]?.kind === "boolean";
 })());
+check("[boot-safeassign-no-figma] a prior entry lacking `figma` does not throw (safeAssign tolerates undefined/null sources like Object.assign)", (() => {
+  // MapEntry.figma is typed as required, but a hand-edited/hostile map on disk (JSON.parse output,
+  // never runtime-checked here) can genuinely lack it. safeAssign({}, entry.figma, {...}) must not
+  // throw when entry.figma is undefined — it should behave like Object.assign and just skip it.
+  const existingRaw: unknown = JSON.parse('{"version":1,"components":{"K":{"code":{"module":"@/k","export":"B"},"status":"active"}}}');
+  const existing = malformed<CodeConnectMap>(existingRaw);
+  const m = bootstrap(catalog([{ key: "K", name: "New", type: "COMPONENT" }]), existing);
+  return m.components.K.figma.name === "New";
+})());
 check("[sec-lint-proto-key] prop named '__proto__' is compared, not silently skipped", (() => {
   // Maps load via JSON.parse, which (unlike an object literal) creates a real own "__proto__" key.
   // A map prop '__proto__' absent on the Figma component must surface as stale-prop, not be skipped.

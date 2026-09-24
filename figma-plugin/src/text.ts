@@ -56,6 +56,9 @@ function fontObj(src: TextStyleSource): FontSpec {
   if (src.fontName && src.fontName !== figma.mixed) {
     f.family = src.fontName.family;
     f.weight = src.fontName.style; // e.g. "Semibold Italic" — keep verbatim
+    // Variable font axis values (Update 138), e.g. {wght: 600, slnt: -10}. Absent for a static font.
+    const vs = src.fontName.variationSettings;
+    if (vs && Object.keys(vs).length) f.variationSettings = { ...vs };
   }
   // Numeric CSS weight when the API exposes it (both node-level and per-segment; figma.mixed for
   // mixed-weight uniform text falls through and leaves weightValue unset).
@@ -95,7 +98,7 @@ function fontObj(src: TextStyleSource): FontSpec {
 // element type stays `keyof Omit<StyledTextSegment, 'characters'|'start'|'end'>` — a readonly tuple
 // isn't assignable to getStyledTextSegments' `T extends (...)[]` (mutable array) constraint, and the
 // wider element type still gives every field below full compile-time checking (TS just can't narrow the
-// segment's Pick<> to exactly these 20 keys — it types it as the full StyledTextSegment shape instead).
+// segment's Pick<> to exactly these 21 keys — it types it as the full StyledTextSegment shape instead).
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",

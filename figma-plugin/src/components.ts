@@ -118,8 +118,10 @@ async function simplifyVisuals(node: ComponentNode | ComponentSetNode): Promise<
 }
 
 // A variant's own prop VALUES (not definitions — componentPropertyDefinitions throws on a variant).
-// variantProperties is deprecated with no replacement (InstanceNode.componentProperties is
-// instance-only), so prefer it when present, else parse the name Figma guarantees is "Prop=Val, ...".
+// variantProperties is deprecated for INSTANCES (use InstanceNode.componentProperties instead), but
+// NOT deprecated for components/variants in a component set — `main` here is the main COMPONENT node,
+// so this read is the supported path — prefer it when present, else parse the name Figma guarantees is
+// "Prop=Val, ...".
 function variantValues(main: ComponentNode): Record<string, string> | undefined {
   try {
     if (main.variantProperties && Object.keys(main.variantProperties).length) return { ...main.variantProperties };

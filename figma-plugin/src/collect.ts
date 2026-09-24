@@ -460,13 +460,16 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
   const sink = (m: string) => localWarnings.push(m);
   const node = await findNodeById(nodeId, sink);
   if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf — it has no children to list.");
-  // PageNode.children THROWS under dynamic-page access unless the page is loaded (and unless it's the
-  // CURRENT page, which is always implicitly loaded) — https://developers.figma.com/docs/plugins/
-  // migrating-to-dynamic-loading/: "Before traversing into PageNode.children, plugins will have to
-  // explicitly call PageNode.loadAsync()". findNodeById already loaded `node` itself when it's a plain
-  // scene node reached via a page scan, but a PAGE node reached directly (rawId is a page id) never goes
-  // through that path, so load it explicitly here.
-  if (node.type === "PAGE" && node.id !== figma.currentPage.id) await loadPageSafely(node, sink, "before listing its children");
+  // PageNode.children THROWS under dynamic-page access unless the page is loaded —
+  // https://developers.figma.com/docs/plugins/migrating-to-dynamic-loading/: "Before traversing into
+  // PageNode.children, plugins will have to explicitly call PageNode.loadAsync()". The migration guide
+  // is explicit that even the CURRENT page needs this: "If you are accessing the current page using an
+  // expression like figma.root.children[x], then you will be required to call loadAsync()" — so this
+  // calls loadPageSafely unconditionally (a no-op when the page is already loaded) rather than skipping
+  // it for figma.currentPage. findNodeById already loaded `node` itself when it's a plain scene node
+  // reached via a page scan, but a PAGE node reached directly (rawId is a page id) never goes through
+  // that path, so load it explicitly here.
+  if (node.type === "PAGE") await loadPageSafely(node, sink, "before listing its children");
   let kids: ReadonlyArray<SceneNode | PageNode>;
   try {
     kids = node.children;

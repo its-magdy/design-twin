@@ -196,6 +196,9 @@ export interface FontSpec {
   weight?: string;
   /** numeric CSS weight when the API exposes it (node-level only) */
   weightValue?: number;
+  /** FontName.variationSettings: the variable font axis values applied, e.g. {wght: 600, slnt: -10}.
+   *  Absent for a static font. */
+  variationSettings?: Record<string, number>;
   lineHeight?: LengthSpec;
   letterSpacing?: LengthSpec;
   case?: "upper" | "lower" | "title" | "small_caps" | "small_caps_forced";
@@ -343,7 +346,7 @@ export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type:
 export interface MotionTrack { base?: JsonValue; keyframes?: MotionKeyframe[] }
 /** One timeline-animated field (KeyframeBinding): base value, the timeline's duration, and its tracks,
  *  each with a non-SET keyframe operation and keyframes. */
-export interface MotionAnimation { base?: JsonValue; duration?: number; tracks?: Array<{ op?: string; keyframes?: MotionKeyframe[] }> }
+export interface MotionAnimation { base?: JsonValue; duration?: number; tracks?: Array<{ op?: "offset" | "scale"; keyframes?: MotionKeyframe[] }> }
 /** A fills[i] / strokes[i] motion entry (PaintManualKeyframeTrack / PaintKeyframeBinding): either ONE binding
  *  for the whole paint, or — for a shader paint — one binding per shader property id under `properties`. */
 export type MotionPaintTrack<T> = T | { properties: Record<string, T> };
@@ -362,11 +365,24 @@ export type MotionTracks = Record<string, MotionTrack> & MotionIndexedTracks<Mot
 /** node.animations: the same layout as MotionTracks, with MotionAnimation bindings. */
 export type MotionAnimations = Record<string, MotionAnimation> & MotionIndexedTracks<MotionAnimation>;
 /** The opt-in motion read on a node (`--motion`): timelines, per-field tracks, applied animation styles. */
+/** One configured value of an applied animation style's `props` (AnimationStyleConfiguration.props):
+ *  a plain string/number/boolean, or — for a MotionEasing / VariableAlias value — the same compacted
+ *  shape as a keyframe's `easing` (lower-cased curve type + params, or `{type:"variable_alias", id}`). */
+export type MotionStylePropValue = string | number | boolean | NonNullable<MotionKeyframe["easing"]>;
 export interface NodeMotion {
   timelines?: Array<{ id: string; duration: number }>;
   manualTracks?: MotionTracks;
   animations?: MotionAnimations;
-  styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
+  /** node.animationStyles (AppliedAnimationStyle[]): the applied instance id, the style's name/styleId,
+   *  and its configuration (duration, timelineOffset, per-prop values). */
+  styles?: Array<{
+    id: string;
+    name: string;
+    styleId: string;
+    duration?: number;
+    timelineOffset?: number;
+    props?: Record<string, MotionStylePropValue>;
+  }>;
 }
 export interface IrNode extends Partial<TextFields> {
   type: IrNodeType;

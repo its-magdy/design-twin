@@ -1309,6 +1309,8 @@
     if (src.fontName && src.fontName !== figma.mixed) {
       f.family = src.fontName.family;
       f.weight = src.fontName.style;
+      const vs = src.fontName.variationSettings;
+      if (vs && Object.keys(vs).length) f.variationSettings = { ...vs };
     }
     if (typeof src.fontWeight === "number") f.weightValue = src.fontWeight;
     const lh = lineH(src.lineHeight);
@@ -2221,13 +2223,18 @@
     if (isList(binding.tracks) && binding.tracks.length) {
       o.tracks = binding.tracks.map((t) => {
         const to = {};
-        if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
+        if (t.keyframeOperation === "OFFSET" || t.keyframeOperation === "SCALE") to.op = t.keyframeOperation === "OFFSET" ? "offset" : "scale";
         const kf = keyframes(t.keyframes);
         if (kf) to.keyframes = kf;
         return to;
       });
     }
     return o;
+  }
+  function stylePropValue(v) {
+    if (v === void 0 || v === null) return void 0;
+    if (typeof v === "object") return motionEasing(v);
+    return v;
   }
   function isPropertyBindings(t) {
     return "properties" in t;
@@ -2290,9 +2297,17 @@
     }
     if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
       out.styles = node.animationStyles.map((s) => {
-        const o = { name: s.name, styleId: s.styleId };
+        const o = { id: s.id, name: s.name, styleId: s.styleId };
         if (typeof s.duration === "number") o.duration = round(s.duration);
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
+        if (s.props) {
+          const props = {};
+          for (const [key, v] of Object.entries(s.props)) {
+            const converted = stylePropValue(v);
+            if (converted !== void 0) props[key] = converted;
+          }
+          if (Object.keys(props).length) o.props = props;
+        }
         return o;
       });
     }
@@ -2887,7 +2902,7 @@
     const sink = (m) => localWarnings.push(m);
     const node = await findNodeById(nodeId, sink);
     if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf \u2014 it has no children to list.");
-    if (node.type === "PAGE" && node.id !== figma.currentPage.id) await loadPageSafely(node, sink, "before listing its children");
+    if (node.type === "PAGE") await loadPageSafely(node, sink, "before listing its children");
     let kids;
     try {
       kids = node.children;

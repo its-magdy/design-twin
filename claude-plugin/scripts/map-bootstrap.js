@@ -435,6 +435,7 @@ var clone = (o) => structuredClone(o);
 var UNSAFE_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
 function safeAssign(target, source1, source2) {
   for (const src of [source1, source2]) {
+    if (src === void 0 || src === null) continue;
     for (const k of Object.keys(src)) {
       if (UNSAFE_KEYS.has(k)) continue;
       target[k] = src[k];
