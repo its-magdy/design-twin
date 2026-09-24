@@ -43,7 +43,7 @@ function safeAssign<T extends object, U extends object, V extends object>(target
       (target as Record<string, unknown>)[k] = (src as Record<string, unknown>)[k];
     }
   }
-  return target as unknown as T & U & V;
+  return target as T & U & V;
 }
 
 // Split an arbitrary name into alphanumeric words (drops "/", punctuation, whitespace).
