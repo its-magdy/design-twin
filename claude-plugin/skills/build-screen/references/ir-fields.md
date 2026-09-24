@@ -80,9 +80,11 @@ how a value becomes code on your stack, see the profile.
 ## Layout: flex, grid, scroll, sticky
 
 - **`layout`** flex: `display:"flex"`, `flexDirection` `row|column`, `gap`, `padding:[t,r,b,l]`
-  (physical sides — map to start/end for RTL), `justifyContent` (`center`/`flex-end`/`space-between`;
-  absent = start), `alignItems` (`center`/`flex-end`/`baseline`; absent = start), `flexWrap:"wrap"` +
-  `rowGap` + `alignContent`, `reverseZ` (later children paint underneath). Negative `gap` = overlap.
+  (physical sides — map to start/end for RTL), `justifyContent` (`center`/`flex-end`/`space-between`/
+  `space-evenly`/`space-around`; absent = start), `alignItems` (`center`/`flex-end`/`baseline`; absent
+  = start), `flexWrap:"wrap"` + `rowGap` + `alignContent`, `reverseZ` (later children paint
+  underneath). Negative `gap` = overlap. `gap` is absent under `space-between`/`space-evenly`/
+  `space-around` — Figma ignores the stored spacing under those modes, so there is nothing to emit.
 - **`layout.inferred:true`** — flex guessed from a non-auto-layout frame. Trust it, but sanity-check
   against the `.png`.
 - **`layout.mode:"absolute"`** (+`width`/`height`) — no auto layout; children carry `x`/`y`. Infer a

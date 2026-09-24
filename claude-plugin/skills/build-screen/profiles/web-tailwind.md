@@ -11,8 +11,8 @@ Output
 - `display:flex` → `flex`; `flexDirection:"column"` → `flex-col` (row is default).
 - `gap:N` → nearest scale (`gap-2` ≈ 8px) or `gap-[Npx]`; `flexWrap:"wrap"` → `flex-wrap`.
 - `padding:[t,r,b,l]` → `pt-/pr-/pb-/pl-`; collapse to `px-`/`py-`/`p-` when symmetric.
-- `justifyContent` → `justify-start|center|end|between`; `alignItems` → `items-start|center|end`,
-  and `"baseline"` → `items-baseline` (`align-items: baseline`).
+- `justifyContent` → `justify-start|center|end|between|evenly|around`; `alignItems` →
+  `items-start|center|end`, and `"baseline"` → `items-baseline` (`align-items: baseline`).
 - `widthMode:"fill"` → `flex-1`/`w-full`; `"hug"` → `w-auto`; `"fixed"` → `w-[Npx]` (avoid if possible).
 
 **Grid (`layout.display:"grid"`) → CSS grid utilities**

@@ -10,9 +10,11 @@ Output
 **Layout (IR → Row/Column)**
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`.
 - `gap:N` → `horizontalArrangement = Arrangement.spacedBy(N.dp)` (Row) /
-  `verticalArrangement = Arrangement.spacedBy(N.dp)` (Column).
+  `verticalArrangement = Arrangement.spacedBy(N.dp)` (Column). Not when `justifyContent` is one of the
+  `Space*` arrangements below — those already distribute space, so `gap` is absent and `spacedBy`
+  doesn't apply.
 - `padding:[t,r,b,l]` → `Modifier.padding(start = l.dp, top = t.dp, end = r.dp, bottom = b.dp)`.
-- `justifyContent` → `Arrangement.Start/Center/End/SpaceBetween`; `alignItems` → the layout's
+- `justifyContent` → `Arrangement.Start/Center/End/SpaceBetween/SpaceEvenly/SpaceAround`; `alignItems` → the layout's
   `verticalAlignment`/`horizontalAlignment` (`Alignment.CenterVertically`, etc.);
   `alignItems:"baseline"` → drop the layout-wide alignment and put `Modifier.alignByBaseline()` on the
   `Row`'s text children instead.

@@ -317,8 +317,9 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
       if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) — a gap has nothing to separate`);
       // primaryAxisAlignItems distribution modes (SPACE_BETWEEN/SPACE_EVENLY/SPACE_AROUND) all space
       // children by dividing the frame's free space along the primary axis, ignoring itemSpacing
-      // (plugin-typings plugin-api.d.ts primaryAxisAlignItems remarks: each "will space the children
-      // evenly along the primary axis" using the extra space, not the configured gap) — so the stored
+      // (Figma Help Center, "Guide to auto layout", article 31289464393751: gap can be a number or
+      // "Auto — choose from Between, Around, and Evenly auto spacing options", which "match CSS
+      // property values space-between, space-evenly and space-around respectively") — so the stored
       // value is slack for all three, not just space-between.
       else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
       else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");

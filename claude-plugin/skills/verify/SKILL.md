@@ -99,8 +99,9 @@ What it prints, and why each part matters:
   this, a third of one screen's rows and 11 of 12 "designed interactions" on another were layers the
   designer had switched off, and a correct build was graded on them.
 - **`notComparable`** lists design values the method cannot compare, each with the reason — a gap
-  that is auto-layout slack (a `space-between` row, a row whose child fills the main axis, fewer than
-  two laid-out children). They are stated so nobody mistakes them for passes.
+  that is auto-layout slack (a `space-between`/`space-evenly`/`space-around` row, a row whose child
+  fills the main axis, fewer than two laid-out children). They are stated so nobody mistakes them for
+  passes.
 - **Positions are frame-relative** — the file's `coordinates` field says exactly how to measure them.
 - It is byte-deterministic, and it says so when it **replaces** an existing expectation that differed,
   naming any `.measured.json`/`.report.json` beside it that is now stale. Every report records the
