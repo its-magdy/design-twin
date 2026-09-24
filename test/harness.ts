@@ -10,7 +10,8 @@ import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc,
   Paint, Effect, VariableValue, ComposedColor, RadiusCorners, Asset,
 } from "../bridge/src/doc-types.ts";
-import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply } from "../bridge/src/commands.ts";
+import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, Cmd } from "../bridge/src/commands.ts";
+import { argsShapeError } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
@@ -41,6 +42,8 @@ interface PostedMessage {
   type: string; source?: string; label?: string; phase?: string;
   page?: { index: number; of: number; name: string; pageId?: string };
   nodes?: number; assets?: number;
+  /** main.ts `bridge-result` */
+  id?: string; ok?: boolean; result?: unknown; error?: string;
 }
 interface FakeTeamLibrary {
   getAvailableLibraryVariableCollectionsAsync(): Promise<Array<{ name: string; key: string; libraryName: string }>>;
@@ -50,7 +53,8 @@ interface FakeFigma {
   mixed: symbol;
   showUI(): void;
   on(): void;
-  ui: { onmessage: null; postMessage(m: PostedMessage): void };
+  /** `onmessage` is main.ts's UI -> main handler once code.js has been evaluated. */
+  ui: { onmessage: ((msg: unknown) => Promise<void>) | null; postMessage(m: PostedMessage): void };
   clientStorage: { getAsync(): Promise<string>; setAsync(): Promise<void> };
   currentPage: FakeNode & { selection: FakeNode[]; appendChild?: () => void };
   fileKey: string;
@@ -2029,6 +2033,99 @@ const sandbox = context as unknown as Sandbox;
 
     sandbox.figma.root.children = prevKidsPC;
     sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [WIRE-ARGS] handleBridge checks `args` against commands.ts before any collector runs ----------
+  // Driven through main.ts's real `bridge` message (the path the UI iframe relays a CLI/MCP frame on),
+  // so what is asserted is the `bridge-result` a caller actually receives.
+  {
+    const posted: PostedMessage[] = [];
+    const prevPost = sandbox.figma.ui.postMessage;
+    sandbox.figma.ui.postMessage = (m: PostedMessage) => { posted.push(m); };
+    /** One bridge frame in, its bridge-result out, plus whether it reached serializeRun (a run-begin). */
+    const wire = async (cmd: string, args: unknown): Promise<{ ok: boolean | undefined; result: unknown; error: string | undefined; queued: boolean }> => {
+      posted.length = 0;
+      const handler = sandbox.figma.ui.onmessage;
+      if (!handler) throw new Error("code.js did not register figma.ui.onmessage");
+      await handler({ type: "bridge", id: "wire-1", cmd, args });
+      const r = posted.find((m) => m.type === "bridge-result");
+      return { ok: r && r.ok, result: r && r.result, error: r && r.error, queued: posted.some((m) => m.type === "run-begin") };
+    };
+
+    // Today's text for a missing node id, captured from the pre-guard plugin: "No node id provided."
+    // It must stay byte-identical, AND the request must now be refused before it is queued (pre-guard,
+    // exportNode/screenshot went through serializeRun and posted run-begin before the collector threw).
+    for (const [cmd, args] of [["exportNode", {}], ["exportNode", { nodeId: null }], ["exportNode", null], ["screenshot", {}]] as const) {
+      const r = await wire(cmd, args);
+      ok(`[WIRE-ARGS] ${cmd} ${JSON.stringify(args)} -> "No node id provided." (unchanged), refused before queueing`,
+        r.ok === false && r.error === "No node id provided." && !r.queued);
+    }
+    // listChildren is unqueued, so "refused before queueing" is not observable; paired with its
+    // wrong-typed twin instead (pre-guard: "Node 5 is not in the open file…").
+    const listNoId = await wire("listChildren", {});
+    const listBadId = await wire("listChildren", { nodeId: 5 });
+    ok("[WIRE-ARGS] listChildren {} -> \"No node id provided.\" (unchanged); nodeId:5 -> named type error",
+      listNoId.ok === false && listNoId.error === "No node id provided." &&
+      listBadId.ok === false && listBadId.error === "bad listChildren args: `nodeId` is not a string");
+
+    // Wrong-typed args. Pre-guard: nodeId 5 was looked up as "5" ("Node 5 is not in the open file…"),
+    // depth "2" silently meant depth 2, scale "x" silently meant the default, a bogus write op came back
+    // as an ok:false reply after the batch started.
+    const badNode = await wire("exportNode", { nodeId: 5 });
+    ok("[WIRE-ARGS] exportNode nodeId:5 -> named type error, not queued",
+      badNode.ok === false && badNode.error === "bad exportNode args: `nodeId` is not a string" && !badNode.queued);
+    const badDepth = await wire("listPages", { depth: "2" });
+    ok("[WIRE-ARGS] listPages depth:\"2\" -> refused with the allowed values",
+      badDepth.ok === false && badDepth.error === "bad listPages args: `depth` is not 1 or 2" && badDepth.result === undefined);
+    const badScale = await wire("screenshot", { nodeId: "1:0", scale: "x" });
+    ok("[WIRE-ARGS] screenshot scale:\"x\" -> refused, not queued",
+      badScale.ok === false && badScale.error === "bad screenshot args: `scale` is not a number" && !badScale.queued);
+    const badOp = await wire("write", { ops: [{ op: "bogus" }] });
+    ok("[WIRE-ARGS] write with an unknown op -> refused before the batch starts",
+      badOp.ok === false && badOp.error === "bad write args: `ops[0].op` is not one of createFrame | createText | setFill | setText" && !badOp.queued);
+
+    // Tolerance kept: an undeclared key is ignored, and non-object args read as {} — paired with a
+    // refusal on the same command so the pair fails if the check were dropped.
+    const depth1 = await wire("listPages", { depth: 1, notDeclared: true });
+    const depthBad = await wire("listPages", { depth: 3, notDeclared: true });
+    const depth1Reply = depth1.result;
+    ok("[WIRE-ARGS] listPages: depth 1 + an undeclared key is served at depth 1; depth 3 is refused",
+      depth1.ok === true && typeof depth1Reply === "object" && depth1Reply !== null && "depth" in depth1Reply && depth1Reply.depth === 1 &&
+      depthBad.ok === false && depthBad.error === "bad listPages args: `depth` is not 1 or 2");
+    const pingJunk = await wire("ping", 7);
+    const libBad = await wire("exportLibrary", { asLibrary: 5 });
+    ok("[WIRE-ARGS] ping with non-object args still pongs; exportLibrary asLibrary:5 is refused, not queued",
+      pingJunk.ok === true && JSON.stringify(pingJunk.result) === JSON.stringify({ pong: true, page: "Page 1", file: "My File", fileKey: "FILEKEY1234567" }) &&
+      libBad.ok === false && libBad.error === "bad exportLibrary args: `asLibrary` is not a string" && !libBad.queued);
+
+    sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [ARGS-SHAPE] every command's guard: its documented args pass, a wrong-typed variant names the field ----------
+  {
+    const cases: Array<[cmd: Cmd, good: unknown, bad: unknown, want: string]> = [
+      ["ping", {}, 7, "bad ping args: not an object"],
+      ["whoami", {}, [], "bad whoami args: not an object"],
+      ["getSelection", {}, null, "bad getSelection args: not an object"],
+      ["listLibraries", {}, "x", "bad listLibraries args: not an object"],
+      ["listPages", { depth: 2 }, { depth: "2" }, "bad listPages args: `depth` is not 1 or 2"],
+      ["listChildren", { nodeId: "1:2" }, { nodeId: 5 }, "bad listChildren args: `nodeId` is not a string"],
+      ["exportFull", { allPages: false, page: ["Home", "0:1"], css: true, skipAssets: true }, { page: [1] }, "bad exportFull args: `page` is not a string or an array of strings"],
+      ["exportFull", { page: "Home" }, { allPages: "yes" }, "bad exportFull args: `allPages` is not a boolean"],
+      ["exportDesignSystem", { variantVisuals: true }, { variantVisuals: "yes" }, "bad exportDesignSystem args: `variantVisuals` is not a boolean"],
+      ["exportLibrary", { asLibrary: "Acme UI", variantVisuals: false }, { asLibrary: 5 }, "bad exportLibrary args: `asLibrary` is not a string"],
+      ["exportSelection", { css: true, measurements: false }, { css: 1 }, "bad exportSelection args: `css` is not a boolean"],
+      ["exportNode", { nodeId: "1:2", css: true }, { nodeId: 5 }, "bad exportNode args: `nodeId` is not a string"],
+      ["exportNode", { nodeId: "1:2" }, {}, "No node id provided."],
+      ["screenshot", { nodeId: "1:2", scale: 2 }, { nodeId: "1:2", scale: "x" }, "bad screenshot args: `scale` is not a number"],
+      ["write", { ops: [{ op: "createFrame", name: "F", width: 10, height: 10, layoutMode: "VERTICAL", itemSpacing: 4, padding: [1, 2, 3, 4], fill: "#fff" }, { op: "setText", nodeId: "1:2", text: "hi" }] },
+        { ops: [{ op: "createFrame", padding: [1, 2, 3] }] }, "bad write args: `ops[0].padding` is not four numbers"],
+      ["write", { ops: [] }, {}, "bad write args: `ops` is missing"],
+    ];
+    for (const [cmd, good, bad, want] of cases) {
+      const gotGood = argsShapeError(cmd, good), gotBad = argsShapeError(cmd, bad);
+      ok(`[ARGS-SHAPE] ${cmd}: ${JSON.stringify(good)} passes, ${JSON.stringify(bad)} -> ${want}`, gotGood === null && gotBad === want);
+    }
   }
 
   report();

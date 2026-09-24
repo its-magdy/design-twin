@@ -778,6 +778,131 @@
     return parseNodeId(raw) || (raw == null ? "" : String(raw));
   }
 
+  // ../bridge/src/commands.ts
+  var COMMAND_SET = {
+    ping: true,
+    whoami: true,
+    getSelection: true,
+    listPages: true,
+    listChildren: true,
+    listLibraries: true,
+    exportFull: true,
+    exportDesignSystem: true,
+    exportLibrary: true,
+    exportSelection: true,
+    exportNode: true,
+    screenshot: true,
+    write: true
+  };
+  function isCmd(x) {
+    return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
+  }
+  var COMMANDS = Object.keys(COMMAND_SET).filter(isCmd);
+  function isRecord(x) {
+    return typeof x === "object" && x !== null && !Array.isArray(x);
+  }
+  var NO_NODE_ID = "No node id provided.";
+  var isBool = (v) => typeof v === "boolean";
+  var isStr = (v) => typeof v === "string";
+  var isNum = (v) => typeof v === "number";
+  function opt(a, key, ok, what, label = key) {
+    const v = a[key];
+    return v === void 0 || ok(v) ? null : `\`${label}\` is not ${what}`;
+  }
+  function first(errs) {
+    for (const e of errs) if (e !== null) return e;
+    return null;
+  }
+  var READ_OPT_NAMES = READ_OPTS.map((o) => o.name);
+  var readOptArgs = (a) => first(READ_OPT_NAMES.map((k) => opt(a, k, isBool, "a boolean")));
+  var nodeArgs = (a) => a.nodeId === void 0 || a.nodeId === null ? NO_NODE_ID : isStr(a.nodeId) ? null : "`nodeId` is not a string";
+  var designSystemArgs = (a) => opt(a, "variantVisuals", isBool, "a boolean");
+  var isPageSel = (v) => isStr(v) || Array.isArray(v) && v.every(isStr);
+  var WRITE_OP_SET = { createFrame: true, createText: true, setFill: true, setText: true };
+  var isWriteOpName = (v) => isStr(v) && Object.prototype.hasOwnProperty.call(WRITE_OP_SET, v);
+  var isPadding = (v) => Array.isArray(v) && v.length === 4 && v.every(isNum);
+  var WRITE_STR_FIELDS = ["parentId", "name", "fill", "text", "nodeId", "color"];
+  var WRITE_NUM_FIELDS = ["width", "height", "itemSpacing", "fontSize"];
+  function writeOpError(o, i) {
+    const at = `ops[${i}]`;
+    if (!isRecord(o)) return `\`${at}\` is not an object`;
+    if (!isWriteOpName(o.op)) return `\`${at}.op\` is not one of ${Object.keys(WRITE_OP_SET).join(" | ")}`;
+    return first([
+      ...WRITE_STR_FIELDS.map((k) => opt(o, k, isStr, "a string", `${at}.${k}`)),
+      ...WRITE_NUM_FIELDS.map((k) => opt(o, k, isNum, "a number", `${at}.${k}`)),
+      opt(o, "layoutMode", (v) => v === "HORIZONTAL" || v === "VERTICAL", "HORIZONTAL or VERTICAL", `${at}.layoutMode`),
+      opt(o, "padding", isPadding, "four numbers", `${at}.padding`)
+    ]);
+  }
+  var writeArgs = (a) => {
+    if (!Array.isArray(a.ops)) return a.ops === void 0 ? "`ops` is missing" : "`ops` is not an array";
+    return first(a.ops.map(writeOpError));
+  };
+  var noArgs = () => null;
+  var ARGS_CHECKS = {
+    ping: noArgs,
+    whoami: noArgs,
+    getSelection: noArgs,
+    listPages: (a) => opt(a, "depth", (v) => v === 1 || v === 2, "1 or 2"),
+    listChildren: nodeArgs,
+    listLibraries: noArgs,
+    exportFull: (a) => first([readOptArgs(a), opt(a, "allPages", isBool, "a boolean"), opt(a, "page", isPageSel, "a string or an array of strings")]),
+    exportDesignSystem: designSystemArgs,
+    exportLibrary: (a) => first([designSystemArgs(a), opt(a, "asLibrary", isStr, "a string")]),
+    exportSelection: readOptArgs,
+    exportNode: (a) => first([nodeArgs(a), readOptArgs(a)]),
+    screenshot: (a) => first([nodeArgs(a), opt(a, "scale", isNum, "a number")]),
+    write: writeArgs
+  };
+  function argsShapeError(cmd, args) {
+    if (!isRecord(args)) return `bad ${cmd} args: not an object`;
+    const e = ARGS_CHECKS[cmd](args);
+    return e === null || e === NO_NODE_ID ? e : `bad ${cmd} args: ${e}`;
+  }
+  function hasArgs(cmd, a) {
+    return ARGS_CHECKS[cmd](a) === null;
+  }
+  function parseCommandRequest(cmd, args) {
+    if (!isCmd(cmd)) return { ok: false, error: "unknown cmd: " + cmd };
+    const a = isRecord(args) ? args : {};
+    const bad = () => {
+      var _a;
+      return { ok: false, error: (_a = argsShapeError(cmd, a)) != null ? _a : `bad ${cmd} args` };
+    };
+    switch (cmd) {
+      case "ping":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "whoami":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "getSelection":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listPages":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listChildren":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "listLibraries":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportFull":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportDesignSystem":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportLibrary":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportSelection":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "exportNode":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "screenshot":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      case "write":
+        return hasArgs(cmd, a) ? { ok: true, req: { cmd, args: a } } : bad();
+      default: {
+        const exhaustive = cmd;
+        return { ok: false, error: "unknown cmd: " + String(exhaustive) };
+      }
+    }
+  }
+
   // src/layout.ts
   var ALIGN = {
     MIN: "flex-start",
@@ -2818,7 +2943,7 @@
   async function collectNode(rawId, opts) {
     resetRun();
     const nodeId = toNodeId(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const node = await findNodeById(nodeId, warn);
     applyOpts(autoCss(opts, node));
     try {
@@ -2835,7 +2960,7 @@
   async function collectScreenshot(rawId, opts) {
     resetRun();
     const nodeId = toNodeId(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const node = await findNodeById(nodeId, warn);
     const reference = await collectReference(node, opts);
     if (!reference) {
@@ -2897,7 +3022,7 @@
   }
   async function listChildren(rawId) {
     const nodeId = toNodeId(rawId);
-    if (!nodeId) throw new Error("No node id provided.");
+    if (!nodeId) throw new Error(NO_NODE_ID);
     const localWarnings = [];
     const sink = (m) => localWarnings.push(m);
     const node = await findNodeById(nodeId, sink);
@@ -3149,31 +3274,7 @@
     return { ok: true, applied };
   }
 
-  // ../bridge/src/commands.ts
-  var COMMAND_SET = {
-    ping: true,
-    whoami: true,
-    getSelection: true,
-    listPages: true,
-    listChildren: true,
-    listLibraries: true,
-    exportFull: true,
-    exportDesignSystem: true,
-    exportLibrary: true,
-    exportSelection: true,
-    exportNode: true,
-    screenshot: true,
-    write: true
-  };
-  function isCmd(x) {
-    return Object.prototype.hasOwnProperty.call(COMMAND_SET, x);
-  }
-  var COMMANDS = Object.keys(COMMAND_SET).filter(isCmd);
-
   // src/bridge.ts
-  function isRecord(x) {
-    return !!x && typeof x === "object" && !Array.isArray(x);
-  }
   var bridgeRun = (cmd) => ({ source: "bridge", label: cmd });
   var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var INSTANCE_STARTED_AT = Date.now();
@@ -3185,9 +3286,9 @@
     }
   }
   async function handleBridge(cmd, args) {
-    if (!isCmd(cmd)) throw new Error("unknown cmd: " + cmd);
-    const req = { cmd, args: isRecord(args) ? args : {} };
-    return dispatch(req);
+    const parsed = parseCommandRequest(cmd, args);
+    if (!parsed.ok) throw new Error(parsed.error);
+    return dispatch(parsed.req);
   }
   async function dispatch(req) {
     switch (req.cmd) {
@@ -3262,8 +3363,7 @@
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
       case "screenshot": {
         const a = req.args;
-        const scale = typeof a.scale === "number" ? a.scale : void 0;
-        return serializeRun(() => collectScreenshot(a.nodeId, { scale }), bridgeRun(req.cmd));
+        return serializeRun(() => collectScreenshot(a.nodeId, { scale: a.scale }), bridgeRun(req.cmd));
       }
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -3272,7 +3372,7 @@
       // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
       // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
       case "listPages":
-        return await listPages(req.args);
+        return listPages(req.args);
       case "listChildren":
         return listChildren(req.args.nodeId);
       // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
@@ -3284,7 +3384,7 @@
         return listLibraries();
       case "write": {
         const ops = req.args.ops;
-        return serializeRun(() => applyWrites(Array.isArray(ops) ? ops : []), bridgeRun(req.cmd));
+        return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd));
       }
       default: {
         const exhaustive = req;

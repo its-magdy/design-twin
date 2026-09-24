@@ -7,15 +7,10 @@ import { type RunInfo } from "./progress";
 // The command/reply contract shared with the bridge (bridge/src/commands.ts): the switch below is
 // exhaustive over `Cmd`, each branch sees that command's own `args`, and its reply type is what the
 // bridge's `request()` promises its callers. esbuild inlines the module like read-opts.ts.
-import { isCmd } from "../../bridge/src/commands.ts";
+import { parseCommandRequest } from "../../bridge/src/commands.ts";
 import type {
   Cmd, CommandRequest, Commands, PingReply, WhoamiReply,
 } from "../../bridge/src/commands.ts";
-
-// `args` arrives over the bridge as parsed JSON — genuinely unknown shape until narrowed per command.
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return !!x && typeof x === "object" && !Array.isArray(x);
-}
 
 // Every queued command announces itself to the plugin window under the SAME label the caller used, so
 // a designer watching Figma go busy can see that a CLI/MCP pull — and which one — is walking their
@@ -42,11 +37,13 @@ function readFileKey(): string | undefined {
 }
 
 export async function handleBridge(cmd: string, args: unknown): Promise<unknown> {
-  if (!isCmd(cmd)) throw new Error("unknown cmd: " + cmd);
-  // The ONE boundary between the wire and the contract: `args` is parsed JSON, and each collector
-  // re-validates what it reads (a missing nodeId is "No node id provided.", not a type error here).
-  const req = { cmd, args: isRecord(args) ? args : {} } as CommandRequest;
-  return dispatch(req);
+  // The ONE boundary between the wire and the contract: `args` is parsed JSON, checked here against
+  // the command's declared `*Args` (commands.ts parseCommandRequest) before any collector sees it. A
+  // missing nodeId still reads "No node id provided." (NO_NODE_ID, the collectors' own text), an
+  // unknown `cmd` still reads "unknown cmd: <cmd>", and an undeclared key is ignored as it always was.
+  const parsed = parseCommandRequest(cmd, args);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return dispatch(parsed.req);
 }
 
 // The collectors return their own typed envelopes (collect.ts ScreenResult/FullResult/…), which are
@@ -124,9 +121,8 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
     case "screenshot": {
       const a = req.args;
-      // `scale` is re-checked at runtime: the frame is JSON, and a non-number here must read as "default".
-      const scale = typeof a.scale === "number" ? a.scale : undefined;
-      return serializeRun(() => collectScreenshot(a.nodeId, { scale }), bridgeRun(req.cmd));
+      // `scale` is a number or absent (parseCommandRequest); a value <= 0 still means "default" in collectReference.
+      return serializeRun(() => collectScreenshot(a.nodeId, { scale: a.scale }), bridgeRun(req.cmd));
     }
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -135,7 +131,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
     // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
     case "listPages":
-      return (await listPages(req.args)) as Commands["listPages"]["reply"];
+      return listPages(req.args);
     case "listChildren":
       return listChildren(req.args.nodeId);
     // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
@@ -147,7 +143,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
       return listLibraries();
     case "write": {
       const ops = req.args.ops;
-      return serializeRun(() => applyWrites(Array.isArray(ops) ? ops : []), bridgeRun(req.cmd));
+      return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd));
     }
     default: {
       // Exhaustive: a command added to commands.ts without a branch here fails to compile. Unreachable
