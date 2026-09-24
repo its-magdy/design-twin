@@ -152,8 +152,10 @@ async function aliasValue(a: VariableAlias): Promise<IrVariableAlias> {
 }
 
 // Each half of a composed colour is emitted the way it would be on its own: an alias as {aliasOf}, the
-// raw colour folded to hex (alpha kept), the raw opacity as Figma's number verbatim (see doc-types
-// ComposedColor — the typings do not state its range, so it is not rescaled).
+// raw colour folded to hex (alpha kept), the raw opacity as Figma's number verbatim — a 0–100
+// percentage: "An opacity percentage from 0 to 100, or an alias to a FLOAT variable" (REST API
+// variables types, VariableComposedColor.opacity, https://developers.figma.com/docs/rest-api/variables-types/).
+// It is NOT rescaled to 0–1 here: the IR keeps Figma's number, and each consumer converts (doc-types ComposedColor).
 async function composedValue(v: VariableComposedColor): Promise<IrVariableComposedColor> {
   if (colorIsAlias(v)) {
     const [color, opacity] = await Promise.all([aliasValue(v.color), isVariableAlias(v.opacity) ? aliasValue(v.opacity) : v.opacity]);

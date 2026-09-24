@@ -20,12 +20,20 @@
 //                             value, so the opacity half (a number or a "{ref}") rides in
 //                             $extensions["figma.com"].opacity (per-mode: .modeOpacity), in
 //                             tokens.dtcg.json AND in the resolver set files. The number is Figma's,
-//                             verbatim: the typings call it an "opacity percentage" and Figma's guide
-//                             (working-with-variables, "Authoring a composed color variable") sets the
-//                             opacity variable to 60, i.e. a 0–100 scale — but no page states the range
-//                             outright, so it is not rescaled or folded into `alpha` yet.
-//                             tokens.css/theme.css write the colour half only, and
-//                             lintTokens says so.
+//                             verbatim, on Figma's 0–100 scale: "An opacity percentage from 0 to
+//                             100, or an alias to a FLOAT variable" (REST API variables types,
+//                             VariableComposedColor.opacity —
+//                             https://developers.figma.com/docs/rest-api/variables-types/). DTCG
+//                             `alpha` is 0–1 and cannot hold a reference, so it is not folded in.
+//                             tokens.css/theme.css write the WHOLE value as
+//                             `color-mix(in srgb, <colour> <opacity>%, transparent)` (see cssValue),
+//                             except when the opacity half aliases a FLOAT whose CSS is not a
+//                             percentage — then the colour half only, and lintTokens says so.
+//                             OPACITY / COLOR_OPACITY-scoped FLOATs (the same 0–100 scale — the
+//                             REST page's VariableScope: "OPACITY corresponds to layer opacity, while
+//                             COLOR_OPACITY corresponds to the opacity channel of a color") are
+//                             written to CSS as a clamped percentage (`40%`), and keep their verbatim
+//                             number in DTCG with $extensions["figma.com"].unit: "percent".
 //   toResolver(ds[, warnings, opts]) -> { resolver, files }: a DTCG **Resolver Module** 2025.10
 //                             document (the spec-blessed portable theming mechanism) plus the token
 //                             files it $refs. Each multi-mode collection becomes a modifier whose
@@ -71,7 +79,7 @@ export interface DtcgColor { colorSpace: DtcgColorSpace; components: number[]; a
 /** The DTCG 2025.10 $types this emitter writes (BOOLEAN is coerced to "string"; a length FLOAT is "dimension"). */
 export type DtcgType = "color" | "number" | "string" | "dimension";
 export type DtcgLeafValue = string | number | boolean | DtcgDimension | DtcgColor;
-/** A composed colour's opacity half: Figma's number verbatim, or a "{ref}" to the opacity token. */
+/** A composed colour's opacity half: Figma's number verbatim (0–100, a percentage), or a "{ref}" to the opacity token. */
 export type DtcgOpacity = number | string;
 export interface DtcgFigmaExtension {
   modes?: Record<string, DtcgLeafValue>;
@@ -82,6 +90,8 @@ export interface DtcgFigmaExtension {
   key?: string;
   sentinel?: { figmaValue: VariableValue; meaning: string };
   scopes?: string[];
+  /** an OPACITY / COLOR_OPACITY-scoped FLOAT: $value is Figma's 0–100 percentage, verbatim (tokens.css writes `N%`) */
+  unit?: "percent";
   codeSyntax?: Variable["codeSyntax"];
   originalType?: "boolean";
 }
@@ -592,6 +602,8 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     if (typeof v.key === "string" && v.key) ext.key = v.key;
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded — emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
+    // A `number` token says nothing about its scale; Figma's opacities are 0–100, not DTCG/CSS's 0–1.
+    if (percentOpacity(v, opts)) ext.unit = "percent";
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean"; // marks a boolean coerced to a string token
     // Vendor key `figma.com` — the namespace the DTCG Resolver Module's own examples and Figma's native
@@ -618,7 +630,8 @@ function toDTCG(designSystem: TokensDoc | null | undefined, warnings?: string[],
 }
 
 // FLOAT unit: Figma FLOAT variables are overwhelmingly dimensions -> `px`; OPACITY/FONT_WEIGHT scopes
-// (and any name in opts.unitless) stay unitless so we never emit invalid CSS like `opacity: 0.5px`.
+// (and any name in opts.unitless) are NOT lengths, so we never emit invalid CSS like `opacity: 0.5px`
+// (FONT_WEIGHT is a bare number; OPACITY/COLOR_OPACITY a percentage — see percentOpacity).
 // LINE_HEIGHT/LETTER_SPACING are DELIBERATELY not unitless: per the Figma API these are px|percent
 // (LineHeight = {value, unit:"PIXELS"|"PERCENT"} | AUTO), never a CSS-style unitless multiplier — so
 // `px` is the safe default. Emitting them unitless would be wrong (`line-height: 24` = 24x font size)
@@ -669,21 +682,74 @@ function unitDecision(variable: Variable, opts?: UnitOpts): UnitDecision {
   if (!narrowed && unitlessName(variable.name)) return "name";
   return "px";
 }
+// OPACITY / COLOR_OPACITY: Figma's opacity numbers are PERCENTAGES, 0–100. REST API variables types
+// (https://developers.figma.com/docs/rest-api/variables-types/): VariableComposedColor.opacity is "An
+// opacity percentage from 0 to 100, or an alias to a FLOAT variable", and VariableScope says "OPACITY
+// corresponds to layer opacity, while COLOR_OPACITY corresponds to the opacity channel of a color".
+// So a FLOAT whose SCOPES say "opacity" (and nothing else) is written to CSS as `N%` — valid for the
+// `opacity` property and as an <alpha-value> — never a bare `N`, which `opacity` clamps to 1 (fully
+// opaque). DTCG keeps the verbatim number, marked $extensions["figma.com"].unit: "percent".
+// Scopes only: a name-heuristic or opts.unitless token carries no evidence of Figma's scale, so it
+// stays a bare number; so does a mix with FONT_WEIGHT (which half of the mix is it?).
+const PERCENT_SCOPES = new Set(["OPACITY", "COLOR_OPACITY"]);
+function percentOpacity(variable: Variable, opts?: UnitOpts): boolean {
+  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
+}
 function numberUnit(variable: Variable, opts?: UnitOpts): string {
+  if (percentOpacity(variable, opts)) return "%";
   return unitDecision(variable, opts) === "px" ? "px" : "";
 }
+// Figma clamps an out-of-range opacity itself (Help Center,
+// https://help.figma.com/hc/en-us/articles/14506821864087): "If the number variable has a negative
+// value, the opacity will default to 0%. If the number variable has a value greater than 100, the
+// opacity will default to 100%." The CSS does the same (and color-mix() REQUIRES 0%–100%); lintNames
+// reports every clamp, and tokens.dtcg.json keeps the verbatim number.
+const pctOutOfRange = (n: number): boolean => n < 0 || n > 100;
+const clampPct = (n: number): number => Math.min(100, Math.max(0, n));
+// `s` is a number's CSS text ("40", "-5", "12.5"); in range it is kept verbatim.
+const cssPercent = (s: string): string => (pctOutOfRange(Number(s)) ? String(clampPct(Number(s))) : s) + "%";
+const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
+// Does v's custom property hold a percentage in EVERY mode? An opacity-scoped FLOAT whose values are
+// numbers, or aliases to such a FLOAT (followed through the SAME plan the emitter named them with).
+// A composed colour may only put `var(--x)` in color-mix()'s <percentage> slot when this holds —
+// a `40px` or a bare `0.4` there makes the whole declaration invalid at computed-value time.
+function cssPercentVar(plan: IdPlan, v: Variable | null, opts: UnitOpts | undefined, depth = 0): boolean {
+  if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
+  const vals = Object.values(v.values || {}).filter((x) => x !== undefined);
+  return vals.length > 0 && vals.every((x) => (isAlias(x)
+    ? cssPercentVar(plan, aliasTarget(plan, x.aliasOf, v), opts, depth + 1)
+    : typeof x === "number" || (typeof x === "string" && NUMERIC_TEXT.test(x))));
+}
 
-// A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (0 stays unitless).
-function cssValue(raw: VariableValue, unit: string, ref?: (name: string) => string): string {
+// A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (a 0 length stays
+// unitless; a percentage is clamped and always carries its `%`, so `0%` is still an <alpha-value> and a
+// color-mix() percentage). `pctRef(name)`: does that alias target's custom property hold a percentage
+// (cssPercentVar)? Without it, no opacity alias is trusted.
+// Composed colour: the colour mixed with `transparent` at the opacity —
+//   color-mix(in srgb, <var(--colour) | #hex> <N% | var(--opacity)>, transparent)
+// color-mix() mixes in premultiplied alpha, so this keeps the colour's channels and multiplies its alpha
+// by the opacity; MDN's own "adding transparency" example is exactly `color-mix(in srgb, var(--base)
+// 25%, transparent)`, and it notes this works "even if the color is already non-opaque"
+// (https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/color-mix). The <percentage> slot takes
+// 0%–100%, which is why every opacity percentage here is clamped; `var(--opacity)` substitutes that
+// token's `N%` (https://developer.mozilla.org/en-US/docs/Web/CSS/var — "instead of any part of a value").
+// alpha × opacity/100 is an INFERENCE: Figma documents the 0–100 range but not how the opacity combines
+// with a colour whose own alpha is < 1; multiplying is what every other alpha stack does.
+// An opacity alias whose target is not a percentage (a px/bare FLOAT) leaves the colour half only —
+// lintNames reports it (never silent).
+function cssValue(raw: VariableValue, unit: string, ref?: (name: string) => string, pctRef?: (name: string) => boolean): string {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
-  // Composed colour: the colour half only. Applying the opacity needs its range, which Figma does not
-  // document — lintNames reports every token this drops an opacity from (never silent).
-  if (isComposed(raw)) return cssValue(raw.composed.color, unit, ref);
+  if (isComposed(raw)) {
+    const { color, opacity } = raw.composed;
+    const c = cssValue(color, "", ref);
+    const pct = isAlias(opacity) ? (pctRef && pctRef(opacity.aliasOf) ? cssValue(opacity, "", ref) : null) : cssPercent(String(opacity));
+    return pct === null ? c : `color-mix(in srgb, ${c} ${pct}, transparent)`;
+  }
   const e = isHexish(raw) ? normHex(raw) : null;
   if (e) return e;
-  const fmtNum = (s: string): string => (s === "0" ? "0" : unit ? s + unit : s); // 0 stays unitless; String(0) === "0"
+  const fmtNum = (s: string): string => (unit === "%" ? cssPercent(s) : s === "0" ? "0" : unit ? s + unit : s); // 0 stays unitless; String(0) === "0"
   if (typeof raw === "number") return fmtNum(String(raw));
-  if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw)) return fmtNum(raw); // string-number FLOAT
+  if (typeof raw === "string" && NUMERIC_TEXT.test(raw)) return fmtNum(raw); // string-number FLOAT
   if (typeof raw === "boolean") return String(raw);
   if (typeof raw === "string") return cssEscapeText(raw); // arbitrary STRING token -> escape CSS breakout chars
   return String(raw);
@@ -710,6 +776,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer: Variable) => (name: string): string => { const t = aliasTarget(plan, name, referrer); return t ? plan.id(t)! : cssVarName(name); };
+  const pctRef = (referrer: Variable) => (name: string): boolean => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = new Map<string, string>();
   // Null-prototype: keyed by MODE NAMES (free-form designer strings, reaching us through JSON.parse,
   // which creates a real own "__proto__" key). On a plain object `perMode["__proto__"]` resolves to
@@ -727,12 +794,12 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
     const varName = plan.id(v)!; // canonical ⇒ planned
-    const r = ref(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r)};`);
+    const r = ref(v), p = pctRef(v);
+    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
-      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r)};`);
+      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r, p)};`);
     }
   }
   let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
@@ -825,7 +892,8 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
     // An alias must point at the TAILWIND name of its target (its own namespace, its own
     // disambiguated name), not the tokens.css one.
     const ref = (n: string): string => { const t = aliasTarget(plan, n, v); return t ? plan.id(t)! : "--" + TW_PREFIX + twSlug(n); };
-    const val = (raw: VariableValue): string => cssValue(webNumber(v, raw), unit, ref);
+    const pctRef = (n: string): boolean => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
+    const val = (raw: VariableValue): string => cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
@@ -1053,11 +1121,34 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
       if (!names.has(segs(target).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${target}'`);
     }
   }
-  // Composed colours: tokens.css / theme.css write the colour half only (see cssValue).
+  // Composed colours: tokens.css / theme.css write color-mix(); only an opacity alias whose target's
+  // CSS is not a percentage falls back to the colour half (see cssValue). Same plan + test as toCSS.
+  let plan: IdPlan | null = null;
   for (const v of vars) {
     if (v.type !== "COLOR") continue;
-    const m = Object.keys(v.values || {}).find((k) => isComposed(v.values[k]));
-    if (m !== undefined) warnings.push(`token '${v.name}' (mode ${m}) is a composed colour (colour + separate opacity); tokens.css/theme.css carry the colour only — the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      if (!isComposed(raw)) continue;
+      const { opacity } = raw.composed;
+      if (isAlias(opacity)) {
+        plan = plan || cssPlan(designSystem);
+        if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); tokens.css/theme.css carry the colour only — the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          break;
+        }
+      } else if (pctOutOfRange(opacity)) {
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0–100 range; clamped to ${clampPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+      }
+    }
+  }
+  // Opacity FLOATs outside 0–100: clamped in the CSS exactly as Figma clamps them (see clampPct).
+  for (const v of vars) {
+    if (!percentOpacity(v, opts)) continue;
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0–100 range; clamped to ${clampPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+    }
   }
   // STRING tokens carrying CSS-structural characters are emitted escaped (see cssEscapeText) — report
   // so the author knows the value was rewritten rather than passed through verbatim. cssNeedsEscape

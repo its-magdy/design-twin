@@ -1067,23 +1067,43 @@ function crossCheck(input) {
   };
 }
 var MIN_CONTRAST = 4.5;
+function composedRgba(color, opacity) {
+  if (!color || opacity === null || !Number.isFinite(opacity)) return null;
+  return { ...color, a: color.a * (Math.min(100, Math.max(0, opacity)) / 100) };
+}
 function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const defs = /* @__PURE__ */ new Map();
   for (const v of tokens && tokens.variables || []) if (v.name) defs.set(v.name, v);
   for (const v of variables && variables.variables || []) if (v.name) defs.set(v.name, v);
   if (!defs.size) return;
+  function valueIn(name, mode) {
+    const v = defs.get(name);
+    if (!v || !v.values) return void 0;
+    const val = v.values[mode];
+    if (val !== void 0) return val;
+    const keys = Object.keys(v.values);
+    return keys.length === 1 ? v.values[keys[0]] : void 0;
+  }
+  const aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+  function resolveNumber(name, mode, depth) {
+    if (depth > 8) return null;
+    const val = valueIn(name, mode);
+    if (typeof val === "number") return Number.isFinite(val) ? val : null;
+    const next = aliasName(val);
+    return next ? resolveNumber(next, mode, depth + 1) : null;
+  }
   function resolve(name, mode, depth) {
     if (depth > 8) return null;
-    const v = defs.get(name);
-    if (!v || !v.values) return null;
-    let val = v.values[mode];
-    if (val === void 0) {
-      const keys = Object.keys(v.values);
-      if (keys.length !== 1) return null;
-      val = v.values[keys[0]];
-    }
+    const val = valueIn(name, mode);
     if (typeof val === "string") return parseHex(val);
-    if (val && typeof val === "object" && "aliasOf" in val && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
+    const next = aliasName(val);
+    if (next) return resolve(next, mode, depth + 1);
+    if (val && typeof val === "object" && "composed" in val) {
+      const { color, opacity } = val.composed;
+      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
+      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
+      return composedRgba(c, o);
+    }
     return null;
   }
   const modes = /* @__PURE__ */ new Set();

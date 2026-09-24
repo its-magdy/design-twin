@@ -9,7 +9,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { crossCheck, toMarkdown } from "../design-to-code/cross-check.ts";
+import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-check.ts";
+import { parseHex } from "../design-to-code/color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
 import { catalog, codeMap, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
@@ -262,6 +263,41 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   const frame = node({ type: "FRAME", id: "1:1", name: "F", resolvedModes: { Sem: "Only" }, tokens: { fills: "Bg" }, children: [] });
   const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: vars });
   ok("[contrast] a single-mode system derives nothing, so it is never warned about", !has(res, "derived-mode-contrast"));
+}
+
+{
+  // A composed colour (colour + separate 0–100 opacity, Figma Update 139) resolves to ONE RGBA:
+  // alpha = colour alpha × opacity/100, the opacity clamped to 0–100 as Figma clamps it.
+  const red = must(parseHex("#ff0000"), "#ff0000 parses");
+  const half = must(parseHex("#ff000080"), "#ff000080 parses");
+  const near = (a: number | undefined, b: number) => a !== undefined && Math.abs(a - b) < 0.005;
+  ok("[composed] #ff0000 at opacity 60 -> alpha 0.6, channels kept", (() => { const c = composedRgba(red, 60); return !!c && c.r === 255 && c.g === 0 && c.b === 0 && near(c.a, 0.6); })());
+  ok("[composed] a colour with alpha 0.5 at opacity 60 -> alpha 0.3 (multiplied)", near(composedRgba(half, 60)?.a, 0.3));
+  ok("[composed] opacity 120 clamps to 100 (alpha 1), -5 clamps to 0", near(composedRgba(red, 120)?.a, 1) && near(composedRgba(red, -5)?.a, 0));
+  ok("[composed] an unresolved half stays null", composedRgba(null, 60) === null && composedRgba(red, null) === null);
+  // End to end: the derived mode's contrast now sees a composed text colour (it was skipped as null),
+  // through both an aliased colour half and an aliased opacity half.
+  const vars = tokens({
+    collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
+    variables: [
+      { name: "Bg", collection: "Sem", key: "b1", type: "COLOR", values: { Dark: "#121319", Light: "#2b2b4f" } },
+      { name: "Ink", collection: "Sem", key: "i1", type: "COLOR", values: { Dark: "#d4d4d4", Light: "#46464f" } },
+      { name: "Op", collection: "Sem", key: "o1", type: "FLOAT", scopes: ["COLOR_OPACITY"], values: { Dark: 60, Light: 60 } },
+      { name: "Fg", collection: "Sem", key: "t1", type: "COLOR", values: {
+        Dark: { composed: { color: { aliasOf: "Ink" }, opacity: { aliasOf: "Op" } } },
+        Light: { composed: { color: { aliasOf: "Ink" }, opacity: { aliasOf: "Op" } } } } },
+    ],
+  });
+  const frame = node({ type: "FRAME", id: "1:1", name: "F", resolvedModes: { Sem: "Dark" }, tokens: { fills: "Bg" }, children: [text("2:1", "Poppins", null, "Fg")] });
+  const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: vars });
+  ok("[composed] a composed text colour resolves in the derived mode, so its contrast is checked",
+    has(res, "derived-mode-contrast") && get(res, "derived-mode-contrast").pairs?.[0]?.fg === "Fg");
+  const gone = tokens({
+    collections: vars.collections,
+    variables: (vars.variables || []).filter((v) => v.name !== "Op"),
+  });
+  ok("[composed] an opacity alias that does not resolve leaves the pair unchecked (null, not a guess)",
+    !has(crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: gone }), "derived-mode-contrast"));
 }
 
 // ---------------------------------------------------------------- honesty about what it could not do

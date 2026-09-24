@@ -45,7 +45,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
   CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection,
+  IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
@@ -787,28 +787,61 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
 const MIN_CONTRAST = 4.5;
 
 
+/**
+ * A composed colour's ONE RGBA from its two resolved halves; null when either half did not resolve.
+ * The opacity is a 0–100 percentage — "An opacity percentage from 0 to 100, or an alias to a FLOAT
+ * variable" (REST API variables types, VariableComposedColor.opacity:
+ * https://developers.figma.com/docs/rest-api/variables-types/) — clamped as Figma clamps it
+ * (https://help.figma.com/hc/en-us/articles/14506821864087: negative -> 0%, > 100 -> 100%).
+ * alpha = colour alpha × opacity/100 is an INFERENCE: Figma does not document how the opacity combines
+ * with a colour whose own alpha is < 1; multiplying is what tokens.css's color-mix() form does too.
+ */
+function composedRgba(color: Rgba | null, opacity: number | null): Rgba | null {
+  if (!color || opacity === null || !Number.isFinite(opacity)) return null;
+  return { ...color, a: color.a * (Math.min(100, Math.max(0, opacity)) / 100) };
+}
+
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
   const defs = new Map<string, Variable>(); // token name -> variable record (the screen's own library wins: it is what the screen binds)
   for (const v of (tokens && tokens.variables) || []) if (v.name) defs.set(v.name, v);
   for (const v of (variables && variables.variables) || []) if (v.name) defs.set(v.name, v);
   if (!defs.size) return;
 
+  // A token's raw value in one mode (the single mode of a one-mode variable stands in for any mode).
+  function valueIn(name: string, mode: string): VariableValue | undefined {
+    const v = defs.get(name);
+    if (!v || !v.values) return undefined;
+    const val = v.values[mode];
+    if (val !== undefined) return val;
+    const keys = Object.keys(v.values);
+    return keys.length === 1 ? v.values[keys[0]] : undefined; // several modes and none of them is this one — do not guess
+  }
+  const aliasName = (val: unknown): string | null =>
+    val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
+  // A FLOAT token's number in one mode, following aliases (the opacity half of a composed colour).
+  function resolveNumber(name: string, mode: string, depth: number): number | null {
+    if (depth > 8) return null;
+    const val = valueIn(name, mode);
+    if (typeof val === "number") return Number.isFinite(val) ? val : null;
+    const next = aliasName(val);
+    return next ? resolveNumber(next, mode, depth + 1) : null;
+  }
   // A token's hex in one mode, following aliases. Depth-limited rather than cycle-tracked: a Figma
   // alias chain is two or three links in practice, and a malformed file must not hang the check.
   function resolve(name: string, mode: string, depth: number): Rgba | null {
     if (depth > 8) return null;
-    const v = defs.get(name);
-    if (!v || !v.values) return null;
-    let val = v.values[mode];
-    if (val === undefined) {
-      const keys = Object.keys(v.values);
-      if (keys.length !== 1) return null; // several modes and none of them is this one — do not guess
-      val = v.values[keys[0]];
-    }
+    const val = valueIn(name, mode);
     if (typeof val === "string") return parseHex(val);
-    if (val && typeof val === "object" && "aliasOf" in val && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
-    // A composed colour needs its opacity applied to the colour half; until the opacity unit is settled
-    // (tokens.ts keeps it under $extensions) it does not resolve to one RGBA here.
+    const next = aliasName(val);
+    if (next) return resolve(next, mode, depth + 1);
+    // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex -> parsed)
+    // and the opacity half (a number, or an alias -> that FLOAT's number), folded by composedRgba.
+    if (val && typeof val === "object" && "composed" in val) {
+      const { color, opacity } = val.composed;
+      const c = typeof color === "string" ? parseHex(color) : resolve(color.aliasOf, mode, depth + 1);
+      const o = typeof opacity === "number" ? opacity : resolveNumber(opacity.aliasOf, mode, depth + 1);
+      return composedRgba(c, o);
+    }
     return null;
   }
 
@@ -950,7 +983,7 @@ function toMarkdown(res: CrossCheckReport): string {
   return L.join("\n") + "\n";
 }
 
-export { crossCheck, toMarkdown, ABSURD_NUMBER, WRONG_CATALOG_PCT };
+export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
 //        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]

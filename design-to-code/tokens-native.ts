@@ -147,8 +147,12 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       const kind = kindOf(v, opts);
       if (!segs(v.name).length) continue;
       if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
-      // A composed colour (colour + separate opacity, doc-types ComposedColor) has no single native
-      // literal: folding the opacity into the colour needs its range, which Figma does not document.
+      // A composed colour (colour + separate opacity, doc-types ComposedColor) is not folded into one
+      // native literal here. The opacity's range IS documented — "An opacity percentage from 0 to 100, or
+      // an alias to a FLOAT variable" (https://developers.figma.com/docs/rest-api/variables-types/,
+      // VariableComposedColor.opacity). Folding it into one literal (alpha × opacity/100, an inference:
+      // Figma does not document how it combines with a colour's own alpha) is not implemented here yet;
+      // tokens.css carries the whole value as color-mix().
       if (Object.values(v.values || {}).some(isComposed)) {
         warnings.push(`${v.name}: skipped — a composed colour (colour + separate opacity) has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
         continue;
