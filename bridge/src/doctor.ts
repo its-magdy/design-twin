@@ -30,25 +30,27 @@ import path from "node:path";
 import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
 import * as daemon from "./daemon.ts";
-import type { DaemonStatus } from "./daemon.ts";
+import type { DaemonStatusView } from "./daemon.ts";
 import { readSnapshotInfo } from "./snapshot-meta.ts";
-import type { SnapshotInfo, SnapshotParseError } from "./snapshot-meta.ts";
 import { errMsg } from "./errmsg.ts";
 import * as LAYOUT from "./project-layout.ts";
 import { isOurMcpEntry } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
+// The manifest's allowedDomains ports — ports.ts, the same list server-core.ts binds from. Its own
+// dependency-free module, so reading it never loads server-core (which exits the process on a bad
+// FIGMA_BRIDGE_PORT — the very case this list exists to diagnose).
+import { ALLOWED_PORTS } from "./ports.ts";
 import type { ClientRow, Bridge } from "./server-core.ts";
 
-// Mirrors server-core's ALLOWED_PORTS (the manifest's allowedDomains). Restated rather than imported
-// because requiring server-core with a bad FIGMA_BRIDGE_PORT exits the process — the very case this
-// list exists to diagnose. test/bridge.test.ts asserts the two stay equal.
-const ALLOWED_PORTS = [8787, 8788, 8789];
 // Same threshold drift-lint uses for its STALE SNAPSHOT warning.
 const STALE_MS = 24 * 60 * 60 * 1000;
 
+/** Every check this report can carry, by id — what `--json` consumers key on. */
+export type CheckId = "node" | "token" | "daemon" | "port" | "plugin" | "project" | "layout" | "export" | "map" | "mcp";
+
 /** One line of the report. `next` is the single next step (absent, or undefined, when there is none). */
 export interface Check {
-  id: string;
+  id: CheckId;
   title: string;
   status: "ok" | "warn" | "fail";
   detail: string;
@@ -81,9 +83,9 @@ export interface PluginProbe {
   error?: string;
 }
 
-const ok = (id: string, title: string, detail: string): Check => ({ id, title, status: "ok", detail });
-const warn = (id: string, title: string, detail: string, next?: string): Check => ({ id, title, status: "warn", detail, next });
-const fail = (id: string, title: string, detail: string, next?: string): Check => ({ id, title, status: "fail", detail, next });
+const ok = (id: CheckId, title: string, detail: string): Check => ({ id, title, status: "ok", detail });
+const warn = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "warn", detail, next });
+const fail = (id: CheckId, title: string, detail: string, next?: string): Check => ({ id, title, status: "fail", detail, next });
 
 // ---------------------------------------------------------------- pure checks
 
@@ -154,10 +156,11 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   // it into this same summary line so it's never a silent gap here either.
   const daemonStale = [...new Set((clients || []).map(daemonRowStalenessNote).filter((n): n is string => Boolean(n)))];
   if ((clients || []).length < 2 && !stale.length && !daemonStale.length) return { detail };
+  const list = clients ?? [];
   const bits: string[] = [];
-  if ((clients || []).length >= 2) bits.push(`${detail} — ${clients!.length} files, so commands must say which`);
+  if (list.length >= 2) bits.push(`${detail} — ${list.length} files, so commands must say which`);
   const nexts: string[] = [];
-  if ((clients || []).length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
+  if (list.length >= 2) nexts.push("add `--client <connId|fileKey|part of the file name>` to every command that reaches the plugin (`dtwin list clients` lists them; MCP: a `client` argument)");
   if (stale.length) nexts.push(...new Set(stale));
   if (daemonStale.length) nexts.push(...daemonStale);
   return {
@@ -171,7 +174,8 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
 // an 8s pull and a 300s+ timeout (findings 202/213/220), and `--client c1` becomes reconnect-order
 // roulette (finding 209) instead of a stable id across a daemon's lifetime. That is a real cost, not a
 // cosmetic one, so a missing daemon is reported `warn`, never `ok` — "optional" undersold it.
-function checkDaemon(st: DaemonStatus | null | undefined, port: number): Check {
+// `st` is read as DaemonStatusView: a daemon from an OLDER bridge may omit fields, which print as "?".
+function checkDaemon(st: DaemonStatusView | null | undefined, port: number): Check {
   if (!st) {
     return warn(
       "daemon", "Daemon",
@@ -180,7 +184,7 @@ function checkDaemon(st: DaemonStatus | null | undefined, port: number): Check {
     );
   }
   const who = st.pluginConnected ? `plugin connected: ${fileNames(st.clients)}` : "no plugin connected to it";
-  return ok("daemon", "Daemon", `running (pid ${st.pid}, port ${st.port}) — ${who}`);
+  return ok("daemon", "Daemon", `running (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — ${who}`);
 }
 
 // `raw` is FIGMA_BRIDGE_PORT. Returns { port } or { problem: <check> }.
@@ -192,9 +196,9 @@ function resolvePort(raw: string | undefined): { port: number; problem?: undefin
 }
 
 // `probe` is probePort()'s result; `st` the daemon status for the same port.
-function checkPort(port: number, probe: PortProbe, st: DaemonStatus | null | undefined): Check {
+function checkPort(port: number, probe: PortProbe, st: DaemonStatusView | null | undefined): Check {
   if (probe.free) return ok("port", "Port", `${port} is free`);
-  if (st) return ok("port", "Port", `${port} is held by the dtwin daemon (pid ${st.pid}) — pulls route through it`);
+  if (st) return ok("port", "Port", `${port} is held by the dtwin daemon (pid ${st.pid ?? "?"}) — pulls route through it`);
   const others = ALLOWED_PORTS.filter((p) => p !== port).join(" or ");
   if (probe.holder === "websocket") {
     return warn("port", "Port", `${port} is held by a WebSocket server that is not a dtwin daemon — most likely the Design Twin MCP server (Claude Code), or a pull still running`, `use the MCP tools (writeToDisk:true) while it runs, or stop it, or run this CLI on another port: FIGMA_BRIDGE_PORT=${others}`);
@@ -301,13 +305,13 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
         "the two trees can disagree (e.g. two different variables.json). Move anything real out of the stray design/pages, design/assets, design/variables.json, design/design-system into design/export/, then remove them — never `dtwin pull design ...` (that outDir already contains export/); use `dtwin pull --node <id>` etc."));
     }
 
-    // Either a SnapshotInfo or a SnapshotParseError; read through one optional view, as plain JS did.
-    const snap = readSnapshotInfo(ex.dir) as Partial<SnapshotInfo & SnapshotParseError> | null;
+    // Either a SnapshotInfo or a SnapshotParseError (only the latter carries `error`).
+    const snap = readSnapshotInfo(ex.dir);
     // "no export" means no export of ANY shape — design-system.json, a page walk's pages/index.json,
     // or a single-screen pages/<Page>/<Screen>.json (snapshot-meta.ts checks all three; naming only
     // the first sent someone who had just pulled a screen off to re-run a pull they had already run).
     if (!snap) out.push(warn("export", "Export", `nothing exported yet (no design-system.json, pages/index.json or screen JSON in ${ex.rel}/)`, "dtwin list   →   dtwin pull --node <id>   (or --page <name> / --design-system)"));
-    else if (snap.error) out.push(warn("export", "Export", snap.error, "re-run the pull"));
+    else if ("error" in snap) out.push(warn("export", "Export", snap.error, "re-run the pull"));
     else if (snap.warning) out.push(warn("export", "Export", snap.warning, "re-run the pull"));
     else {
       const ageMs = now - Date.parse(String(snap.exportedAt));
@@ -421,11 +425,11 @@ export interface RunOptions {
 async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOptions = {}): Promise<Report> {
   const checks: Check[] = [];
   const add = (...cs: Check[]) => { for (const c of cs) { checks.push(c); if (onCheck) onCheck(c); } };
-  // `engines!`: a package.json without `engines` throws here and reads as null, exactly as before.
+  // A package.json without `engines.node` reads as null — checkNode then reports the range as unreadable.
   const engines = (() => {
     try {
-      return (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string; engines?: { node?: string } }).engines!.node;
-    } catch (e) { return null; }
+      return (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string; engines?: { node?: string } }).engines?.node ?? null;
+    } catch { return null; }
   })();
   add(checkNode(process.version, engines));
 
@@ -462,7 +466,7 @@ async function run({ cwd = process.cwd(), waitSec = 10, onCheck, onWait }: RunOp
             // set by an up-to-date daemon that saw a version-less/old `hello`), or the DAEMON itself
             // predating version reporting (its rows have no `pluginVersion` key at all — the live case
             // this was found in: a long-running `dtwin serve` older than this bridge).
-            const stale = (st.clients || []).some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
+            const stale = (st.clients ?? []).some((cl) => cl.pluginStale || daemonRowStalenessNote(cl));
             return { id: "plugin", title: "Figma plugin", status: stale ? "warn" : "ok", detail: c.detail, ...(c.next ? { next: c.next } : {}) };
           })()
         : fail("plugin", "Figma plugin", "the daemon is running, but no plugin is connected to it", "in Figma DESKTOP open the file and run Plugins → Development → Design Twin; if its window says the token is wrong, re-paste `dtwin --show-token`");

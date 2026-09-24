@@ -13,8 +13,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 // "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { RawData } from "ws";
-import type { RequestArgs } from "../bridge/src/server-core.ts";
-import type { ScreenExport } from "../bridge/src/doc-types.ts";
+import type { Cmd, ScreenReply } from "../bridge/src/commands.ts";
 // Type-only: erased before Node runs this file, so the server module is NOT imported here (it is
 // booted as a subprocess below — importing it would start a real bridge + stdio transport).
 import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mcp.ts";
@@ -44,7 +43,7 @@ function firstText(r: JsonRpcReply): string {
   return c.text;
 }
 // The one bridge -> plugin frame this fake plugin reads: `{ id, cmd, args }` (server-core does not export it).
-interface CommandFrame { id: string; cmd: string; args?: RequestArgs }
+interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
 // figma_write's dryRun result — figma-mcp.ts previewWrites() (an inferred return type, not exported): the fields read below.
 interface WritePreview { dryRun: boolean; applied: boolean; creates: number; overwrites: number; invalid: number; steps: Array<{ target: string | null; invalid?: string }> }
 // The compact result exportResult() returns once an export is written to disk: only its note is read.
@@ -103,10 +102,13 @@ void (async () => {
       const m = JSON.parse(String(raw)) as CommandFrame;
       if (m.cmd !== "exportSelection") return;
       const children = Array.from({ length: kids }, (_, i) => ({ id: "9:" + i, name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
-      plugin.send(JSON.stringify({ id: m.id, ok: true, result: { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }], assets: [] } }));
+      // The REAL exportSelection shape (figma-plugin/src/collect.ts screenResult) — the bridge now
+      // checks every reply against commands.ts before a tool sees it.
+      const screen = { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] };
+      plugin.send(JSON.stringify({ id: m.id, ok: true, result: { screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] } }));
     });
     const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
-    ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenExport).nodes[0].children!.length === 3);
+    ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0].children?.length === 3);
     kids = 1500; // ~200 KB of indented JSON — far past the 25k-token default
     const big = await client.callTool({ name: "figma_export_selection", arguments: {} });
     const idx = JSON.parse(firstText(big)) as WrittenExport;

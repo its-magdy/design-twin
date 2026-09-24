@@ -653,7 +653,7 @@ const sandbox = context as unknown as Sandbox;
   // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
   ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
   ok("[RD-noassets] the reference screenshot IS still produced", typeof skipRun.screen.nodes[0].reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
-  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped! >= 1);
+  ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
   ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
     skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
 
@@ -1607,9 +1607,9 @@ const sandbox = context as unknown as Sandbox;
   };
   const libs = await sandbox.listLibraries();
   const acme = libs.libraries.find((l) => l.name === "Acme DS");
-  ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections!.length === 3);
-  ok("[LIB] each collection carries its variable count", acme!.variableCollections!.find((c) => c.name === "Semantic")!.variableCount === 2);
-  ok("[LIB] one unreadable collection omits only its own count", acme!.variableCollections!.find((c) => c.name === "Broken")!.variableCount === undefined
+  ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections.length === 3);
+  ok("[LIB] each collection carries its variable count", acme!.variableCollections.find((c) => c.name === "Semantic")!.variableCount === 2);
+  ok("[LIB] one unreadable collection omits only its own count", acme!.variableCollections.find((c) => c.name === "Broken")!.variableCount === undefined
     && libs.warnings.some((w) => /'Broken'/.test(w)));
   ok("[LIB] a library with no attributable components carries no invented count", acme!.componentCount === undefined && /cannot be enumerated|impossible/.test(acme!.note!));
 

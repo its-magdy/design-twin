@@ -40,7 +40,7 @@ const NATIVE_COMP_RE = /component\s*=\s*([A-Za-z0-9_]+)\s*(?:\.self|::class)/g;
 
 function walk(dir: string, hits: string[]): void {
   let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
@@ -94,7 +94,7 @@ function extractMappings(text: string): Mapping[] {
 }
 
 function loadJson(p: string): unknown {
-  try { return JSON.parse(fs.readFileSync(p, "utf8")) as unknown; } catch (e) { return undefined; }
+  try { return JSON.parse(fs.readFileSync(p, "utf8")) as unknown; } catch { return undefined; }
 }
 
 // id -> component name, from an existing export (optional; only needed for Code Connect forms that
@@ -107,19 +107,27 @@ function loadJson(p: string): unknown {
 // design-to-code/catalog-input.ts exists to prevent. So follow the `files.componentsLocal` pointer instead,
 // and keep accepting an inline array for pre-split exports.
 // The fields read off design-system.json (either shape) and off a components catalog. Untyped JSON
-// from disk, so every read below is guarded exactly as it was in plain JS.
+// from disk: only a row whose `id` AND `name` are strings can be a lookup entry, so the map is filled
+// under that guard and typed by it.
 interface DsJson { components?: unknown; files?: { componentsLocal?: unknown } }
-interface CatalogRow { id?: unknown; name?: unknown }
+const isDsJson = (x: unknown): x is DsJson => typeof x === "object" && x !== null && !Array.isArray(x);
 
-function loadIdToName(dir: string): Map<unknown, unknown> {
-  const idToName = new Map<unknown, unknown>();
-  const ds = loadJson(path.join(dir, "design-system.json")) as DsJson | null | undefined;
-  if (!ds) return idToName;
+function loadIdToName(dir: string): Map<string, string> {
+  const idToName = new Map<string, string>();
+  const ds = loadJson(path.join(dir, "design-system.json"));
+  if (!isDsJson(ds)) return idToName;
   const inline = Array.isArray(ds.components) ? ds.components : null;
   const pointer = ds.files && typeof ds.files === "object" ? ds.files.componentsLocal : null;
-  // ts-port: path.join throws on a non-string pointer, exactly as it did before (String() is not applied).
-  const rows = inline || (pointer ? ((loadJson(path.join(dir, pointer as string)) || {}) as DsJson).components : null);
-  if (Array.isArray(rows)) for (const c of rows as CatalogRow[]) if (c && c.id) idToName.set(c.id, c.name);
+  // A pointer that is not a string is a corrupt manifest — nothing to follow.
+  const pointed = typeof pointer === "string" ? loadJson(path.join(dir, pointer)) : null;
+  const rows: unknown[] | null = inline ?? (isDsJson(pointed) && Array.isArray(pointed.components) ? pointed.components : null);
+  if (rows) {
+    for (const c of rows) {
+      if (typeof c !== "object" || c === null) continue;
+      const { id, name } = c as { id?: unknown; name?: unknown };
+      if (typeof id === "string" && id && typeof name === "string") idToName.set(id, name);
+    }
+  }
   return idToName;
 }
 
@@ -135,14 +143,12 @@ function main(): void {
   const found: Array<{ name: string; identifier: string | undefined; nodeId: string | undefined; source: string }> = [];
   for (const f of files) {
     let text = "";
-    try { text = fs.readFileSync(f, "utf8"); } catch (e) { continue; }
+    try { text = fs.readFileSync(f, "utf8"); } catch { continue; }
     // Gate: a Code Connect signal of any kind — a node-id URL, the call form, or the native marker.
     if (text.indexOf("node-id=") === -1 && text.indexOf("figma.connect") === -1 && text.indexOf("FigmaConnect") === -1) continue;
     for (const mp of extractMappings(text)) {
       const nodeId = parseNodeId(mp.url);
-      // ts-port: a catalog `name` is untyped JSON; the cast only names the type it is used as — it is an
-      // object key below, where plain JS already coerced it to a string.
-      const name = ((nodeId && idToName.get(nodeId)) || mp.identifier) as string | undefined;
+      const name = (nodeId && idToName.get(nodeId)) || mp.identifier;
       if (!name) continue;
       found.push({ name, identifier: mp.identifier, nodeId, source: mp.source || path.relative(codeRoot, f) });
     }

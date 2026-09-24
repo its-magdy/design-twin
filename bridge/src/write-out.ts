@@ -21,31 +21,25 @@ import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-
 import { mergeVariablesDoc } from "./variables-merge.ts";
 import { sha1Hex, normalizeForCompare } from "./asset-compare.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
-import type { DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, ScreenExport, VariablesDoc, LibraryCounts } from "./doc-types.ts";
+import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, ScreenExport, VariablesDoc, LibraryCounts } from "./doc-types.ts";
+import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
 
-// ---- what the plugin hands this module (the `r` of every writer below)
+// ---- what the plugin hands this module (the `r` of every writer below): the per-command replies of
+// commands.ts. writeAny tells them apart by the field only that reply carries (`screen`, `reference`),
+// which is a real narrowing of the union, not a guess over one optional bag.
 
-/** One exported asset (figma-plugin/src/state.ts Asset). `file` is the producer-owned name; writeAssets
- *  rewrites it (and `text`/`base64`) in place to what actually landed on disk. */
-export interface ExportAsset {
-  id?: string;
-  name?: string;
-  format?: string;
-  file: string;
-  base64?: string | null;
-  text?: string | null;
-  kind?: string;
-  hash?: string;
-  from?: string[];
-}
+/** One exported asset — doc-types.ts Asset, the plugin's own definition. `file` is the producer-owned
+ *  name; writeAssets rewrites it (and `text`/`base64`) in place to what actually landed on disk. */
+export type ExportAsset = Asset;
+
+/** `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts (P4 #33) onto the reply before it reaches a
+ *  writer — never by the plugin. */
+export type Stamped<R> = R & { sourceFile?: string; sourceFileKey?: string };
 
 /**
- * Any export result the plugin returns — the ONE shape writeAny dispatches on. Which fields are present
- * depends on the command: a full/page pull (`designSystem` + `layersDoc` + `assets`), a design-system or
- * library pull (`designSystem` only; a library's carries `source.role === "library"`), a single-screen
- * pull (figma-plugin/src/collect.ts screenResult: `screenName` + `screen` + `variables` + `assets` + the
- * page/node identity), or a screenshot (`id`/`name`/`type`/`reference` + `manifest` + `assets`).
- * `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts (P4 #33), never by the plugin.
+ * The ONE optional-bag view of every export reply, kept for test/harness.ts (which extends it per
+ * collector) and for readers that only probe a field or two. The writers below take the precise
+ * per-command reply instead; nothing here dispatches on this shape any more.
  */
 export interface ExportResult {
   designSystem?: DesignSystemDoc;
@@ -158,7 +152,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   const ldir = path.join(dir, built.dir);
 
   let prevIndexDoc: { files?: unknown } | null = null;
-  try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")) as { files?: unknown }; } catch (e) {} // absent/corrupt = first export
+  try { prevIndexDoc = JSON.parse(fs.readFileSync(path.join(ldir, INDEX), "utf8")) as { files?: unknown }; } catch { /* absent/corrupt = first export */ }
 
   fs.mkdirSync(ldir, { recursive: true });
   for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
@@ -178,7 +172,7 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   // must not erase library A's row.
   const rootIndex = path.join(dir, ROOT, INDEX);
   let prevRoot: unknown = null;
-  try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")) as unknown; } catch (e) {}
+  try { prevRoot = JSON.parse(fs.readFileSync(rootIndex, "utf8")) as unknown; } catch { /* first export */ }
   writeJson(dir, ROOT + "/" + INDEX, mergeLibrariesIndex(prevRoot, built), false, log);
 
   return { dir: built.dir, counts: built.counts, publish: built.manifest.publish, orphans };
@@ -210,7 +204,7 @@ const BUSY_SVG_PATHS = 400;
 function readExistingDirCaseFold(adir: string): Map<string, string> {
   const map = new Map<string, string>(); // lowercased basename -> real basename on disk
   let names: string[] = [];
-  try { names = fs.readdirSync(adir); } catch (e) { /* doesn't exist yet */ }
+  try { names = fs.readdirSync(adir); } catch { /* doesn't exist yet */ }
   for (const n of names) map.set(n.toLowerCase(), n);
   return map;
 }
@@ -230,10 +224,10 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 function readExistingDirByContent(adir: string): Map<string, string> {
   const map = new Map<string, string>(); // normalised sha1 -> real basename on disk
   let names: string[] = [];
-  try { names = fs.readdirSync(adir); } catch (e) { return map; }
+  try { names = fs.readdirSync(adir); } catch { return map; }
   for (const name of names) {
     let bytes: Buffer;
-    try { bytes = fs.readFileSync(path.join(adir, name)); } catch (e) { continue; }
+    try { bytes = fs.readFileSync(path.join(adir, name)); } catch { continue; }
     const hash = sha1Hex(normalizeForCompare(name, bytes));
     if (!map.has(hash)) map.set(hash, name); // first (alphabetically-readdir'd) name wins ties
   }
@@ -290,7 +284,7 @@ function writeAssets(dir: string, assets: ExportAsset[] | null | undefined, log?
     const byContentName = byContent.get(contentHash);
     if (byContentName !== undefined) {
       let priorBytes: Buffer | null = null;
-      try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch (e) { /* fall through as new */ }
+      try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch { /* fall through as new */ }
       if (priorBytes) {
         reuseExisting(a, dirPrefix, byContentName, priorBytes);
         n++; // counted as written even though the on-disk file was left untouched
@@ -377,13 +371,13 @@ function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined): 
 // directory, one name, no duplicate: shoot a node during discovery and the PNG is already in the
 // place build-screen reads, whether or not you go on to pull it.
 const REF_DIR = "assets";
-function writeScreenshot(outDir: string | null | undefined, r: ExportResult, log?: Log): { outDir: string; reference: string | undefined; wrote: { screenshot: true; assets: number; reference: string | undefined } } {
+function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log): { outDir: string; reference: string; wrote: { screenshot: true; assets: number; reference: string } } {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   const assets = writeAssets(dir, r.assets, log, REF_DIR);
   // The path the caller should PRINT. `r.reference` is the plugin's own relative name; recomputing it
   // here from the file actually written is what keeps the message and the file in agreement.
-  const first = (r.assets || []).find((a) => a && a.file);
+  const first = r.assets.find((a) => a && a.file);
   const reference = first ? REF_DIR + "/" + path.basename(first.file) : r.reference;
   return { outDir: dir, reference, wrote: { screenshot: true as const, assets, reference } };
 }
@@ -392,37 +386,40 @@ function writeScreenshot(outDir: string | null | undefined, r: ExportResult, log
 // path. Returns the COMPACT INDEX — counts and paths, never node payloads — which is precisely what
 // an MCP tool should hand back in place of the export itself: the agent then Reads/Greps the files
 // at whatever granularity it actually needs, instead of paying for the whole tree in context.
-function writeExport(outDir: string | null | undefined, r: ExportResult, log?: Log) {
+// `r` is a full/page pull (designSystem + layersDoc + assets) or a catalog-only one (designSystem alone).
+function writeExport(outDir: string | null | undefined, r: Stamped<FullExportReply | DesignSystemReply>, log?: Log) {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
   // A library catalog is routed by the PRODUCER's own flag (`source.role`), not by a CLI-side guess:
   // the plugin is the only thing that knows which file it ran in, and misrouting would overwrite the
   // design file's catalog with a library's.
-  const isLib = !!(r.designSystem && r.designSystem.source && r.designSystem.source.role === "library");
+  const isLib = !!(r.designSystem.source && r.designSystem.source.role === "library");
   if (isLib) {
     const lib = writeLibrary(dir, r.designSystem, log);
     return { outDir: dir, wrote: { library: lib.dir, libraryCounts: lib.counts, publish: lib.publish, orphans: lib.orphans } };
   }
-  const ds = r.designSystem ? writeDesignSystem(dir, r.designSystem, log) : null;
+  const ds = writeDesignSystem(dir, r.designSystem, log);
+  // The page walk half, present on a full pull only — narrowed on the field that IS the walk.
+  const full: Stamped<FullExportReply> | null = "layersDoc" in r ? r : null;
   // P4 #33: figma-pull.ts resolves which connected Figma file this pull talked to and stamps it as
   // `r.sourceFile`/`r.sourceFileKey` (the plugin itself has no reason to know its own bridge-side
   // connection id). Forward it onto layersDoc so buildPageLayout can carry it onto every per-page
   // layer file/index row — the same field writeScreen below stamps for a single-screen pull.
-  if (r.layersDoc && r.sourceFile && r.layersDoc.sourceFile === undefined) {
-    r.layersDoc.sourceFile = r.sourceFile;
-    if (r.sourceFileKey) r.layersDoc.sourceFileKey = r.sourceFileKey;
+  if (full && full.sourceFile && full.layersDoc.sourceFile === undefined) {
+    full.layersDoc.sourceFile = full.sourceFile;
+    if (full.sourceFileKey) full.layersDoc.sourceFileKey = full.sourceFileKey;
   }
-  const pages = r.layersDoc ? writePages(dir, r.layersDoc, log) : null;
-  const assets = writeAssets(dir, r.assets, log);
+  const pages = full ? writePages(dir, full.layersDoc, log) : null;
+  const assets = full ? writeAssets(dir, full.assets, log) : 0;
   return {
     outDir: dir,
     wrote: {
-      designSystem: !!r.designSystem,
-      designSystemCounts: ds || undefined,
+      designSystem: true,
+      designSystemCounts: ds,
       layerFiles: pages ? pages.layerFiles : 0,
       pageDirs: pages ? pages.pageDirs : 0,
       assets,
-      assetsSkipped: Array.isArray(r.assets) ? r.assets.length - assets : 0,
+      assetsSkipped: full ? full.assets.length - assets : 0,
     },
     index: pages ? pages.meta : undefined,
   };
@@ -440,7 +437,7 @@ function writeExport(outDir: string | null | undefined, r: ExportResult, log?: L
 // already on disk rather than being recomputed in one pass like buildPageLayout's.
 //
 // Asset filenames are still NOT sanitised here: the plugin owns them (see writeAssets).
-function writeScreen(outDir: string | null | undefined, r: ExportResult, log?: Log) {
+function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>, log?: Log) {
   const dir = resolveOutDir(outDir);
   const paths = screenPaths(r, "/");
   fs.mkdirSync(path.join(dir, "pages", paths.dir), { recursive: true });
@@ -453,27 +450,31 @@ function writeScreen(outDir: string | null | undefined, r: ExportResult, log?: L
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
   writeJson(dir, paths.screen, screenDoc, false, log);
+  // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
   const assets = writeAssets(dir, r.assets, log);
   const assetIndex = writeScreenAssets(dir, paths, r.assets);
   // Finding 30 / acceptance criterion 10: a screen whose icons largely fell back to raw geometry
   // (figma-plugin/src/assets.ts geometryOf) instead of a real SVG export gets a warning AT PULL TIME,
   // not only if someone happens to go looking in manifest.assetsGeometry later.
-  if (log) { const gw = assetsGeometryWarning(r.screen && r.screen.manifest); if (gw) log(gw); }
+  if (log) { const gw = assetsGeometryWarning(r.screen.manifest); if (gw) log(gw); }
 
   // The entry a consumer reads instead of guessing filenames. Every sibling this pull produced is a
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that
   // reassembles `pages/<dir>/<base>.vars.json` from parts is right until the day one part changes.
-  const root: Partial<IrNode> = (r.screen && r.screen.nodes && r.screen.nodes[0]) || {};
+  const root: Partial<IrNode> = (Array.isArray(r.screen.nodes) && r.screen.nodes[0]) || {};
   // title/texts: findings 16/17/70/90/120 — the visible title a user types is a TEXT node inside the
   // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.ts deriveTitle.
   const title = deriveTitle(root);
   const texts = collectTexts(root);
-  // ts-port: `name`/`id`/`type` can be undefined on a degenerate result (no screen label, no nodes) —
-  // JSON.stringify then drops them, exactly as before; the casts only name the row type it is written as.
+  // The index row's join keys. A screen with no id at all (no nodeId on the reply, no root node) could
+  // only be indexed as a row nothing can ever address again — refuse it, loudly, rather than write it.
+  const name = r.screen.screen || r.screenName;
+  const id = paths.nodeId || root.id;
+  if (!id) throw new Error(`screen '${name}' has no id — cannot index it (the reply carried no nodeId and no root node)`);
   const entry: ScreenIndexRow = {
-    name: ((r.screen && r.screen.screen) || r.screenName) as string,
-    id: (paths.nodeId || root.id) as string,
+    name,
+    id,
     type: root.type,
     page: paths.page,
     pageId: paths.pageId,
@@ -485,7 +486,7 @@ function writeScreen(outDir: string | null | undefined, r: ExportResult, log?: L
     variables: r.variables ? paths.variables : undefined,
     assets: assetIndex ? paths.assets : undefined,
     reference: root.reference,
-    nodes: (r.screen && r.screen.manifest && r.screen.manifest.nodes) || undefined,
+    nodes: (r.screen.manifest && r.screen.manifest.nodes) || undefined,
     w: root.box && root.box.w,
     h: root.box && root.box.h,
   };
@@ -533,7 +534,7 @@ function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; pat
 function readJsonOr(file: string, fallback: unknown): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-  } catch (e) {
+  } catch {
     return fallback; // absent or corrupt — this pull is the first, or the last one was interrupted
   }
 }
@@ -558,10 +559,10 @@ function readJsonOr(file: string, fallback: unknown): unknown {
 function sharedAssetHashes(assetsDir: string): Map<string, string[]> {
   const out = new Map<string, string[]>(); // normalised hash -> ["assets/<file>", ...]
   let names: string[] = [];
-  try { names = fs.readdirSync(assetsDir); } catch (e) { return out; }
+  try { names = fs.readdirSync(assetsDir); } catch { return out; }
   for (const name of names) {
     let bytes: Buffer;
-    try { bytes = fs.readFileSync(path.join(assetsDir, name)); } catch (e) { continue; }
+    try { bytes = fs.readFileSync(path.join(assetsDir, name)); } catch { continue; }
     const hash = sha1Hex(normalizeForCompare(name, bytes));
     let group = out.get(hash);
     if (!group) { group = []; out.set(hash, group); }
@@ -674,12 +675,12 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 }
 
 // Dispatch on the RESULT shape, so each export tool forwards whatever the plugin sent without
-// having to know which writer its own command implies.
-function writeAny(outDir: string | null | undefined, r: ExportResult, log?: Log) {
-  if (r && r.screen) return writeScreen(outDir, r, log);
-  // A screenshot result has none of designSystem/layersDoc/screen, only id/name/type/reference/assets
-  // — `reference` is the tell that distinguishes it from a real export.
-  if (r && r.reference && !r.designSystem && !r.layersDoc) return writeScreenshot(outDir, r, log);
+// having to know which writer its own command implies. Each member of ExportReply carries a field
+// the others do not — `screen` (a screen pull), `reference` (a screenshot), otherwise a catalog with
+// or without a page walk — so `in` narrows the union to the writer's own reply type.
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log) {
+  if ("screen" in r) return writeScreen(outDir, r, log);
+  if ("reference" in r) return writeScreenshot(outDir, r, log);
   return writeExport(outDir, r, log);
 }
 

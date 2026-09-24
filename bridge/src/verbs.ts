@@ -18,9 +18,15 @@
 
 export class VerbError extends Error {}
 
-const LIST: Record<string, string> = { "": "--list", frames: "--list", pages: "--list-pages", libraries: "--list-libraries", libs: "--list-libraries", clients: "--list-clients" };
-const TOKEN: Record<string, string> = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
-const SIMPLE: Record<string, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help", version: "--version" };
+// The sub-noun and simple-verb tables, keyed by their own literal unions: a typo in a table key is a
+// compile error rather than a dead row, and `has()` narrows a user-typed word to a key before lookup.
+type ListSub = "" | "frames" | "pages" | "libraries" | "libs" | "clients";
+type TokenSub = "" | "status" | "show" | "rotate" | "forget";
+type SimpleVerb = "whoami" | "serve" | "stop" | "status" | "help" | "version";
+const LIST: Record<ListSub, string> = { "": "--list", frames: "--list", pages: "--list-pages", libraries: "--list-libraries", libs: "--list-libraries", clients: "--list-clients" };
+const TOKEN: Record<TokenSub, string> = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
+const SIMPLE: Record<SimpleVerb, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help", version: "--version" };
+const has = <K extends string>(table: Record<K, string>, word: string): word is K => Object.prototype.hasOwnProperty.call(table, word);
 export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help", "version"];
 
 // Words people (and agents) reach for first that are NOT verbs. Left alone they were a positional
@@ -86,19 +92,19 @@ export function translate(argv: string[], exists: (p: string) => boolean = () =>
   const [verb, ...rest] = argv;
   if (!verb || isFlag(verb)) return argv;
   if (verb === "pull") return rest;
-  if (SIMPLE[verb]) return [SIMPLE[verb], ...rest];
+  if (has(SIMPLE, verb)) return [SIMPLE[verb], ...rest];
   if (verb === "list") {
     const sub = rest[0] && !isFlag(rest[0]) ? rest[0] : "";
     if (sub === "children") {
       if (!rest[1] || isFlag(rest[1])) throw new VerbError("dtwin list children needs a node id or a Figma URL (ids come from `dtwin list`)");
       return ["--children", rest[1], ...rest.slice(2)];
     }
-    if (!(sub in LIST)) throw new VerbError(`unknown \`dtwin list ${sub}\` — use: dtwin list [pages|libraries|clients], or dtwin list children <id>`);
+    if (!has(LIST, sub)) throw new VerbError(`unknown \`dtwin list ${sub}\` — use: dtwin list [pages|libraries|clients], or dtwin list children <id>`);
     return [LIST[sub], ...rest.slice(sub ? 1 : 0)];
   }
   if (verb === "token") {
     const sub = rest[0] && !isFlag(rest[0]) ? rest[0] : "";
-    if (!(sub in TOKEN)) throw new VerbError(`unknown \`dtwin token ${sub}\` — use: dtwin token [status|show|rotate|forget]`);
+    if (!has(TOKEN, sub)) throw new VerbError(`unknown \`dtwin token ${sub}\` — use: dtwin token [status|show|rotate|forget]`);
     return [TOKEN[sub], ...rest.slice(sub ? 1 : 0)];
   }
   if (verb === "screenshot") {
