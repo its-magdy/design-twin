@@ -6,6 +6,7 @@ import type {
 } from "../../bridge/src/doc-types.ts";
 import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
+import { isUnknownArray } from "../../bridge/src/json-util.ts";
 
 // The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
 // places (bound-variable maps, valuesByMode entries, nested per-property binding objects).
@@ -129,6 +130,33 @@ export function resolvedModes(node: SceneNode): Promise<ModeMap | undefined> {
 function isComposedColor(v: VariableValue): v is VariableComposedColor {
   return typeof v === "object" && "opacity" in v && "color" in v;
 }
+// The UNDOCUMENTED runtime shape. figma/plugin-typings issue #375 (open, no reply; filed 2026-09-04 against
+// Figma Desktop 126.8.18 / typings 1.138) shows a composed colour authored in the UI coming back from
+// valuesByMode as
+//   { type: "VARIABLE_EXPRESSION", expressionFunction: "COMPOSE_COLOR",
+//     expressionArguments: [ <RGB | RGBA | VariableAlias>, <number | VariableAlias> ] }
+// while typings 1.139 declare VariableComposedColor as {color, opacity}. Nothing public says which one a
+// current runtime returns, so BOTH are read: this normalises the expression form into the documented one
+// and every path below sees {color, opacity}. Anything else stays on the verbatim path, as before.
+function isRgb(x: unknown): x is RGB | RGBA {
+  return !!x && typeof x === "object" && "r" in x && typeof x.r === "number" && "g" in x && typeof x.g === "number" && "b" in x && typeof x.b === "number";
+}
+function composedFromExpression(v: VariableValue): VariableComposedColor | null {
+  const u: unknown = v;
+  if (!u || typeof u !== "object" || !("type" in u) || u.type !== "VARIABLE_EXPRESSION") return null;
+  if (!("expressionFunction" in u) || u.expressionFunction !== "COMPOSE_COLOR") return null;
+  if (!("expressionArguments" in u) || !isUnknownArray(u.expressionArguments) || u.expressionArguments.length !== 2) return null;
+  const [c, o] = u.expressionArguments;
+  if (isVariableAlias(c)) {
+    if (isVariableAlias(o) || typeof o === "number") return { color: c, opacity: o };
+    return null;
+  }
+  return isRgb(c) && isVariableAlias(o) ? { color: c, opacity: o } : null;
+}
+// Either shape, as the documented one; null for anything that is not a composed colour.
+function toComposed(v: VariableValue): VariableComposedColor | null {
+  return isComposedColor(v) ? v : composedFromExpression(v);
+}
 // Figma's two members are told apart by whether `color` is an alias; a guard narrows the whole union
 // (a property check alone would narrow `color` but not `opacity`).
 function colorIsAlias(v: VariableComposedColor): v is Extract<VariableComposedColor, { color: VariableAlias }> {
@@ -139,10 +167,11 @@ function colorIsAlias(v: VariableComposedColor): v is Extract<VariableComposedCo
 // composed colour's aliases exactly as they see a top-level one.
 function aliasIds(v: VariableValue): string[] {
   if (isVariableAlias(v)) return v.id ? [v.id] : [];
-  if (!isComposedColor(v)) return [];
+  const c = toComposed(v);
+  if (!c) return [];
   const out: string[] = [];
-  if (isVariableAlias(v.color) && v.color.id) out.push(v.color.id);
-  if (isVariableAlias(v.opacity) && v.opacity.id) out.push(v.opacity.id);
+  if (isVariableAlias(c.color) && c.color.id) out.push(c.color.id);
+  if (isVariableAlias(c.opacity) && c.opacity.id) out.push(c.opacity.id);
   return out;
 }
 
@@ -170,6 +199,8 @@ async function resolveModeValue(v: VariableValue, resolvedType: VariableResolved
   if (isVariableAlias(v)) return aliasValue(v);
   if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
   if (isComposedColor(v)) return composedValue(v);
+  const fromExpression = composedFromExpression(v); // not a type guard (the shape is outside VariableValue)
+  if (fromExpression) return composedValue(fromExpression);
   if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
   return verbatimValue(v);
 }
@@ -295,7 +326,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       const raw = v.valuesByMode[modeId];
       // A composed colour always holds at least one alias (Figma's own constraint), so it is an alias
       // for the tier and for the "raw value in a multi-mode collection" hygiene check below.
-      if (isVariableAlias(raw) || isComposedColor(raw)) hasAlias = true;
+      if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
       // Top-level alias: its id as before (even an empty one); composed colour: each nested alias id.
       for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
         // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
