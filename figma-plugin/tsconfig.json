@@ -3,11 +3,19 @@
     // Figma's plugin main thread is a QuickJS-like realm: ES6 but NO browser/DOM globals.
     // "dom" is deliberately omitted — it would pull in DOM-typed console/fetch/timers that
     // conflict with the narrower ones @figma/plugin-typings declares (see index.d.ts).
-    "target": "es6",
+    // The Figma sandbox baseline used by build.js (esbuild target es2019); matches "lib".
+    "target": "es2019",
     "lib": ["es2019"],
     "strict": true,
     "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    // esbuild transpiles one file at a time; this flags type-only re-exports it can't see through.
+    "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     // Plugin API types are hosted under /@figma (not DefinitelyTyped's /@types). Load them via
     // `types` so bundler module resolution finds the scoped package — this makes the globals

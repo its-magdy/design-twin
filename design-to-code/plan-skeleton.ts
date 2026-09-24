@@ -229,7 +229,7 @@ export interface SkeletonTokenRow extends PlanTokenRow { sites: { visible: numbe
 /** The same row while buildTokens is still filling it (codeToken/verdict come last). */
 type TokenRowDraft = Omit<SkeletonTokenRow, "codeToken" | "verdict"> & { codeToken?: string | null; verdict?: PlanTokenVerdict | null };
 
-function buildTokens(doc: ScreenDoc | null | undefined, vis: Visibility, vars: TokensDoc | null | undefined, ds: TokensDoc | null | undefined, resolvedModes: ModeMap): SkeletonTokenRow[] {
+function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null | undefined, ds: TokensDoc | null | undefined, resolvedModes: ModeMap): SkeletonTokenRow[] {
   const uses = new Map<string, { fields: Set<string>; visible: number; hidden: number }>(); // name -> { fields:Set, visible, hidden }
   walkNodes(doc, (n, ctx) => {
     for (const b of bindingsOf(n)) {
@@ -388,7 +388,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const roots = rootsOf(doc);
   const root: Partial<IrNode> = roots[0] || {};
   const resolvedModes = root.resolvedModes || {};
-  const tokens = buildTokens(doc, vis, vars, ds, resolvedModes);
+  const tokens = buildTokens(doc, vars, ds, resolvedModes);
   const components = buildComponents(doc, catalog, library, mapKeys || new Map());
   const anchors: Record<string, PlanAnchor> = {};
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };

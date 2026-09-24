@@ -1540,7 +1540,7 @@ const sandbox = context as unknown as Sandbox;
   const attributed = await sandbox.collectLibraryComponents(() => {});
   ok("[LIB] the registry attributes a component to its library", attributed.find((c) => c.key === "libkey_btn")!.source === "Acme DS");
   ok("[LIB] and unregistered ones stay unknown", attributed.find((c) => c.key === "libkey_card")!.source === "unknown-library");
-  sandbox.figma.root.getPluginData = (k: string) => "!!not json!!";
+  sandbox.figma.root.getPluginData = () => "!!not json!!";
   const badReg = await sandbox.collectLibraryComponents(() => {});
   ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
   delete sandbox.figma.root.getPluginData;

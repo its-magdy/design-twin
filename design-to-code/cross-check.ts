@@ -39,7 +39,7 @@ import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
-  CatalogComponent, ComponentsCatalog, CoverageBucket, CoverageEntry, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
+  CatalogComponent, ComponentsCatalog, CoverageBucket, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -451,7 +451,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       distinct.get(id)!.count++;
     }
     coverage.distinct = distinct.size;
-    for (const [id, i] of distinct) {
+    for (const i of distinct.values()) {
       const byKeyHit = (i.setKey && byKey.get(i.setKey)) || (i.key && byKey.get(i.key));
       if (byKeyHit) {
         coverage.matchedByKey++;
@@ -498,10 +498,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
         coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
       }
     }
-    const matched = coverage.matchedByKey + coverage.matchedByName;
     coverage.pct = Math.round((coverage.matchedByKey / coverage.distinct) * 100);
     coverage.localPct = Math.round((coverage.matchedByLocalKey / coverage.distinct) * 100);
-    const pctAny = Math.round((matched / coverage.distinct) * 100);
 
     // Before concluding "wrong catalog": the copy/re-key case (livetest-3 #226). Duplicating a Figma
     // file re-mints every component key, so 0% by key is ALSO what a duplicated design system looks

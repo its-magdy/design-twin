@@ -24,7 +24,8 @@ import type { GetComponentModule, DriftLintModule } from "../bridge/src/figma-mc
 // the real modules, so drift between them would only show at runtime, inside a tool call. The test
 // program sees both trees, so it checks here that the real modules still satisfy the server's view.
 type Assert<T extends true> = T;
-type _McpLayerConformance = [
+// Exported only so noUnusedLocals accepts a type whose whole job is to be checked, never referenced.
+export type McpLayerConformance = [
   Assert<typeof import("../design-to-code/get-component.ts") extends GetComponentModule ? true : false>,
   Assert<typeof import("../design-to-code/drift-lint.ts") extends DriftLintModule ? true : false>,
 ];
@@ -82,6 +83,12 @@ const CWD = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-"));
 
     const status = await client.callTool({ name: "figma_status", arguments: {} });
     ok("figma_status answers with no plugin connected (no hang, parseable JSON)", (() => { try { JSON.parse(firstText(status)) as unknown; return true; } catch { return false; } })());
+
+    // design_drift_lint applies the same map gate as the CLI: a structurally invalid map is a tool error
+    // listing the [map-invalid] findings, never linted (and rejected before the export is even read).
+    fs.writeFileSync(path.join(CWD, "bad-map.json"), JSON.stringify({ components: "not-an-object", bogus: 1 }));
+    const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json" } });
+    ok("design_drift_lint rejects an invalid map as a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
 
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
     const plugin = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });

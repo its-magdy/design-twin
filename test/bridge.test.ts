@@ -1247,7 +1247,7 @@ async function disconnectErr(code: number, reason: string) {
     const fixtureScreen = JSON.parse(fs.readFileSync(
       path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
-    const screenResult = OUT.writeScreen(sdir, {
+    OUT.writeScreen(sdir, {
       screenName: "positions ",
       nodeId: "7314:87192",
       page: "✅ Organization management ",
@@ -1891,7 +1891,7 @@ async function disconnectErr(code: number, reason: string) {
   ok("[token] and the minted token is 48 hex chars (24 bytes of CSPRNG)",
     withStore(() => /^[0-9a-f]{48}$/.test(store.resolve().token)));
   ok("[token] a minted token is STABLE across runs — the whole point of the store",
-    withStore((d: string) => store.resolve().token === store.resolve().token));
+    withStore(() => store.resolve().token === store.resolve().token));
   ok("[token] persist:false mints without writing anything, so --token-status can't lie",
     withStore((d: string) => {
       const r = store.resolve({ persist: false });
@@ -2416,7 +2416,7 @@ async function disconnectErr(code: number, reason: string) {
   }
 
   console.log("\ndoctor — probes (real sockets, spare ports):");
-  const httpSrv = http.createServer((q, s) => s.end("hi"));
+  const httpSrv = http.createServer((_q, s) => s.end("hi"));
   await new Promise<void>((r) => httpSrv.listen(0, "127.0.0.1", r));
   const httpProbe = await doctor.probePort((httpSrv.address() as AddressInfo).port);
   ok("[doctor] probePort: a plain HTTP server is identified as not-a-bridge", httpProbe.free === false && httpProbe.holder === "http");
@@ -2490,7 +2490,7 @@ async function disconnectErr(code: number, reason: string) {
     // ever touching outDir — is the exact shape finding 13 reproduces (`dtwin nonexistent` with two
     // clients connected). We don't need a real daemon: --list-clients against no bridge at all also
     // exercises the same "no mkdir before any client contact" code path, and is deterministic offline.
-    const r = spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
+    spawnSync(process.execPath, [cli, "nonexistent-outdir"], { encoding: "utf8", cwd: dir, timeout: 5000, env: { ...process.env, FIGMA_BRIDGE_PORT: "8788" } });
     ok("[mkdir] a command that never reaches a plugin leaves no stray outDir behind",
       !fs.existsSync(path.join(dir, "nonexistent-outdir")));
   }
@@ -2676,7 +2676,6 @@ async function disconnectErr(code: number, reason: string) {
 
     // A re-pull that produces byte-IDENTICAL content under the same name is a no-op, not a rewrite or
     // a new suffixed file — re-pulling an unchanged screen must not multiply files on disk.
-    const before = fs.statSync(path.join(dir, a1.file)).mtimeMs;
     writeOut.writeAssets(dir, [{ id: "n1b", file: "assets/angle-left.svg", text: svg1, hash: "aaaaaaaa-1" }]);
     ok("[case-fold] an identical re-pull reuses the existing file rather than duplicating it",
       fs.readdirSync(path.join(dir, "assets")).length === 2);
@@ -2705,7 +2704,7 @@ async function disconnectErr(code: number, reason: string) {
     // duplicates must be EMPTY for this group now that dedup happens before either file is written —
     // there is only ever one file, so there is nothing for the duplicates scan to find.
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
-    const idx = writeOut.writeScreenAssets(dir, { base: "S", assets: "pages/P/S.assets.json" } as unknown as ScreenPaths, [a1, a2]);
+    writeOut.writeScreenAssets(dir, { base: "S", assets: "pages/P/S.assets.json" } as unknown as ScreenPaths, [a1, a2]);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[content-dedup] `duplicates` is empty — the writer no longer creates the duplicate it used to report",
       doc.duplicates.length === 0);
@@ -2760,7 +2759,7 @@ async function disconnectErr(code: number, reason: string) {
     const icon = { id: "i1", file: "assets/icon.svg", text: "<svg></svg>", hash: "cccccccc-1" };
     const ref = { id: "n1:ref", file: "assets/n1_ref.png", base64: Buffer.from("x".repeat(1000)).toString("base64"), hash: "dddddddd-1", kind: "reference" };
     writeOut.writeAssets(dir, [icon, ref]);
-    const idx = writeOut.writeScreenAssets(dir, { base: "Screen", assets: "pages/P/Screen.assets.json" } as unknown as ScreenPaths, [icon, ref]);
+    writeOut.writeScreenAssets(dir, { base: "Screen", assets: "pages/P/Screen.assets.json" } as unknown as ScreenPaths, [icon, ref]);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "Screen.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[ref-asset] the reference PNG is not counted in `count`/`totalBytes`", doc.count === 1 && doc.totalBytes === icon.text.length);
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
@@ -2811,7 +2810,7 @@ async function disconnectErr(code: number, reason: string) {
     };
     // Build the "prev" hash from one variant's real bytes, then diff against the doc whose on-disk
     // bytes are a DIFFERENT variant's — exactly redrawnAssets()'s contract.
-    const prevFor = (file: string, content: string) => {
+    const prevFor = (content: string) => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-svgnorm-prev-"));
       const prevAssetPath = path.join(tmp, "assets"); fs.mkdirSync(prevAssetPath);
       fs.writeFileSync(path.join(prevAssetPath, "arrow-down.svg"), content);
@@ -2821,19 +2820,19 @@ async function disconnectErr(code: number, reason: string) {
     const now3ea6be = setup(read("arrow-down-3ea6be.svg"));
     // 3ea6be and ccfd6b are the SAME icon (finding 25's own example, ≤0.002px drift) — must NOT be
     // reported as redrawn.
-    const prevSame = prevFor(now3ea6be.file, read("arrow-down-ccfd6b.svg"));
+    const prevSame = prevFor(read("arrow-down-ccfd6b.svg"));
     const redrawnSame = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevSame, now3ea6be.root);
     ok("[svg-tolerance] two exports of the SAME icon (sub-0.002px drift) are NOT reported as redrawn",
       redrawnSame.size === 0);
     // 3ea6be (14x14, white, 1.5 stroke) vs 31f462 (16x16, #F6F6F6, 1.2 stroke) ARE genuinely different
     // icons and must still be caught as a real redraw even after normalisation.
-    const prevDiff = prevFor(now3ea6be.file, read("arrow-down-31f462.svg"));
+    const prevDiff = prevFor(read("arrow-down-31f462.svg"));
     const redrawnDiff = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevDiff, now3ea6be.root);
     ok("[svg-tolerance] two genuinely DIFFERENT icons are still reported as redrawn",
       redrawnDiff.has("assets/arrow-down.svg"));
     // The end-to-end case the acceptance criteria name directly: a byte-identical re-pull of the SAME
     // file (no design change at all) reports zero changed assets.
-    const prevIdentical = prevFor(now3ea6be.file, read("arrow-down-3ea6be.svg"));
+    const prevIdentical = prevFor(read("arrow-down-3ea6be.svg"));
     const redrawnIdentical = diffMod.redrawnAssets(now3ea6be.file, docFor(), prevIdentical, now3ea6be.root);
     ok("[svg-tolerance] a byte-identical re-pull reports zero redrawn assets", redrawnIdentical.size === 0);
   }

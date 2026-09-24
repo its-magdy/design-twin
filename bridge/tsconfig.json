@@ -4,6 +4,14 @@
     "target": "es2024",                      // pinned; Node 24 runs it natively. TS7's default floats.
     "lib": ["es2024"],
     "types": ["node"],                       // TS7 default is [] — must be explicit
+    "strict": true,                          // TS7 default, stated explicitly
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
     "rootDir": "src",                        // TS7 default is "." → would emit dist/src/*
     "outDir": "dist",
     "declaration": true,
@@ -12,7 +20,6 @@
     "erasableSyntaxOnly": true,              // reject enum / namespace / param properties before Node does
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true, // "./x.ts" in source → "./x.js" in dist
-    "resolveJsonModule": true,               // figma-pull/init/doctor require("./package.json")
     "skipLibCheck": true
   },
   "include": ["src"]

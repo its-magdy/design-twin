@@ -561,7 +561,7 @@ function crossCheck(input) {
       distinct.get(id).count++;
     }
     coverage.distinct = distinct.size;
-    for (const [id, i] of distinct) {
+    for (const i of distinct.values()) {
       const byKeyHit = i.setKey && byKey.get(i.setKey) || i.key && byKey.get(i.key);
       if (byKeyHit) {
         coverage.matchedByKey++;
@@ -599,10 +599,8 @@ function crossCheck(input) {
         coverage.entries.push({ setName: i.setName, key: i.setKey || i.key, matchedBy: null, verified: false, instances: i.count });
       }
     }
-    const matched = coverage.matchedByKey + coverage.matchedByName;
     coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
     coverage.localPct = Math.round(coverage.matchedByLocalKey / coverage.distinct * 100);
-    const pctAny = Math.round(matched / coverage.distinct * 100);
     rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
     const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
     coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;

@@ -474,12 +474,12 @@ ${usage}`);
     scopedCatalog = Object.assign({}, catalog, { components: scoped });
     console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
   }
-  const json = JSON.stringify(bootstrap(scopedCatalog, existing), null, 2) + "\n";
+  const written = bootstrap(scopedCatalog, existing);
+  const json = JSON.stringify(written, null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);
   } else {
     fs3.writeFileSync(outFile, json);
-    const written = JSON.parse(json);
     const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);

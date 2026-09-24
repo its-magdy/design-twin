@@ -6,7 +6,7 @@ import { validateMap } from "../design-to-code/map-validate.ts";
 import { driftLint, checkFreshness, DEFAULT_MAX_AGE_MS } from "../design-to-code/drift-lint.ts";
 import { bootstrap } from "../design-to-code/map-bootstrap.ts";
 import { isManifest } from "../design-to-code/catalog-input.ts";
-import { getComponent, findComponent, resolveVariantsFile } from "../design-to-code/get-component.ts";
+import { getComponent, findComponent } from "../design-to-code/get-component.ts";
 import { buildDesignSystemLayout } from "../bridge/src/design-system-layout.ts";
 import { check, report } from "./assert.ts";
 import { bag } from "../design-to-code/types.ts";
