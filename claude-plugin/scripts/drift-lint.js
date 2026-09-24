@@ -41,7 +41,7 @@ function walkWithHidden(root, fn, opts) {
     const hidden = isHidden(node, parentHidden);
     fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path2 ? path2 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path2 ? path2 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -243,6 +243,7 @@ function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
     if (tok === "--") {
       out.push(...argv.slice(i));
       break;
@@ -342,7 +343,7 @@ function parseVariant(s) {
   }
   return Object.keys(out).length ? out : null;
 }
-var baseProp = (p) => String(p).split("#")[0];
+var baseProp = (p) => String(p).split("#")[0] ?? "";
 var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
 function signature(inst, cand) {
   const props = {};
@@ -362,7 +363,10 @@ function signature(inst, cand) {
       score += known.length ? 10 : -15;
       reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
     }
-    const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
+    const bad = Object.entries(variant).filter(([k, val]) => {
+      const d = props[k];
+      return d && d.type === "VARIANT" && !(d.options || []).includes(val);
+    }).map(([k]) => k);
     if (known.length && !bad.length) {
       score += 25;
       reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
@@ -414,8 +418,9 @@ function matchByNameAndSignature(instances, catalog, library) {
   const libNames = new Set((library && library.components || []).map((c) => c.name));
   const groups = /* @__PURE__ */ new Map();
   for (const inst of instances) {
-    if (!groups.has(inst.name)) groups.set(inst.name, []);
-    groups.get(inst.name).push(inst);
+    const group = groups.get(inst.name);
+    if (group) group.push(inst);
+    else groups.set(inst.name, [inst]);
   }
   const rows = [];
   for (const [name, list] of groups) {
@@ -440,17 +445,21 @@ function matchByNameAndSignature(instances, catalog, library) {
       rows.push(row);
       continue;
     }
+    const [firstInst, ...otherInsts] = list;
     const scored = cands.map((c) => {
-      const per = list.map((i) => signature(i, c));
-      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+      const first = signature(firstInst, c);
+      const per = [first, ...otherInsts.map((i) => signature(i, c))];
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
     }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
     const best = scored[0];
+    if (best === void 0) throw new Error("component-match: a non-empty candidate list scored to nothing");
     if (!best.verified) {
       row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
       rows.push(row);
       continue;
     }
     const verifiedOnes = scored.filter((s) => s.verified);
+    const runnerUp = verifiedOnes[1];
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
     row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
@@ -460,7 +469,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
       row.tie = identical ? "duplicate-definitions" : "different-signatures";
     } else if (scored.length > 1) {
-      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
     }
     row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
@@ -661,7 +670,7 @@ ${res.errors.length} error(s)`);
 }
 
 // design-to-code/drift-lint.ts
-var stripSuffix = (k) => String(k).split("#")[0];
+var stripSuffix = (k) => String(k).split("#")[0] ?? "";
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
@@ -692,8 +701,9 @@ function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
   const ambiguous = /* @__PURE__ */ new Set(), out = nullProto();
   for (const k of Object.keys(rawProps || {})) {
     const b = stripSuffix(k);
-    if (b in out && out[b].orig !== k) {
-      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${out[b].orig}', '${k}') \u2014 comparison skipped`, { mapKey, prop: b });
+    const prev = out[b];
+    if (prev !== void 0 && prev.orig !== k) {
+      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${prev.orig}', '${k}') \u2014 comparison skipped`, { mapKey, prop: b });
       ambiguous.add(b);
     }
     out[b] = { orig: k, [valKey]: (rawProps || {})[k] };
@@ -717,8 +727,7 @@ function driftLint(map, catalog, opts) {
   const mappedIds = /* @__PURE__ */ new Set();
   const compToEntries = /* @__PURE__ */ new Map();
   const entries = map && map.components || {};
-  for (const mapKey of Object.keys(entries)) {
-    const e = entries[mapKey];
+  for (const [mapKey, e] of Object.entries(entries)) {
     const f = e.figma || {};
     let comp;
     if (f.key) comp = byKey.get(f.key);
@@ -726,7 +735,8 @@ function driftLint(map, catalog, opts) {
     else comp = byKey.get(mapKey) || byId.get(mapKey);
     if (!comp) {
       const sameName = f.name && byName.get(f.name);
-      const suggestedKey = sameName && sameName.length === 1 ? sameName[0].key : void 0;
+      const onlyNamed = sameName && sameName.length === 1 ? sameName[0] : void 0;
+      const suggestedKey = onlyNamed ? onlyNamed.key : void 0;
       push(
         errors,
         "orphaned-entry",
@@ -743,25 +753,25 @@ function driftLint(map, catalog, opts) {
     }
     const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase(comp.props, "def", `component '${comp.name}'`, push, warnings, mapKey);
     const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase(e.props, "prop", `map entry '${mapKey}'`, push, warnings, mapKey);
-    for (const pn of Object.keys(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mapProps[pn].orig} does not exist on the Figma component`, { mapKey, prop: pn });
-    for (const pn of Object.keys(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${catProps[pn].orig}' (${catProps[pn].def.type}) is not mapped`, { mapKey, prop: pn });
-    for (const pn of Object.keys(mapProps)) {
+    for (const [pn, mp] of Object.entries(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mp.orig} does not exist on the Figma component`, { mapKey, prop: pn });
+    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.def.type}) is not mapped`, { mapKey, prop: pn });
+    for (const [pn, mp] of Object.entries(mapProps)) {
       const cp = catProps[pn];
       if (!cp || catAmbiguous.has(pn) || mapAmbiguous.has(pn)) continue;
-      const prop = mapProps[pn].prop;
+      const prop = mp.prop;
       const kind = prop.kind, expected = TYPE_TO_KIND[cp.def.type];
       if (expected && kind && kind !== expected) {
-        push(errors, "kind-mismatch", `'${mapKey}'.props.${mapProps[pn].orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn });
+        push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn });
         continue;
       }
       if (prop.kind === "enum") {
         const values = prop.values || {};
         if (!Array.isArray(cp.def.options)) {
-          push(warnings, "no-variant-options", `'${mapKey}'.props.${mapProps[pn].orig}: component exposes no variant options \u2014 enum values can't be verified`, { mapKey, prop: pn });
+          push(warnings, "no-variant-options", `'${mapKey}'.props.${mp.orig}: component exposes no variant options \u2014 enum values can't be verified`, { mapKey, prop: pn });
           continue;
         }
-        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mapProps[pn].orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
-        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mapProps[pn].orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
+        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
+        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
       }
     }
   }
@@ -789,8 +799,8 @@ async function checkLiveFreshness(fileKey, token, exportedAt) {
 function screenCoverage(map, catalog, screenDocs) {
   const entries = map && map.components || {};
   const mapKeys = /* @__PURE__ */ new Set();
-  for (const k of Object.keys(entries)) {
-    const f = entries[k].figma || {};
+  for (const [k, entry] of Object.entries(entries)) {
+    const f = entry.figma || {};
     if (f.key) mapKeys.add(f.key);
     if (f.id) mapKeys.add(f.id);
     mapKeys.add(k);
@@ -887,7 +897,8 @@ ${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
   let screenFail = false;
   if (screenFiles.length) {
-    const docs = screenFiles.map((f) => readDocFile(f, "screen export", isScreenDoc));
+    const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
+    const docs = read.map((r) => r.doc);
     const cov = screenCoverage(map, catalog, docs);
     if (!cov.distinct) {
       console.error(`
@@ -899,7 +910,7 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
       );
       console.error(`       (this says which components you can REUSE by key \u2014 not which ones the build contains; that is verify's job.)`);
       const none = [];
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
         screenFail = true;
         console.error(

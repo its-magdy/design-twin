@@ -85,7 +85,7 @@ function freshEntry(c: CatalogComponent): MapEntry {
   // in map-validate.ts for the same reasoning). Serializes with JSON.stringify like any plain object.
   const props: Record<string, PropMap> = nullProto();
   const defs = c.props || {};
-  for (const pn of Object.keys(defs)) { const pe = propEntry(pn, defs[pn]); if (pe) props[pn] = pe; }
+  for (const [pn, def] of Object.entries(defs)) { const pe = propEntry(pn, def); if (pe) props[pn] = pe; }
   if (Object.keys(props).length) entry.props = props;
   return entry;
 }
@@ -101,9 +101,9 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
   // component that changes how it's identified (e.g. an id-keyed entry whose component later gains a
   // publish key) reuses its existing entry instead of producing a duplicate.
   const prevByIdent = new Map<string, string>();
-  for (const pk of Object.keys(prev)) {
+  for (const [pk, pe] of Object.entries(prev)) {
     if (!prevByIdent.has(pk)) prevByIdent.set(pk, pk);
-    const pf: Partial<MapEntry["figma"]> = prev[pk].figma || {};
+    const pf: Partial<MapEntry["figma"]> = pe.figma || {};
     if (pf.key && !prevByIdent.has(pf.key)) prevByIdent.set(pf.key, pk);
     if (pf.id && !prevByIdent.has(pf.id)) prevByIdent.set(pf.id, pk);
   }
@@ -134,8 +134,8 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
       if (entry.props) Object.assign(props, entry.props); // safe: props has no prototype to hijack
       entry.props = props;
       const defs = c.props || {};
-      for (const pn of Object.keys(defs)) {
-        const cdef = defs[pn], kind = KIND[cdef.type], ex = props[pn];
+      for (const [pn, cdef] of Object.entries(defs)) {
+        const kind = KIND[cdef.type], ex = props[pn];
         if (!ex || (kind && ex.kind && ex.kind !== kind)) { const pe = propEntry(pn, cdef); if (pe) props[pn] = pe; }
       }
       if (!Object.keys(props).length) delete entry.props;
@@ -151,7 +151,7 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
 
   // Keep existing entries whose component is genuinely absent from the catalog (drift-lint's
   // orphaned-entry surfaces them) — never silently delete human work.
-  for (const pk of Object.keys(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(prev[pk]);
+  for (const [pk, pe] of Object.entries(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(pe);
   return out;
 }
 
@@ -169,7 +169,7 @@ function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null |
   const out: CodeConnectMap = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev: Record<string, MapEntry> = (existing && existing.components) || {};
-  for (const pk of Object.keys(prev)) out.components[pk] = clone(prev[pk]);
+  for (const [pk, pe] of Object.entries(prev)) out.components[pk] = clone(pe);
   const comps = (catalog && catalog.components) || [];
   const report: ProposalsReport = { confirmed: 0, added: 0, kept: 0, skipped: [] };
   for (const p of proposals || []) {
@@ -212,20 +212,23 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
-    proposalsFile = argv[pi + 1];
-    if (!proposalsFile || proposalsFile.startsWith("--")) { console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage); process.exit(1); }
+    const next = argv[pi + 1];
+    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage); process.exit(1); }
+    proposalsFile = next;
     argv.splice(pi, 2);
   }
   const si = argv.indexOf("--screen");
   if (si !== -1) {
-    screenFile = argv[si + 1];
-    if (!screenFile || screenFile.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); process.exit(1); }
+    const next = argv[si + 1];
+    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); process.exit(1); }
+    screenFile = next;
     argv.splice(si, 2);
   }
   const o = argv.indexOf("--out");
   if (o !== -1) {
-    outFile = argv[o + 1];
-    if (!outFile || outFile.startsWith("--")) { console.error("--out needs a file path\n" + usage); process.exit(1); }
+    const next = argv[o + 1];
+    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); process.exit(1); }
+    outFile = next;
     argv.splice(o, 2);
   }
   const unknown = argv.find((a) => a.startsWith("--"));

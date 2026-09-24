@@ -216,21 +216,23 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
     const byIdent = new Map<string, Variable>();
     for (const v of list) byIdent.set(identityOf(v), v); // the same variable read twice: last record
     const members = [...byIdent.values()];
-    const clusters: Variable[][] = [];
+    const clusters: [Variable, ...Variable[]][] = [];
     for (const v of members) {
       const c = clusters.find((cl) => equivalentVars(cl[0], v, collections));
       if (c) c.push(v); else clusters.push([v]);
     }
-    if (clusters.length === 1) {
+    const onlyCluster = clusters.length === 1 ? clusters[0] : undefined;
+    if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical.add(members[0]);
+      canonical.add(onlyCluster[0]); // members[0]: the first member always opens the first cluster
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
     // Every member of this group gets an identifier below, so the lookups that follow never miss.
     const assigned = new Map<string, string>();
     const exactOnes = exact ? members.filter((v) => exact(v)) : [];
-    const keeper = exactOnes.length === 1 && members.filter((v) => v.name === exactOnes[0].name).length === 1 ? exactOnes[0] : null;
+    const exactOne = exactOnes.length === 1 ? exactOnes[0] : undefined;
+    const keeper = exactOne && members.filter((v) => v.name === exactOne.name).length === 1 ? exactOne : null;
     for (const v of members) {
       if (v === keeper) { assigned.set(identityOf(v), id); canonical.add(v); continue; }
       const s = shortKey(v) || suffixSlug(v.collection) || "alt";
@@ -257,12 +259,13 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
 // re-ordered input cannot change the output — and SAY so.
 function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): Variable | null {
   const cands = (plan.byName.get(name) || []).filter((c) => plan.id(c) != null);
-  if (!cands.length) return null;
-  if (new Set(cands.map((c) => plan.id(c))).size === 1) return cands[0];
+  const firstCand = cands[0];
+  if (firstCand === undefined) return null;
+  if (new Set(cands.map((c) => plan.id(c))).size === 1) return firstCand;
   const sameColl = cands.filter((c) => referrer && c.collection === referrer.collection);
   const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands)
     .slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
-  const pick = pool[0];
+  const pick = pool[0] ?? firstCand; // ?? firstCand: pool is sameColl (non-empty) or cands (non-empty), so it never applies
   if (warn) {
     warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' ` +
       `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
@@ -275,11 +278,11 @@ function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | und
 // paragraphs is how a warning stops being read.
 function collisionMessages(notes: readonly CollisionNote[], opts?: EmitOpts): string[] {
   const sources = (opts && opts.sources) || null;
-  const bySet = new Map<string, CollisionNote[]>();
+  const bySet = new Map<string, [CollisionNote, ...CollisionNote[]]>();
   for (const n of notes) {
     const k = (n.differ ? "D" : "S") + n.members.map((m) => identityOf(m.v)).sort().join("|");
-    if (!bySet.has(k)) bySet.set(k, []);
-    bySet.get(k)!.push(n);
+    const group = bySet.get(k);
+    if (group) group.push(n); else bySet.set(k, [n]);
   }
   const out: string[] = [];
   for (const group of bySet.values()) {
@@ -293,9 +296,10 @@ function collisionMessages(notes: readonly CollisionNote[], opts?: EmitOpts): st
       return (k ? `key ${k}…` : `'${v.collection || ""}'`) + ` = ${JSON.stringify(v.values || {})}` +
         (where && where.length ? ` (from ${where.join(", ")})` : "");
     };
-    const oneColl = members.every((v) => v.collection === members[0].collection) && members[0].collection;
+    const m0 = members[0];
+    const oneColl = m0 !== undefined && members.every((v) => v.collection === m0.collection) && m0.collection;
     const subject = names.length === 1
-      ? `${members.length} different Figma variables share the name '${names[0]}'${oneColl ? ` (collection '${members[0].collection}')` : ""}`
+      ? `${members.length} different Figma variables share the name '${names[0]}'${oneColl ? ` (collection '${oneColl}')` : ""}`
       : `${members.length} different Figma variables (${names.map((n) => `'${n}'`).join(", ")}) fold onto one identifier`;
     const where = group.map((n) => `${n.output} ${n.members.map((m) => m.id).join(" / ")}`).join("; ");
     if (first.differ) {
@@ -436,9 +440,9 @@ const DTCG_TYPE: Partial<Record<VariableType, DtcgType>> = { COLOR: "color", FLO
 const EMITTED_TYPES: ReadonlySet<string> = new Set<VariableType>(["COLOR", "FLOAT", "STRING", "BOOLEAN"]);
 const emitted = (v: Variable): boolean => EMITTED_TYPES.has(v.type);
 
-// Returns a string by its own contract (`modes[0]` — "any present mode"); a variable with no values at
-// all yields undefined at runtime exactly as the JS did, and every caller tolerates that lookup.
-function defaultModeName(variable: Variable, collections: VariableCollection[] | undefined): string {
+// `modes[0]` — "any present mode"; a variable with no values at all has none, so undefined (as the JS
+// always returned), and every caller tolerates that.
+function defaultModeName(variable: Variable, collections: VariableCollection[] | undefined): string | undefined {
   const c = (collections || []).find((x) => x.name === variable.collection);
   const modes = variable.values ? Object.keys(variable.values) : [];
   if (c && c.default && modes.includes(c.default)) return c.default;
@@ -449,7 +453,7 @@ function defaultModeName(variable: Variable, collections: VariableCollection[] |
 function baseValue(variable: Variable, collections: VariableCollection[] | undefined, def?: string): VariableValue | undefined {
   const values = variable.values || {};
   if (def === undefined) def = defaultModeName(variable, collections);
-  if (values[def] !== undefined) return values[def];
+  if (def !== undefined && values[def] !== undefined) return values[def];
   const firstDefined = Object.keys(values).find((m) => values[m] !== undefined);
   return firstDefined !== undefined ? values[firstDefined] : undefined;
 }
@@ -531,9 +535,9 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
 
     // Descend, guarding leaf/group collisions instead of clobbering or producing illegal nodes.
     let node: DtcgGroup = root, collided = false;
-    for (let i = 0; i < path.length - 1; i++) {
-      let child = node[path[i]];
-      if (child === undefined) child = node[path[i]] = {};
+    for (const [i, seg] of path.slice(0, -1).entries()) {
+      let child = node[seg];
+      if (child === undefined) child = node[seg] = {};
       else if (isLeaf(child)) {
         warn(`token '${v.name}' collides with token '${path.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) — skipped`);
         collided = true; break;
@@ -541,7 +545,7 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
       node = child;
     }
     if (collided) continue;
-    const leafKey = path[path.length - 1];
+    const leafKey = path[path.length - 1] ?? ""; // ?? "": split() always returns at least one piece, so it never applies
     const existing = node[leafKey];
     if (existing !== undefined && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name — skipped`); continue;
@@ -810,7 +814,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
     }
   }
   let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  for (const m of Object.keys(perMode)) out += `\n${selectorFor(m)} {\n` + [...perMode[m].values()].join("\n") + "\n}\n";
+  for (const [m, lines] of Object.entries(perMode)) out += `\n${selectorFor(m)} {\n` + [...lines.values()].join("\n") + "\n}\n";
   return out;
 }
 
@@ -915,7 +919,7 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
     "   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-…),\n" +
     "   so Tailwind's own scale (rounded-xl, p-4, …) keeps its framework meaning. */\n";
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  for (const m of Object.keys(perMode)) out += `\n[data-theme="${cssAttrEscape(m)}"] {\n` + [...perMode[m].values()].join("\n") + "\n}\n";
+  for (const [m, lines] of Object.entries(perMode)) out += `\n[data-theme="${cssAttrEscape(m)}"] {\n` + [...lines.values()].join("\n") + "\n}\n";
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 
@@ -1078,7 +1082,8 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
     if (!nonEmpty) continue; // every mode was identical to the default — a modifier would resolve to nothing
 
     const modName = reserveKey(label, "modifier");
-    const def = c && c.default != null && modes.includes(c.default) ? c.default : modes[0];
+    // ?? "": modes has at least two entries here (the `modes.length < 2` continue above), so it never applies
+    const def = c && c.default != null && modes.includes(c.default) ? c.default : (modes[0] ?? "");
     modifiers[modName] = { description: `${label} mode`, contexts, default: def, $extensions: { "figma.com": { collection: collName || null, defaultMode: def } } };
     modifierRefs.push({ $ref: `#/modifiers/${ptrEsc(modName)}` });
   }
@@ -1253,7 +1258,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (!input) { console.error(USAGE); process.exit(1); }
   if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
   const WEB_TARGETS: Record<string, string> = { tailwind: "theme.css", "web-tailwind": "theme.css" }; // build-screen's profile name works too
-  if (web !== undefined && !WEB_TARGETS[web]) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); process.exit(1); }
+  const webFile = web === undefined ? undefined : WEB_TARGETS[web];
+  if (web !== undefined && !webFile) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); process.exit(1); }
   // The SPLIT token file (or a merged variables.json): the manifest is refused with its own message, and
   // anything else that is not a token catalog is a one-line error — never an empty token set.
   const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
@@ -1284,9 +1290,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     }
   }
   let canonicalFile: string | null = null;
-  if (web !== undefined) {
+  if (web !== undefined && webFile !== undefined) { // webFile is set whenever web is (unknown targets exit above)
     const tw = tailwind!; // emitTokens built it: opts.tailwind is `web !== undefined`
-    const file = WEB_TARGETS[web];
+    const file = webFile;
     fs.writeFileSync(path.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);

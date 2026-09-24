@@ -306,7 +306,8 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
       const [padTop, , padBottom] = node.layout.padding;
       const kids = node.children.filter((c): c is IrNode & { box: Box } => !!(c && c.box && typeof c.box.h === "number"));
-      if (kids.length === node.children.length && kids.length) {
+      // (length 4 above, so both pads are set; a missing one would have made expectedH NaN and reported nothing)
+      if (kids.length === node.children.length && kids.length && padTop !== undefined && padBottom !== undefined) {
         const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
         const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
         let expectedH: number | null = null;
@@ -501,13 +502,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
 
   // ---- near-duplicate raw colors (likely one token typed twice)
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
-  const labs = raws.map((x) => toLab(x.rgb)); // once per color, not once per pair
+  const labs = raws.map((x) => ({ x, lab: toLab(x.rgb) })); // once per color, not once per pair
   const seen = new Set<string>();
-  for (let a = 0; a < raws.length; a++) {
-    if (seen.has(raws[a].hex)) continue;
-    const cluster = [raws[a]];
-    for (let b = a + 1; b < raws.length; b++) {
-      if (!seen.has(raws[b].hex) && labDist(labs[a], labs[b]) < 3) { cluster.push(raws[b]); seen.add(raws[b].hex); }
+  for (const [a, { x: ra, lab: la }] of labs.entries()) {
+    if (seen.has(ra.hex)) continue;
+    const cluster = [ra];
+    for (const { x: rb, lab: lb } of labs.slice(a + 1)) {
+      if (!seen.has(rb.hex) && labDist(la, lb) < 3) { cluster.push(rb); seen.add(rb.hex); }
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}×${c.count}`).join(", ")} are visually indistinguishable (ΔE<3) — probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
   }
@@ -531,7 +532,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     const values: Array<string | boolean> = [];
     for (const p of Object.values(def.props || {})) {
       if (p.type === "VARIANT" && Array.isArray(p.options)) values.push(...p.options);
-      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0]);
+      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? ""); // ?? "": split() always returns at least one piece, so it never applies
     }
     const norm = values.map((v) => String(v).trim().toLowerCase());
     const present = CONTROL_STATES.filter((s) => norm.some((v) => STATE_SYNONYMS[s].test(v)));
@@ -784,7 +785,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   } as const;
   const { values: flags, positionals: files } = cliParse("audit", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); process.exit(0); }
-  if (!files.length) { console.error(USAGE); process.exit(2); }
+  const firstFile = files[0];
+  if (firstFile === undefined) { console.error(USAGE); process.exit(2); }
   const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
   if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); process.exit(2); }
@@ -796,7 +798,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const ctx = variablesContext(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const inputs: AuditInput[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const inputs: AuditInput[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : undefined;
   // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
   // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
@@ -821,7 +823,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
   // so two runs on the same screen land on the same report pair without either caller having to
   // agree on a name out of band. Only the first input names it when several are given at once.
-  const outBase = out || path.join("design", "audit", path.basename(files[0], ".json"));
+  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
   // Finding 315's sibling / P3 c6: refuse an explicit --out under a different name than an existing
   // report already covering this node, unless --force.
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {

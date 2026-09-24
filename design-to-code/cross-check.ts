@@ -236,12 +236,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     varScope = "union";
     screenVars = (variables && variables.variables) || [];
   }
-  const screenVarsByName = new Map<string, Variable[]>(); // name -> [variable], distinct by key
+  const screenVarsByName = new Map<string, [Variable, ...Variable[]]>(); // name -> [variable], distinct by key
   for (const v of screenVars) {
     if (!v || !v.name) continue;
-    if (!screenVarsByName.has(v.name)) screenVarsByName.set(v.name, []);
-    const list = screenVarsByName.get(v.name)!;
-    if (!list.some((x) => (x.key && x.key === v.key) || (!x.key && !v.key && x.collection === v.collection))) list.push(v);
+    const list = screenVarsByName.get(v.name);
+    if (!list) screenVarsByName.set(v.name, [v]);
+    else if (!list.some((x) => (x.key && x.key === v.key) || (!x.key && !v.key && x.collection === v.collection))) list.push(v);
   }
   const screenVarByName = new Map([...screenVarsByName].map(([n, l]): [string, Variable] => [n, l[0]]));
   const shortKey = (v: Variable | null | undefined): string | null => (v && typeof v.key === "string" && v.key ? v.key.slice(0, 8) + "…" : null);
@@ -608,24 +608,25 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       );
     }
     const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
-    if (amb.length) {
+    const firstAmb = amb[0]; // set exactly when amb.length
+    if (firstAmb) {
       push(
         "warning",
         "ambiguous-component-name",
         `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` +
           amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", …" : "") +
           `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed — ` +
-          `binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
+          `binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
         { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
       );
     }
   }
 
   // ---------------------------------------------------------------- font-family strays
-  if (fonts.size > 1) {
-    const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
-    const [mainFamily, mainCount] = sorted[0];
-    const strays = sorted.slice(1);
+  const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
+  const [main, ...strays] = sorted;
+  if (fonts.size > 1 && main) {
+    const [mainFamily, mainCount] = main;
     const total = sorted.reduce((n, [, c]) => n + c, 0);
     push(
       "warning",
@@ -700,14 +701,15 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       absurd.push({ name: v.name, collection: v.collection, mode, value: n });
     }
   }
-  if (absurd.length) {
+  const firstAbsurd = absurd[0]; // set exactly when absurd.length
+  if (firstAbsurd) {
     push(
       "warning",
       "sentinel-token-value",
       `${absurd.length} token value(s) are sentinels, not measurements: ` +
         absurd.slice(0, 4).map((a) => `'${a.name}' = ${a.value} (${a.mode})`).join(", ") + (absurd.length > 4 ? ", …" : "") +
         `. Figma's "fully rounded" corner exports as a literal 1e9. Emit these as the platform's own idiom ` +
-        `(CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) — never as \`${absurd[0].value}px\`.`,
+        `(CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) — never as \`${firstAbsurd.value}px\`.`,
       { tokens: absurd }
     );
   }
@@ -727,8 +729,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   for (const c of multiModeColls) {
     const seen = resolvedModes.get(c.name);
     if (!seen || !seen.size) continue;
-    if (seen.size === 1 && c.modes.length > 1) {
-      const only = [...seen][0];
+    const only = seen.size === 1 ? [...seen][0] : undefined; // a Set<string>: set exactly when size is 1
+    if (only !== undefined && c.modes.length > 1) {
       const rest = c.modes.filter((m) => m !== only);
       push(
         "warning",
@@ -813,7 +815,8 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
     const val = v.values[mode];
     if (val !== undefined) return val;
     const keys = Object.keys(v.values);
-    return keys.length === 1 ? v.values[keys[0]] : undefined; // several modes and none of them is this one — do not guess
+    const [onlyKey] = keys;
+    return keys.length === 1 && onlyKey !== undefined ? v.values[onlyKey] : undefined; // several modes and none of them is this one — do not guess
   }
   const aliasName = (val: unknown): string | null =>
     val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
@@ -1017,7 +1020,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);

@@ -224,7 +224,8 @@ function resolveScreen(exportDir, query, opts) {
   const noTitles = rows.length > 0 && !rows.some((r) => r.title);
   if (NODE_ID_RE.test(q)) {
     const idMatches = rows.filter((r) => r.id === q);
-    if (idMatches.length === 1) return { status: "resolved", row: idMatches[0], stage: "node id" };
+    const only2 = idMatches.length === 1 ? idMatches[0] : void 0;
+    if (only2) return { status: "resolved", row: only2, stage: "node id" };
   }
   const plans = planRows(options.planDir);
   const planHit = plans.filter((p) => p.screenName === q || p.route === q);
@@ -241,8 +242,8 @@ function resolveScreen(exportDir, query, opts) {
     if (planIds.has(r.id)) join(r, "plan screenName/route");
   }
   const unionRows = [...union.values()];
-  if (unionRows.length === 1) {
-    const only = unionRows[0];
+  const only = unionRows.length === 1 ? unionRows[0] : void 0;
+  if (only) {
     return { status: "resolved", row: only.row, stage: [...only.via].join(" + ") };
   }
   if (unionRows.length > 1) {
@@ -273,7 +274,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const listCandidates = (candidates) => {
     for (const c of candidates) console.error(`  ${c.id}  ${c.name}${c.title ? ` (title: "${c.title}")` : ""}${c.matchedVia ? ` [matched: ${c.matchedVia.join(", ")}]` : ""}  ${c.w || "?"}x${c.h || "?"}  nodes=${c.nodes ?? "?"}  ${c.reference || ""}  -> ${c.screenshot}`);
   };
-  const res = resolveScreen(exportDir, query, { planDir });
+  const res = resolveScreen(exportDir, query, { ...ifDefined("planDir", planDir) });
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");

@@ -87,18 +87,19 @@ function variablesContext(screenFiles: readonly string[] | null | undefined, var
   const files = screenFiles || [];
   const own = files.map((f) => readTokens(String(f).replace(/\.json$/, ".vars.json")));
   let variablesPath = varsFile || null;
-  if (!variablesPath && files.length) {
-    const exportRoot = path.resolve(path.dirname(files[0]), "..", "..");
+  const firstFile = files[0]; // set exactly when files.length
+  if (!variablesPath && firstFile !== undefined) {
+    const exportRoot = path.resolve(path.dirname(firstFile), "..", "..");
     const rootVars = path.join(exportRoot, "variables.json");
-    const sibling = path.join(path.dirname(files[0]), "variables.json");
+    const sibling = path.join(path.dirname(firstFile), "variables.json");
     if (fs.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy: string | null = null;
-  if (files.length) {
-    const legacy = path.join(path.resolve(path.dirname(files[0]), "..", ".."), "..", "variables.json");
+  if (firstFile !== undefined) {
+    const legacy = path.join(path.resolve(path.dirname(firstFile), "..", ".."), "..", "variables.json");
     if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };

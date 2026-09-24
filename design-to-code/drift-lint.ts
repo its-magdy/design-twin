@@ -31,7 +31,7 @@ import type {
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 
-const stripSuffix = (k: string): string => String(k).split("#")[0]; // "Size#12:3" -> "Size"
+const stripSuffix = (k: string): string => String(k).split("#")[0] ?? ""; // "Size#12:3" -> "Size"; ?? "": split() always returns at least one piece, so it never applies
 
 /** What driftLint accepts as `opts`. */
 export interface DriftLintOptions { maxAgeMs?: number; now?: number }
@@ -88,8 +88,9 @@ function indexPropsByBase(rawProps: Record<string, unknown> | undefined, valKey:
   const ambiguous = new Set<string>(), out: Record<string, { orig: string; [k: string]: unknown }> = nullProto();
   for (const k of Object.keys(rawProps || {})) {
     const b = stripSuffix(k);
-    if (b in out && out[b].orig !== k) {
-      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${out[b].orig}', '${k}') — comparison skipped`, { mapKey, prop: b });
+    const prev = out[b]; // null-prototype and never set to undefined: defined exactly when `b in out`
+    if (prev !== undefined && prev.orig !== k) {
+      push(warnings, "ambiguous-prop", `${subject} has two props with base name '${b}' ('${prev.orig}', '${k}') — comparison skipped`, { mapKey, prop: b });
       ambiguous.add(b);
     }
     out[b] = { orig: k, [valKey]: (rawProps || {})[k] };
@@ -114,8 +115,7 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
   const compToEntries = new Map<CatalogEntry, string[]>();       // component -> [mapKey] (double-map detection)
   const entries = (map && map.components) || {};
 
-  for (const mapKey of Object.keys(entries)) {
-    const e = entries[mapKey];
+  for (const [mapKey, e] of Object.entries(entries)) {
     const f: Partial<MapEntry["figma"]> = e.figma || {};
     // Identity resolution. An author-declared figma.key/figma.id is an explicit identity CLAIM and is
     // authoritative: if it's present we resolve by it ALONE and never fall through to the map key. That
@@ -131,7 +131,8 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     if (!comp) {
       // Orphaned — a NAME is never allowed to rebind; only suggested.
       const sameName = f.name && byName.get(f.name);
-      const suggestedKey = sameName && sameName.length === 1 ? sameName[0].key : undefined;
+      const onlyNamed = sameName && sameName.length === 1 ? sameName[0] : undefined;
+      const suggestedKey = onlyNamed ? onlyNamed.key : undefined;
       push(errors, "orphaned-entry",
         `map entry '${mapKey}' (was '${f.name || "?"}'${f.id ? ", id " + f.id : ""}) has no matching component in Figma — deleted, moved, or unpublished${suggestedKey ? ` (a component named '${f.name}' exists with key ${suggestedKey} — verify before re-pointing)` : ""}`,
         { mapKey, ...ifDefined("suggestedKey", suggestedKey) });
@@ -151,19 +152,19 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     const { props: catProps, ambiguous: catAmbiguous } = indexPropsByBase(comp.props, "def", `component '${comp.name}'`, push, warnings, mapKey);
     const { props: mapProps, ambiguous: mapAmbiguous } = indexPropsByBase(e.props, "prop", `map entry '${mapKey}'`, push, warnings, mapKey);
 
-    for (const pn of Object.keys(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mapProps[pn].orig} does not exist on the Figma component`, { mapKey, prop: pn });
-    for (const pn of Object.keys(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${catProps[pn].orig}' (${catProps[pn].def.type}) is not mapped`, { mapKey, prop: pn });
+    for (const [pn, mp] of Object.entries(mapProps)) if (!(pn in catProps)) push(errors, "stale-prop", `'${mapKey}'.props.${mp.orig} does not exist on the Figma component`, { mapKey, prop: pn });
+    for (const [pn, cp] of Object.entries(catProps)) if (!(pn in mapProps)) push(warnings, "uncovered-prop", `'${mapKey}': Figma prop '${cp.orig}' (${cp.def.type}) is not mapped`, { mapKey, prop: pn });
 
-    for (const pn of Object.keys(mapProps)) {
+    for (const [pn, mp] of Object.entries(mapProps)) {
       const cp = catProps[pn]; if (!cp || catAmbiguous.has(pn) || mapAmbiguous.has(pn)) continue; // ambiguous base (either side) -> already warned, don't emit order-dependent errors
-      const prop = mapProps[pn].prop;
+      const prop = mp.prop;
       const kind = prop.kind, expected = TYPE_TO_KIND[cp.def.type];
-      if (expected && kind && kind !== expected) { push(errors, "kind-mismatch", `'${mapKey}'.props.${mapProps[pn].orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn }); continue; }
+      if (expected && kind && kind !== expected) { push(errors, "kind-mismatch", `'${mapKey}'.props.${mp.orig}: map kind '${kind}' but Figma type is ${cp.def.type} (expected '${expected}')`, { mapKey, prop: pn }); continue; }
       if (prop.kind === "enum") {
         const values = prop.values || {};
-        if (!Array.isArray(cp.def.options)) { push(warnings, "no-variant-options", `'${mapKey}'.props.${mapProps[pn].orig}: component exposes no variant options — enum values can't be verified`, { mapKey, prop: pn }); continue; }
-        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mapProps[pn].orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
-        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mapProps[pn].orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
+        if (!Array.isArray(cp.def.options)) { push(warnings, "no-variant-options", `'${mapKey}'.props.${mp.orig}: component exposes no variant options — enum values can't be verified`, { mapKey, prop: pn }); continue; }
+        for (const opt of Object.keys(values)) if (!cp.def.options.includes(opt)) push(errors, "unknown-variant-value", `'${mapKey}'.props.${mp.orig}: maps option '${opt}' that is not a Figma variant option`, { mapKey, prop: pn });
+        for (const opt of cp.def.options) if (!(opt in values)) push(warnings, "unmapped-variant-value", `'${mapKey}'.props.${mp.orig}: variant option '${opt}' has no code mapping (will be omitted)`, { mapKey, prop: pn });
       }
     }
   }
@@ -226,8 +227,8 @@ interface UsedSet { setName: string; instances: number; hiddenInstances: number;
 function screenCoverage(map: CodeConnectMap | null | undefined, catalog: ComponentsCatalog | null | undefined, screenDocs: ReadonlyArray<ScreenDoc | null | undefined> | null | undefined): ScreenCoverage {
   const entries = (map && map.components) || {};
   const mapKeys = new Set<string>();
-  for (const k of Object.keys(entries)) {
-    const f: Partial<MapEntry["figma"]> = entries[k].figma || {};
+  for (const [k, entry] of Object.entries(entries)) {
+    const f: Partial<MapEntry["figma"]> = entry.figma || {};
     if (f.key) mapKeys.add(f.key);
     if (f.id) mapKeys.add(f.id);
     mapKeys.add(k);
@@ -331,7 +332,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // The number a builder is actually asking for. Printed last, because it is the headline.
   let screenFail = false;
   if (screenFiles.length) {
-    const docs = screenFiles.map((f) => readDocFile(f, "screen export", isScreenDoc));
+    const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
+    const docs = read.map((r) => r.doc);
     const cov = screenCoverage(map, catalog, docs);
     if (!cov.distinct) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
@@ -347,7 +349,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
       // pointing the user at "the wrong library".
       const none: VisibleInstance[] = [];
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...docs.map((d, i) => visibleInstances(d, screenFiles[i]))), catalog) : null;
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
         screenFail = true;
         console.error(

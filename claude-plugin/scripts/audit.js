@@ -13,9 +13,9 @@ var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
   if (typeof v !== "string") return null;
-  const m = HEX.exec(v.trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
 function colorKey(v) {
@@ -50,7 +50,8 @@ function luminance(c) {
   return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
 }
 function contrastRatio(a, b) {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  const la = luminance(a), lb = luminance(b);
+  const hi = Math.max(la, lb), lo = Math.min(la, lb);
   return (hi + 0.05) / (lo + 0.05);
 }
 
@@ -132,7 +133,7 @@ function parseVariant(s) {
   }
   return Object.keys(out).length ? out : null;
 }
-var baseProp = (p) => String(p).split("#")[0];
+var baseProp = (p) => String(p).split("#")[0] ?? "";
 var SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
 function signature(inst, cand) {
   const props = {};
@@ -152,7 +153,10 @@ function signature(inst, cand) {
       score += known.length ? 10 : -15;
       reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate");
     }
-    const bad = known.filter((k) => !(props[k].options || []).includes(variant[k]));
+    const bad = Object.entries(variant).filter(([k, val]) => {
+      const d = props[k];
+      return d && d.type === "VARIANT" && !(d.options || []).includes(val);
+    }).map(([k]) => k);
     if (known.length && !bad.length) {
       score += 25;
       reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`);
@@ -204,8 +208,9 @@ function matchByNameAndSignature(instances, catalog, library) {
   const libNames = new Set((library && library.components || []).map((c) => c.name));
   const groups = /* @__PURE__ */ new Map();
   for (const inst of instances) {
-    if (!groups.has(inst.name)) groups.set(inst.name, []);
-    groups.get(inst.name).push(inst);
+    const group = groups.get(inst.name);
+    if (group) group.push(inst);
+    else groups.set(inst.name, [inst]);
   }
   const rows = [];
   for (const [name, list] of groups) {
@@ -230,17 +235,21 @@ function matchByNameAndSignature(instances, catalog, library) {
       rows.push(row);
       continue;
     }
+    const [firstInst, ...otherInsts] = list;
     const scored = cands.map((c) => {
-      const per = list.map((i) => signature(i, c));
-      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+      const first = signature(firstInst, c);
+      const per = [first, ...otherInsts.map((i) => signature(i, c))];
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
     }).sort((a, b) => Number(b.verified) - Number(a.verified) || b.score - a.score || a.c._order - b.c._order);
     const best = scored[0];
+    if (best === void 0) throw new Error("component-match: a non-empty candidate list scored to nothing");
     if (!best.verified) {
       row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` + (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") + " \u2014 a name alone is not a match");
       rows.push(row);
       continue;
     }
     const verifiedOnes = scored.filter((s) => s.verified);
+    const runnerUp = verifiedOnes[1];
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
     row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     row.evidence = list.some((i) => i.variant || Object.keys(i.props || {}).length) ? "name+signature" : "name+no-props";
@@ -250,7 +259,7 @@ function matchByNameAndSignature(instances, catalog, library) {
       row.reasons.push(identical ? `${ties.length + 1} catalog entries named "${name}" score identically \u2014 they are duplicates of one definition (same props, same variants); the first in the catalog is used` : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures \u2014 the first in the catalog is used; confirm which one`);
       row.tie = identical ? "duplicate-definitions" : "different-signatures";
     } else if (scored.length > 1) {
-      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
     }
     row.alternatives = verifiedOnes.filter((s) => s !== best).map((s) => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
@@ -473,6 +482,7 @@ function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
     if (tok === "--") {
       out.push(...argv.slice(i));
       break;
@@ -553,18 +563,19 @@ function variablesContext(screenFiles, varsFile, opts) {
   const files = screenFiles || [];
   const own = files.map((f) => readTokens(String(f).replace(/\.json$/, ".vars.json")));
   let variablesPath = varsFile || null;
-  if (!variablesPath && files.length) {
-    const exportRoot = path.resolve(path.dirname(files[0]), "..", "..");
+  const firstFile = files[0];
+  if (!variablesPath && firstFile !== void 0) {
+    const exportRoot = path.resolve(path.dirname(firstFile), "..", "..");
     const rootVars = path.join(exportRoot, "variables.json");
-    const sibling = path.join(path.dirname(files[0]), "variables.json");
+    const sibling = path.join(path.dirname(firstFile), "variables.json");
     if (fs3.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs3.existsSync(sibling)) variablesPath = sibling;
-    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
+    else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
-  if (files.length) {
-    const legacy = path.join(path.resolve(path.dirname(files[0]), "..", ".."), "..", "variables.json");
+  if (firstFile !== void 0) {
+    const legacy = path.join(path.resolve(path.dirname(firstFile), "..", ".."), "..", "variables.json");
     if (fs3.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
@@ -700,9 +711,9 @@ function crossCheck(input) {
   const screenVarsByName = /* @__PURE__ */ new Map();
   for (const v of screenVars) {
     if (!v || !v.name) continue;
-    if (!screenVarsByName.has(v.name)) screenVarsByName.set(v.name, []);
     const list = screenVarsByName.get(v.name);
-    if (!list.some((x) => x.key && x.key === v.key || !x.key && !v.key && x.collection === v.collection)) list.push(v);
+    if (!list) screenVarsByName.set(v.name, [v]);
+    else if (!list.some((x) => x.key && x.key === v.key || !x.key && !v.key && x.collection === v.collection)) list.push(v);
   }
   const screenVarByName = new Map([...screenVarsByName].map(([n, l]) => [n, l[0]]));
   const shortKey = (v) => v && typeof v.key === "string" && v.key ? v.key.slice(0, 8) + "\u2026" : null;
@@ -947,19 +958,20 @@ function crossCheck(input) {
       );
     }
     const amb = coverage.entries.filter((e) => e.ambiguous && !proposedNames.has(e.setName));
-    if (amb.length) {
+    const firstAmb = amb[0];
+    if (firstAmb) {
       push(
         "warning",
         "ambiguous-component-name",
-        `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${amb[0].candidates} chance.`,
+        `${amb.length} component(s) share their name with SEVERAL catalog entries and were left unmatched on purpose: ` + amb.slice(0, 8).map((e) => `'${e.setName}' (${e.candidates} candidates)`).join(", ") + (amb.length > 8 ? ", \u2026" : "") + `. Generic names like these are what the design system's own hygiene report flags as duplicated/unnamed \u2014 binding code to one of them by name would be a guess with a 1-in-${firstAmb.candidates} chance.`,
         { components: amb.map((e) => ({ setName: e.setName, ...ifDefined("candidates", e.candidates) })) }
       );
     }
   }
-  if (fonts.size > 1) {
-    const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
-    const [mainFamily, mainCount] = sorted[0];
-    const strays = sorted.slice(1);
+  const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
+  const [main, ...strays] = sorted;
+  if (fonts.size > 1 && main) {
+    const [mainFamily, mainCount] = main;
     const total = sorted.reduce((n, [, c]) => n + c, 0);
     push(
       "warning",
@@ -1021,11 +1033,12 @@ function crossCheck(input) {
       absurd.push({ name: v.name, collection: v.collection, mode, value: n });
     }
   }
-  if (absurd.length) {
+  const firstAbsurd = absurd[0];
+  if (firstAbsurd) {
     push(
       "warning",
       "sentinel-token-value",
-      `${absurd.length} token value(s) are sentinels, not measurements: ` + absurd.slice(0, 4).map((a) => `'${a.name}' = ${a.value} (${a.mode})`).join(", ") + (absurd.length > 4 ? ", \u2026" : "") + `. Figma's "fully rounded" corner exports as a literal 1e9. Emit these as the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) \u2014 never as \`${absurd[0].value}px\`.`,
+      `${absurd.length} token value(s) are sentinels, not measurements: ` + absurd.slice(0, 4).map((a) => `'${a.name}' = ${a.value} (${a.mode})`).join(", ") + (absurd.length > 4 ? ", \u2026" : "") + `. Figma's "fully rounded" corner exports as a literal 1e9. Emit these as the platform's own idiom (CSS 9999px or 50%, SwiftUI .infinity, Compose CircleShape) \u2014 never as \`${firstAbsurd.value}px\`.`,
       { tokens: absurd }
     );
   }
@@ -1041,8 +1054,8 @@ function crossCheck(input) {
   for (const c of multiModeColls) {
     const seen = resolvedModes.get(c.name);
     if (!seen || !seen.size) continue;
-    if (seen.size === 1 && c.modes.length > 1) {
-      const only = [...seen][0];
+    const only = seen.size === 1 ? [...seen][0] : void 0;
+    if (only !== void 0 && c.modes.length > 1) {
       const rest = c.modes.filter((m) => m !== only);
       push(
         "warning",
@@ -1101,7 +1114,8 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
     const val = v.values[mode];
     if (val !== void 0) return val;
     const keys = Object.keys(v.values);
-    return keys.length === 1 ? v.values[keys[0]] : void 0;
+    const [onlyKey] = keys;
+    return keys.length === 1 && onlyKey !== void 0 ? v.values[onlyKey] : void 0;
   }
   const aliasName = (val) => val && typeof val === "object" && "aliasOf" in val && typeof val.aliasOf === "string" && val.aliasOf ? val.aliasOf : null;
   function resolveNumber(name, mode, depth) {
@@ -1209,7 +1223,7 @@ if (false) {
   const ctx = variablesContext2(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const screens = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
@@ -1407,7 +1421,7 @@ function audit(input, opts = {}) {
     if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
       const [padTop, , padBottom] = node.layout.padding;
       const kids = node.children.filter((c) => !!(c && c.box && typeof c.box.h === "number"));
-      if (kids.length === node.children.length && kids.length) {
+      if (kids.length === node.children.length && kids.length && padTop !== void 0 && padBottom !== void 0) {
         const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
         const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
         let expectedH = null;
@@ -1575,15 +1589,15 @@ function audit(input, opts = {}) {
     }
   }
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
-  const labs = raws.map((x) => toLab(x.rgb));
+  const labs = raws.map((x) => ({ x, lab: toLab(x.rgb) }));
   const seen = /* @__PURE__ */ new Set();
-  for (let a = 0; a < raws.length; a++) {
-    if (seen.has(raws[a].hex)) continue;
-    const cluster = [raws[a]];
-    for (let b = a + 1; b < raws.length; b++) {
-      if (!seen.has(raws[b].hex) && labDist(labs[a], labs[b]) < 3) {
-        cluster.push(raws[b]);
-        seen.add(raws[b].hex);
+  for (const [a, { x: ra, lab: la }] of labs.entries()) {
+    if (seen.has(ra.hex)) continue;
+    const cluster = [ra];
+    for (const { x: rb, lab: lb } of labs.slice(a + 1)) {
+      if (!seen.has(rb.hex) && labDist(la, lb) < 3) {
+        cluster.push(rb);
+        seen.add(rb.hex);
       }
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}\xD7${c.count}`).join(", ")} are visually indistinguishable (\u0394E<3) \u2014 probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
@@ -1606,7 +1620,7 @@ function audit(input, opts = {}) {
     const values = [];
     for (const p of Object.values(def.props || {})) {
       if (p.type === "VARIANT" && Array.isArray(p.options)) values.push(...p.options);
-      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0]);
+      if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? "");
     }
     const norm2 = values.map((v) => String(v).trim().toLowerCase());
     const present = CONTROL_STATES.filter((s) => norm2.some((v) => STATE_SYNONYMS[s].test(v)));
@@ -1828,7 +1842,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     console.log(USAGE);
     process.exit(0);
   }
-  if (!files.length) {
+  const firstFile = files[0];
+  if (firstFile === void 0) {
     console.error(USAGE);
     process.exit(2);
   }
@@ -1846,7 +1861,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const ctx = variablesContext(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json"), vars: ctx.own[i] }));
+  const inputs = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
     tokens: readOptionalDoc(path2.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
@@ -1858,7 +1873,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path2.join("design", "audit", path2.basename(files[0], ".json"));
+  const outBase = out || path2.join("design", "audit", path2.basename(firstFile, ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
     const dup = findExistingAuditFor(path2.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {

@@ -73,7 +73,7 @@ function parseVariant(s: unknown): Record<string, string> | null {
   return Object.keys(out).length ? out : null;
 }
 
-const baseProp = (p: string): string => String(p).split("#")[0];
+const baseProp = (p: string): string => String(p).split("#")[0] ?? ""; // ?? "": split() always returns at least one piece, so it never applies
 const SHARED_PAGE = /shared|style ?guide|foundation|core|global|design.?system|librar|banner|badge/i;
 
 interface Signature { verified: boolean; score: number; reasons: string[] }
@@ -92,7 +92,8 @@ function signature(inst: MatchInstance, cand: CatalogComponent): Signature {
     const known = axes.filter((k) => props[k] && props[k].type === "VARIANT");
     if (known.length === axes.length) { score += 25; reasons.push(`all ${axes.length} variant prop name(s) exist as VARIANT props`); }
     else { verified = false; score += known.length ? 10 : -15; reasons.push(known.length ? `${known.length}/${axes.length} variant prop names exist` : "variant prop names are NOT on this candidate"); }
-    const bad = known.filter((k) => !((props[k].options || []).includes(variant[k])));
+    // `known` in the same order, with each axis's value: the axes whose value is not in the option list
+    const bad = Object.entries(variant).filter(([k, val]) => { const d = props[k]; return d && d.type === "VARIANT" && !(d.options || []).includes(val); }).map(([k]) => k);
     if (known.length && !bad.length) { score += 25; reasons.push(`variant value(s) ${known.map((k) => `${k}=${variant[k]}`).join(", ")} are in the option list`); }
     else if (bad.length) { verified = false; score -= 20; reasons.push(`variant value(s) not in option list (${bad.map((k) => `${k}=${variant[k]}`).join(", ")})`); }
   } else if (cand.type === "COMPONENT") {
@@ -133,10 +134,10 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
   const libKeys = new Set(((library && library.components) || []).map((c) => c.key).filter((k): k is string => !!k));
   const libNames = new Set(((library && library.components) || []).map((c) => c.name));
 
-  const groups = new Map<string, MatchInstance[]>();
+  const groups = new Map<string, [MatchInstance, ...MatchInstance[]]>();
   for (const inst of instances) {
-    if (!groups.has(inst.name)) groups.set(inst.name, []);
-    groups.get(inst.name)!.push(inst);
+    const group = groups.get(inst.name);
+    if (group) group.push(inst); else groups.set(inst.name, [inst]);
   }
   const rows: MatchRow[] = [];
   for (const [name, list] of groups) {
@@ -167,11 +168,14 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
     }
     // Every instance of the name must agree with the winner — one mismatching variant is enough to
     // refuse the proposal, since a mapping is per component, not per instance.
+    const [firstInst, ...otherInsts] = list;
     const scored: Scored[] = cands.map((c) => {
-      const per = list.map((i) => signature(i, c));
-      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: per[0].reasons, failing: per.find((p) => !p.verified) };
+      const first = signature(firstInst, c);
+      const per = [first, ...otherInsts.map((i) => signature(i, c))];
+      return { c, verified: per.every((p) => p.verified), score: Math.min(...per.map((p) => p.score)), reasons: first.reasons, failing: per.find((p) => !p.verified) };
     }).sort((a, b) => (Number(b.verified) - Number(a.verified)) || (b.score - a.score) || (a.c._order - b.c._order));
     const best = scored[0];
+    if (best === undefined) throw new Error("component-match: a non-empty candidate list scored to nothing"); // cands is non-empty here (the `!cands.length` branch above continued)
     if (!best.verified) {
       row.reasons.push(`${cands.length} catalog entr${cands.length === 1 ? "y is" : "ies are"} named ${JSON.stringify(name)}, but no prop signature agrees: ` +
         (best.failing ? best.failing.reasons.filter((r) => /NOT|not in|none of|\d+\/\d+|sets no variant/.test(r)).join("; ") : "signature mismatch") +
@@ -180,6 +184,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
       continue;
     }
     const verifiedOnes = scored.filter((s) => s.verified);
+    const runnerUp = verifiedOnes[1]; // set exactly when verifiedOnes.length > 1
     const ties = verifiedOnes.filter((s) => s.score === best.score && s !== best);
     row.match = { ...ifDefined("id", best.c.id), ...ifDefined("key", best.c.key), name: best.c.name, type: best.c.type, ...ifDefined("page", best.c.page) };
     // How much the signature actually proved: an instance with variants or props proved it; one with
@@ -194,7 +199,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
         : `${ties.length + 1} catalog entries named "${name}" score identically with DIFFERENT signatures — the first in the catalog is used; confirm which one`);
       row.tie = identical ? "duplicate-definitions" : "different-signatures";
     } else if (scored.length > 1) {
-      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${verifiedOnes.length > 1 ? ` by ${best.score - verifiedOnes[1].score} pts` : " (their prop signatures do not agree)"}`);
+      row.reasons.push(`beat ${scored.length - 1} same-named candidate(s)${runnerUp ? ` by ${best.score - runnerUp.score} pts` : " (their prop signatures do not agree)"}`);
     }
     row.alternatives = verifiedOnes.filter((s) => s !== best).map((s): MatchAlternative => ({ ...ifDefined("id", s.c.id), ...ifDefined("key", s.c.key), ...ifDefined("page", s.c.page), score: s.score }));
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog — re-keyed)"));

@@ -16,7 +16,7 @@ function walkWithHidden(root, fn, opts) {
     const hidden = isHidden(node, parentHidden);
     fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (let i = 0; i < kids.length; i++) go(kids[i], hidden, (path3 ? path3 + " > " : "") + pathOf(kids[i], i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -250,6 +250,7 @@ function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
     if (tok === "--") {
       out.push(...argv.slice(i));
       break;
@@ -317,9 +318,9 @@ function screenExportOf(doc) {
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 function normHex(v) {
   if (typeof v !== "string") return null;
-  const m = HEX.exec(v.trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
+  const g = HEX.exec(v.trim())?.[1];
+  if (g === void 0) return null;
+  const h = g.toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
 function colorKey(v) {
@@ -365,14 +366,15 @@ function normColor(v) {
   const s = String(v).trim().toLowerCase();
   const key = colorKey(s);
   if (key) return key;
-  const m = /^rgba?\(([^)]+)\)$/.exec(s);
-  if (m) {
-    const p = m[1].split(/[,\s/]+/).filter(Boolean).map(Number);
-    if (p.length < 3 || p.some((n) => Number.isNaN(n))) return s;
-    const a = p.length > 3 ? p[3] : 1;
+  const inner = /^rgba?\(([^)]+)\)$/.exec(s)?.[1];
+  if (inner !== void 0) {
+    const p = inner.split(/[,\s/]+/).filter(Boolean).map(Number);
+    const [r, g, b, a0] = p;
+    if (r === void 0 || g === void 0 || b === void 0 || p.some((n) => Number.isNaN(n))) return s;
+    const a = a0 ?? 1;
     if (a === 0) return "transparent";
     const hex = (n) => Math.round(n).toString(16).padStart(2, "0");
-    return "#" + hex(p[0]) + hex(p[1]) + hex(p[2]) + hex(Math.round(a * 255));
+    return "#" + hex(r) + hex(g) + hex(b) + hex(Math.round(a * 255));
   }
   if (s === "transparent" || s === "rgba(0, 0, 0, 0)") return "transparent";
   return s;
@@ -404,7 +406,7 @@ function normWeight(v) {
 }
 function normFamily(v) {
   if (v == null) return null;
-  return String(v).split(",")[0].trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+  return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
 function lineHeightPx(lh, fontSize) {
   if (lh == null) return null;
@@ -434,8 +436,8 @@ var STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
 var normState = (w) => /^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus";
 function drawnStateOf(n) {
   const fillTok = n.tokens && typeof n.tokens.fills === "string" && n.tokens.fills || Array.isArray(n.fills) && n.fills.map((f) => f && f.tokens && f.tokens.color).find((t) => typeof t === "string") || null;
-  let m = fillTok && STATE_WORD.exec(fillTok);
-  if (m) return { state: normState(m[1]), why: `its fill is bound to '${fillTok}'` };
+  const word = fillTok ? STATE_WORD.exec(fillTok)?.[1] : void 0;
+  if (word !== void 0) return { state: normState(word), why: `its fill is bound to '${fillTok}'` };
   for (const [k, v] of Object.entries(n.props || {})) {
     if (typeof v === "string" && /^\s*(hover(?:ed)?|pressed|focus(?:ed)?)\s*$/i.test(v)) return { state: normState(v.trim()), why: `variant ${k}=${v}` };
   }
@@ -523,12 +525,10 @@ function expectNode(n, ctxOrPath) {
   if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
-    const c = ["tl", "tr", "br", "bl"].map((k) => {
-      const v = rc[k];
-      return num(v) ? v : 0;
-    });
-    if (c.every((v) => v === c[0])) spec.borderRadius = c[0];
-    else spec.radiusCorners = { tl: c[0], tr: c[1], br: c[2], bl: c[3] };
+    const corner = (v) => num(v) ? v : 0;
+    const c = { tl: corner(rc.tl), tr: corner(rc.tr), br: corner(rc.br), bl: corner(rc.bl) };
+    if (c.tr === c.tl && c.br === c.tl && c.bl === c.tl) spec.borderRadius = c.tl;
+    else spec.radiusCorners = c;
   }
   const L = n.layout;
   if (L && typeof L === "object") {
@@ -793,11 +793,17 @@ function radiusCorners(v) {
   if (num(v)) return [v, v, v, v];
   if (Array.isArray(v)) {
     const a = v.map(Number);
-    return a.length === 4 && a.every(Number.isFinite) ? a : a.length === 1 && Number.isFinite(a[0]) ? [a[0], a[0], a[0], a[0]] : null;
+    const [a0, a1, a2, a3] = a;
+    if (a.length === 4 && a.every(Number.isFinite) && a0 !== void 0 && a1 !== void 0 && a2 !== void 0 && a3 !== void 0) return [a0, a1, a2, a3];
+    return a.length === 1 && a0 !== void 0 && Number.isFinite(a0) ? [a0, a0, a0, a0] : null;
   }
   const p = String(v).trim().split(/\s+/).map(parseFloat);
-  if (!p.length || p.some(Number.isNaN)) return null;
-  return p.length === 1 ? [p[0], p[0], p[0], p[0]] : p.length === 2 ? [p[0], p[1], p[0], p[1]] : p.length === 3 ? [p[0], p[1], p[2], p[1]] : p.slice(0, 4);
+  const [p0, p1, p2, p3] = p;
+  if (p0 === void 0 || p.some(Number.isNaN)) return null;
+  if (p1 === void 0) return [p0, p0, p0, p0];
+  if (p2 === void 0) return [p0, p1, p0, p1];
+  if (p3 === void 0) return [p0, p1, p2, p1];
+  return [p0, p1, p2, p3];
 }
 var clampRadius = (r, w, h) => num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r;
 var TABLE_TAGS = /* @__PURE__ */ new Set(["table", "thead", "tbody", "tfoot", "tr"]);
@@ -848,7 +854,8 @@ function compare(expectation, measured, opts) {
   const viaSharedPath = (id) => {
     const sfx = suffix(String(id));
     const c = sfx && foreignBySuffix.get(sfx);
-    return c && c.length === 1 ? c[0] : null;
+    const only = c && c.length === 1 ? c[0] : void 0;
+    return only ?? null;
   };
   const deltas = [];
   const notMeasured = [];
@@ -987,9 +994,11 @@ function compare(expectation, measured, opts) {
       if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
-        ["tl", "tr", "br", "bl"].forEach((k, i) => {
+        const [ctl, ctr, cbr, cbl] = c;
+        const measured2 = { tl: ctl, tr: ctr, br: cbr, bl: cbl };
+        ["tl", "tr", "br", "bl"].forEach((k) => {
           fieldsChecked++;
-          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(c[i], W, H);
+          const want = clampRadius(rc[k], spec.width, spec.height), have = clampRadius(measured2[k], W, H);
           const d = Math.abs(want - have);
           if (d > TOLERANCE.radius) push(spec, `border-radius (${{ tl: "top-left", tr: "top-right", br: "bottom-right", bl: "bottom-left" }[k]})`, "medium", { want, got: have, delta: Number(d.toFixed(3)) }, { unit: "px", ...ifDefined("token", tokenFor(spec, "radius." + k)) });
         });
@@ -1202,7 +1211,7 @@ function compare(expectation, measured, opts) {
     unverifiable,
     notComparable: expectation.notComparable || [],
     probe: {
-      unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, canonical: KEY_HINTS[key] })),
+      unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
@@ -1346,13 +1355,14 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
-    if (!files.length) {
+    const firstFile = files[0];
+    if (firstFile === void 0) {
       console.error("--expect needs at least one screen export\n" + USAGE);
       process.exit(2);
     }
     const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    const outBase = out || path2.join("design", "verify", path2.basename(files[0], ".json"));
+    const outBase = out || path2.join("design", "verify", path2.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path2.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
@@ -1427,8 +1437,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       const byName = path2.basename(f, ".json") === stem || p.file && path2.basename(String(p.file), ".json") === stem;
       if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
     }
-    if (hits.length === 1) {
-      code = { plan: path2.join(planDir, hits[0].f).split(path2.sep).join("/"), files: fileHashes(hits[0].files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    const onlyHit = hits.length === 1 ? hits[0] : void 0;
+    if (onlyHit) {
+      code = { plan: path2.join(planDir, onlyHit.f).split(path2.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }

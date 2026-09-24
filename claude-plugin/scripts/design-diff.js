@@ -218,6 +218,7 @@ function joinNegativeValues(argv, options) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i], next = argv[i + 1];
+    if (tok === void 0) continue;
     if (tok === "--") {
       out.push(...argv.slice(i));
       break;
@@ -702,7 +703,8 @@ function previous(file, against, cwd = process.cwd(), current = null) {
     found.push({ doc, source: "git HEAD", kind: "git" });
   } catch {
   }
-  if (!found.length) return null;
+  const firstFound = found[0];
+  if (firstFound === void 0) return null;
   const at = (d) => {
     if (!d || typeof d !== "object") return null;
     if ("exportedAt" in d && typeof d.exportedAt === "string") return d.exportedAt;
@@ -715,10 +717,11 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   const now = at(current), notes = [];
   const useful = found.filter((c) => !(now && at(c.doc) === now));
   for (const c of found) if (!useful.includes(c)) notes.push(`${c.source} is the SAME export as ${file} (exportedAt ${now}) \u2014 ${c.kind === "snapshot" ? "the snapshot was taken after the re-pull" : "the new export is already committed"}, so it was not used as the baseline.`);
-  if (!useful.length) return { ...found[0], notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
   useful.sort((x, y) => String(at(y.doc) || "").localeCompare(String(at(x.doc) || "")));
-  if (useful.length > 1 && at(useful[0].doc) !== at(useful[1].doc)) notes.push(`${useful[1].source} is older than ${useful[0].source} \u2014 used the newer one, so changes already applied are not listed again.`);
-  return { ...useful[0], notes };
+  const [newest, older] = useful;
+  if (newest === void 0) return { ...firstFound, notes: [...notes, `There is no OLDER export to compare against, so this says nothing about what the designer changed. Pass --against <an older copy>.`], same: true };
+  if (older !== void 0 && at(newest.doc) !== at(older.doc)) notes.push(`${older.source} is older than ${newest.source} \u2014 used the newer one, so changes already applied are not listed again.`);
+  return { ...newest, notes };
 }
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
