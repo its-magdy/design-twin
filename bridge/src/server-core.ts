@@ -6,7 +6,7 @@
 // this process is the SERVER. Loopback only — no internet exposure.
 
 import { WebSocketServer } from "ws";
-import type { WebSocket, VerifyClientInfo, VerifyClientCallback } from "ws";
+import type { WebSocket, VerifyClientCallbackAsync } from "ws";
 import type { IncomingMessage } from "node:http";
 import crypto from "node:crypto";
 import * as tokenStore from "./token-store.ts";
@@ -18,6 +18,10 @@ import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
 // the CLI's pure helpers and doctor.ts can use it without loading this module; re-exported below so
 // this module's surface is unchanged.
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
+
+// The async (two-argument) verifyClient form is the only one this file uses; name its two halves.
+type VerifyClientInfo = Parameters<VerifyClientCallbackAsync>[0];
+type VerifyClientCallback = Parameters<VerifyClientCallbackAsync>[1];
 
 // The ONLY ports a published plugin can reach. figma-plugin/manifest.json lists these three in
 // `networkAccess.allowedDomains`, Figma's match patterns have no port wildcard, and a plugin socket to
@@ -435,7 +439,7 @@ function createBridge(port: number = PORT) {
   });
 
   wss.on("error", (e) => {
-    if (e && e.code === "EADDRINUSE") {
+    if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
       console.error(
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
           `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +

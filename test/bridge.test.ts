@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
-// "ws" has no types of its own; see bridge/src/ws.d.ts for the ambient shim.
+// "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { ClientOptions, RawData } from "ws";
 import { ok, report } from "./assert.ts";

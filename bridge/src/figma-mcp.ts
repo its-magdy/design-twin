@@ -630,7 +630,9 @@ export interface DriftLintModule {
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   try {
-    return (await import("../../design-to-code/" + mod)) as T;
+    // A file: URL, not a "../" string: tsc's rewriteRelativeImportExtensions wraps a computed relative
+    // specifier in a helper that turns "x.ts" into "x.js" at runtime, and the layer only exists as .ts.
+    return (await import(new URL("../../design-to-code/" + mod, import.meta.url).href)) as T;
   } catch (e) {
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
