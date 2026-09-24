@@ -184,7 +184,11 @@ import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { Bridge, ClientRow, ConnectionInfo, RequestArgs } from "./server-core.ts";
+import type { Bridge, ClientRow, ConnectionInfo } from "./server-core.ts";
+// The command/reply contract shared with the plugin (commands.ts): `send()` below is typed per command
+// from it, so this file can no longer read a reply field the plugin never sends (an earlier hand-mirror
+// declared a top-level `frames` that did not exist, and two hints silently never printed).
+import type { Cmd, Commands, ListChildrenReply, ListLibrariesReply, ListPagesReply, NodeSummary, ScreenReply } from "./commands.ts";
 // Type-only (erased): cli() loads server-core itself, lazily — see above.
 import type * as ServerCore from "./server-core.ts";
 // node-id.ts is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
@@ -197,7 +201,7 @@ import { toNodeId } from "./node-id.ts";
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
-import type { ExportResult } from "./write-out.ts";
+import type { Stamped } from "./write-out.ts";
 import type { LayersDoc } from "./doc-types.ts";
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
@@ -228,13 +232,13 @@ const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => 
 // OUT.writePages itself) — kept as an export because test/bridge.test.ts drives the pages/ LAYOUT
 // through this exact entry point.
 const writePages = (dir: string, layersDoc: LayersDoc | null | undefined) => OUT.writePages(dir, layersDoc, plog);
-const writeScreenshot = (dir: string, r: ExportResult) => OUT.writeScreenshot(dir, r, plog);
+const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"]) => OUT.writeScreenshot(dir, r, plog);
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
 // COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
 // here so hygiene surfaces the same run it was produced in, not only on a later manual diff.
-function printHygiene(r: ExportResult | null | undefined): void {
-  const hygiene = r && r.designSystem && Array.isArray(r.designSystem.hygiene) ? r.designSystem.hygiene : [];
+function printHygiene(r: { designSystem: { hygiene?: string[] } }): void {
+  const hygiene = Array.isArray(r.designSystem.hygiene) ? r.designSystem.hygiene : [];
   if (!hygiene.length) return;
   plog(`hygiene (${hygiene.length}):`);
   for (const h of hygiene) console.error("  - " + h);
@@ -295,7 +299,7 @@ for (const [flag, opt] of Object.entries(READ_OPT_FLAGS)) {
 // prefix trap takeValues() guards against below, one line earlier.
 const listCmd = args.includes("--list-pages") ? "--list-pages" : args.includes("--list") ? "--list" : null;
 const listOnly = listCmd !== null;
-const listDepth = listCmd === "--list-pages" ? 1 : 2;
+const listDepth: 1 | 2 = listCmd === "--list-pages" ? 1 : 2;
 // --list-libraries: the LIBRARY-scoped member of the same cheap-index family. Same cost model as
 // --list (no recursion, no node properties, no assets — it reads the file's library usage), same
 // budget tier (TIMEOUTS.list), same "prints and exits before any export runs" shape, and therefore
@@ -670,22 +674,14 @@ function formatClients(rows: unknown): string {
   return lines.join("\n");
 }
 
-/** One library row of the plugin's listLibraries reply (every field optional: the renderer tolerates gaps). */
-export interface LibraryRow {
-  kind?: string;
-  name?: string;
-  key?: string;
-  componentCount?: number;
-  variableCollections?: Array<{ key?: string; name?: string; variableCount?: number }>;
-  note?: string;
-}
-/** The plugin's listLibraries reply. */
-export interface LibrariesReply {
-  libraries?: LibraryRow[];
-  warnings?: string[];
-}
+/** The plugin's listLibraries reply — commands.ts ListLibrariesReply. The name is kept because
+ *  test/harness.ts imports it from here; the shape is the contract's, not a second declaration. */
+export type LibrariesReply = ListLibrariesReply;
 
-function formatLibraries(r: LibrariesReply | null | undefined): string {
+/** The renderer tolerates gaps (`--json` fixtures, older plugins): every row field is read as optional. */
+type LibraryRowView = Partial<ListLibrariesReply["libraries"][number]>;
+
+function formatLibraries(r: { libraries?: LibraryRowView[]; warnings?: string[] } | null | undefined): string {
   const libs = (r && r.libraries) || [];
   const lines: string[] = [];
   if (!libs.length) {
@@ -739,57 +735,11 @@ function formatLibraries(r: LibrariesReply | null | undefined): string {
   return lines.join("\n");
 }
 
-// ---- the plugin replies main() reads (plugin JSON, taken as given; every field main() does not
-// guard itself is what the plugin always sends for that command)
-
-/** The plugin's `whoami` reply. */
-interface WhoamiReply {
-  instanceId?: string;
-  file?: string;
-  uptimeMs?: number;
-  pluginVersion?: string | null;
-  fileKeyAvailable?: boolean;
-  fileKey?: string;
-}
-
-/** One layer as the plugin's `summarize()` reports it (figma-plugin/src/collect.ts). */
-interface LayerSummary {
-  id: string;
-  name: string;
-  type: string;
-  w?: number;
-  h?: number;
-  hidden?: true;
-}
-
-/** One page of the plugin's `listPages` reply. `frames` is present only at depth 2, and absent on a
- * page that could not be loaded (`unreadable`) — its top-level layers live HERE, per page. */
-interface PageSummary {
-  id: string;
-  name: string;
-  current?: true;
-  unreadable?: true;
-  frames?: LayerSummary[];
-}
-
-/** The plugin's `listPages` (depth 1/2) and `listChildren` replies, read through one bag.
- * There is NO top-level `frames`: an earlier version of this type declared one, the plugin never
- * sent it, so the per-type breakdown and the SECTION hint below silently never printed. */
-interface IndexReply {
-  exportedAt?: string;
-  file?: string;
-  depth?: number;
-  pages?: PageSummary[];
-  manifest?: { pages?: number; frames?: number; children?: number; warnings?: string[] };
-  // listChildren only
-  id?: string;
-  children?: unknown[];
-  name?: string;
-  type?: string;
-}
-
-// Every top-level layer of a listPages reply, across pages (empty at depth 1).
-const topLevelLayers = (r: IndexReply): LayerSummary[] => (r.pages ?? []).flatMap((p) => p.frames ?? []);
+// Every layer an index reply lists: a listPages reply's top-level layers across its pages (under
+// pages[].frames — empty at depth 1), or a listChildren reply's direct children. One walk for both, so
+// the per-type breakdown and the SECTION hint below work for `dtwin list children` too.
+const topLevelLayers = (r: ListPagesReply | ListChildrenReply): NodeSummary[] =>
+  "pages" in r ? r.pages.flatMap((p) => p.frames ?? []) : r.children;
 
 export type ParsedArgs = ReturnType<typeof parseArgs>;
 
@@ -856,13 +806,18 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   if (daemonCmd === "--daemon-status") {
     const st = await daemon.status();
     console.log(JSON.stringify(st || { daemon: false }, null, 2));
+    // Fields an OLDER daemon may not report (daemon.ts DaemonStatusView) print as "?", never as a guess.
     console.error("[dtwin] " + (st
-      ? `daemon up (pid ${st.pid}, port ${st.port}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
-        (st.idleMs ? `, idle ${Math.round(st.idleForMs / 60000)}/${Math.round(st.idleMs / 60000)} min before auto-shutdown.` : ", no idle shutdown.")
+      ? `daemon up (pid ${st.pid ?? "?"}, port ${st.port ?? "?"}) — plugin ${st.pluginConnected ? "CONNECTED" : "not connected"}` +
+        (st.idleMs ? `, idle ${Math.round((st.idleForMs ?? 0) / 60000)}/${Math.round(st.idleMs / 60000)} min before auto-shutdown.` : ", no idle shutdown.")
       : "no daemon is running — start one with --serve."));
     return;
   }
   if (daemonCmd === "--serve") {
+    // The already-running probe FIRST: createBridge() binds the port, and with a daemon already up
+    // that is an EADDRINUSE exit naming "another dtwin bridge" — the right answer is the daemon's own
+    // refusal, which names --stop. serve() probes again right before listening (the race is handled there).
+    await daemon.assertNoDaemon();
     const bridge = createBridge();
     const { sock } = await daemon.serve(bridge, { log: (m) => console.error("[dtwin] " + m) });
     console.error("[dtwin] bridge listening on ws://localhost:" + bridge.port + " — socket " + sock);
@@ -906,12 +861,17 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   const STALL_MS = Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;
 
   let bridge: Bridge | null = null;
-  // `T` is the reply shape the caller expects from the plugin for that command (plugin JSON, taken as given).
-  let send: <T>(cmd: string, args: RequestArgs, timeoutMs: number) => Promise<T>;
+  // Typed per command (commands.ts). Every send also answers WHICH connected Figma file the bridge
+  // routed the command to — the client resolveClient() picked for --client, described as `dtwin list
+  // clients` would — so a screen export can be stamped with its real source (P4 #33) without this
+  // file re-implementing the bridge's matching rules. `client` is null only from a daemon older than
+  // that field.
+  type Sent<C extends Cmd> = { reply: Commands[C]["reply"]; client: ClientRow | null };
+  let send: <C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number) => Promise<Sent<C>>;
   if (d) {
     // waitForConnection is forwarded so the DAEMON does the waiting: the plugin may not have
     // reconnected yet after a Figma restart, and the daemon is the side holding the socket.
-    send = <T>(cmd: string, args: RequestArgs, timeoutMs: number) => d.request({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000) as Promise<T>;
+    send = (cmd, args, timeoutMs) => d.requestWithClient({ cmd, args, timeoutMs, client, waitForConnection: connectWaitMs }, timeoutMs + connectWaitMs + 30000);
   } else {
     const b = createBridge();
     bridge = b;
@@ -938,7 +898,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     // A name/fileKey target (not a bare c<N> connId, which never depends on identification) can lose
     // the race against the plugin's `hello` — see waitForIdentified's comment (finding 216).
     if (client && !/^c\d+$/.test(client)) await b.waitForIdentified();
-    send = <T>(cmd: string, args: RequestArgs, timeoutMs: number) => b.request<T>(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined);
+    send = (cmd, args, timeoutMs) => b.requestWithClient(cmd, args, timeoutMs, client, isExportCmd ? STALL_MS : undefined);
   }
   // Every exit path below used to call bridge.close(); with a daemon there is no bridge of ours to
   // close, and closing the DAEMON's would be wrong — one helper so no call site has to know which.
@@ -966,7 +926,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // focused file) and compare — the interpretation notes below are printed with the result so the
   // reading does not depend on remembering what each field means.
   if (whoami) {
-    const r = await send<WhoamiReply>("whoami", {}, TIMEOUTS.command);
+    const { reply: r } = await send("whoami", {}, TIMEOUTS.command);
     // connectionInfo lives on the bridge object; with a daemon in front, the daemon owns it and this
     // process has no bridge of its own, so report the plugin half alone rather than inventing zeros.
     // With a daemon in front this process owns no socket, but the DAEMON does — so ask it, rather
@@ -979,7 +939,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     }
     console.log(JSON.stringify({ plugin: r, connection: conn, connectionFrom: connFrom || undefined }, null, 2));
     console.error("[dtwin] plugin instance " + r.instanceId + " — file " + JSON.stringify(r.file) +
-      ", up " + Math.round((r.uptimeMs || 0) / 1000) + "s.");
+      ", up " + Math.round(r.uptimeMs / 1000) + "s.");
     // Finding 327: printed even when nothing is stale, so "no version at all" (an old bundle that
     // predates this field) is visibly different from "version reported, and it's current".
     console.error("[dtwin] plugin version: " + (r.pluginVersion || "unknown (older bundle — predates version reporting)"));
@@ -1004,10 +964,10 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
 
   if (listLibraries) {
     console.error("[dtwin] plugin connected — listing libraries…");
-    const r = await send<LibrariesReply | null>("listLibraries", {}, listTimeoutMs);
+    const { reply: r } = await send("listLibraries", {}, listTimeoutMs);
     // Plugin-side warnings first, on stderr, so they survive a `| less` of stdout and can never be
     // mistaken for part of the table.
-    for (const w of (r && r.warnings) || []) console.error("[dtwin] warn  " + w);
+    for (const w of r.warnings) console.error("[dtwin] warn  " + w);
     console.log(json ? JSON.stringify(r, null, 2) : formatLibraries(r));
     console.error("[dtwin] next: dtwin --list   then   --page <id>   (pull only the pages you need)");
     return finish(); // see the close()-not-exit note below
@@ -1018,34 +978,23 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // --list surfaced. Both PRINT to stdout and never write outDir — a decision aid, not a build input —
   // and both share the same warn/print/hint/shutdown tail, so only the command differs.
   if (listOnly || childrenId) {
-    const q = childrenId
-      ? {
-          note: "listing children of " + childrenId,
-          cmd: "listChildren",
-          args: { nodeId: childrenId },
-          summary: (r: IndexReply) => `${r.children!.length} direct child(ren) of "${r.name}" (${r.type}).`,
-        }
-      : {
-          note: "listing structure",
-          cmd: "listPages",
-          args: { depth: listDepth },
-          // "top-level frame(s)" was a lie on every real file: the array holds SECTION, GROUP,
-          // INSTANCE, TEXT and RECTANGLE too, and on a sectioned file the actual screens are one
-          // level deeper (live finding 18). Say "layer", which is Figma's own word for any object,
-          // and break the count down so "deep-pull next" points somewhere real.
-          summary: (r: IndexReply) => {
-            const fr = r.manifest && r.manifest.frames;
-            const byType: Record<string, number> = {};
-            for (const f of topLevelLayers(r)) byType[f.type] = (byType[f.type] || 0) + 1;
-            const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
-            return `${r.manifest!.pages} page(s)${fr === undefined ? "" : `, ${fr} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
-          },
-        };
-    console.error("[dtwin] plugin connected — " + q.note + "…");
-    const r = await send<IndexReply>(q.cmd, q.args, listTimeoutMs);
-    for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
+    console.error("[dtwin] plugin connected — " + (childrenId ? "listing children of " + childrenId : "listing structure") + "…");
+    const r: ListPagesReply | ListChildrenReply = childrenId
+      ? (await send("listChildren", { nodeId: childrenId }, listTimeoutMs)).reply
+      : (await send("listPages", { depth: listDepth }, listTimeoutMs)).reply;
+    for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
     console.log(JSON.stringify(r, null, 2));
-    console.error("[dtwin] " + q.summary(r));
+    // "top-level frame(s)" was a lie on every real file: the array holds SECTION, GROUP, INSTANCE,
+    // TEXT and RECTANGLE too, and on a sectioned file the actual screens are one level deeper (live
+    // finding 18). Say "layer", which is Figma's own word for any object, and break the count down
+    // so "deep-pull next" points somewhere real — for a children listing as much as for the page map.
+    const byType: Record<string, number> = {};
+    for (const f of topLevelLayers(r)) byType[f.type] = (byType[f.type] || 0) + 1;
+    const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
+    const summary = "children" in r
+      ? `${r.children.length} direct child(ren) of "${r.name}" (${r.type})${kinds ? ` — ${kinds}` : ""}.`
+      : `${r.manifest.pages} page(s)${r.manifest.frames === undefined ? "" : `, ${r.manifest.frames} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
+    console.error("[dtwin] " + summary);
     // A SECTION is a container, not a screen — pulling one deep-serializes every screen inside it.
     // On the file this was found on, the sections were 8898-35975px wide.
     if (topLevelLayers(r).some((f) => f.type === "SECTION")) {
@@ -1068,17 +1017,16 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   // it sits next to, so it gets its own branch rather than joining their print-only one.
   if (screenshotId) {
     console.error("[dtwin] plugin connected — rendering a reference screenshot…");
-    const r = await send<ExportResult>("screenshot", { nodeId: screenshotId, scale }, exportTimeoutMs);
-    for (const w of (r.manifest && r.manifest.warnings) || []) console.error("[dtwin] warn  " + w);
+    const { reply: r } = await send("screenshot", { nodeId: screenshotId, scale }, exportTimeoutMs);
+    for (const w of r.manifest.warnings) console.error("[dtwin] warn  " + w);
     // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
     // string: those disagreed for a whole release (live-test findings 20/31) and a printed path that
     // finds nothing is worse than no path at all.
     const shot = writeScreenshot(outDir, r);
     const ref = shot.reference || r.reference;
+    if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
     console.log(JSON.stringify({ id: r.id, name: r.name, type: r.type, reference: ref }, null, 2));
-    // ts-port: `ref` is passed to path.join as-is, as before (a reply with no reference at all throws
-    // there, as it always did); the cast only names the type.
-    console.error(`[dtwin] wrote ${path.join(outDir, ref as string)} — ${r.name} (${r.type}).`);
+    console.error(`[dtwin] wrote ${path.join(outDir, ref)} — ${r.name} (${r.type}).`);
     return finish();
   }
 
@@ -1092,60 +1040,40 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
   }
   console.error(`[dtwin] plugin connected — pulling ${mode}… (timeout ${Math.round(exportTimeoutMs / 1000)}s)`);
 
-  // P4 #33: the bridge already knows exactly which connected Figma file this pull talked to (the
-  // same `resolveClient()` matching --client goes through, server-side) — it is just never carried
-  // past the request. A screen export result has no field of its own naming its source file (unlike
-  // design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could only
-  // ever report whichever file's export happened to sort first, attributing every screen to it. Look
-  // the resolved client up the same way `--list-clients`/`whoami` already do and stamp it onto the
-  // result before it reaches write-out.ts, which persists it onto the screen JSON and its index row.
-  async function resolveSourceFile(): Promise<ClientRow | null> {
-    try {
-      const clients: ClientRow[] = bridge && typeof bridge.listClients === "function" ? bridge.listClients() : (await daemon.status())?.clients || [];
-      if (!clients.length) return null;
-      if (client) {
-        const t = String(client);
-        const byId = clients.find((c) => c.connId === t);
-        if (byId) return byId;
-        const byKey = clients.find((c) => c.fileKey && c.fileKey === t);
-        if (byKey) return byKey;
-        const byName = clients.filter((c) => c.file && c.file.toLowerCase().includes(t.toLowerCase()));
-        if (byName.length === 1) return byName[0];
-        return null; // ambiguous or no match — leave the screen unstamped rather than guess
-      }
-      return clients.length === 1 ? clients[0] : null;
-    } catch { return null; }
-  }
-  const stampSource = (r: ExportResult): ExportResult | Promise<ExportResult> => {
-    if (!r || typeof r !== "object") return r;
-    // Fire-and-forget-free: resolved synchronously enough (the export already completed) that the
-    // client list has not changed since the request went out.
-    return resolveSourceFile().then((src) => {
-      if (src && src.file) { r.sourceFile = src.file; if (src.fileKey) r.sourceFileKey = src.fileKey; }
-      return r;
-    });
+  // P4 #33: WHICH connected Figma file this pull talked to — the client the bridge's own
+  // resolveClient() picked for --client, handed back with the reply (server-core requestWithClient;
+  // a daemon relays it). A screen export result has no field of its own naming its source file
+  // (unlike design-system.json / a library catalog, which the plugin itself stamps), so `doctor` could
+  // only ever report whichever file's export happened to sort first, attributing every screen to it.
+  // Stamped onto the result before it reaches write-out.ts, which persists it onto the screen JSON and
+  // its index row. Unstamped (never guessed) when a daemon too old to relay the client answered.
+  const stampSource = <R extends object>(sent: { reply: R; client: ClientRow | null }): Stamped<R> => {
+    const r: Stamped<R> = sent.reply;
+    const src = sent.client;
+    if (src && src.file) { r.sourceFile = src.file; if (src.fileKey) r.sourceFileKey = src.fileKey; }
+    return r;
   };
 
   if (nodeId) {
     // Same writer the MCP figma_export_url tool uses (write-out.ts's writeScreen), so a CLI --node
     // pull and an MCP pull of the same node land in identical shape.
-    const r = await stampSource(await send<ExportResult>("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
+    const r: Stamped<ScreenReply> = stampSource(await send("exportNode", { nodeId, ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (selection) {
     // Same writer as --node above — routing both through write-out.ts's writeScreen means a
     // selection pull and a --node pull can never drift into two slightly different write shapes
     // (this used to write variables.json unconditionally, where writeScreen correctly skips it
     // when the result carries none, and printed no summary).
-    const r = await stampSource(await send<ExportResult>("exportSelection", { ...readOpts }, exportTimeoutMs));
+    const r: Stamped<ScreenReply> = stampSource(await send("exportSelection", { ...readOpts }, exportTimeoutMs));
     OUT.writeScreen(outDir, r, plog);
   } else if (asLibrary) {
     // Same writer as every other branch: writeExport routes on the plugin's own `source.role`, so a
     // library catalog lands under libraries/<slug>-<fileKey8>/ and can never overwrite design-system/.
-    const r = await send<ExportResult>("exportLibrary", { asLibrary, variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
+    const { reply: r } = await send("exportLibrary", { asLibrary, variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else if (designSystemOnly) {
-    const r = await send<ExportResult>("exportDesignSystem", { variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
+    const { reply: r } = await send("exportDesignSystem", { variantVisuals: readOpts.variantVisuals }, exportTimeoutMs);
     // Same writer as the full-export branch (OUT.writeExport): it resolves outDir the same way,
     // reports counts, and degrades correctly with no layersDoc/assets on this result shape. The
     // limited-library-variables note rides in designSystem.hygiene (see collect.ts), which
@@ -1154,7 +1082,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     OUT.writeExport(outDir, r, plog);
     printHygiene(r);
   } else {
-    const r = await stampSource(await send<ExportResult>("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs));
+    const r = stampSource(await send("exportFull", { allPages, page: pageSel.length ? pageSel : undefined, ...readOpts }, exportTimeoutMs));
     // Route through the SAME split writer the MCP export tools use (write-out.ts's writeExport), so a
     // CLI pull and an MCP pull land in identical shape. The CLI used to write r.designSystem flat to
     // design-system.json here — undocumented drift from the split described in this file's own header

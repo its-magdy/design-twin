@@ -5,14 +5,20 @@
 // The plugin is always the WebSocket CLIENT (a browser iframe cannot listen);
 // this process is the SERVER. Loopback only — no internet exposure.
 
-import { WebSocketServer } from "ws";
-import type { WebSocket, VerifyClientCallbackAsync } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
+import type { RawData, VerifyClientCallbackAsync } from "ws";
 import type { IncomingMessage } from "node:http";
 import crypto from "node:crypto";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errMsg } from "./errmsg.ts";
 import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
+// The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
+import { ALLOWED_PORTS } from "./ports.ts";
+// The command/reply contract shared with the plugin: `request()` is typed per command from it, and
+// every reply is checked against it once, at the point it enters this process (see the message handler).
+import { replyShapeError } from "./commands.ts";
+import type { Cmd, Commands } from "./commands.ts";
 
 // Finding 327 (BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote) lives in staleness.ts so
 // the CLI's pure helpers and doctor.ts can use it without loading this module; re-exported below so
@@ -23,13 +29,7 @@ import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./s
 type VerifyClientInfo = Parameters<VerifyClientCallbackAsync>[0];
 type VerifyClientCallback = Parameters<VerifyClientCallbackAsync>[1];
 
-// The ONLY ports a published plugin can reach. figma-plugin/manifest.json lists these three in
-// `networkAccess.allowedDomains`, Figma's match patterns have no port wildcard, and a plugin socket to
-// any other port is blocked by Figma before it leaves the iframe. So FIGMA_BRIDGE_PORT is a choice of
-// three, not a free number: binding 9999 gives a bridge that nothing can ever connect to. Keep this
-// array and the manifest's allowedDomains in sync — they are two halves of one contract.
-const ALLOWED_PORTS = [8787, 8788, 8789];
-
+// FIGMA_BRIDGE_PORT is a choice of three (ports.ts), not a free number.
 const PORT = (() => {
   const raw = process.env.FIGMA_BRIDGE_PORT;
   if (!raw) return ALLOWED_PORTS[0];
@@ -90,9 +90,12 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 // previous `ba.length === bb.length && ...` guard short-circuited before the constant-time compare
 // and leaked the token's LENGTH through timing. Hashing first makes both sides a fixed 32 bytes, so
 // every comparison takes the same path regardless of what was presented.
-function safeEqual(a: unknown, b: unknown): boolean {
-  const ha = crypto.createHash("sha256").update(String(a)).digest();
-  const hb = crypto.createHash("sha256").update(String(b)).digest();
+// Strings only: an earlier `unknown` signature ran String() on both sides, so a null TOKEN (a failed
+// resolution) would have compared equal to the literal token "null". The expected token is narrowed
+// to a real string once, in createBridge, and threaded through verifyClientWith below.
+function safeEqual(a: string, b: string): boolean {
+  const ha = crypto.createHash("sha256").update(a).digest();
+  const hb = crypto.createHash("sha256").update(b).digest();
   return crypto.timingSafeEqual(ha, hb);
 }
 
@@ -112,14 +115,14 @@ let lastAuthLog = 0;
 let lastBadToken: { at: number; fingerprint: string | null } | null = null;
 const AUTH_LOG_INTERVAL_MS = 30000;
 
-function rejectBadToken(presented: string): string {
+function rejectBadToken(presented: string, expected: string): string {
   authFailures++;
   lastBadToken = { at: Date.now(), fingerprint: presented ? tokenStore.fingerprint(presented) : null };
   const now = Date.now();
   if (now - lastAuthLog > AUTH_LOG_INTERVAL_MS) {
     lastAuthLog = now;
     const detail = presented
-      ? `presented ${tokenStore.fingerprint(presented)}, expected ${tokenStore.fingerprint(TOKEN)}`
+      ? `presented ${tokenStore.fingerprint(presented)}, expected ${tokenStore.fingerprint(expected)}`
       : "no token presented";
     console.error(
       `[bridge] rejected a connection: ${detail}` +
@@ -139,8 +142,17 @@ interface HandshakeInfo {
   req: { url?: string; headers: { host?: string } };
 }
 
-// Runs during the WS handshake, before the connection is accepted.
-function verifyClient(info: HandshakeInfo, done: VerifyClientCallback): void {
+/** The handshake check, bound to the ONE expected token. */
+type VerifyClient = (info: HandshakeInfo, done: VerifyClientCallback) => void;
+
+// Runs during the WS handshake, before the connection is accepted. A factory, so the expected token
+// is a real string by construction (createBridge narrows it once) rather than a module-level
+// `string | null` every comparison has to trust.
+function verifyClientWith(token: string): VerifyClient {
+  return (info, done) => verifyClientAgainst(token, info, done);
+}
+
+function verifyClientAgainst(expected: string, info: HandshakeInfo, done: VerifyClientCallback): void {
   const req = info.req;
   // Origin: the plugin iframe sends "null" (sandboxed). Block real websites as cheap
   // defense-in-depth — but a sandboxed attacker iframe ALSO sends "null", so the token
@@ -162,8 +174,8 @@ function verifyClient(info: HandshakeInfo, done: VerifyClientCallback): void {
   let token = "";
   try {
     token = new URL(String(req.url), "http://127.0.0.1").searchParams.get("token") || "";
-  } catch (e) {}
-  if (!safeEqual(token, TOKEN)) return done(false, 401, rejectBadToken(token));
+  } catch { /* unparseable URL: no token presented */ }
+  if (!safeEqual(token, expected)) return done(false, 401, rejectBadToken(token, expected));
   authFailures = 0; // a success clears the backoff — a mis-paste then a fix shouldn't stay penalised
   done(true);
 }
@@ -186,26 +198,29 @@ const badTokenRequests = new WeakSet<IncomingMessage>();
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
-/** One frame from the plugin, after JSON.parse and the non-object guard. Every field is checked before use. */
-interface PluginFrame {
-  type?: unknown;
-  id?: unknown;
-  ok?: unknown;
-  result?: unknown;
-  error?: unknown;
-  // `hello` only
-  instanceId?: unknown;
-  file?: unknown;
-  fileKey?: unknown;
-  page?: unknown;
-  pluginVersion?: unknown;
-}
+/** One frame from the plugin (figma-plugin/ui.html), after parsePluginFrame: a `hello` identity
+ *  announcement, an unsolicited `progress` tick, or the reply to one command (`{id, ok, result, error}`).
+ *  Anything else — a non-object, a reply whose id is not a string — is dropped (null). */
+type PluginFrame =
+  | { type: "progress" }
+  | { type: "hello"; instanceId: string | null; file: string | null; fileKey: string | null; page: string | null; pluginVersion: string | null }
+  | { type: "reply"; id: string; ok: boolean; result: unknown; error: unknown };
 
-/** The arguments of one command sent to the plugin (`{id, cmd, args}`). Open: each command has its own. */
-export interface RequestArgs {
-  nodeId?: unknown;
-  node?: unknown;
-  [key: string]: unknown;
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+function parsePluginFrame(parsed: unknown): PluginFrame | null {
+  // JSON.parse can return a non-object (null, number, string) — guard before reading .id so a
+  // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
+  if (!isRecord(parsed)) return null;
+  const m = parsed;
+  if (m.type === "progress") return { type: "progress" };
+  if (m.type === "hello") {
+    return { type: "hello", instanceId: str(m.instanceId), file: str(m.file), fileKey: str(m.fileKey), page: str(m.page), pluginVersion: str(m.pluginVersion) };
+  }
+  // Request ids are always strings ("r<N>"), so a frame whose id is anything else matches nothing.
+  if (typeof m.id !== "string") return null;
+  return { type: "reply", id: m.id, ok: !!m.ok, result: m.result, error: m.error };
 }
 
 /** One registry entry: a connected plugin socket plus what its `hello` said. */
@@ -250,21 +265,32 @@ export interface ConnectionInfo {
 
 interface PendingRequest {
   connId: string;
+  /** which command was sent — what the reply is checked against, and what the check's error names */
+  cmd: Cmd;
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
+}
+
+/** What a request resolved with, plus WHICH connected file answered it (the client resolveClient picked). */
+export interface RequestOutcome<C extends Cmd> {
+  reply: Commands[C]["reply"];
+  client: ClientRow;
 }
 
 // ws's per-socket connId, kept off the socket object itself.
 const connIds = new WeakMap<WebSocket, string>();
 
-function admit(info: VerifyClientInfo, done: VerifyClientCallback): void {
-  verifyClient(info, (ok, code, msg) => {
-    if (!ok && code === 401 && info.origin === "null") {
-      badTokenRequests.add(info.req);
-      return done(true);
-    }
-    done(ok, code, msg);
-  });
+function admitWith(token: string): (info: VerifyClientInfo, done: VerifyClientCallback) => void {
+  const verify = verifyClientWith(token);
+  return (info, done) => {
+    verify(info, (ok, code, msg) => {
+      if (!ok && code === 401 && info.origin === "null") {
+        badTokenRequests.add(info.req);
+        return done(true);
+      }
+      done(ok, code, msg);
+    });
+  };
 }
 
 /** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
@@ -275,27 +301,31 @@ interface BridgeOptions {
 }
 
 function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
-  // host: "127.0.0.1" keeps it strictly loopback. verifyClient authenticates every handshake
-  // (Origin + Host + shared token). maxPayload bounds a single frame so a malformed/huge payload
-  // can't OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large
-  // file can raise it via FIGMA_BRIDGE_MAX_PAYLOAD_MB.
-  const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
-  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient: admit });
-
   // Print the token ONCE — on the run that mints it — and never again. It is stable from here on, the
   // plugin has it saved in clientStorage, and reprinting a live secret into terminal scrollback on
   // every single run is exactly the habit this store exists to end. `--show-token` reveals it on
   // demand; `--token-status` answers "which one is in play" without disclosing it.
   // A token that could not be resolved at require time (a mistyped --token-file) surfaces HERE, where
   // the caller's error handling can turn it into a one-line message instead of a module-load stack.
-  // Before the port is bound, so a failed start leaves nothing listening.
+  // Before the server is even constructed, so a failed start leaves nothing listening — and so the
+  // token every handshake is checked against is a real string from here on (the `null` case IS the
+  // resolution error; there is no bridge without a token).
   if (TOKEN_ERROR) throw TOKEN_ERROR;
+  if (TOKEN === null) throw new Error("no bridge token could be resolved");
+  const token: string = TOKEN;
+
+  // host: "127.0.0.1" keeps it strictly loopback. verifyClient authenticates every handshake
+  // (Origin + Host + shared token). maxPayload bounds a single frame so a malformed/huge payload
+  // can't OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large
+  // file can raise it via FIGMA_BRIDGE_MAX_PAYLOAD_MB.
+  const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
+  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient: admitWith(token) });
 
   // Commit a freshly-minted token to disk now that one is actually being used. Resolution happened at
   // require time (deliberately without persisting); this is where it becomes permanent.
-  if (TOKEN_INFO.source === "ephemeral" && TOKEN !== null) { // an ephemeral token is always a real one
+  if (TOKEN_INFO.source === "ephemeral") {
     try {
-      const file = tokenStore.write(TOKEN);
+      const file = tokenStore.write(token);
       TOKEN_INFO = { ...TOKEN_INFO, source: "file", path: file, created: true };
     } catch (e) {
       TOKEN_INFO = { ...TOKEN_INFO, persistError: e };
@@ -303,23 +333,23 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   }
 
   if (TOKEN_INFO.source === "token-file") {
-    console.error(`[bridge] auth: token read from ${TOKEN_INFO.path} (${tokenStore.fingerprint(TOKEN)}).`);
+    console.error(`[bridge] auth: token read from ${TOKEN_INFO.path} (${tokenStore.fingerprint(token)}).`);
   } else if (TOKEN_FROM_ENV) {
-    console.error(`[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment (${tokenStore.fingerprint(TOKEN)}).`);
+    console.error(`[bridge] auth: using FIGMA_BRIDGE_TOKEN from the environment (${tokenStore.fingerprint(token)}).`);
   } else if (TOKEN_INFO.created) {
-    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + TOKEN);
+    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
     console.error(`[bridge] saved to ${TOKEN_INFO.path} — you won't be asked to paste it again.`);
     console.error("[bridge] see it later with `dtwin --show-token`; replace it with `dtwin --rotate-token`.");
   } else if (TOKEN_INFO.source === "ephemeral") {
     // Couldn't persist (read-only FS, no HOME, locked-down container). Still works — but say so,
     // because the user WILL have to paste again next run and deserves to know why.
-    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + TOKEN);
+    console.error("[bridge] auth token (paste into the plugin's \"Bridge token\" field): " + token);
     console.error(
       "[bridge] could not save it (" + errMsg(TOKEN_INFO.persistError) + ") — it changes every run. " +
         "Set FIGMA_BRIDGE_TOKEN to a stable value instead."
     );
   } else {
-    console.error(`[bridge] auth: using the saved token from ${TOKEN_INFO.path} (${tokenStore.fingerprint(TOKEN)}).`);
+    console.error(`[bridge] auth: using the saved token from ${TOKEN_INFO.path} (${tokenStore.fingerprint(token)}).`);
     if (TOKEN_INFO.path !== null && tokenStore.loosePerms(TOKEN_INFO.path)) {
       console.error(`[bridge] warning: ${TOKEN_INFO.path} is readable by other users — chmod 600 it.`);
     }
@@ -362,17 +392,22 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     clients.set(connId, entry);
     console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
 
-    ws.on("message", (buf) => {
+    ws.on("message", (data: RawData, isBinary: boolean) => {
+      // The plugin only ever sends text frames (JSON.stringify in ui.html). ws hands the payload over
+      // as a Buffer, an ArrayBuffer or a Buffer[] depending on how it arrived — decode each explicitly
+      // rather than trusting `.toString()` on a shape it does not have.
+      if (isBinary) return;
+      const text = Buffer.isBuffer(data) ? data.toString("utf8")
+        : Array.isArray(data) ? Buffer.concat(data).toString("utf8")
+        : Buffer.from(data).toString("utf8");
       let parsed: unknown;
       try {
-        parsed = JSON.parse(buf.toString()) as unknown;
-      } catch (e) {
+        parsed = JSON.parse(text) as unknown;
+      } catch {
         return;
       }
-      // JSON.parse can return a non-object (null, number, string) — guard before reading .id so a
-      // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
-      if (!parsed || typeof parsed !== "object") return;
-      const msg: PluginFrame = parsed;
+      const msg = parsePluginFrame(parsed);
+      if (!msg) return;
       // ANY message from this client is a sign of life — recorded unconditionally, before the
       // type-specific handling below, so request()'s stall detector (see below) can tell "the plugin
       // is genuinely walking a big file and periodically reporting progress" from "nothing has been
@@ -391,27 +426,31 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // correctly labelled without any resumable-session machinery. A `hello` carries no request id,
       // so it can never be confused with a reply.
       if (msg.type === "hello") {
-        entry.instanceId = typeof msg.instanceId === "string" ? msg.instanceId : null;
-        entry.file = typeof msg.file === "string" ? msg.file : null;
-        entry.fileKey = typeof msg.fileKey === "string" && msg.fileKey ? msg.fileKey : null;
-        entry.page = typeof msg.page === "string" ? msg.page : null;
+        entry.instanceId = msg.instanceId;
+        entry.file = msg.file;
+        entry.fileKey = msg.fileKey;
+        entry.page = msg.page;
         // Finding 327: the plugin's own build version (figma-plugin/package.json, baked in at build
         // time — see figma-plugin/build.js). `null` for a plugin bundle old enough to predate this
         // field entirely, which is itself a useful signal (definitely stale).
-        entry.pluginVersion = typeof msg.pluginVersion === "string" && msg.pluginVersion ? msg.pluginVersion : null;
+        entry.pluginVersion = msg.pluginVersion;
         const stalenessNote = pluginStalenessNote(entry.pluginVersion);
         console.error(`[bridge] ${connId} identified: ${JSON.stringify(entry.file || "(unnamed file)")}` +
           (entry.fileKey ? ` [fileKey ${entry.fileKey}]` : " [no fileKey — private-plugin API not in effect]") +
           ` [plugin v${entry.pluginVersion || "unknown"}]` + (stalenessNote ? ` — ${stalenessNote}` : ""));
         return;
       }
-      // Request ids are always strings ("r<N>"), so a frame whose id is anything else matches nothing.
-      if (typeof msg.id !== "string") return;
       const p = pending.get(msg.id);
       if (!p) return;
       pending.delete(msg.id);
-      if (msg.ok) p.resolve(msg.result);
-      else p.reject(new Error(String(msg.error || "plugin error")));
+      if (!msg.ok) return p.reject(new Error(String(msg.error || "plugin error")));
+      // The ONE place a reply enters this process, so the ONE place its shape is checked against the
+      // contract (commands.ts). A plugin that answers `listPages` with something that has no `pages`
+      // — an older bundle, a half-migrated command — fails HERE, named, instead of as a TypeError in
+      // whichever reader touches the missing field first.
+      const bad = replyShapeError(p.cmd, msg.result);
+      if (bad) return p.reject(new Error(`plugin replied with an unexpected shape for ${p.cmd}: ${bad}`));
+      p.resolve(msg.result);
     });
     // A socket error is the ONLY place the real cause of a mid-export disconnect shows up (most
     // importantly 1009 / "max payload size exceeded" when an export outgrows maxPayload). Swallowing
@@ -473,7 +512,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     console.error("[bridge] server error:", e.message);
   });
 
-  const isLive = (e: ClientEntry | undefined): e is ClientEntry => !!e && !!e.ws && e.ws.readyState === 1;
+  const isLive = (e: ClientEntry | undefined): e is ClientEntry => !!e && !!e.ws && e.ws.readyState === WebSocket.OPEN;
   const liveClients = () => [...clients.values()].filter(isLive);
 
   function isConnected(): boolean {
@@ -574,9 +613,18 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // deliberately does NOT pass it: a persistent connection is exactly the case finding 220 shows is
   // already fast, so there is nothing here worth protecting against on that path.
   const STALL_POLL_MS = 500;
-  // `T` is what the caller expects this command's reply to be — the plugin's JSON, taken as given.
-  function request<T = unknown>(cmd: string, args?: RequestArgs, timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
+  // Typed per command from commands.ts: `args` is what the plugin reads for `cmd`, and the reply is
+  // what it sends back — checked structurally on arrival (the message handler above), so the type
+  // here is a promise the runtime keeps rather than a cast.
+  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number): Promise<Commands[C]["reply"]> {
+    return requestWithClient(cmd, args, timeoutMs, target, stallMs).then((o) => o.reply);
+  }
+
+  // The same, also answering WHICH connected file the command went to — the client resolveClient
+  // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
+  // screen export as `sourceFile` (P4 #33); it used to re-implement the matching rules to find out.
+  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number): Promise<RequestOutcome<C>> {
+    return new Promise<RequestOutcome<C>>((resolve, reject) => {
       let client: ClientEntry;
       try {
         client = resolveClient(target);
@@ -608,7 +656,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
           clearTimeout(timer);
-          const node = args && (args.nodeId || args.node) ? ` (node ${String(args.nodeId || args.node)})` : "";
+          const nodeId = "nodeId" in args && typeof args.nodeId === "string" ? args.nodeId : "";
+          const node = nodeId ? ` (node ${nodeId})` : "";
           reject(new Error(
             `no response from the Figma plugin${node} for '${cmd}' in ${Math.round(stallMs / 1000)}s, and no progress was reported either — ` +
             `this is the shape a missing \`dtwin serve\` daemon produces (every command opens a fresh bridge and the plugin's reconnect is what actually takes ` +
@@ -621,9 +670,14 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // leave a live 2-minute timer (and its closure) armed until it harmlessly fires.
       // connId is recorded so the close handler can fail exactly this client's in-flight work and
       // leave every other file's alone.
+      // `resolve` takes the reply as `unknown`: the message handler has already checked it against
+      // this command's shape (replyShapeError) before it gets here, which is what makes the typed
+      // promise honest. The one assertion below is that hand-off, not a guess about the plugin.
+      const settle = (v: unknown) => resolve({ reply: v as Commands[C]["reply"], client: describe(client) });
       pending.set(id, {
         connId: client.connId,
-        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); resolve(v as T); },
+        cmd,
+        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); settle(v); },
         reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); reject(e); },
       });
       client.ws.send(JSON.stringify({ id, cmd, args }));
@@ -672,19 +726,25 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // Close EVERY client, not just the one that used to be `socket` — otherwise a second connected
     // file would hold the event loop open and the process would never exit on its own, which is the
     // whole reason this function exists.
-    for (const e of clients.values()) { try { e.ws.close(); } catch { /* already gone */ } }
+    // close() starts a closing handshake and ws then waits up to 30s for the peer to answer it; a
+    // plugin iframe that is busy (or gone) can hold this process open for that long. terminate()
+    // after a grace period drops the socket regardless — the same backstop the bad-token path uses.
+    for (const e of clients.values()) {
+      try { e.ws.close(); } catch { /* already gone */ }
+      setTimeout(() => { try { e.ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
+    }
     clients.clear();
     try { wss.close(); } catch { /* already closing */ }
   }
 
-  return { request, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port, listening };
+  return { request, requestWithClient, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port, listening };
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.
 export type Bridge = ReturnType<typeof createBridge>;
 export type { BridgeOptions };
 
-// verifyClient/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
+// verifyClientWith/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through
 // a live WebSocket handshake.
-export { createBridge, verifyClient, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };
+export { createBridge, verifyClientWith, authStats, CLOSE_BAD_TOKEN, safeEqual, TIMEOUTS, exportTimeout, errMsg, ALLOWED_PORTS, tokenStore, BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote };

@@ -447,19 +447,49 @@ export interface IrNode extends Partial<TextFields> {
 
 // ================================================================ the documents a pull writes
 
-/** state.ts manifest(): {nodes, skipped, truncated, assetsFailed, warnings[]} + the raw counters. */
+/** state.ts manifest(): {nodes, skipped, truncated, assetsFailed, warnings[]} + the raw counters
+ *  (every RunStats counter is always present — state.ts newStats() zeroes them all). */
 export interface Manifest {
   nodes: number;
   /** derived: === truncated */
   skipped: number;
   truncated: number;
   assetsFailed: number;
-  assetsSkipped?: number;
-  assetsSkippedInvisible?: number;
-  assetsGeometry?: number;
+  /** nodes that would have exported an asset but were skipped via --no-assets */
+  assetsSkipped: number;
+  /** vector/icon nodes with no visible paint — nothing to render, never attempted, never a failure */
+  assetsSkippedInvisible: number;
+  /** real export failures RECOVERED as inline path geometry (assets.ts geometryOf) */
+  assetsGeometry: number;
   /** which opt-in reads ran */
   reads?: string[];
   warnings: string[];
+}
+
+// ---- assets (figma-plugin/src/state.ts Asset — the ONE definition, used by the plugin's collectors
+// and by the bridge's write-out.ts alike)
+/** What assets.ts registers: an SVG (`text`), a 2x PNG (`base64`), or a source image's own bytes. */
+export type AssetFormat = "svg" | "png" | "jpg" | "webp" | "gif" | "bin";
+/** `reference`: the whole-frame screenshot; `source`: an image fill's original bytes; absent: a rendered node. */
+export type AssetKind = "reference" | "source";
+/** One exported asset. Exactly one of `base64`/`text` carries the bytes (a manifest-only entry has neither). */
+export interface Asset {
+  id: string;
+  name: string;
+  format: AssetFormat;
+  /** Basename this asset must be written as. The PRODUCER names the file (assets.ts) and the node
+   *  tree's `asset` path is built from the same string, so a consumer never re-derives the convention
+   *  — a mismatch here would silently point every `asset:` path at a file that isn't on disk. */
+  file: string;
+  base64?: string;
+  text?: string;
+  kind?: AssetKind;
+  /** Content hash of the bytes (assets.ts contentHash). Written into the per-screen asset index so a
+   *  consumer can see which files are byte-identical without diffing them. */
+  hash?: string;
+  /** Every node id that resolved to THIS file. Present only when more than one did — i.e. when the
+   *  same artwork was reached through several instance paths and deduped to one file. */
+  from?: string[];
 }
 
 export interface Measurement {

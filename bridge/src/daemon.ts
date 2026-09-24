@@ -18,26 +18,79 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { errMsg } from "./errmsg.ts";
-import type { ClientRow, ConnectionInfo, RequestArgs } from "./server-core.ts";
+import { isCmd, replyShapeError } from "./commands.ts";
+import type { Cmd, Commands } from "./commands.ts";
+import type { ClientRow, ConnectionInfo } from "./server-core.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
 
-/** A request frame: a bridge command to forward, or one of the daemon's own `__ping`/`__status`/`__shutdown`. */
-export interface DaemonRequest {
-  cmd: string;
-  args?: RequestArgs;
-  timeoutMs?: number;
-  /** routing target, forwarded verbatim to the bridge (connId / fileKey / file-name substring) */
-  client?: string | null;
-  /** ms to wait for a plugin to connect before sending */
-  waitForConnection?: number;
+/** A bridge command to forward, typed per command from commands.ts (`switch (msg.cmd)` narrows `args`). */
+export type DaemonCommandRequest<C extends Cmd = Cmd> = {
+  [K in C]: {
+    /** optional correlation id, echoed back on the reply */
+    id?: string;
+    cmd: K;
+    args?: Commands[K]["args"];
+    timeoutMs?: number;
+    /** routing target, forwarded verbatim to the bridge (connId / fileKey / file-name substring) */
+    client?: string | null;
+    /** ms to wait for a plugin to connect before sending */
+    waitForConnection?: number;
+  };
+}[C];
+
+/** One of the daemon's own commands — answered here, never forwarded. */
+export interface DaemonControlRequest {
+  id?: string;
+  cmd: "__ping" | "__status" | "__shutdown";
 }
 
-/** A reply frame. */
-interface DaemonReply {
-  ok: boolean;
-  result?: unknown;
-  error?: string;
+/** A request frame: a bridge command to forward, or one of the daemon's own `__ping`/`__status`/`__shutdown`. */
+export type DaemonRequest = DaemonCommandRequest | DaemonControlRequest;
+
+const CONTROL = new Set<string>(["__ping", "__status", "__shutdown"]);
+const isControl = (m: DaemonRequest): m is DaemonControlRequest => CONTROL.has(m.cmd);
+
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+/** A client row as relayed over the socket: the one field routing needs (`connId`) is checked, the rest
+ *  is read as the bridge's own describe() wrote it. */
+function isClientRow(x: unknown): x is ClientRow {
+  return isRecord(x) && typeof x.connId === "string";
+}
+
+/** Why `x` is not a well-formed request frame, or null when it is one. A `{}` frame used to be forwarded
+ *  with `cmd: undefined`; `timeoutMs: "x"` reached setTimeout as NaN. Both are refused here instead. */
+export function daemonRequestError(x: unknown): string | null {
+  if (!isRecord(x)) return "not an object";
+  if (typeof x.cmd !== "string") return "`cmd` is missing";
+  if (x.id !== undefined && typeof x.id !== "string") return "`id` is not a string";
+  if (CONTROL.has(x.cmd)) return null;
+  if (!isCmd(x.cmd)) return `unknown cmd '${x.cmd}'`;
+  if (x.args !== undefined && !isRecord(x.args)) return "`args` is not an object";
+  if (x.timeoutMs !== undefined && !(typeof x.timeoutMs === "number" && Number.isFinite(x.timeoutMs) && x.timeoutMs > 0)) return "`timeoutMs` is not a positive number";
+  if (x.client !== undefined && x.client !== null && typeof x.client !== "string") return "`client` is not a string";
+  if (x.waitForConnection !== undefined && !(typeof x.waitForConnection === "number" && Number.isFinite(x.waitForConnection) && x.waitForConnection >= 0)) return "`waitForConnection` is not a number";
+  return null;
+}
+
+export function isDaemonRequest(x: unknown): x is DaemonRequest {
+  return daemonRequestError(x) === null;
+}
+
+/** A reply frame. `client` (on a forwarded command's success) is the connected file the bridge used —
+ *  absent from a daemon older than this field. */
+type DaemonReply =
+  | { ok: true; id?: string; result: unknown; client?: ClientRow }
+  | { ok: false; id?: string; error: string };
+
+function parseDaemonReply(x: unknown): DaemonReply | null {
+  if (!isRecord(x)) return null;
+  if (x.ok === true) return { ok: true, result: x.result, client: isClientRow(x.client) ? x.client : undefined };
+  if (x.ok === false) return { ok: false, error: typeof x.error === "string" ? x.error : "daemon error" };
+  return null;
 }
 
 /** `__status`'s result — what `dtwin --daemon-status`, doctor and `list clients` read. */
@@ -52,12 +105,22 @@ export interface DaemonStatus {
   idleForMs: number;
 }
 
+/** What status() hands back: `daemon: true` is the one field every daemon has sent; a daemon from an
+ *  OLDER bridge may omit the newer ones (see staleness.ts daemonRowStalenessNote), so the rest is Partial. */
+export type DaemonStatusView = Partial<DaemonStatus> & { daemon: true };
+
+function isDaemonStatus(x: unknown): x is DaemonStatusView {
+  return isRecord(x) && x.daemon === true;
+}
+
 /** What serve() drives: the bridge shape (server-core's createBridge() result, or the test suite's fake). */
 export interface DaemonBridge {
   port: number;
   isConnected(): boolean;
   waitForConnection(timeoutMs: number): Promise<void>;
-  request(cmd: string, args: RequestArgs | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
+  request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
+  /** The same, also naming the client the command went to (server-core has it; a fake may not). */
+  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<{ reply: unknown; client: ClientRow }>;
   close(): void;
   listClients?: () => ClientRow[];
   connectionInfo?: () => ConnectionInfo;
@@ -70,10 +133,12 @@ export interface ServeOptions {
   signals?: boolean;
 }
 
-/** connect()'s answer when a daemon is live: its socket, and a request function bound to it. */
+/** connect()'s answer when a daemon is live: its socket, and request functions bound to it. */
 export interface DaemonConnection {
   sock: string;
-  request: (msg: DaemonRequest, timeoutMs?: number) => Promise<unknown>;
+  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number): Promise<Commands[C]["reply"]>;
+  /** As request(), plus the connected file the daemon's bridge used (null from an older daemon). */
+  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
 }
 
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
@@ -100,18 +165,43 @@ export function framer(onFrame: (line: string) => void): (chunk: string) => void
 
 // ---------------------------------------------------------------- server
 
+/** The refusal `--serve` gives when a daemon already holds this socket. ONE spelling: figma-pull.ts
+ *  asks before it opens a bridge of its own, and serve() asks again right before listening. */
+export function alreadyRunning(sock: string): Error {
+  return new Error(`a dtwin daemon is already running on ${sock} — stop it with --stop`);
+}
+
+/** The socket path for `port` — or a throw if a LIVE daemon already answers on it. */
+export async function assertNoDaemon(port?: number): Promise<string> {
+  const sock = sockPath(port);
+  // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
+  // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
+  if (await probe(sock)) throw alreadyRunning(sock);
+  return sock;
+}
+
+// The `exit` hook that removes the socket file when a `signals: false` host (the MCP server) goes
+// away. Registered ONCE per process, over a set of live socket paths: figma-mcp re-serves after every
+// `dtwin stop`, and a listener per serve() call would pile up (and warn) over a long session.
+const exitUnlink = new Set<string>();
+let exitHooked = false;
+function unlinkOnExit(sock: string): () => void {
+  exitUnlink.add(sock);
+  if (!exitHooked) {
+    exitHooked = true;
+    process.on("exit", () => { for (const s of exitUnlink) { try { fs.unlinkSync(s); } catch { /* already gone */ } } });
+  }
+  return () => { exitUnlink.delete(sock); };
+}
+
 // Requests are SERIALIZED, not multiplexed. server-core's `pending` map is id-keyed and would happily
 // interleave them, but the plugin is single-threaded and its heavy commands mutate shared per-run
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
 // existing caller was written against.
 export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true }: ServeOptions = {}): Promise<{ sock: string; shutdown: () => void }> {
-  const sock = sockPath(port);
-  // A socket file left by a crashed daemon is NOT a running daemon. Probing it first (rather than
-  // unlinking unconditionally) is what keeps `--serve` from silently stealing a live daemon's socket.
-  return probe(sock).then((alive) => {
-    if (alive) throw new Error(`a dtwin daemon is already running on ${sock} — stop it with --stop`);
-    try { fs.unlinkSync(sock); } catch (e) { /* nothing to clean up */ }
+  return assertNoDaemon(port).then((sock) => {
+    try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ }
 
     // Idle shutdown. A daemon outlives the terminal that started it, so without this an orphan holds
     // port 8787 until someone remembers --stop — and the next thing to want the bridge (a pull, or
@@ -148,37 +238,16 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       // A client that dies mid-export must not take the daemon with it: the write below would emit
       // EPIPE on a dead socket, which is an unhandled 'error' event => process exit.
       conn.on("error", () => {});
-      conn.on("data", framer(async (line) => {
+      conn.on("data", framer((line) => {
         touch(); // any client contact counts as activity, including the probe
-        let msg: DaemonRequest;
-        try { msg = JSON.parse(line) as DaemonRequest; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
-        if (msg.cmd === "__ping") return reply(conn, { ok: true, result: { daemon: true, pid: process.pid, port: bridge.port } });
-        if (msg.cmd === "__status") {
-          return reply(conn, {
-            ok: true,
-            result: {
-              daemon: true, pid: process.pid, port: bridge.port, pluginConnected: bridge.isConnected(),
-              // The daemon owns the bridge, so it is the only side that can see WHICH files are
-              // connected — a CLI process routing through it has no socket of its own to ask.
-              // Guarded because `bridge` here is any object with the bridge shape (the test suite
-              // passes a minimal fake): a status call must never be the thing that kills the daemon.
-              clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
-              // The socket stats too. `dtwin whoami` documents "socket uptime, and how many times a
-              // new connection displaced an earlier one" and then told the reader to go and run a
-              // different command, because with a daemon in front the CLI has no bridge of its own
-              // (live finding 14). The daemon does. One extra field and the documented output is real.
-              connection: typeof bridge.connectionInfo === "function" ? bridge.connectionInfo() : null,
-              // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
-              // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
-              idleMs: idleMs || null,
-              idleForMs: Date.now() - lastActivity,
-            },
-          });
-        }
-        if (msg.cmd === "__shutdown") {
-          reply(conn, { ok: true, result: { stopped: true } });
-          return shutdown();
-        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(line) as unknown; } catch (e) { return reply(conn, { ok: false, error: "bad request frame: " + errMsg(e) }); }
+        // The frame is checked BEFORE anything reads it: a `{}` used to forward `cmd: undefined` to
+        // the bridge, and a `timeoutMs: "x"` reached setTimeout as NaN.
+        const bad = daemonRequestError(parsed);
+        if (bad !== null || !isDaemonRequest(parsed)) return reply(conn, { ok: false, error: "bad request frame: " + (bad ?? "malformed") });
+        const msg = parsed;
+        if (isControl(msg)) return control(conn, msg);
         // Chain onto the queue so requests run one at a time, in arrival order.
         inFlight++; // counted OUTSIDE the queue: work that is queued but not yet started still
                     // counts as activity, so a backlog can't be reaped as idleness.
@@ -187,10 +256,17 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection);
             // msg.client is the routing target (connId / fileKey / file-name substring). Forwarded
             // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
-            const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
-            reply(conn, { ok: true, result });
+            // The client the bridge picked rides back on the reply (a fake bridge without
+            // requestWithClient simply doesn't say).
+            if (typeof bridge.requestWithClient === "function") {
+              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client);
+              reply(conn, { ok: true, id: msg.id, result: o.reply, client: o.client });
+            } else {
+              const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
+              reply(conn, { ok: true, id: msg.id, result });
+            }
           } catch (e) {
-            reply(conn, { ok: false, error: errMsg(e) });
+            reply(conn, { ok: false, id: msg.id, error: errMsg(e) });
           } finally {
             inFlight--;
             touch(); // the idle clock starts when work FINISHES, not when it was requested
@@ -199,32 +275,75 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       }));
     });
 
+    // The daemon's own three commands — answered here, never forwarded to the bridge.
+    function control(conn: net.Socket, msg: DaemonControlRequest): void {
+      if (msg.cmd === "__ping") return reply(conn, { ok: true, id: msg.id, result: { daemon: true, pid: process.pid, port: bridge.port } });
+      if (msg.cmd === "__status") {
+        const result: DaemonStatus = {
+          daemon: true, pid: process.pid, port: bridge.port, pluginConnected: bridge.isConnected(),
+          // The daemon owns the bridge, so it is the only side that can see WHICH files are
+          // connected — a CLI process routing through it has no socket of its own to ask.
+          // Guarded because `bridge` here is any object with the bridge shape (the test suite
+          // passes a minimal fake): a status call must never be the thing that kills the daemon.
+          clients: typeof bridge.listClients === "function" ? bridge.listClients() : [],
+          // The socket stats too. `dtwin whoami` documents "socket uptime, and how many times a
+          // new connection displaced an earlier one" and then told the reader to go and run a
+          // different command, because with a daemon in front the CLI has no bridge of its own
+          // (live finding 14). The daemon does. One extra field and the documented output is real.
+          connection: typeof bridge.connectionInfo === "function" ? bridge.connectionInfo() : null,
+          // Reported in ms, not rounded minutes: a sub-minute window (used by the tests, and a
+          // legitimate choice) rounded to "0" reads as "disabled", which is the opposite of true.
+          idleMs: idleMs || null,
+          idleForMs: Date.now() - lastActivity,
+        };
+        return reply(conn, { ok: true, id: msg.id, result });
+      }
+      // "__shutdown"
+      reply(conn, { ok: true, id: msg.id, result: { stopped: true } });
+      shutdown();
+    }
+
+    let forgetExit: (() => void) | null = null;
     function shutdown() {
       if (idleTimer) clearInterval(idleTimer);
-      try { server.close(); } catch (e) {}
-      try { fs.unlinkSync(sock); } catch (e) {}
+      try { server.close(); } catch { /* already closed */ }
+      try { fs.unlinkSync(sock); } catch { /* already gone */ }
+      if (forgetExit) { forgetExit(); forgetExit = null; }
       bridge.close();
       if (log) log("daemon stopped.");
     }
     // Ctrl-C / kill must remove the socket file, or the next --serve refuses to start against a
-    // socket nobody is listening on.
-    if (signals) for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { shutdown(); process.exit(0); });
+    // socket nobody is listening on. `as const`: process.on's overload wants NodeJS.Signals, not string.
+    if (signals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { shutdown(); process.exit(0); });
     // A host that exits some other way (the MCP server ends when its stdio closes) still must not
-    // leave the socket file behind for the next probe to trip over.
-    else process.on("exit", () => { try { fs.unlinkSync(sock); } catch (e) {} });
+    // leave the socket file behind for the next probe to trip over. One process-level hook, and this
+    // socket is forgotten again on shutdown (the MCP server re-serves after every `dtwin stop`).
+    else forgetExit = unlinkOnExit(sock);
 
     return new Promise<{ sock: string; shutdown: () => void }>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(sock, () => {
+      const onListening = () => {
         if (log) log(`daemon listening on ${sock} (pid ${process.pid}) — stop it with: dtwin --stop`);
         resolve({ sock, shutdown });
+      };
+      // The probe-then-unlink-then-listen window is a race: another `--serve` can bind between our
+      // probe and our listen. EADDRINUSE from listen() is that case — re-probe, and either refuse
+      // (it is alive) or take over the stale file it left (it is not), exactly once.
+      server.once("error", (e: NodeJS.ErrnoException) => {
+        if (e.code !== "EADDRINUSE") return reject(e);
+        probe(sock).then((alive) => {
+          if (alive) return reject(alreadyRunning(sock));
+          try { fs.unlinkSync(sock); } catch { /* gone already */ }
+          server.once("error", reject);
+          server.listen(sock, onListening);
+        }, reject);
       });
+      server.listen(sock, onListening);
     });
   });
 }
 
 function reply(conn: net.Socket, obj: DaemonReply): void {
-  try { conn.write(JSON.stringify(obj) + "\n"); } catch (e) { /* client went away mid-reply */ }
+  try { conn.write(JSON.stringify(obj) + "\n"); } catch { /* client went away mid-reply */ }
 }
 
 // ---------------------------------------------------------------- client
@@ -236,24 +355,24 @@ export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
     let done = false;
     const finish = (v: boolean) => { if (!done) { done = true; resolve(v); } };
     let c: net.Socket;
-    try { c = net.createConnection(sock); } catch (e) { return finish(false); }
-    const t = setTimeout(() => { try { c.destroy(); } catch (e) {} finish(false); }, timeoutMs);
+    try { c = net.createConnection(sock); } catch { return finish(false); }
+    const t = setTimeout(() => { try { c.destroy(); } catch { /* already gone */ } finish(false); }, timeoutMs);
     c.on("error", () => { clearTimeout(t); finish(false); });
     c.setEncoding("utf8");
-    c.on("data", framer(() => { clearTimeout(t); try { c.end(); } catch (e) {} finish(true); }));
-    c.on("connect", () => { try { c.write(JSON.stringify({ cmd: "__ping" }) + "\n"); } catch (e) { finish(false); } });
+    c.on("data", framer(() => { clearTimeout(t); try { c.end(); } catch { /* already gone */ } finish(true); }));
+    c.on("connect", () => { try { c.write(JSON.stringify({ cmd: "__ping" }) + "\n"); } catch { finish(false); } });
   });
 }
 
 // One request through a running daemon. Rejects (rather than falling back) once connected: a daemon
 // that answered __ping and then failed is a real error the caller should see, not a reason to
 // silently open a second bridge that would then hit EADDRINUSE against the daemon itself.
-function request(sock: string, msg: DaemonRequest, timeoutMs?: number): Promise<unknown> {
-  return new Promise<unknown>((resolve, reject) => {
+function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number): Promise<{ result: unknown; client: ClientRow | null }> {
+  return new Promise<{ result: unknown; client: ClientRow | null }>((resolve, reject) => {
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
     let settled = false;
-    const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; try { c.end(); } catch (e) {} fn(v); } };
+    const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; try { c.end(); } catch { /* already gone */ } fn(v); } };
     // The daemon's own per-command budget still applies; this is the outer guard for a daemon that
     // stopped answering entirely. Generous by design — an --all-pages export legitimately runs long.
     const t = timeoutMs ? setTimeout(() => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s")), timeoutMs) : null;
@@ -261,9 +380,11 @@ function request(sock: string, msg: DaemonRequest, timeoutMs?: number): Promise<
     c.on("close", () => { if (t) clearTimeout(t); done(reject, new Error("daemon closed the connection before replying")); });
     c.on("data", framer((line) => {
       if (t) clearTimeout(t);
-      let r: DaemonReply;
-      try { r = JSON.parse(line) as DaemonReply; } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
-      if (r.ok) done(resolve, r.result);
+      let parsed: unknown;
+      try { parsed = JSON.parse(line) as unknown; } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
+      const r = parseDaemonReply(parsed);
+      if (!r) return done(reject, new Error("bad reply frame: not a daemon reply"));
+      if (r.ok) done(resolve, { result: r.result, client: r.client ?? null });
       else done(reject, new Error(r.error));
     }));
     c.on("connect", () => c.write(JSON.stringify(msg) + "\n"));
@@ -274,7 +395,22 @@ function request(sock: string, msg: DaemonRequest, timeoutMs?: number): Promise<
 // there isn't one and let the caller open its own bridge exactly as before.
 export async function connect(port?: number): Promise<DaemonConnection | null> {
   const sock = sockPath(port);
-  return (await probe(sock)) ? { sock, request: (msg, timeoutMs) => request(sock, msg, timeoutMs) } : null;
+  if (!(await probe(sock))) return null;
+  // The daemon's reply to a forwarded command is the plugin's own reply. The daemon's bridge already
+  // checked it against commands.ts on arrival, but that was another process (and possibly an older
+  // build), so it is checked again here — which is what makes the typed reply below honest rather
+  // than a guess about what came over the socket.
+  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number) => {
+    const r = await request(sock, msg, timeoutMs);
+    const bad = replyShapeError(msg.cmd, r.result);
+    if (bad) throw new Error(`the daemon relayed an unexpected shape for ${msg.cmd}: ${bad}`);
+    return { reply: r.result as Commands[C]["reply"], client: r.client };
+  };
+  return {
+    sock,
+    requestWithClient,
+    request: async (msg, timeoutMs) => (await requestWithClient(msg, timeoutMs)).reply,
+  };
 }
 
 export async function stop(port?: number): Promise<boolean> {
@@ -284,11 +420,12 @@ export async function stop(port?: number): Promise<boolean> {
   return true;
 }
 
-export async function status(port?: number): Promise<DaemonStatus | null> {
+export async function status(port?: number): Promise<DaemonStatusView | null> {
   const sock = sockPath(port);
   if (!(await probe(sock))) return null;
-  // The daemon's own __status reply, taken as the shape above (a daemon from an OLDER bridge may omit
-  // newer row fields — see staleness.ts daemonRowStalenessNote).
-  return (await request(sock, { cmd: "__status" }, 5000)) as DaemonStatus;
+  // The daemon's own __status reply: `daemon: true` is checked, the rest is read as optional (a daemon
+  // from an OLDER bridge may omit newer fields — see staleness.ts daemonRowStalenessNote).
+  const { result } = await request(sock, { cmd: "__status" }, 5000);
+  if (!isDaemonStatus(result)) throw new Error("the daemon answered __status with an unexpected shape");
+  return result;
 }
-

@@ -37,20 +37,20 @@ interface McpJson {
   mcpServers?: Record<string, unknown>;
 }
 
-/** One step of init's plan (see `plan`). `content`/`merge` only on "write"; `path` on everything but "note"/"token". */
-export interface InitAction {
-  kind: "skip" | "mkdir" | "write" | "note" | "token";
-  path?: string;
-  content?: string;
-  merge?: boolean;
-  note: string;
-}
+/** One step of init's plan (see `plan`), discriminated on `kind`: the file-touching kinds carry their
+ *  `path`, "write" its `content` (and `merge` for the one write allowed onto an existing file). */
+export type InitAction =
+  | { kind: "skip"; path: string; note: string }
+  | { kind: "mkdir"; path: string; note: string }
+  | { kind: "write"; path: string; content: string; merge?: boolean; note: string }
+  | { kind: "note"; note: string }
+  | { kind: "token"; note: string };
 
 export interface PlanOptions {
   mcp?: boolean;
   mcpEntry?: McpEntry;
-  /** The resolved bridge token (token-store resolve()) — required; only its source/path/created are read. */
-  token?: Pick<ResolvedToken, "source" | "path" | "created">;
+  /** The resolved bridge token (token-store resolve()) — only its source/path/created are read. */
+  token: Pick<ResolvedToken, "source" | "path" | "created">;
 }
 
 // The profiles build-screen ships. Named in target.json when detection finds nothing, so the user can
@@ -95,7 +95,7 @@ function detectProfile(cwd: string): { profile: string; because: string } | null
 
 // Pure planner: what init WOULD do in `cwd`. Returns { actions:[{kind, path?, content?, note}], steps:[…] }.
 // Split from the writer so the test suite can assert the plan without touching a real HOME.
-function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions = {}): InitAction[] {
+function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitAction[] {
   const actions: InitAction[] = [];
   const rel = (p: string) => path.relative(cwd, p) || ".";
 
@@ -165,18 +165,16 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions = {}): 
     }
   }
 
-  // `token!`: a caller that passes none gets the same TypeError here that plain JS threw.
-  actions.push({ kind: "token", note: token!.created ? `bridge token created (${token!.path})` : token!.source === "env" ? "bridge token: using FIGMA_BRIDGE_TOKEN from the environment" : token!.source === "ephemeral" ? "bridge token could NOT be saved (read-only config dir?) — it will change every run" : `bridge token already saved (${token!.path})` });
+  actions.push({ kind: "token", note: token.created ? `bridge token created (${token.path})` : token.source === "env" ? "bridge token: using FIGMA_BRIDGE_TOKEN from the environment" : token.source === "ephemeral" ? "bridge token could NOT be saved (read-only config dir?) — it will change every run" : `bridge token already saved (${token.path})` });
   return actions;
 }
 
 function apply(cwd: string, actions: InitAction[], log: (m: string) => void): void {
   for (const a of actions) {
-    // ts-port: every "mkdir"/"write" action plan() builds carries `path` (and "write" carries `content`).
-    if (a.kind === "mkdir") fs.mkdirSync(path.join(cwd, a.path as string), { recursive: true });
-    if (a.kind === "write") { fs.mkdirSync(path.dirname(path.join(cwd, a.path as string)), { recursive: true }); fs.writeFileSync(path.join(cwd, a.path as string), a.content as string, { flag: a.merge ? "w" : "wx" }); }
+    if (a.kind === "mkdir") fs.mkdirSync(path.join(cwd, a.path), { recursive: true });
+    if (a.kind === "write") { fs.mkdirSync(path.dirname(path.join(cwd, a.path)), { recursive: true }); fs.writeFileSync(path.join(cwd, a.path), a.content, { flag: a.merge ? "w" : "wx" }); }
     const tag = a.kind === "write" ? "wrote " : a.kind === "mkdir" ? "created" : a.kind === "skip" ? "skipped" : a.kind === "note" ? "note   " : "token  ";
-    log(`${tag} ${a.path ? a.path + " — " : ""}${a.note}`);
+    log(`${tag} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   }
 }
 
@@ -212,7 +210,7 @@ function main(argv: string[]): void {
   // checkout's source, bridge/dist/figma-mcp.js when it runs from the built (npm-installed) package.
   const mcpEntry: McpEntry = { command: "node", args: [path.join(import.meta.dirname, "figma-mcp" + path.extname(import.meta.filename))] };
   const actions = plan(cwd, { mcp: argv.includes("--mcp"), mcpEntry, token });
-  if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${a.path ? a.path + " — " : ""}${a.note}`);
+  if (dry) for (const a of actions) log(`${a.kind === "write" ? "would write" : a.kind === "mkdir" ? "would create" : a.kind} ${"path" in a ? a.path + " — " : ""}${a.note}`);
   else apply(cwd, actions, log);
 
   // The plugin manifest of a repo checkout: bridge/src/ (or bridge/dist/) -> ../../figma-plugin/. An npm

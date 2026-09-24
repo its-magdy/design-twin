@@ -26,7 +26,10 @@ import path from "node:path";
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
 import { createBridge, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
-import type { Bridge, ClientRow, ConnectionInfo, RequestArgs } from "./server-core.ts";
+import type { Bridge, ClientRow, ConnectionInfo } from "./server-core.ts";
+// The command/reply contract shared with the plugin (commands.ts): every `bridge.request` below is
+// typed per command from it, so a tool cannot read a reply field the plugin never sends.
+import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // TIMEOUTS is the per-command budget table shared with the dtwin CLI. Every EXPORT tool needs a
 // budget well above server-core's 120s default (tuned for ping/getSelection, not for a walk of every
 // node on a page) — a whole-file walk is the slow case, but a single big frame is the same shape of
@@ -46,7 +49,7 @@ import { parseNodeId, toNodeId } from "./node-id.ts";
 // daemon socket so the NEXT session (or a `dtwin pull`) shares it instead of fighting for the port.
 // Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
 import * as daemon from "./daemon.ts";
-import type { DaemonBridge, DaemonConnection, DaemonStatus } from "./daemon.ts";
+import type { DaemonBridge, DaemonConnection } from "./daemon.ts";
 type Holder = { own: Bridge } | { via: DaemonConnection };
 let own: Bridge | null = null;
 // The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
@@ -83,11 +86,12 @@ async function resolveHolder(): Promise<Holder> {
   return { own: mine };
 }
 const bridge = {
-  // `T` is the reply shape the tool expects for that command (plugin JSON, taken as given).
-  async request<T = unknown>(cmd: string, args?: RequestArgs, timeoutMs: number = TIMEOUTS.command, target?: string): Promise<T> {
+  // Typed per command (commands.ts): the reply is what the plugin sends for `cmd`, checked on arrival
+  // by server-core — whether this process holds the bridge or a daemon does.
+  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string): Promise<Commands[C]["reply"]> {
     const h = await holder();
-    if ("own" in h) return h.own.request<T>(cmd, args, timeoutMs, target);
-    return (await h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000)) as T;
+    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target);
+    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000);
   },
   async listClients(): Promise<ClientRow[]> {
     const h = await holder();
@@ -96,8 +100,9 @@ const bridge = {
   async connectionInfo(): Promise<ConnectionInfo | { via: string; port: number | undefined; pluginConnected: boolean | undefined }> {
     const h = await holder();
     if ("own" in h) return h.own.connectionInfo();
-    const st: Partial<DaemonStatus> = (await daemon.status()) || {};
-    return { via: "shared bridge (pid " + st.pid + ")", port: st.port, pluginConnected: st.pluginConnected };
+    // An older daemon may omit fields (daemon.ts DaemonStatusView) — reported as undefined, never guessed.
+    const st = await daemon.status();
+    return { via: "shared bridge (pid " + (st?.pid ?? "?") + ")", port: st?.port, pluginConnected: st?.pluginConnected };
   },
 };
 
@@ -121,9 +126,11 @@ const guarded = <A extends unknown[], R>(fn: (...a: A) => Promise<R>) => async (
 // Read results carry asset payloads (base64 PNG / SVG strings) that would dump megabytes of noise
 // straight into the agent's context. Strip the payloads to a lightweight manifest — the figma-pull
 // CLI is the path that actually writes asset bytes to disk.
-function stripAssets(r: ExportResult | null | undefined): unknown {
-  if (!r || !Array.isArray(r.assets)) return r;
-  const light: Omit<ExportResult, "assets"> & { assets: Array<Partial<ExportAsset>>; assetsNote?: string } =
+/** An asset row with its bytes stripped: identity only. */
+interface LightAsset { id: string; name: string; format: string; kind?: string }
+function stripAssets(r: ExportReply): unknown {
+  if (!("assets" in r)) return r; // a catalog-only pull carries no assets at all
+  const light: Omit<typeof r, "assets"> & { assets: LightAsset[]; assetsNote?: string } =
     { ...r, assets: r.assets.map((a) => ({ id: a.id, name: a.name, format: a.format, ...(a.kind ? { kind: a.kind } : {}) })) };
   if (r.assets.length) light.assetsNote = "Asset bytes omitted from context — re-run with writeToDisk:true to write them to <outDir>/assets/.";
   return light;
@@ -143,10 +150,6 @@ function stripAssets(r: ExportResult | null | undefined): unknown {
 // running, because both call createBridge() and bind port 8787 — the second to start hits EADDRINUSE
 // and exits (server-core.ts). Before this, an MCP-only session had no way to get assets at all.
 import { writeAny, assertInsideCwd, inlineLimitChars } from "./write-out.ts";
-import type { ExportResult, ExportAsset } from "./write-out.ts";
-// The plugin's listLibraries reply shape — declared beside the CLI's table renderer (type-only import:
-// erased at emit, so this loads nothing from figma-pull.ts).
-import type { LibrariesReply } from "./figma-pull.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./doc-types.ts";
 
 // stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
@@ -156,7 +159,7 @@ const wlog = (m: string) => console.error("[figma-mcp] " + m);
 /** The two writeShape arguments every export tool reads. */
 interface WriteArgs { writeToDisk?: boolean; outDir?: string }
 
-function exportResult(a: WriteArgs, r: ExportResult) {
+function exportResult(a: WriteArgs, r: ExportReply) {
   let spilled = "";
   if (!a || !a.writeToDisk) {
     const inline = textResult(stripAssets(r));
@@ -245,7 +248,7 @@ server.registerTool(
         note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
       });
     }
-    return textResult({ connected: true, clients, ...(await bridge.request<object>("ping", {}, TIMEOUTS.command, a && a.client)), snapshot });
+    return textResult({ connected: true, clients, ...(await bridge.request("ping", {}, TIMEOUTS.command, a && a.client)), snapshot });
   })
 );
 
@@ -362,16 +365,16 @@ server.registerTool(
   // reads this tool's result in full, so collapse each library's collections to name+count and keep
   // `warnings` (the field that explains an empty list) intact. Same spirit as stripAssets.
   guarded(async (a) => {
-    const r = await bridge.request<LibrariesReply | null>("listLibraries", {}, TIMEOUTS.list, a && a.client);
-    const libraries = ((r && r.libraries) || []).map((l) => ({
+    const r = await bridge.request("listLibraries", {}, TIMEOUTS.list, a && a.client);
+    const libraries = r.libraries.map((l) => ({
       key: l.key,
       name: l.name,
       kind: l.kind,
       componentCount: l.componentCount,
-      variableCollections: (l.variableCollections || []).map((c) => ({ key: c.key, name: c.name, variableCount: c.variableCount })),
+      variableCollections: l.variableCollections.map((c) => ({ key: c.key, name: c.name, variableCount: c.variableCount })),
       ...(l.note ? { note: l.note } : {}),
     }));
-    const warnings = (r && r.warnings) || [];
+    const warnings = r.warnings;
     return textResult({
       libraries,
       warnings,
@@ -443,7 +446,7 @@ server.registerTool(
     // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
     // of the rule here. This path always needs a connected plugin anyway, so there is nothing to
     // answer faster.
-    return exportResult(a, await bridge.request<ExportResult>(
+    return exportResult(a, await bridge.request(
       "exportFull",
       { allPages, page, ...readOpts(a) },
       exportTimeout({ allPages }),
@@ -474,7 +477,7 @@ server.registerTool(
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a) => exportResult(a, await bridge.request<ExportResult>("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client)))
+  guarded(async (a) => exportResult(a, await bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client)))
 );
 
 server.registerTool(
@@ -484,7 +487,7 @@ server.registerTool(
     inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => exportResult(a, await bridge.request<ExportResult>("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client)))
+  guarded(async (a) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client)))
 );
 
 server.registerTool(
@@ -506,7 +509,7 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return exportResult(a, await bridge.request<ExportResult>("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
+    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
   })
 );
 
@@ -532,31 +535,43 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return exportResult(a, await bridge.request<ExportResult>("screenshot", { nodeId, scale: a.scale }, TIMEOUTS.export, a && a.client));
+    return exportResult(a, await bridge.request("screenshot", { nodeId, scale: a.scale }, TIMEOUTS.export, a && a.client));
   })
 );
 
 // What a figma_write batch WOULD do, without doing it. creates = additive; overwrites = replaces a
 // property on a node the user already has (the irreversible half).
-/** One figma_write op as validated by the schema below: a known `op`, every other field passed through. */
-interface WriteOp { op: string; [field: string]: unknown }
-
-/** The plugin's `write` reply — `ok: false` on a partial failure, with what was applied before it. */
-// Field types mirror figma-plugin/src/writes.ts WriteResult (`applied` stays unknown: it is only relayed).
-interface WriteReply { ok?: boolean; applied?: unknown; failedAt?: number; failedOp?: string; error?: string }
+// The op schema is the wire contract (commands.ts WriteOp) spelled in Zod: `op` is constrained to the
+// four ops the plugin implements — rejected at the boundary rather than round-tripped — and the fields
+// each op reads are typed. `.passthrough()` keeps a stray extra field flowing (the plugin ignores it).
+const writeOpShape = z.object({
+  op: z.enum(["createFrame", "createText", "setFill", "setText"]),
+  parentId: z.string().optional(),
+  name: z.string().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  layoutMode: z.enum(["HORIZONTAL", "VERTICAL"]).optional(),
+  itemSpacing: z.number().optional(),
+  padding: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  fill: z.string().optional(),
+  text: z.string().optional(),
+  fontSize: z.number().optional(),
+  nodeId: z.string().optional(),
+  color: z.string().optional(),
+}).passthrough();
 
 function previewWrites(ops: WriteOp[]) {
   const steps = ops.map((o, i) => {
     const creates = o.op === "createFrame" || o.op === "createText";
     const missing = o.op === "createText" ? (o.text == null ? ["text"] : [])
-      : o.op === "setFill" ? ["nodeId", "color"].filter((k) => o[k] == null)
-      : o.op === "setText" ? ["nodeId", "text"].filter((k) => o[k] == null)
+      : o.op === "setFill" ? [o.nodeId == null ? "nodeId" : "", o.color == null ? "color" : ""].filter(Boolean)
+      : o.op === "setText" ? [o.nodeId == null ? "nodeId" : "", o.text == null ? "text" : ""].filter(Boolean)
       : [];
     return {
       index: i,
       op: o.op,
       effect: creates ? "creates" : "overwrites",
-      target: creates ? (o.parentId ? `new node under ${String(o.parentId)}` : "new node on the current page") : o.nodeId || null,
+      target: creates ? (o.parentId ? `new node under ${o.parentId}` : "new node on the current page") : o.nodeId || null,
       ...(o.op === "setFill" ? { newFill: o.color } : {}),
       ...(o.op === "setText" || o.op === "createText" ? { newText: o.text } : {}),
       ...(missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}),
@@ -589,7 +604,7 @@ server.registerTool(
       ...clientShape,
       // Constrain `op` to the four ops the plugin actually implements — reject unknown ops at the
       // boundary rather than round-tripping them to the plugin. Other fields stay open (.passthrough).
-      ops: z.array(z.object({ op: z.enum(["createFrame", "createText", "setFill", "setText"]) }).passthrough())
+      ops: z.array(writeOpShape)
         // Writes are not transactional and cannot be undone from here, so a runaway batch is bounded:
         // 50 ops is several screens' worth of frames/text, and a larger job is simply several calls.
         .max(50, "at most 50 ops per call — split a larger job into several calls (writes cannot be undone from here)")
@@ -608,11 +623,11 @@ server.registerTool(
     // The preview is built HERE, not plugin-side: it must work before a connection exists, and the
     // annotations above are only a hint — not every MCP client turns destructiveHint into a prompt.
     if (a.dryRun) return textResult(previewWrites(a.ops || []));
-    const r = await bridge.request<WriteReply | null>("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
+    const r = await bridge.request("write", { ops: a.ops || [] }, TIMEOUTS.command, a && a.client);
     // Partial failure is reported as an error result, but MUST still carry `applied` — those nodes
     // exist in the document and the agent needs their ids to continue or undo.
-    if (r && r.ok === false) {
-      const applied = Array.isArray(r.applied) ? r.applied : [];
+    if (!r.ok) {
+      const applied = r.applied;
       return errorResult(
         `Write failed at op ${r.failedAt}${r.failedOp ? " (" + r.failedOp + ")" : ""}: ${r.error}\n` +
           `${applied.length} earlier op(s) were applied and NOT rolled back:\n` +
@@ -656,7 +671,7 @@ async function loadLayer<T>(mod: string, tool: string): Promise<T> {
     // A file: URL, not a "../" string: tsc's rewriteRelativeImportExtensions wraps a computed relative
     // specifier in a helper that turns "x.ts" into "x.js" at runtime, and the layer only exists as .ts.
     return (await import(new URL("../../design-to-code/" + mod, import.meta.url).href)) as T;
-  } catch (e) {
+  } catch {
     throw new Error(
       `${tool} needs the design-to-code layer, which is not present in this install. It ships with the ` +
         `Design Twin repository, not with the published npm package — run this MCP server from a repo ` +
@@ -684,7 +699,7 @@ function componentsLocalPath(exportDir?: string): string {
   let manifest: { files?: { componentsLocal?: string } };
   try {
     manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { files?: { componentsLocal?: string } };
-  } catch (e) {
+  } catch {
     throw new Error(
       `No design export found at ${manifestPath}. Run an export first (figma_export_design_system with ` +
         `writeToDisk:true, or the dtwin CLI), or pass exportDir.`
