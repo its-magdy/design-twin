@@ -353,6 +353,12 @@ across restarts; `c1`/`c2` are only for telling two *currently open* files apart
 like `--list-clients`' own listing does. Under a running `dtwin serve` daemon, connIds are assigned
 once per plugin connection and stay stable until that plugin's window disconnects/reconnects.
 
+A named target (file name or fileKey) is **waited for**: each open plugin window redials on its own
+3 s clock, so right after a bridge starts only one of two open files may be connected yet. `dtwin`
+gives the named file up to 15 s (or `--timeout`, whichever is shorter) to land before resolving the
+name; a name that never matches then fails with the list of what *is* connected. A bare `c<N>`
+never waits.
+
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
 dtwin design/base --client "Marketing" --page 12:34

@@ -29,3 +29,9 @@ export const exportTimeout = ({ selection, allPages }: { selection?: boolean; al
 // network stack without involving page script, so a plugin busy with a long export still answers.
 // createBridge's `heartbeatMs` option overrides it (the test suite uses a short one).
 export const HEARTBEAT_MS = 30000;
+
+// How long a NAMED --client target (file name / fileKey, not a c<N> connId) is waited for after the
+// first plugin connects. Every open plugin window redials every 3 s (figma-plugin ui.html), so a file
+// that is open lands within one or two cycles; 15 s is five, and a name that never matches fails
+// with the connected list instead of holding the terminal for the whole connect window.
+export const NAMED_CLIENT_WAIT_MS = 15000;
