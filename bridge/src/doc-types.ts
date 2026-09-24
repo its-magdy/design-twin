@@ -238,6 +238,8 @@ export type ReactionTrigger =
 export type ActionType =
   | "back" | "close" | "url" | "node" | "set_variable" | "set_variable_mode" | "conditional" | "update_media_runtime" | (string & {});
 export type ActionNavigation = "navigate" | "swap" | "overlay" | "scroll_to" | "change_to" | (string & {});
+/** Control points of a custom cubic-bezier easing — Figma's `easingFunctionCubicBezier`, carried verbatim. */
+export interface CubicBezier { x1: number; y1: number; x2: number; y2: number }
 export interface Transition {
   type?: string;
   direction?: string;
@@ -245,7 +247,7 @@ export interface Transition {
   duration?: number;
   matchLayers?: boolean;
   easing?: string;
-  cubicBezier?: unknown;
+  cubicBezier?: CubicBezier;
   spring?: unknown;
 }
 export interface Action {
@@ -329,6 +331,17 @@ export interface TextFields {
   missingFont?: true;
 }
 
+/** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, … */
+export interface MotionKeyframe { t: number; value: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } }
+/** One animated field: its base value, a non-SET keyframe operation, and the keyframes. */
+export interface MotionTrack { base?: JsonValue; op?: string; keyframes?: MotionKeyframe[] }
+/** The opt-in motion read on a node (`--motion`): timelines, per-field tracks, applied animation styles. */
+export interface NodeMotion {
+  timelines?: Array<{ id: string; duration: number }>;
+  manualTracks?: Record<string, MotionTrack>;
+  animations?: Record<string, MotionTrack>;
+  styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
+}
 export interface IrNode extends Partial<TextFields> {
   type: IrNodeType;
   name: string;
@@ -424,7 +437,7 @@ export interface IrNode extends Partial<TextFields> {
   css?: Record<string, string>;
   pluginData?: Record<string, string>;
   sharedData?: Record<string, Record<string, string>>;
-  motion?: JsonObject;
+  motion?: NodeMotion;
 
   // assets (asset nodes are LEAVES — no children)
   asset?: string;
