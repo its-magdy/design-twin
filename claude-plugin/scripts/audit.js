@@ -28,6 +28,20 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+    a: 1
+  };
+}
 function luminance(c) {
   const ch = (v) => {
     v /= 255;
@@ -1069,7 +1083,7 @@ function crossCheck(input) {
 var MIN_CONTRAST = 4.5;
 function composedRgba(color, opacity) {
   if (!color || opacity === null || !Number.isFinite(opacity)) return null;
-  return { ...color, a: color.a * (Math.min(100, Math.max(0, opacity)) / 100) };
+  return { ...color, a: composeAlpha(color.a, opacity) };
 }
 function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   const defs = /* @__PURE__ */ new Map();
@@ -1136,7 +1150,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
       const fg = resolve(p.fg, mode, 0);
       const bg = resolve(p.bg, mode, 0);
       if (!fg || !bg) continue;
-      const r = contrastRatio(fg, bg);
+      const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
       if (r >= MIN_CONTRAST) continue;
       failures.push({ mode, fg: p.fg, bg: p.bg, ratio: Number(r.toFixed(2)), nodes: p.nodes, sample: p.sample });
     }

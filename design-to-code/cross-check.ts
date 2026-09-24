@@ -34,7 +34,7 @@ import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./componen
 // hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
 // hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
 import { hiddenSelf } from "./hidden.ts";
-import { parseHex, contrastRatio } from "./color.ts";
+import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
 import { readDocFile, readOptionalDoc } from "./catalog-input.ts";
 import { isComponentsCatalog, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
@@ -789,16 +789,14 @@ const MIN_CONTRAST = 4.5;
 
 /**
  * A composed colour's ONE RGBA from its two resolved halves; null when either half did not resolve.
- * The opacity is a 0–100 percentage — "An opacity percentage from 0 to 100, or an alias to a FLOAT
- * variable" (REST API variables types, VariableComposedColor.opacity:
- * https://developers.figma.com/docs/rest-api/variables-types/) — clamped as Figma clamps it
- * (https://help.figma.com/hc/en-us/articles/14506821864087: negative -> 0%, > 100 -> 100%).
- * alpha = colour alpha × opacity/100 is an INFERENCE: Figma does not document how the opacity combines
- * with a colour whose own alpha is < 1; multiplying is what tokens.css's color-mix() form does too.
+ * The opacity is a 0–100 percentage (REST API variables types, VariableComposedColor.opacity:
+ * https://developers.figma.com/docs/rest-api/variables-types/), clamped and multiplied into the colour's
+ * alpha by color.ts composeAlpha (Help Center 14506821864087 for the clamp; the multiply is an
+ * inference — see composeAlpha).
  */
 function composedRgba(color: Rgba | null, opacity: number | null): Rgba | null {
   if (!color || opacity === null || !Number.isFinite(opacity)) return null;
-  return { ...color, a: color.a * (Math.min(100, Math.max(0, opacity)) / 100) };
+  return { ...color, a: composeAlpha(color.a, opacity) };
 }
 
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
@@ -884,7 +882,12 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
       const fg = resolve(p.fg, mode, 0);
       const bg = resolve(p.bg, mode, 0);
       if (!fg || !bg) continue; // this pair is not defined in this mode — say nothing rather than guess
-      const r = contrastRatio(fg, bg);
+      // A translucent text colour (alpha < 1, e.g. a composed colour) renders as a MIX with its
+      // background, and WCAG 2.2's contrast ratio is defined on what renders
+      // (https://www.w3.org/TR/WCAG22/#dfn-contrast-ratio): composite it over the background first
+      // (color.ts compositeOver — the conventional reading). An opaque fg is used as is, so opaque
+      // pairs compute exactly what they did before.
+      const r = contrastRatio(fg.a < 1 ? compositeOver(fg, bg) : fg, bg);
       if (r >= MIN_CONTRAST) continue;
       failures.push({ mode, fg: p.fg, bg: p.bg, ratio: Number(r.toFixed(2)), nodes: p.nodes, sample: p.sample });
     }

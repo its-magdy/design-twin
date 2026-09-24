@@ -287,10 +287,31 @@ function normHex(v) {
   const h = m[1].toLowerCase();
   return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
 }
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
 
 // design-to-code/tokens-native.ts
 var FULL = Object.freeze({ fullyRounded: true });
-function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2 }) {
+function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaultModeName2, baseValue: baseValue2, unitDecision: unitDecision2, isSentinel: isSentinel2, percentOpacity: percentOpacity2 }) {
   const PLATFORMS2 = {
     swiftui: { file: "DesignTokens.swift" },
     compose: { file: "DesignTokens.kt" },
@@ -330,12 +351,28 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
     const values = v.values || {};
     let raw = values[mode];
     if (raw === void 0) raw = baseValue2(v, collections, defaultModeName2(v, collections));
-    if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
-    const target = byName.get(raw.aliasOf);
-    if (!target || seen && seen.has(target.name)) return void 0;
     const next = new Set(seen || []).add(v.name);
-    const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
-    return resolve(byName, collections, target, tMode, next);
+    const follow = (a) => {
+      const target = byName.get(a.aliasOf);
+      if (!target || seen && seen.has(target.name)) return void 0;
+      const tMode = target.values && target.values[mode] !== void 0 ? mode : defaultModeName2(target, collections);
+      return resolve(byName, collections, target, tMode, next);
+    };
+    if (raw && typeof raw === "object" && "composed" in raw) {
+      const { color, opacity } = raw.composed;
+      const c = typeof color === "string" ? color : isAlias2(color) ? follow(color) : void 0;
+      const o = typeof opacity === "number" ? opacity : isAlias2(opacity) ? follow(opacity) : void 0;
+      const rgba = parseHex(c);
+      if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return void 0;
+      return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
+    }
+    if (!isAlias2(raw)) return isNativeScalar(raw) ? raw : void 0;
+    return follow(raw);
+  }
+  const NUMERIC_TEXT2 = /^-?\d+(?:\.\d+)?$/;
+  function opacityNumber(r) {
+    const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT2.test(r) ? Number(r) : NaN;
+    return Number.isFinite(n) ? n : null;
   }
   function model(designSystem, warnings, opts) {
     const collections = designSystem && designSystem.collections || [];
@@ -360,10 +397,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
           warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
           continue;
         }
-        if (Object.values(v.values || {}).some(isComposed2)) {
-          warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
-          continue;
-        }
+        const pct = kind === "number" && percentOpacity2(v, opts);
         const values = {};
         let ok = true;
         for (const m of modeNames) {
@@ -372,7 +406,22 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
             ok = false;
             break;
           }
+          if (pct) {
+            const n = opacityNumber(r);
+            if (n === null) {
+              ok = false;
+              break;
+            }
+            const clamped = clampOpacityPct(n);
+            if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0\u2013100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);
+            values[m] = clamped / 100;
+            continue;
+          }
           values[m] = isSentinel2 && isSentinel2(v, r) ? FULL : r;
+        }
+        if (!ok && Object.values(v.values || {}).some(isComposed2)) {
+          warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
+          continue;
         }
         if (!ok) {
           warnings.push(`${v.name}: skipped \u2014 its value could not be resolved inside this file (an alias to a library variable that was not exported?)`);
@@ -963,7 +1012,10 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     if (v.description) leaf.$description = v.description;
     const opacity = dtcgOpacity(bv, aliasRef);
     if (!withExtensions) {
-      if (opacity !== void 0) leaf.$extensions = { "figma.com": { opacity } };
+      const setExt = {};
+      if (opacity !== void 0) setExt.opacity = opacity;
+      if (percentOpacity(v, opts)) setExt.unit = "percent";
+      if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf;
       continue;
     }
@@ -1034,8 +1086,7 @@ function numberUnit(variable, opts) {
   return unitDecision(variable, opts) === "px" ? "px" : "";
 }
 var pctOutOfRange = (n) => n < 0 || n > 100;
-var clampPct = (n) => Math.min(100, Math.max(0, n));
-var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampPct(Number(s))) : s) + "%";
+var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
 var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 function cssPercentVar(plan, v, opts, depth = 0) {
   if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
@@ -1325,7 +1376,7 @@ function lintNames(designSystem, opts, warnings) {
           break;
         }
       } else if (pctOutOfRange(opacity)) {
-        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
       }
     }
   }
@@ -1334,7 +1385,7 @@ function lintNames(designSystem, opts, warnings) {
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
-      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
     }
   }
   for (const v of vars) {
@@ -1376,7 +1427,7 @@ function emitTokens(designSystem, opts) {
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
-var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel });
+var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const args = process.argv.slice(2);
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]

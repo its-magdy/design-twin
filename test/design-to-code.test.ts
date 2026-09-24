@@ -891,6 +891,38 @@ console.log("tokens — opacity FLOATs are percentages:");
     toCSS(tokens({ variables: [{ name: "w/x", type: "FLOAT", scopes: ["FONT_WEIGHT", "OPACITY"], values: { v: 50 } }, { name: "Opacity/y", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 50 } }] }))
       .includes("--w-x: 50;\n  --Opacity-y: 50;"));
   check("[pct] opts.unitless overrides the scope (a bare number)", toCSS(opDs, { unitless: new Set(["op/a"]) }).includes("--op-a: 40;"));
+  // The name heuristic (ALL_SCOPES + an "Opacity" segment) makes a token unitless but carries no scale
+  // evidence: DTCG gives it NO unit, so tokens.css keeps it bare too — the two sides agree.
+  const byName = tokens({ variables: [{ name: "Opacity/hover", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 50 } }] });
+  check("[pct] a name-heuristic opacity: DTCG number 50 with no unit extension, CSS bare `50`",
+    JSON.stringify(leafAt(toDTCG(byName), "Opacity.hover")) === JSON.stringify({ $type: "number", $value: 50, $extensions: { "figma.com": { scopes: ["ALL_SCOPES"] } } })
+    && toCSS(byName).includes("--Opacity-hover: 50;"));
+  // Resolver set files carry the same unit: "percent" tokens.dtcg.json carries (and only there).
+  const opModes = tokens({ collections: [{ name: "Fx", modes: ["Calm", "Loud"], default: "Calm" }], variables: [
+    { name: "fx/fade", type: "FLOAT", collection: "Fx", scopes: ["OPACITY"], values: { Calm: 40, Loud: 80 } },
+    { name: "fx/gap", type: "FLOAT", collection: "Fx", scopes: ["GAP"], values: { Calm: 4, Loud: 8 } }] });
+  const { resolver: or, files: of } = toResolver(opModes);
+  const oBase = fileAt(of, or.sets.Fx.sources[0].$ref), oLoud = fileAt(of, modifierOf(or, "Fx").contexts.Loud[0].$ref);
+  check("[pct] resolver base set: the opacity leaf is {$type number, $value 40, $extensions figma.com unit percent}",
+    JSON.stringify(leafAt(oBase, "fx.fade")) === JSON.stringify({ $type: "number", $value: 40, $extensions: { "figma.com": { unit: "percent" } } }));
+  check("[pct] resolver mode context (Loud): 80 with the same unit; the GAP dimension gets no $extensions",
+    JSON.stringify(leafAt(oLoud, "fx.fade")) === JSON.stringify({ $type: "number", $value: 80, $extensions: { "figma.com": { unit: "percent" } } })
+    && JSON.stringify(leafAt(oBase, "fx.gap")) === JSON.stringify({ $type: "dimension", $value: { value: 4, unit: "px" } }));
+  check("[pct] tokens.dtcg.json and the resolver set agree on the unit", figmaExt(leafAt(toDTCG(opModes), "fx.fade")).unit === figmaExt(leafAt(oBase, "fx.fade")).unit);
+  // Native: an out-of-range opacity is clamped as Figma clamps it (Help Center 14506821864087) and reported.
+  const opNative = tokens({ collections: [{ name: "Fx", modes: ["M"], default: "M" }], variables: [
+    { name: "fx/over", type: "FLOAT", collection: "Fx", scopes: ["COLOR_OPACITY"], values: { M: 120 } },
+    { name: "fx/under", type: "FLOAT", collection: "Fx", scopes: ["OPACITY"], values: { M: -5 } },
+    { name: "fx/half", type: "FLOAT", collection: "Fx", scopes: ["OPACITY"], values: { M: 12.5 } },
+    { name: "Opacity/named", type: "FLOAT", collection: "Fx", scopes: ["ALL_SCOPES"], values: { M: 50 } }] });
+  const opKt = toNative(opNative, "compose");
+  check("[pct] native: 120 -> 1f, -5 -> 0f, 12.5 -> 0.125f; a name-heuristic opacity stays verbatim (50f), like its CSS",
+    opKt.text.includes("    val fxOver: Float = 1f // fx/over\n") && opKt.text.includes("    val fxUnder: Float = 0f // fx/under\n")
+    && opKt.text.includes("    val fxHalf: Float = 0.125f // fx/half\n") && opKt.text.includes("    val opacityNamed: Float = 50f // Opacity/named\n"));
+  check("[pct] native: each clamp is a warning, an in-range value is not",
+    opKt.warnings.includes("fx/over (mode M): opacity 120 is outside Figma's 0–100 range; clamped to 100 (as Figma does) and written as 1")
+    && opKt.warnings.includes("fx/under (mode M): opacity -5 is outside Figma's 0–100 range; clamped to 0 (as Figma does) and written as 0")
+    && !opKt.warnings.some((m) => /fx\/half/.test(m)));
 }
 
 // ---------- tokens: COMPOSED colour variables (Figma Update 139: colour + separate opacity, one or both aliases) ----------
@@ -960,9 +992,28 @@ console.log("tokens — composed colours:");
     && figmaExt(leafAt(toDTCG(hot), "a")).opacity === 150);
   check("[composed] a DANGLING nested alias is reported like a top-level one", lintTokens(tokens({ variables: [
     { name: "a", type: "COLOR", values: { v: { composed: { color: "#000000", opacity: { aliasOf: "gone/op" } } } } }] })).some((m) => /'a'.*undefined token 'gone\/op'/.test(m)));
-  const n = toNative(composed, "swiftui");
-  check("[composed] toNative skips it with a composed-colour warning, not a broken literal",
-    !n.text.includes("[object Object]") && n.warnings.some((m) => /text\/muted.*composed colour/.test(m)));
+  // Native: folded into ONE colour, alpha × opacity/100 (color.ts composeAlpha), each half resolved like
+  // a plain colour. text/muted Light = ink #111111 at 50 -> alpha 0.5 -> round(127.5) = 128 = 0x80;
+  // Dark = ink at opacity/60 (alias -> 60) -> 0.6 × 255 = 153 = 0x99. overlay/scrim Light = #000000 at
+  // 60 -> 0x99, Dark = #ffffff at 60 -> 0x99.
+  const n = toNative(composed, "swiftui"), nk = toNative(composed, "compose"), nd = toNative(composed, "flutter"), nr = toNative(composed, "react-native");
+  check("[composed] toNative folds it into one colour: Compose ARGB 0x80111111 (Light) / 0x99111111 (Dark), scrim 0x99000000 / 0x99FFFFFF",
+    /ThemeTokensLight = ThemeTokens\(\n {4}overlayScrim = Color\(0x99000000\),\n {4}textMuted = Color\(0x80111111\),/.test(nk.text)
+    && /ThemeTokensDark = ThemeTokens\(\n {4}overlayScrim = Color\(0x99FFFFFF\),\n {4}textMuted = Color\(0x99111111\),/.test(nk.text));
+  check("[composed] SwiftUI: the composed alpha is the Color opacity (128/255 = 0.502, 153/255 = 0.6)",
+    n.text.includes("textMuted: Color(.sRGB, red: 0.0667, green: 0.0667, blue: 0.0667, opacity: 0.502)")
+    && n.text.includes("textMuted: Color(.sRGB, red: 0.0667, green: 0.0667, blue: 0.0667, opacity: 0.6)"));
+  check("[composed] Flutter Color(0x80111111) and React Native \"#11111180\" (Light text/muted)",
+    nd.text.includes("    textMuted: Color(0x80111111),\n") && nr.text.includes("    textMuted: \"#11111180\",\n"));
+  check("[composed] no composed-colour skip warning when both halves resolve, and no broken literal",
+    !n.text.includes("[object Object]") && !n.warnings.some((m) => /composed colour/.test(m)));
+  // A half that does not resolve inside the file (the opacity alias names a variable that was not
+  // exported) is still skipped, with the composed-colour warning.
+  const lost = toNative(tokens({ collections: [{ name: "C", modes: ["M"], default: "M" }], variables: [
+    { name: "ink", type: "COLOR", collection: "C", values: { M: "#111111" } },
+    { name: "fg/faint", type: "COLOR", collection: "C", values: { M: { composed: { color: { aliasOf: "ink" }, opacity: { aliasOf: "lib/op" } } } } }] }), "swiftui");
+  check("[composed] an unresolvable half: skipped with the composed-colour warning, no field emitted",
+    !lost.text.includes("fgFaint") && lost.warnings.some((m) => m.startsWith("fg/faint: skipped — a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file")));
 }
 
 // ---------- kinds.ts: a SLOT component property maps to an instance slot (the plugin emits SLOT) ----------
@@ -1057,7 +1108,8 @@ console.log("map — SLOT props:");
       { name: "Blue/500", type: "COLOR", collection: "Primitive", values: { "Mode 1": "#1A2B3C" }, scopes: ["ALL_SCOPES"] },
       { name: "Blue/200", type: "COLOR", collection: "Primitive", values: { "Mode 1": "#AABBCC80" }, scopes: ["ALL_SCOPES"] },
       { name: "Space/MD", type: "FLOAT", collection: "Primitive", values: { "Mode 1": 16 }, scopes: ["GAP"] },
-      { name: "opacity/disabled", type: "FLOAT", collection: "Primitive", values: { "Mode 1": 0.4 }, scopes: ["OPACITY"] },
+      // Figma opacities are 0–100 percentages (REST API variables types): 40 is 40%.
+      { name: "opacity/disabled", type: "FLOAT", collection: "Primitive", values: { "Mode 1": 40 }, scopes: ["OPACITY"] },
       { name: "Body", type: "FLOAT", collection: "Font Sizes", values: { "Mode 1": 14 }, scopes: ["ALL_SCOPES"] },
       { name: "Primary/Primary", type: "COLOR", collection: "Theme", values: { Light: { aliasOf: "Blue/500" }, Dark: { aliasOf: "Blue/200" } }, scopes: ["ALL_SCOPES"] },
       { name: "class", type: "COLOR", collection: "Theme", values: { Light: "#ffffff", Dark: "#000000" }, scopes: ["ALL_SCOPES"] },
@@ -1075,8 +1127,12 @@ console.log("map — SLOT props:");
     && !/ThemeTokensDark = ThemeTokens\([\s\S]*?primaryPrimary = Color\(0xFF1A2B3C\)/.test(kt.text));
   check("[native] compose: data class + CompositionLocal defaulting to the collection's default mode, package honoured",
     /^package com\.acme\.ui$/m.test(kt.text) && /@Immutable\ndata class ThemeTokens\(/.test(kt.text) && /val LocalThemeTokens = staticCompositionLocalOf \{ ThemeTokensLightMode \}/.test(kt.text));
-  check("[native] compose units: spacing → dp, font size → sp (by name under ALL_SCOPES), opacity → unitless Float",
-    /val spaceMD: Dp = 16\.dp/.test(kt.text) && /val body: TextUnit = 14\.sp/.test(kt.text) && /val opacityDisabled: Float = 0\.4f/.test(kt.text));
+  check("[native] compose units: spacing → dp, font size → sp (by name under ALL_SCOPES), OPACITY 40 → Float 0.4f (Modifier.alpha's 0–1)",
+    /val spaceMD: Dp = 16\.dp/.test(kt.text) && /val body: TextUnit = 14\.sp/.test(kt.text) && kt.text.includes("    val opacityDisabled: Float = 0.4f // opacity/disabled\n"));
+  check("[native] OPACITY 40 is the 0–1 fraction on every platform: SwiftUI Double 0.4, Flutter double 0.4, React Native 0.4",
+    sw.text.includes("    public static let opacityDisabled: Double = 0.4 // opacity/disabled\n")
+    && da.text.includes("  static const double opacityDisabled = 0.4; // opacity/disabled\n")
+    && ts.text.includes("  opacityDisabled: 0.4, // opacity/disabled\n"));
   check("[native] a single-mode collection is plain constants, not a themed type", /^object PrimitiveTokens \{/m.test(kt.text) && /^public enum PrimitiveTokens \{/m.test(sw.text) && /^abstract final class PrimitiveTokens \{/m.test(da.text) && /^export const primitiveTokens = \{/m.test(ts.text));
   check("[native] reserved words and duplicate identifiers are renamed, with a warning for the duplicate",
     /val classToken: Color/.test(kt.text) && /val primaryPrimary2: Color/.test(kt.text) && kt.warnings.some((w) => /Primary primary.*primaryPrimary2/.test(w)));

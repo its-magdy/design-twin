@@ -33,7 +33,8 @@
 //                             REST page's VariableScope: "OPACITY corresponds to layer opacity, while
 //                             COLOR_OPACITY corresponds to the opacity channel of a color") are
 //                             written to CSS as a clamped percentage (`40%`), and keep their verbatim
-//                             number in DTCG with $extensions["figma.com"].unit: "percent".
+//                             number in DTCG with $extensions["figma.com"].unit: "percent" (in
+//                             tokens.dtcg.json AND in the resolver set files).
 //   toResolver(ds[, warnings, opts]) -> { resolver, files }: a DTCG **Resolver Module** 2025.10
 //                             document (the spec-blessed portable theming mechanism) plus the token
 //                             files it $refs. Each multi-mode collection becomes a modifier whose
@@ -54,7 +55,7 @@ import { isTokensDoc } from "./doc-guards.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
-import { normHex } from "./color.ts";
+import { normHex, clampOpacityPct } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
@@ -577,7 +578,13 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     const opacity = dtcgOpacity(bv, aliasRef);
 
     if (!withExtensions) { // resolver set files: modes live in the resolver
-      if (opacity !== undefined) leaf.$extensions = { "figma.com": { opacity } };
+      // …and so does an opacity FLOAT's scale: a set's `sources` are ordinary DTCG token files
+      // (designtokens.org/tr/2025.10/resolver/), so a set file's `number` must say it is Figma's 0–100
+      // percentage exactly as tokens.dtcg.json does (same key, same value, same condition: percentOpacity).
+      const setExt: DtcgFigmaExtension = {};
+      if (opacity !== undefined) setExt.opacity = opacity;
+      if (percentOpacity(v, opts)) setExt.unit = "percent";
+      if (Object.keys(setExt).length) leaf.$extensions = { "figma.com": setExt };
       node[leafKey] = leaf; continue;
     }
 
@@ -703,11 +710,11 @@ function numberUnit(variable: Variable, opts?: UnitOpts): string {
 // https://help.figma.com/hc/en-us/articles/14506821864087): "If the number variable has a negative
 // value, the opacity will default to 0%. If the number variable has a value greater than 100, the
 // opacity will default to 100%." The CSS does the same (and color-mix() REQUIRES 0%–100%); lintNames
-// reports every clamp, and tokens.dtcg.json keeps the verbatim number.
+// reports every clamp, and tokens.dtcg.json keeps the verbatim number. The clamp itself is color.ts
+// clampOpacityPct — the one implementation every emitter and checker shares.
 const pctOutOfRange = (n: number): boolean => n < 0 || n > 100;
-const clampPct = (n: number): number => Math.min(100, Math.max(0, n));
 // `s` is a number's CSS text ("40", "-5", "12.5"); in range it is kept verbatim.
-const cssPercent = (s: string): string => (pctOutOfRange(Number(s)) ? String(clampPct(Number(s))) : s) + "%";
+const cssPercent = (s: string): string => (pctOutOfRange(Number(s)) ? String(clampOpacityPct(Number(s))) : s) + "%";
 const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
 // Does v's custom property hold a percentage in EVERY mode? An opacity-scoped FLOAT whose values are
 // numbers, or aliases to such a FLOAT (followed through the SAME plan the emitter named them with).
@@ -1137,17 +1144,17 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
           break;
         }
       } else if (pctOutOfRange(opacity)) {
-        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0–100 range; clamped to ${clampPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
       }
     }
   }
-  // Opacity FLOATs outside 0–100: clamped in the CSS exactly as Figma clamps them (see clampPct).
+  // Opacity FLOATs outside 0–100: clamped in the CSS exactly as Figma clamps them (see clampOpacityPct in color.ts).
   for (const v of vars) {
     if (!percentOpacity(v, opts)) continue;
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
-      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0–100 range; clamped to ${clampPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
     }
   }
   // STRING tokens carrying CSS-structural characters are emitted escaped (see cssEscapeText) — report
@@ -1220,7 +1227,7 @@ function emitTokens(designSystem: TokensDoc | null | undefined, opts?: EmitOpts)
 export { toDTCG, toCSS, toResolver, toTailwind, lintTokens, emitTokens, hexToColorValue, cssVarName, TW_PREFIX, WEB_FULL_ROUND };
 // tokens-native.ts must agree with this file on names, default modes, aliases and units, so it is
 // built FROM these helpers (see the note at its top on why it does not import this file back).
-const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel });
+const { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
 export { toNative, platformOf, PLATFORMS };
 
 // CLI: node design-to-code/tokens.ts <design-system/tokens.json> [outDir] [--native <platform>] [--package <kotlin.package>]

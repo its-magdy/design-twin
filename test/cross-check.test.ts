@@ -10,7 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { crossCheck, toMarkdown, composedRgba } from "../design-to-code/cross-check.ts";
-import { parseHex } from "../design-to-code/color.ts";
+import { parseHex, clampOpacityPct, composeAlpha, formatHex, compositeOver } from "../design-to-code/color.ts";
 import { screenCoverage } from "../design-to-code/drift-lint.ts";
 import { check as ok, report } from "./assert.ts";
 import { catalog, codeMap, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
@@ -238,6 +238,9 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
     get(res, "derived-mode-contrast").mode === "Light");
   ok("[contrast] and reports the actual ratio, not a verdict",
     (get(res, "derived-mode-contrast").pairs?.[0]?.ratio ?? 0) < 4.5 && (get(res, "derived-mode-contrast").pairs?.[0]?.ratio ?? 0) > 1);
+  // An OPAQUE pair is not composited: #46464f on #2b2b4f is the plain WCAG ratio, 1.44 (unchanged).
+  ok("[contrast] an opaque pair's ratio is the plain WCAG one: #46464f on #2b2b4f = 1.44",
+    get(res, "derived-mode-contrast").pairs?.[0]?.ratio === 1.44);
   ok("[contrast] the fix it asks for is a designer answer or a real frame, never an invented override",
     /Do not invent an override/.test(get(res, "derived-mode-contrast").message));
 }
@@ -298,6 +301,48 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
   });
   ok("[composed] an opacity alias that does not resolve leaves the pair unchecked (null, not a guess)",
     !has(crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: gone }), "derived-mode-contrast"));
+}
+
+// ---------------------------------------------------------------- color.ts: the one opacity rule + compositing
+{
+  // clampOpacityPct: Figma's clamp (Help Center 14506821864087): negative -> 0, > 100 -> 100, in range verbatim.
+  ok("[color] clampOpacityPct: -5 -> 0, 120 -> 100, 40 -> 40, 12.5 -> 12.5",
+    clampOpacityPct(-5) === 0 && clampOpacityPct(120) === 100 && clampOpacityPct(40) === 40 && clampOpacityPct(12.5) === 12.5);
+  // composeAlpha: alpha × clamp(pct)/100 — 0.5 × 60/100 = 0.3; 1 × 150 -> 1 × 100/100 = 1; 1 × -5 -> 0.
+  ok("[color] composeAlpha: (0.5, 60) = 0.3, (1, 150) = 1, (1, -5) = 0, (1, 40) = 0.4",
+    composeAlpha(0.5, 60) === 0.3 && composeAlpha(1, 150) === 1 && composeAlpha(1, -5) === 0 && composeAlpha(1, 40) === 0.4);
+  // formatHex: alpha 0.5 -> round(127.5) = 128 = 0x80; alpha 1 -> 255 -> 6 digits.
+  ok("[color] formatHex: #111111 at alpha 0.5 -> \"#11111180\", opaque -> \"#111111\"",
+    formatHex({ r: 17, g: 17, b: 17, a: 0.5 }) === "#11111180" && formatHex({ r: 17, g: 17, b: 17, a: 1 }) === "#111111");
+  // compositeOver: black at alpha 0.5 over white -> 0 × 0.5 + 255 × 0.5 = 127.5 per channel, opaque.
+  const c = compositeOver({ r: 0, g: 0, b: 0, a: 0.5 }, { r: 255, g: 255, b: 255, a: 1 });
+  ok("[color] compositeOver: #000000 at alpha 0.5 over #ffffff = (127.5, 127.5, 127.5, 1)", c.r === 127.5 && c.g === 127.5 && c.b === 127.5 && c.a === 1);
+}
+
+console.log("cross-check — contrast of a TRANSLUCENT text colour (WCAG 2.2 on the rendered colour):");
+{
+  // Fg = #000000 composed at opacity 50 over Bg = #ffffff, in the derived mode (Light).
+  // Rendered fg (color.ts compositeOver): 0 × 0.5 + 255 × 0.5 = 127.5 per channel.
+  // Relative luminance (WCAG 2.2 #dfn-relative-luminance): 127.5/255 = 0.5 > 0.04045, so
+  //   ((0.5 + 0.055) / 1.055)^2.4 = 0.526066^2.4 = 0.214041; equal channels -> L = 0.214041.
+  // Contrast (#dfn-contrast-ratio): (1 + 0.05) / (0.214041 + 0.05) = 1.05 / 0.264041 = 3.9767 -> 3.98.
+  // Without compositing it would be black on white, 21:1, and no finding at all.
+  const vars = tokens({
+    collections: [{ name: "Sem", key: "c1", modes: ["Dark", "Light"], default: "Dark" }],
+    variables: [
+      { name: "Surface", collection: "Sem", key: "b1", type: "COLOR", values: { Dark: "#000000", Light: "#ffffff" } },
+      { name: "Ink", collection: "Sem", key: "i1", type: "COLOR", values: { Dark: "#000000", Light: "#000000" } },
+      { name: "Label", collection: "Sem", key: "t1", type: "COLOR", values: {
+        Dark: "#ffffff",
+        Light: { composed: { color: { aliasOf: "Ink" }, opacity: 50 } } } },
+    ],
+  });
+  const frame = node({ type: "FRAME", id: "1:1", name: "Card", resolvedModes: { Sem: "Dark" }, tokens: { fills: "Surface" }, children: [text("2:1", "Inter", null, "Label")] });
+  const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: vars });
+  const f = res.findings.find((x) => x.code === "derived-mode-contrast");
+  ok("[contrast-alpha] black at 50% on white, composited: ratio 3.98 in mode 'Light' (21 if alpha were ignored)",
+    !!f && f.mode === "Light" && f.pairs?.length === 1 && f.pairs[0].ratio === 3.98 && f.pairs[0].fg === "Label" && f.pairs[0].bg === "Surface");
+  ok("[contrast-alpha] the message carries the composited ratio", !!f && f.message.includes("'Label' on 'Surface' = 3.98:1"));
 }
 
 // ---------------------------------------------------------------- honesty about what it could not do

@@ -21,8 +21,24 @@
 // Aliases are RESOLVED per mode (a native constant cannot reference "whatever the theme says"), into
 // the alias target's same-named mode when it has one, else its default mode. An alias that leaves the
 // file (a library variable that was not exported) is skipped with a warning, never guessed.
+//
+// Opacity. Figma's opacity numbers are PERCENTAGES, 0–100 (REST API variables types,
+// https://developers.figma.com/docs/rest-api/variables-types/: VariableComposedColor.opacity is "An
+// opacity percentage from 0 to 100, or an alias to a FLOAT variable"; VariableScope "OPACITY corresponds
+// to layer opacity, while COLOR_OPACITY corresponds to the opacity channel of a color"). Every platform
+// below takes opacity as a 0–1 fraction, so an OPACITY / COLOR_OPACITY-scoped FLOAT (tokens.ts
+// percentOpacity — the same test that gives it `N%` in tokens.css and unit "percent" in DTCG) is written
+// as clamp(N)/100 (clamp: color.ts clampOpacityPct, as Figma clamps):
+//   swiftui       Double   — View.opacity(_ opacity: Double) / Color.opacity(_:), 0…1 (developer.apple.com/documentation/swiftui/view/opacity(_:))
+//   compose       Float    — Modifier.alpha(alpha: Float) / Color.copy(alpha = …), 0f…1f (developer.android.com/reference/kotlin/androidx/compose/ui/draw/package-summary#(androidx.compose.ui.Modifier).alpha(kotlin.Float))
+//   flutter       double   — Opacity(opacity: …) and Color.withValues(alpha: …) (Color.withOpacity(double) before Flutter 3.27), 0.0…1.0 (api.flutter.dev/flutter/widgets/Opacity/opacity.html)
+//   react-native  number   — the `opacity` style prop, 0…1 (reactnative.dev/docs/view-style-props#opacity)
+// A name-heuristic or opts.unitless FLOAT carries no evidence of Figma's scale and stays verbatim, as it
+// does in tokens.css. A COMPOSED colour is folded into one colour literal: the colour half's alpha ×
+// clamp(opacity)/100 (color.ts composeAlpha — the multiply is an inference, see there), each half
+// resolved through the same alias resolution as a plain colour.
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
-import { normHex } from "./color.ts";
+import { normHex, parseHex, formatHex, composeAlpha, clampOpacityPct } from "./color.ts";
 
 /** The px-vs-unitless override every emitter honours (tokens.ts unitDecision): the names a caller declared unitless. */
 export interface UnitOpts {
@@ -40,7 +56,7 @@ export interface NativeOpts extends UnitOpts {
 // output) rather than this file importing tokens.ts back: an import cycle makes the bundler wrap
 // tokens.ts as an inner module, and its `import.meta.main` CLI guard then never fires.
 // (Colour parsing is NOT one of them: color.ts imports nothing, so it is imported directly.)
-/** The six tokens.ts helpers this emitter is built from — typed from their definitions there. */
+/** The seven tokens.ts helpers this emitter is built from — typed from their definitions there. */
 export interface NativeHelpers {
   segs: (name: string | null | undefined) => string[];
   isAlias: (v: unknown) => v is VariableAlias;
@@ -48,6 +64,8 @@ export interface NativeHelpers {
   baseValue: (variable: Variable, collections: VariableCollection[] | undefined, def?: string) => VariableValue | undefined;
   unitDecision: (variable: Variable, opts?: UnitOpts) => UnitDecision;
   isSentinel: (v: Variable | null | undefined, raw: unknown) => boolean;
+  /** an OPACITY / COLOR_OPACITY-scoped FLOAT (Figma's 0–100 percentage) — tokens.ts percentOpacity */
+  percentOpacity: (variable: Variable, opts?: UnitOpts) => boolean;
 }
 
 type NativeKind = "color" | "bool" | "string" | "fontSize" | "dimension" | "number";
@@ -66,7 +84,7 @@ export interface NativeFile { file: string; text: string; warnings: string[] }
 // written as each platform's own idiom — never as the literal (livetest-3 #96).
 const FULL = Object.freeze({ fullyRounded: true });
 
-export default function nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel }: NativeHelpers) {
+export default function nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity }: NativeHelpers) {
 
 // A plain string-keyed object on purpose (as the JS was): `platformOf` looks a caller's word up in it
 // with a truthiness test, so an inherited name behaves exactly as it did.
@@ -118,12 +136,33 @@ function resolve(byName: Map<string, Variable>, collections: VariableCollection[
   const values = v.values || {};
   let raw: VariableValue | undefined = values[mode];
   if (raw === undefined) raw = baseValue(v, collections, defaultModeName(v, collections));
-  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : undefined; // a motion OBJECT (EASING/TIMING) has no native literal
-  const target = byName.get(raw.aliasOf);
-  if (!target || (seen && seen.has(target.name))) return undefined;
   const next = new Set(seen || []).add(v.name);
-  const tMode = target.values && target.values[mode] !== undefined ? mode : defaultModeName(target, collections);
-  return resolve(byName, collections, target, tMode, next);
+  // One alias hop: into the target's same-named mode when it has one, else its default mode.
+  const follow = (a: VariableAlias): string | number | boolean | undefined => {
+    const target = byName.get(a.aliasOf);
+    if (!target || (seen && seen.has(target.name))) return undefined;
+    const tMode = target.values && target.values[mode] !== undefined ? mode : defaultModeName(target, collections);
+    return resolve(byName, collections, target, tMode, next);
+  };
+  // A composed colour (doc-types ComposedColor) folds into ONE hex: each half a literal or an alias
+  // resolved like any other, the opacity a 0–100 percentage applied by color.ts composeAlpha (see the
+  // header). Either half unresolved -> undefined, and model() reports the token as skipped.
+  if (raw && typeof raw === "object" && "composed" in raw) {
+    const { color, opacity } = raw.composed;
+    const c = typeof color === "string" ? color : isAlias(color) ? follow(color) : undefined;
+    const o = typeof opacity === "number" ? opacity : isAlias(opacity) ? follow(opacity) : undefined;
+    const rgba = parseHex(c);
+    if (!rgba || typeof o !== "number" || !Number.isFinite(o)) return undefined;
+    return formatHex({ ...rgba, a: composeAlpha(rgba.a, o) });
+  }
+  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : undefined; // a motion OBJECT (EASING/TIMING) has no native literal
+  return follow(raw);
+}
+// An opacity FLOAT's resolved number (a number, or a string-number FLOAT); null when it is neither.
+const NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
+function opacityNumber(r: string | number | boolean): number | null {
+  const n = typeof r === "number" ? r : typeof r === "string" && NUMERIC_TEXT.test(r) ? Number(r) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 // → [{ name, type, modes:[{name,id}], default, fields:[{id, kind, source, values:{modeName: concrete}}] }]
@@ -147,22 +186,28 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       const kind = kindOf(v, opts);
       if (!segs(v.name).length) continue;
       if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
-      // A composed colour (colour + separate opacity, doc-types ComposedColor) is not folded into one
-      // native literal here. The opacity's range IS documented — "An opacity percentage from 0 to 100, or
-      // an alias to a FLOAT variable" (https://developers.figma.com/docs/rest-api/variables-types/,
-      // VariableComposedColor.opacity). Folding it into one literal (alpha × opacity/100, an inference:
-      // Figma does not document how it combines with a colour's own alpha) is not implemented here yet;
-      // tokens.css carries the whole value as color-mix().
-      if (Object.values(v.values || {}).some(isComposed)) {
-        warnings.push(`${v.name}: skipped — a composed colour (colour + separate opacity) has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
-        continue;
-      }
+      // An opacity FLOAT is written as a 0–1 fraction (see the header); every other value verbatim.
+      const pct = kind === "number" && percentOpacity(v, opts);
       const values: Record<string, Concrete> = {};
       let ok = true;
       for (const m of modeNames) {
         const r = resolve(byName, collections, v, m);
         if (r === undefined || (kind === "color" && !normHex(r))) { ok = false; break; }
+        if (pct) {
+          const n = opacityNumber(r);
+          if (n === null) { ok = false; break; }
+          const clamped = clampOpacityPct(n);
+          if (clamped !== n) warnings.push(`${v.name} (mode ${m}): opacity ${n} is outside Figma's 0–100 range; clamped to ${clamped} (as Figma does) and written as ${clamped / 100}`);
+          values[m] = clamped / 100;
+          continue;
+        }
         values[m] = isSentinel && isSentinel(v, r) ? FULL : r;
+      }
+      // A composed colour (colour + separate opacity) whose halves did not both resolve to a hex and a
+      // number here (an alias to a variable that was not exported?) has no native literal.
+      if (!ok && Object.values(v.values || {}).some(isComposed)) {
+        warnings.push(`${v.name}: skipped — a composed colour (colour + separate opacity) whose colour or opacity could not be resolved inside this file has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
+        continue;
       }
       if (!ok) { warnings.push(`${v.name}: skipped — its value could not be resolved inside this file (an alias to a library variable that was not exported?)`); continue; }
       cands.push({ v, kind, values, id: camel(segs(v.name)) });
