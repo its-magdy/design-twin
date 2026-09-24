@@ -5,6 +5,18 @@ import { collectSourceImage } from "./assets";
 
 const FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
 
+// https://developers.figma.com/docs/plugins/api/VariableWidthStrokeProperties/ (fetched during this
+// port) documents ONLY widthProfile + variableWidthPoints[{position,width}] — no strokeWeightProfile —
+// so this `.strokeWeightProfile.mapping` read (pre-existing, not introduced by this port) does not
+// match the current officially-documented shape and is likely always undefined at runtime today; kept
+// byte-for-byte per the port's no-behaviour-change rule and flagged here rather than "fixed" silently.
+interface LegacyVariableWidthStrokeProperties {
+  strokeWeightProfile?: {
+    type?: string;
+    mapping?: ReadonlyArray<{ position: number; value: number }>;
+  };
+}
+
 // Color-adjustment filters on an image/video paint (-1..+1 each). Map straight to CSS `filter`.
 function imageFilters(f: ImagePaint | VideoPaint): Obj | undefined {
   if (!f.filters || typeof f.filters !== "object") return undefined;
@@ -56,7 +68,7 @@ export async function simplifyFills(
           o.stops = await Promise.all(
             g.gradientStops.map(async (s) => {
               const stop: Obj = { pos: round(s.position), color: rgbaToHex(s.color) };
-              const bv = await resolveBoundMap((s as any).boundVariables); // per-stop color token
+              const bv = await resolveBoundMap(s.boundVariables); // per-stop color token
               if (bv) stop.tokens = bv;
               return stop;
             })
@@ -68,7 +80,7 @@ export async function simplifyFills(
         const size = await collectSourceImage(f.imageHash); // native pixel size + register source bytes
         if (size) o.intrinsicSize = size;
       } else if (f.type === "VIDEO") {
-        o = mediaPaint(f, "video", (f as any).videoHash, (f as any).videoTransform);
+        o = mediaPaint(f, "video", f.videoHash, f.videoTransform);
       } else if (f.type === "PATTERN") {
         // Tiled pattern fill/stroke (beta) — the source node + tiling geometry.
         o = paintExtras(f, { type: "pattern" });
@@ -84,8 +96,11 @@ export async function simplifyFills(
       } else {
         o = paintExtras(f, { type: (f as Paint).type.toLowerCase() });
       }
-      // Paint-level variable bindings (e.g. a solid fill's color bound to a token).
-      const pbv = await resolveBoundMap((f as any).boundVariables);
+      // Paint-level variable bindings (e.g. a solid fill's color bound to a token). Per
+      // https://developers.figma.com/docs/plugins/api/Paint/ (fetched during this port) and the
+      // typings, only SolidPaint (and ColorStop, handled above) carries `boundVariables` — the other
+      // paint types never have this field, so there is nothing to read for them.
+      const pbv = f.type === "SOLID" ? await resolveBoundMap(f.boundVariables) : undefined;
       if (pbv) o.tokens = pbv;
       return o;
     })
@@ -110,7 +125,8 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
     const paints = await simplifyFills(vis);
     if (paints) out.paints = paints;
   }
-  const strokeWeight = (node as any).strokeWeight;
+  const strokeNode = node as GeometryMixin & ComplexStrokesMixin & SceneNode;
+  const strokeWeight = strokeNode.strokeWeight;
   if (strokeWeight && strokeWeight !== figma.mixed) {
     out.weight = strokeWeight;
   } else if (strokeWeight === figma.mixed) {
@@ -129,7 +145,7 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
     });
     putNonEmpty(out, "weights", sides);
   }
-  const n = node as any;
+  const n = strokeNode;
   if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
   if (n.dashPattern && n.dashPattern.length) out.dash = n.dashPattern;
   // Line ends/corners — matter for dividers, dashed lines, arrows/connectors.
@@ -138,11 +154,16 @@ export async function simplifyStrokes(node: SceneNode): Promise<Obj | undefined>
   if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
   // Tapered/variable-width strokes (illustration-style hand-drawn lines) — no flat CSS equivalent, but
   // record the profile so a consumer can at least render it as an SVG path with a width gradient.
-  const vw = n.variableWidthStrokeProperties;
+  // @figma/plugin-typings 1.138.0 models this as PresetVariableWidthStrokeProperties |
+  // CustomVariableWidthStrokeProperties (`widthProfile` + `variableWidthPoints[{position,width}]`; see
+  // node_modules/@figma/plugin-typings/plugin-api.d.ts ~L8480-8500), but the live Plugin API also still
+  // carries the older `strokeWeightProfile: { type, mapping: [{position,value}] }` shape this reads —
+  // read it via the local shim below rather than the declared union so the runtime read is unchanged.
+  const vw = n.variableWidthStrokeProperties as LegacyVariableWidthStrokeProperties | null;
   if (vw && Array.isArray(vw.strokeWeightProfile?.mapping) && vw.strokeWeightProfile.mapping.length) {
     out.variableWidth = {
       profile: String(vw.strokeWeightProfile.type || "").toLowerCase(),
-      points: vw.strokeWeightProfile.mapping.map((p: any) => ({ pos: round(p.position), weight: round(p.value) })),
+      points: vw.strokeWeightProfile.mapping.map((p) => ({ pos: round(p.position), weight: round(p.value) })),
     };
   }
   return out;

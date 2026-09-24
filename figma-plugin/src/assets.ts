@@ -138,33 +138,31 @@ function imageFormat(b: Uint8Array): string {
   return "bin";
 }
 
+// figma.getImageByHash / Image.getSizeAsync / Image.getBytesAsync are all real, non-optional members
+// (plugin-api.d.ts: PluginAPI.getImageByHash ~1705, Image ~12667) — the `typeof === "function"` guards
+// this replaced predate that and are now unreachable; kept as try/catch instead.
 export function collectSourceImage(hash: string | undefined | null): Promise<{ w: number; h: number } | undefined> {
-  const f = figma as any;
-  if (!hash || typeof f.getImageByHash !== "function") return Promise.resolve(undefined);
+  if (!hash) return Promise.resolve(undefined);
   let p = imageSizeCache.get(hash);
   if (!p) {
-    p = readSourceImage(f, hash);
+    p = readSourceImage(hash);
     imageSizeCache.set(hash, p); // set BEFORE awaiting, so a concurrent fill joins this fetch
   }
   return p;
 }
 
-async function readSourceImage(f: any, hash: string): Promise<{ w: number; h: number } | undefined> {
+async function readSourceImage(hash: string): Promise<{ w: number; h: number } | undefined> {
   let size: { w: number; h: number } | undefined;
   try {
-    const img = f.getImageByHash(hash);
+    const img = figma.getImageByHash(hash);
     if (img) {
-      if (typeof img.getSizeAsync === "function") {
-        const s = await img.getSizeAsync();
-        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-      }
+      const s = await img.getSizeAsync();
+      if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
       // The promise cache above already guarantees one pass per hash, so no dedupe scan is needed.
-      if (typeof img.getBytesAsync === "function") {
-        try {
-          const bytes = await img.getBytesAsync();
-          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-        } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
-      }
+      try {
+        const bytes = await img.getBytesAsync();
+        if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+      } catch (e) { /* bytes optional — intrinsic size alone is still useful */ }
     }
   } catch (e) {
     warn("source image unavailable for hash " + hash + " (" + errMsg(e) + ")");
@@ -193,14 +191,14 @@ function paints(v: unknown): ReadonlyArray<Paint> | null {
 }
 // `fills` is passed in rather than re-read: collectAsset already paid for that getter (see the note
 // there — every read crosses the sandbox bridge and materializes fresh paint wrappers).
-function hasVisiblePaint(n: any, fills: ReadonlyArray<Paint> | null): boolean {
+function hasVisiblePaint(node: SceneNode, fills: ReadonlyArray<Paint> | null): boolean {
   if (fills && fills.some((p) => p.visible !== false)) return true;
-  const s = paints(n.strokes);
+  const s = paints("strokes" in node ? node.strokes : undefined);
   return !!s && s.some((p) => p.visible !== false);
 }
-function hasArea(n: any): boolean {
-  if (typeof n.width !== "number" || typeof n.height !== "number") return true; // unknown -> don't skip
-  return n.width > 0 && n.height > 0;
+function hasArea(node: SceneNode): boolean {
+  if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true; // unknown -> don't skip
+  return node.width > 0 && node.height > 0;
 }
 
 // Last-resort icon recovery when exportAsync genuinely fails on a node that DOES paint something.
@@ -208,26 +206,26 @@ function hasArea(n: any): boolean {
 // `vectorPaths` is documented as "simple, but incomplete", so it is deliberately not used here. The
 // node's own w/h come along so a consumer can drop the `d` strings straight into an inline
 // <svg viewBox="0 0 w h"> — otherwise the paths have no coordinate space to be interpreted in.
-function geometryOf(n: any): Obj | undefined {
-  const ds = (g: unknown): string[] =>
-    Array.isArray(g) ? g.map((p: any) => p && p.data).filter((d: unknown): d is string => typeof d === "string" && !!d) : [];
-  const fills = ds(n.fillGeometry);
-  const strokes = ds(n.strokeGeometry);
+function geometryOf(node: SceneNode): Obj | undefined {
+  const ds = (g: VectorPaths | undefined): string[] =>
+    g ? g.map((p) => p && p.data).filter((d): d is string => typeof d === "string" && !!d) : [];
+  const fills = ds("fillGeometry" in node ? node.fillGeometry : undefined);
+  const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : undefined);
   if (!fills.length && !strokes.length) return undefined;
   const out: Obj = {};
   if (fills.length) out.fills = fills;
   if (strokes.length) out.strokes = strokes;
-  if (typeof n.width === "number") { out.w = round(n.width); out.h = round(n.height); }
+  if ("width" in node && typeof node.width === "number") { out.w = round(node.width); out.h = round(node.height); }
   return out;
 }
 
 export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   const isVector = VECTOR_TYPES.has(node.type);
-  const n = node as any;
   // node.fills / node.children are Plugin-API GETTERS — each read crosses the sandbox bridge and
   // materializes a fresh array of paint/node wrappers. Read each once per node, not three times.
-  const fills: Paint[] | null = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
-  const kids: SceneNode[] | null = "children" in node && Array.isArray(n.children) ? n.children : null;
+  const rawFills = "fills" in node ? node.fills : undefined;
+  const fills: ReadonlyArray<Paint> | null = Array.isArray(rawFills) ? rawFills : null;
+  const kids: readonly SceneNode[] | null = "children" in node && Array.isArray(node.children) ? node.children : null;
   // A visible image fill makes a LEAF (rectangle/shape) exportable as a PNG. But a CONTAINER that
   // merely uses an image as its BACKGROUND and has children (a hero/cover-card/banner/profile-header)
   // must NOT be flattened — doing so silently drops its text/buttons/nested layout and their tokens.
@@ -236,25 +234,28 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
   // exportAsync flattens the WHOLE subtree into one SVG, so only treat a container as an icon/asset
   // when it's genuinely graphic: name matches AND it's icon-sized AND has no text descendant.
+  // `findOne` (PluginAPI.findOne on ChildrenMixin) is real and typed on every ICON_CONTAINER_TYPES
+  // member (FRAME/INSTANCE/GROUP/COMPONENT all have children) — no cast needed.
   let iconLike = false;
   if (
     ICON_CONTAINER_TYPES.has(node.type) &&
     node.name &&
     /icon|logo|illustration|avatar/i.test(node.name) &&
     "width" in node &&
-    Math.max(n.width, n.height) <= 96
+    "findOne" in node &&
+    Math.max(node.width, node.height) <= 96
   ) {
     try {
-      iconLike = !n.findOne((x: SceneNode) => x.type === "TEXT");
+      iconLike = !node.findOne((x) => x.type === "TEXT");
     } catch (e) {
       iconLike = false; // when unsure, keep the structure rather than flatten it
     }
   }
   // Figma's own asset heuristic (icon or raster image) — a free cross-check alongside the name/size
   // rule above, for containers our regex misses (unconventional names) as long as there's no text to lose.
-  if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+  if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && node.isAsset === true && "findOne" in node) {
     try {
-      iconLike = !n.findOne((x: SceneNode) => x.type === "TEXT");
+      iconLike = !node.findOne((x) => x.type === "TEXT");
     } catch (e) {
       iconLike = false;
     }
@@ -282,14 +283,18 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
   if (isVector || iconLike) {
     // The paint pre-check is for VECTOR-ish LEAVES only: an icon CONTAINER paints nothing itself —
     // its children do — so asking it the same question would skip every real icon frame.
-    if (!hasArea(n) || (isVector && !hasVisiblePaint(n, fills))) {
+    if (!hasArea(node) || (isVector && !hasVisiblePaint(node, fills))) {
       stats.assetsSkippedInvisible++;
       return undefined; // silent by design — see RunStats.assetsSkippedInvisible
     }
     let svg: string | null = null;
     let reason = "empty/invalid SVG";
     try {
-      svg = await (node as any).exportAsync({ format: "SVG_STRING" });
+      // Every VECTOR_TYPES/ICON_CONTAINER_TYPES member has ExportMixin (DefaultShapeMixin and
+      // DefaultFrameMixin both extend it) — the guard is always true on this path, but narrows the
+      // SVG_STRING overload (nodes/exportasync docs: exportAsync(settings) is overloaded per
+      // `format`, and only the `SVG_STRING` overload returns `Promise<string>`) without a cast.
+      if ("exportAsync" in node) svg = await node.exportAsync({ format: "SVG_STRING" });
     } catch (e) {
       reason = errMsg(e);
     }
@@ -298,7 +303,7 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
     }
     // The node DOES paint something and still would not render — recover its outlines rather than
     // emit a node with no graphic at all, which is what left 663 icons unimplementable.
-    const geo = geometryOf(n);
+    const geo = geometryOf(node);
     if (geo) {
       stats.assetsGeometry++;
       return { geometry: geo };
@@ -308,10 +313,10 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
     return undefined;
   }
   try {
-    if (hasImage) {
+    if (hasImage && "exportAsync" in node) {
       // useAbsoluteBounds:true exports the node's full dimensions rather than the cropped/clipped box,
       // so overhanging content isn't clipped out of the raster. (Verified: developers.figma.com ExportSettings.)
-      const bytes = await (node as any).exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
+      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
       if (!bytes || !bytes.length) {
         stats.assetsFailed++;
         warnKind("image asset export empty", node.name + " (" + node.id + ")");
@@ -332,13 +337,12 @@ export async function collectAsset(node: SceneNode): Promise<AssetResult> {
 // the auto-capped default (a small icon rendered at the same 2048px cap as a full page would come out
 // tiny); root callers never pass it, so their behavior is untouched.
 export async function collectReference(node: SceneNode, opts?: { scale?: number }): Promise<string | undefined> {
-  const n = node as any;
   if (!node || !("exportAsync" in node) || !("width" in node)) return undefined;
   try {
     const value = opts && typeof opts.scale === "number" && opts.scale > 0
       ? opts.scale
-      : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
-    const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
+      : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+    const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
     if (!bytes || !bytes.length) {
       warn("reference screenshot empty: " + node.name);
       return undefined;
@@ -352,15 +356,17 @@ export async function collectReference(node: SceneNode, opts?: { scale?: number 
 
 // Dev-Mode resource links (Jira / GitHub / Storybook URLs pinned to nodes). Node-level + async, so
 // call ONCE per exported root with includeChildren (never per-node — that would be O(nodes) round-trips).
+// getDevResourcesAsync is declared on DevResourcesMixin, which BaseNodeMixin extends (plugin-api.d.ts
+// ~6220/~6444) — every BaseNode has it for real, so the old `typeof === "function"` probe is
+// unreachable; kept as a try/catch instead. See developers.figma.com/docs/plugins/api/properties/nodes-getdevresourcesasync/.
 export async function devResources(node: BaseNode): Promise<Obj[] | undefined> {
-  const n = node as any;
-  if (!node || typeof n.getDevResourcesAsync !== "function") return undefined;
+  if (!node) return undefined;
   try {
-    const rs = await n.getDevResourcesAsync({ includeChildren: true });
+    const rs = await node.getDevResourcesAsync({ includeChildren: true });
     if (!Array.isArray(rs) || !rs.length) return undefined;
     // Keep the owning node (r.nodeId) distinct from inheritedNodeId (a link inherited from the main
     // component), so a link on a specific child can be attributed rather than collapsed.
-    return rs.map((r: any) => {
+    return rs.map((r) => {
       const o: Obj = { name: r.name, url: r.url };
       if (r.nodeId) o.nodeId = r.nodeId;
       if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;

@@ -10,8 +10,21 @@ const ALIGN: { [k: string]: string } = {
 };
 
 // Build flex intent from any auto-layout-shaped source (a real frame OR node.inferredAutoLayout —
-// both carry the same fields, so this stays structurally typed as `any`).
-function flexIntent(src: any): Obj {
+// both carry the same fields via AutoLayoutMixin, so a small structural interface covers either).
+interface FlexLike {
+  layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
+  itemSpacing?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  primaryAxisAlignItems?: "MIN" | "MAX" | "CENTER" | "SPACE_BETWEEN" | "SPACE_EVENLY" | "SPACE_AROUND";
+  counterAxisAlignItems?: "MIN" | "MAX" | "CENTER" | "BASELINE";
+  layoutWrap?: "NO_WRAP" | "WRAP";
+  counterAxisSpacing?: number | null;
+  counterAxisAlignContent?: "AUTO" | "SPACE_BETWEEN";
+}
+function flexIntent(src: FlexLike): Obj {
   const l: Obj = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
   if (src.itemSpacing) l.gap = src.itemSpacing;
   const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
@@ -30,20 +43,20 @@ function flexIntent(src: any): Obj {
 // A Figma LayoutGrid (column/row grid or uniform grid) -> a compact descriptor.
 export function simplifyGrid(g: LayoutGrid): Obj | undefined {
   if (!g) return undefined;
-  const gg = g as any;
-  const o: Obj = { pattern: gg.pattern ? String(gg.pattern).toLowerCase() : undefined };
-  if (typeof gg.sectionSize === "number") o.size = round(gg.sectionSize);
-  if (typeof gg.gutterSize === "number") o.gutter = round(gg.gutterSize);
-  if (typeof gg.count === "number" && gg.count !== Infinity) o.count = gg.count;
-  if (typeof gg.offset === "number") o.offset = round(gg.offset);
-  if (gg.alignment) o.alignment = String(gg.alignment).toLowerCase();
-  if (gg.visible === false) o.visible = false;
+  const o: Obj = { pattern: g.pattern ? String(g.pattern).toLowerCase() : undefined };
+  if (g.pattern === "GRID" && typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+  if (g.pattern !== "GRID") {
+    if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
+    if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
+    if (typeof g.offset === "number") o.offset = round(g.offset);
+    if (g.alignment) o.alignment = String(g.alignment).toLowerCase();
+  }
+  if (g.visible === false) o.visible = false;
   return o;
 }
 
-// A GridTrackSize ({ type:'FLEX'|'FIXED'|'HUG', value?:number }) -> compact track descriptor.
-function simplifyTrack(t: any): any {
-  if (!t || typeof t !== "object") return t;
+// A GridTrackSize ({ type:'FLEX'|'FIXED', value?:number }) -> compact track descriptor.
+function simplifyTrack(t: GridTrackSize): Obj {
   const o: Obj = { type: t.type ? String(t.type).toLowerCase() : undefined };
   if (typeof t.value === "number") o.value = round(t.value);
   return o;
@@ -52,9 +65,27 @@ function simplifyTrack(t: any): any {
 // Grid child cell alignment (justify-self / align-self analog): MIN|CENTER|MAX|AUTO.
 export const GRID_SELF: { [k: string]: string } = { MIN: "start", CENTER: "center", MAX: "end" };
 
+// The auto-layout/grid-shaped fields layout() reads, on top of a real SceneNode — the plugin manifest
+// targets `documentAccess: "dynamic-page"`, so not every SceneNode variant carries these (hence the
+// `in node` guards below), but the ones that do are typed exactly per AutoLayoutMixin/GridLayoutMixin.
+interface LayoutNode extends FlexLike {
+  inferredAutoLayout?: InferredAutoLayoutResult | null;
+  width?: number;
+  height?: number;
+  gridColumnCount?: number;
+  gridRowCount?: number;
+  gridColumnGap?: number;
+  gridRowGap?: number;
+  gridColumnSizes?: GridTrackSize[];
+  gridRowSizes?: GridTrackSize[];
+  gridItemsPositioning?: "MANUAL" | "ROW_AUTO_FLOW";
+  gridAutoTracks?: "NONE" | "ROWS";
+  itemReverseZIndex?: boolean;
+}
+
 // Auto Layout -> flex intent. NONE with an inferred layout -> flex (flagged). NONE otherwise -> absolute.
 export function layout(node: SceneNode): Obj | undefined {
-  const n = node as any;
+  const n = node as SceneNode & LayoutNode;
   if (!("layoutMode" in node) || n.layoutMode === "NONE") {
     // inferredAutoLayout upgrades a non-auto-layout frame to flex intent (better than raw coords).
     if ("inferredAutoLayout" in node && n.inferredAutoLayout) {

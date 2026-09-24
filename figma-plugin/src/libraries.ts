@@ -29,14 +29,24 @@ export const UNKNOWN_LIBRARY = "unknown-library";
 // The user-maintained key -> library-name registry, stored as document plugin data. There is NO API
 // that attributes a component key to its library (see the header), so this is the ONLY non-guessed
 // source of attribution. Absent/garbage data degrades to "no attribution", never to an exception.
+// The stored shape BEFORE validation: a flat key -> library-name object, but values are only trusted
+// after the typeof check below (the data is hand-maintained, so anything can be in it).
+interface LibraryRegistry {
+  [componentKey: string]: unknown;
+}
+
 function readRegistry(sink: (m: string) => void): { [componentKey: string]: string } {
   try {
-    const raw = (figma.root as any).getPluginData && (figma.root as any).getPluginData("libraryRegistry");
+    const root = figma.root;
+    const raw = typeof root.getPluginData === "function" && root.getPluginData("libraryRegistry");
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as LibraryRegistry | null;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const out: { [k: string]: string } = {};
-    for (const k of Object.keys(parsed)) if (typeof parsed[k] === "string" && parsed[k]) out[k] = parsed[k];
+    for (const k of Object.keys(parsed)) {
+      const v = parsed[k];
+      if (typeof v === "string" && v) out[k] = v;
+    }
     return out;
   } catch (e) {
     sink("library registry (document pluginData 'libraryRegistry') is unreadable (" + errMsg(e) + ") — remote components stay unattributed");
@@ -55,9 +65,9 @@ function readRegistry(sink: (m: string) => void): { [componentKey: string]: stri
 async function allInstances(sink: (m: string) => void): Promise<InstanceNode[]> {
   await loadAllPages("library component scan may be incomplete");
   const out: InstanceNode[] = [];
-  const prevSkip = (figma as any).skipInvisibleInstanceChildren;
+  const prevSkip = figma.skipInvisibleInstanceChildren;
   try {
-    try { (figma as any).skipInvisibleInstanceChildren = true; } catch (e) {}
+    try { figma.skipInvisibleInstanceChildren = true; } catch (e) {}
     for (const page of figma.root.children) {
       try {
         out.push(...(page.findAllWithCriteria({ types: ["INSTANCE"] }) as InstanceNode[]));
@@ -66,7 +76,7 @@ async function allInstances(sink: (m: string) => void): Promise<InstanceNode[]> 
       }
     }
   } finally {
-    try { (figma as any).skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
+    try { figma.skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
   }
   return out;
 }
@@ -76,7 +86,7 @@ async function allInstances(sink: (m: string) => void): Promise<InstanceNode[]> 
 // instance must not take the whole catalog down with it.
 async function mainOf(inst: InstanceNode): Promise<ComponentNode | null> {
   try {
-    return await (inst as any).getMainComponentAsync();
+    return await inst.getMainComponentAsync();
   } catch (e) {
     return null;
   }
@@ -89,7 +99,7 @@ async function mainOf(inst: InstanceNode): Promise<ComponentNode | null> {
 // defensive padding, it is the documented shape. A crash here would have taken out the whole catalog
 // for exactly the files this module exists to serve.
 function mainNames(main: ComponentNode): { name: string; variantOf?: string } {
-  const parent: any = (main as any).parent || null;
+  const parent = main.parent || null;
   if (parent && parent.type === "COMPONENT_SET") return { name: parent.name, variantOf: main.name };
   return { name: main.name };
 }
@@ -101,7 +111,7 @@ function mainNames(main: ComponentNode): { name: string; variantOf?: string } {
 // COMPLETE, and downstream codegen that mistakes one for the other emits a type with missing cases.
 function tryDefinitions(main: ComponentNode): Obj | undefined {
   try {
-    const defs = (main as any).componentPropertyDefinitions;
+    const defs = main.componentPropertyDefinitions;
     if (!defs || !Object.keys(defs).length) return undefined;
     const props: Obj = {};
     for (const k of Object.keys(defs)) {
@@ -110,7 +120,7 @@ function tryDefinitions(main: ComponentNode): Obj | undefined {
       if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
       if (d.defaultValue !== undefined) p.default = d.defaultValue;
       if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
-        p.preferredValues = d.preferredValues.map((v: any) => ({ type: v.type, key: v.key }));
+        p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
       }
       if (d.description) p.description = d.description;
       props[propName(k)] = p;
@@ -129,14 +139,14 @@ function tryDefinitions(main: ComponentNode): Obj | undefined {
 function aggregateFromInstances(instances: InstanceNode[]): Obj | undefined {
   const props: Obj = {};
   for (const inst of instances) {
-    let cp: any;
-    try { cp = (inst as any).componentProperties; } catch (e) { continue; }
+    let cp: ComponentProperties | undefined;
+    try { cp = inst.componentProperties; } catch (e) { continue; }
     if (!cp) continue;
     for (const k of Object.keys(cp)) {
       const v = cp[k];
       if (!v) continue;
       const name = propName(k);
-      const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] as any[] });
+      const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] as Array<string | boolean> });
       // Values are primitives (string/boolean) for VARIANT/TEXT/BOOLEAN and a component key for
       // INSTANCE_SWAP — all safely comparable with indexOf. Uniqued so an option list of 3 does not
       // become a list of 300 on a file with 300 buttons.
@@ -165,8 +175,8 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
   for (let i = 0; i < instances.length; i++) {
     const main = mains[i];
     if (!main) continue;
-    if (!(main as any).remote) continue; // local mains are already in collectComponentCatalog
-    const key = (main as any).key;
+    if (!main.remote) continue; // local mains are already in collectComponentCatalog
+    const key = main.key;
     if (!key) { unkeyed++; continue; } // a remote main with no publish key cannot be deduped or mapped
     const bucket = byKey.get(key);
     if (bucket) bucket.instances.push(instances[i]);
@@ -186,7 +196,7 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
       uses: bucket.instances.length, // how many instances of it are in THIS file
     };
     if (names.variantOf) entry.variant = names.variantOf;
-    if ((bucket.main as any).description) entry.description = (bucket.main as any).description;
+    if (bucket.main.description) entry.description = bucket.main.description;
     const defs = tryDefinitions(bucket.main);
     if (defs) {
       entry.props = defs;
@@ -291,12 +301,12 @@ export async function listLibraries(): Promise<Obj> {
     ]);
     const perColl = new Map<string, number>();
     for (const v of vars) perColl.set(v.variableCollectionId, (perColl.get(v.variableCollectionId) || 0) + 1);
-    for (const c of colls) localCollections.push({ key: (c as any).key || c.id, name: c.name, variableCount: perColl.get(c.id) || 0 });
+    for (const c of colls) localCollections.push({ key: c.key || c.id, name: c.name, variableCount: perColl.get(c.id) || 0 });
   } catch (e) {
     sink("local variable collections could not be listed (" + errMsg(e) + ")");
   }
   libraries.push({
-    key: (figma as any).fileKey || "local",
+    key: figma.fileKey || "local",
     name: (figma.root && figma.root.name) || "(this file)",
     kind: "local",
     variableCollections: localCollections,

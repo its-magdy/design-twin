@@ -1,7 +1,7 @@
 // The recursive node serializer: one SceneNode -> compact JSON. Orchestrates the typed helper
 // modules. Reads are defensive (`"x" in node` guards) because it runs over the whole SceneNode
 // union; per-property values are typed inside the helpers it calls.
-import { Obj, round, propName, rgbaToHex, nonEmpty, putNonEmpty, xy } from "./util";
+import { Obj, round, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, anyProp, numProp } from "./util";
 import { stats, warn, runOpts } from "./state";
 import { layout, GRID_SELF, simplifyGrid } from "./layout";
 import { simplifyFills, simplifyStrokes } from "./paint";
@@ -16,7 +16,11 @@ import { collectMotion } from "./motion";
 const MAX_DEPTH = 60;
 
 // Enum reads that are all "if present and not the default, emit lowercased" — table-driven so a new
-// Figma enum property is one row rather than another hand-derived guard line.
+// Figma enum property is one row rather than another hand-derived guard line. The field names span
+// many different SceneNode-union members (layoutAlign/layoutSizing* only exist on auto-layout
+// children, overflowDirection only on scroll frames, etc), so a single static property type can't
+// cover the table — `anyProp`/`numProp` (util.ts) are the one sanctioned dynamic-key read for exactly
+// this "table of {node-type-varying field} -> output key" shape.
 // [ node field, output key, value to treat as the default and skip ]
 const LOWER_ENUMS: Array<[string, string, string?]> = [
   ["layoutAlign", "alignSelf", "INHERIT"],
@@ -67,15 +71,15 @@ function radiusOut(out: Obj, raw: number): number {
 // Own-scope plugin data (getPluginData) written by THIS plugin — round-trip metadata (e.g. a future
 // Code-Connect mapping our write plane stamps). Shared namespaces can't be enumerated by the API, so
 // only own-scope keys are read. Opt-in via runOpts.pluginData.
+// getPluginData(Keys) is declared on PluginDataMixin, which every BaseNode extends (verified: plugin-api.d.ts
+// PluginDataMixin ~6380, BaseNodeMixin extends it ~6220) — real methods, not a beta surface, so no cast.
 function pluginData(node: BaseNode): Obj | undefined {
-  const n = node as any;
-  if (typeof n.getPluginDataKeys !== "function") return undefined;
   let keys: string[] = [];
-  try { keys = n.getPluginDataKeys(); } catch (e) { return undefined; }
+  try { keys = node.getPluginDataKeys(); } catch (e) { return undefined; }
   if (!keys || !keys.length) return undefined;
   const out: Obj = {};
   for (const k of keys) {
-    try { const v = n.getPluginData(k); if (v) out[k] = v; } catch (e) {}
+    try { const v = node.getPluginData(k); if (v) out[k] = v; } catch (e) {}
   }
   return nonEmpty(out);
 }
@@ -89,15 +93,13 @@ function pluginData(node: BaseNode): Obj | undefined {
 // API can't enumerate them — so we probe the well-known ones.
 const SHARED_NAMESPACES = ["tokens"];
 function sharedData(node: BaseNode): Obj | undefined {
-  const n = node as any;
-  if (typeof n.getSharedPluginDataKeys !== "function" || typeof n.getSharedPluginData !== "function") return undefined;
   const out: Obj = {};
   for (const ns of SHARED_NAMESPACES) {
     let keys: string[] = [];
-    try { keys = n.getSharedPluginDataKeys(ns) || []; } catch (e) { continue; }
+    try { keys = node.getSharedPluginDataKeys(ns) || []; } catch (e) { continue; }
     const bucket: Obj = {};
     for (const k of keys) {
-      try { const v = n.getSharedPluginData(ns, k); if (v) bucket[k] = v; } catch (e) {}
+      try { const v = node.getSharedPluginData(ns, k); if (v) bucket[k] = v; } catch (e) {}
     }
     putNonEmpty(out, ns, bucket);
   }
@@ -106,11 +108,12 @@ function sharedData(node: BaseNode): Obj | undefined {
 
 // Figma's OWN computed CSS for the node — the oracle the paid get_design_context leans on. One async
 // call per node, so opt-in via runOpts.css. Ground truth for a codegen self-correction loop.
+// getCSSAsync is declared directly on BaseNodeMixin (plugin-api.d.ts ~6367), i.e. every SceneNode has
+// it — the original `typeof n.getCSSAsync === "function"` guard predates that and is now unreachable
+// (kept as a try/catch instead, in case a given node type still rejects at runtime).
 async function nodeCss(node: SceneNode): Promise<Obj | undefined> {
-  const n = node as any;
-  if (typeof n.getCSSAsync !== "function") return undefined;
   try {
-    const css = await n.getCSSAsync();
+    const css = await node.getCSSAsync();
     return css && Object.keys(css).length ? css : undefined;
   } catch (e) {
     return undefined;
@@ -124,20 +127,20 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     return null;
   }
   stats.nodes++;
-  const n = node as any;
   // Hidden nodes are KEPT (flagged) — hidden variant states (error toasts, tooltips, empty states)
   // are part of the design and must be implementable; codegen decides render vs display:none.
   const out: Obj = { type: node.type, name: node.name, id: node.id };
-  if (n.visible === false) out.hidden = true;
+  if ("visible" in node && node.visible === false) out.hidden = true;
 
   if (node.type === "INSTANCE" && node.componentProperties) {
     const props: Obj = {};
     const propTokens: Obj = {}; // a BOOLEAN/TEXT prop whose value is driven by a variable (token link)
-    const keys = Object.keys(node.componentProperties);
+    const componentProperties = node.componentProperties;
+    const keys = Object.keys(componentProperties);
     // One await for the whole prop set rather than one per property — the bindings are independent.
-    const bound = await Promise.all(keys.map((k) => resolveBoundMap((node.componentProperties as any)[k].boundVariables)));
+    const bound = await Promise.all(keys.map((k) => resolveBoundMap(componentProperties[k].boundVariables)));
     keys.forEach((k, i) => {
-      props[propName(k)] = (node.componentProperties as any)[k].value;
+      props[propName(k)] = componentProperties[k].value;
       const bv = bound[i];
       if (bv && bv.value) propTokens[propName(k)] = bv.value;
     });
@@ -150,36 +153,36 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if (lay) out.layout = lay;
 
   // Child-in-parent layout role (out of auto-layout flow / grows to fill).
-  const absoluteInParent = "layoutPositioning" in node && n.layoutPositioning === "ABSOLUTE";
+  const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
   if (absoluteInParent) out.absolute = true;
-  if ("layoutGrow" in node && n.layoutGrow) out.grow = n.layoutGrow;
+  if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
 
   // Child sizing intent (FILL/HUG/FIXED), counter-axis alignment, scroll direction — see LOWER_ENUMS.
   for (const [field, key, skip] of LOWER_ENUMS) {
-    const v = n[field];
+    const v = anyProp(node, field);
     if (typeof v === "string" && v && v !== skip) out[key] = v.toLowerCase();
   }
 
   // Grid child placement — span across tracks AND the starting (anchor) cell.
-  if ("gridColumnSpan" in node && typeof n.gridColumnSpan === "number" && n.gridColumnSpan !== 1) out.gridColumnSpan = n.gridColumnSpan;
-  if ("gridRowSpan" in node && typeof n.gridRowSpan === "number" && n.gridRowSpan !== 1) out.gridRowSpan = n.gridRowSpan;
-  if ("gridColumnAnchorIndex" in node && typeof n.gridColumnAnchorIndex === "number") out.gridColumnStart = n.gridColumnAnchorIndex; // 0-based track index
-  if ("gridRowAnchorIndex" in node && typeof n.gridRowAnchorIndex === "number") out.gridRowStart = n.gridRowAnchorIndex;
+  if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+  if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+  if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex; // 0-based track index
+  if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
   for (const [field, key] of GRID_SELF_ENUMS) {
-    const v = n[field];
-    if (v && v !== "AUTO") out[key] = GRID_SELF[v];
+    const v = anyProp(node, field);
+    if (v && v !== "AUTO" && typeof v === "string") out[key] = GRID_SELF[v];
   }
 
   // Position — only when the parent does NOT auto-position this node.
-  if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof n.x === "number") {
-    out.x = round(n.x);
-    out.y = round(n.y);
+  if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
+    out.x = round(node.x);
+    out.y = round(node.y);
   }
 
   // Resolved page-space box — the ground-truth pixel size. `renderBox` adds stroke/shadow/blur extent,
   // emitted only when it actually differs from the layout box.
-  if ("absoluteBoundingBox" in node && n.absoluteBoundingBox) {
-    const b = n.absoluteBoundingBox;
+  if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
+    const b = node.absoluteBoundingBox;
     // w/h always; x/y only under the SAME rule as the `x`/`y` fields above. These are PAGE-space
     // coordinates: inside an auto-layout or grid parent the container decides placement, so codegen
     // must never use them — and emitting them invites exactly that (absolutely-positioned children
@@ -187,87 +190,89 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     // any child of a non-auto-layout parent.
     out.box = { w: round(b.width), h: round(b.height) };
     if (!parentControlsLayout || absoluteInParent) { out.box.x = round(b.x); out.box.y = round(b.y); }
-    const rb = n.absoluteRenderBounds;
+    const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
     if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
       out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
     }
   }
 
   // Per-frame layout grids (responsive column/row grids).
-  if ("layoutGrids" in node && Array.isArray(n.layoutGrids) && n.layoutGrids.length) {
-    out.layoutGrids = n.layoutGrids.map(simplifyGrid).filter(Boolean);
+  if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
+    out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter(Boolean);
   }
 
   // Dev Mode handoff — FREE via the Plugin API and NOT surfaced by the paid REST/get_design_context.
-  if ("annotations" in node && Array.isArray(n.annotations) && n.annotations.length) {
-    out.annotations = n.annotations.map((a: any) => {
+  if ("annotations" in node && Array.isArray(node.annotations) && node.annotations.length) {
+    out.annotations = node.annotations.map((a) => {
       const o: Obj = {};
       if (a.label) o.label = a.label;
       if (a.labelMarkdown) o.markdown = a.labelMarkdown;
       if (a.categoryId) o.categoryId = a.categoryId; // groups annotations by Dev-Mode category
-      if (Array.isArray(a.properties) && a.properties.length) o.props = a.properties.map((p: any) => p.type);
+      if (Array.isArray(a.properties) && a.properties.length) o.props = a.properties.map((p: AnnotationProperty) => p.type);
       return o;
     });
   }
-  if ("devStatus" in node && n.devStatus && n.devStatus.type) {
-    out.devStatus = n.devStatus.type.toLowerCase(); // ready_for_dev | completed
-    if (n.devStatus.description) out.devStatusNote = n.devStatus.description; // free-text handoff note
+  if ("devStatus" in node && node.devStatus && node.devStatus.type) {
+    out.devStatus = node.devStatus.type.toLowerCase(); // ready_for_dev | completed
+    if (node.devStatus.description) out.devStatusNote = node.devStatus.description; // free-text handoff note
   }
 
   // Min/max size (responsive auto-layout constraints). Allocated lazily — most nodes have none.
   let sizeLimits: Obj | undefined;
   for (const k of SIZE_LIMIT_KEYS) {
-    if (k in node && typeof n[k] === "number") (sizeLimits || (sizeLimits = {}))[k] = round(n[k]);
+    const v = numProp(node, k);
+    if (k in node && typeof v === "number") (sizeLimits || (sizeLimits = {}))[k] = round(v);
   }
   if (sizeLimits) out.sizeLimits = sizeLimits;
 
   // Pin constraints (how a non-auto-layout child resizes with its parent).
-  if ("constraints" in node && n.constraints && (n.constraints.horizontal !== "MIN" || n.constraints.vertical !== "MIN")) {
-    out.pin = { h: n.constraints.horizontal.toLowerCase(), v: n.constraints.vertical.toLowerCase() };
+  if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
+    out.pin = { h: node.constraints.horizontal.toLowerCase(), v: node.constraints.vertical.toLowerCase() };
   }
 
   // Sticky children: the first N children of a scrolling frame are PINNED (Figma's "fixed position
   // when scrolling"). Without this a sticky header / bottom nav / FAB serializes as a plain flow
   // child and codegen emits a header that scrolls away with the content.
-  if ("numberOfFixedChildren" in node && typeof n.numberOfFixedChildren === "number" && n.numberOfFixedChildren > 0) {
-    out.fixedChildren = n.numberOfFixedChildren;
+  if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
+    out.fixedChildren = node.numberOfFixedChildren;
   }
 
   // Clip — the difference between a ScrollView and a fixed frame (critical on mobile). The matching
   // `scroll` (overflowDirection) read is table-driven above.
-  if ("clipsContent" in node && n.clipsContent) out.clip = true;
+  if ("clipsContent" in node && node.clipsContent) out.clip = true;
 
   // Three INDEPENDENT paint reads that each end in resolveBoundMap (a getVariableByIdAsync round trip
   // on a cache miss), awaited one after another for no reason — none consumes another's result, and
   // they write distinct keys. Same treatment as the fan-out at the end of this function.
   const [fills, strokes, effects] = await Promise.all([
-    simplifyFills("fills" in node ? n.fills : undefined),
+    simplifyFills("fills" in node ? node.fills : undefined),
     simplifyStrokes(node),
-    simplifyEffects("effects" in node ? n.effects : undefined),
+    simplifyEffects("effects" in node ? node.effects : undefined),
   ]);
   if (fills) out.fills = fills;
   if (strokes) out.strokes = strokes;
   // Whether stroke weight counts toward auto-layout size (border-box vs content-box).
-  if ("strokesIncludedInLayout" in node && n.strokesIncludedInLayout) out.strokesInLayout = true;
+  if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
   if (effects) out.effects = effects;
 
   if ("cornerRadius" in node) {
-    if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = radiusOut(out, n.cornerRadius);
-    else if (n.cornerRadius === figma.mixed) {
+    if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = radiusOut(out, node.cornerRadius);
+    else if (node.cornerRadius === figma.mixed) {
       // Per-corner fallback (pills/cards with asymmetric corners).
       const corners: Obj = {};
       for (const [k, s] of CORNER_KEYS) {
-        if (k in node && typeof n[k] === "number" && n[k]) corners[s] = radiusOut(out, n[k]);
+        const v = numProp(node, k);
+        if (k in node && typeof v === "number" && v) corners[s] = radiusOut(out, v);
       }
       putNonEmpty(out, "radius", corners);
     }
   }
-  if ("opacity" in node && n.opacity < 1) out.opacity = round(n.opacity);
-  if ("rotation" in node && n.rotation) out.rotation = round(n.rotation);
+  if ("opacity" in node && node.opacity < 1) out.opacity = round(node.opacity);
+  if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
   // Transform decomposition. `rotation` above covers the rotation term; this recovers the two parts
   // of relativeTransform that were being thrown away.
-  if ("relativeTransform" in node && Array.isArray(n.relativeTransform) && n.relativeTransform.length === 2) {
-    const m = n.relativeTransform;
+  if ("relativeTransform" in node && Array.isArray(node.relativeTransform) && node.relativeTransform.length === 2) {
+    const m = node.relativeTransform;
     // [[a c e],[b d f]] — column-major 2x3 affine, per developers.figma.com.
     const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
     // Mirror (negative-scale flip): the sign of the determinant.
@@ -281,17 +286,17 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
       if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
     }
   }
-  if ("blendMode" in node && n.blendMode && n.blendMode !== "NORMAL" && n.blendMode !== "PASS_THROUGH") out.blendMode = n.blendMode.toLowerCase();
-  if ("isMask" in node && n.isMask) out.mask = true;
-  if (out.mask && "maskType" in node && n.maskType && n.maskType !== "ALPHA") out.maskType = String(n.maskType).toLowerCase(); // vector(clip-path) | luminance
-  if ("cornerSmoothing" in node && typeof n.cornerSmoothing === "number" && n.cornerSmoothing) out.cornerSmoothing = round(n.cornerSmoothing); // squircle -> iOS "continuous" corners
-  if ("targetAspectRatio" in node && n.targetAspectRatio && n.targetAspectRatio.y) out.aspectRatio = round(n.targetAspectRatio.x / n.targetAspectRatio.y); // locked ratio -> CSS aspect-ratio
+  if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = node.blendMode.toLowerCase();
+  if ("isMask" in node && node.isMask) out.mask = true;
+  if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase(); // vector(clip-path) | luminance
+  if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing); // squircle -> iOS "continuous" corners
+  if ("targetAspectRatio" in node && node.targetAspectRatio && node.targetAspectRatio.y) out.aspectRatio = round(node.targetAspectRatio.x / node.targetAspectRatio.y); // locked ratio -> CSS aspect-ratio
 
   // Parametric shape intent. These node types flatten to SVG for rendering (assets.ts), but the raw
   // parameters preserve editable design intent codegen can act on (SVG arc/conic-gradient/dasharray,
   // clip-path, boolean mask). Read BEFORE the asset early-return below so they survive on asset leaves.
-  if (node.type === "ELLIPSE" && n.arcData) {
-    const a = n.arcData; // radians; innerRadius 0..1 (donut ratio)
+  if (node.type === "ELLIPSE" && node.arcData) {
+    const a = node.arcData; // radians; innerRadius 0..1 (donut ratio)
     const isFull = (!a.startingAngle || a.startingAngle === 0) && Math.abs((a.endingAngle || 0) - Math.PI * 2) < 1e-4 && !a.innerRadius;
     if (!isFull) {
       const arc: Obj = {};
@@ -303,20 +308,20 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
   if (node.type === "STAR") {
     const shape: Obj = {};
-    if (typeof n.pointCount === "number") shape.points = n.pointCount; // spikes, integer >= 3
-    if (typeof n.innerRadius === "number") shape.innerRadius = round(n.innerRadius); // 0..1 acuteness
+    if (typeof node.pointCount === "number") shape.points = node.pointCount; // spikes, integer >= 3
+    if (typeof node.innerRadius === "number") shape.innerRadius = round(node.innerRadius); // 0..1 acuteness
     putNonEmpty(out, "shape", shape);
   }
-  if (node.type === "POLYGON" && typeof n.pointCount === "number") out.shape = { points: n.pointCount }; // 3=triangle, 6=hexagon
-  if (node.type === "BOOLEAN_OPERATION" && n.booleanOperation) out.booleanOp = String(n.booleanOperation).toLowerCase(); // union|intersect|subtract|exclude
+  if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount }; // 3=triangle, 6=hexagon
+  if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = String(node.booleanOperation).toLowerCase(); // union|intersect|subtract|exclude
 
   // The designer's OWN export presets — @2x/@3x/SVG and the intended asset filename suffix. This is
   // explicit intent about which nodes ship as assets and at what density, which nothing else in the
   // export carries. Compacted to format/suffix/scale; omitted entirely when the node has none.
-  if ("exportSettings" in node && Array.isArray(n.exportSettings) && n.exportSettings.length) {
-    out.exportSettings = n.exportSettings.map((es: any) => {
+  if ("exportSettings" in node && Array.isArray(node.exportSettings) && node.exportSettings.length) {
+    out.exportSettings = node.exportSettings.map((es) => {
       const o: Obj = { format: String(es.format || "").toLowerCase() };
-      if (es.suffix) o.suffix = es.suffix;
+      if ("suffix" in es && es.suffix) o.suffix = es.suffix;
       const con = es.constraint;
       // SCALE 1 is the default and says nothing; WIDTH/HEIGHT constraints carry a pixel target.
       if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
@@ -327,31 +332,31 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
 
   // Node detached from a component — codegen should map it back rather than treat it as bespoke markup.
-  if ("detachedInfo" in node && n.detachedInfo) {
-    out.detachedFrom = n.detachedInfo.type === "library" ? { key: n.detachedInfo.componentKey } : { componentId: n.detachedInfo.componentId };
+  if ("detachedInfo" in node && node.detachedInfo) {
+    out.detachedFrom = node.detachedInfo.type === "library" ? { key: node.detachedInfo.componentKey } : { componentId: node.detachedInfo.componentId };
   }
   // Nested instances whose component props surface at THIS instance's top level (distinct wiring).
   if (node.type === "INSTANCE" && "exposedInstances" in node) {
     try {
-      if (Array.isArray(n.exposedInstances) && n.exposedInstances.length) out.exposedInstances = n.exposedInstances.map((i: any) => i.id);
+      if (Array.isArray(node.exposedInstances) && node.exposedInstances.length) out.exposedInstances = node.exposedInstances.map((i) => i.id);
     } catch (e) {}
   }
   // Overlay frame settings — emit when the frame carries any non-default overlay configuration.
   if ("overlayPositionType" in node) {
-    const hasScrim = n.overlayBackground && n.overlayBackground.type === "SOLID_COLOR" && n.overlayBackground.color;
-    const closeOutside = n.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
-    const posSet = n.overlayPositionType && n.overlayPositionType !== "CENTER";
+    const hasScrim = node.overlayBackground && node.overlayBackground.type === "SOLID_COLOR" && node.overlayBackground.color;
+    const closeOutside = node.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
+    const posSet = node.overlayPositionType && node.overlayPositionType !== "CENTER";
     if (hasScrim || closeOutside || posSet) {
       const ov: Obj = {};
-      if (n.overlayPositionType) ov.position = n.overlayPositionType.toLowerCase();
+      if (node.overlayPositionType) ov.position = node.overlayPositionType.toLowerCase();
       if (closeOutside) ov.closeOnClickOutside = true;
-      if (hasScrim) ov.background = rgbaToHex(n.overlayBackground.color);
+      if (hasScrim && node.overlayBackground.type === "SOLID_COLOR") ov.background = rgbaToHex(node.overlayBackground.color);
       out.overlay = ov;
     }
   }
 
   // TEXT_PATH (text on a curve) shares the TEXT characters/font surface.
-  if (node.type === "TEXT" || node.type === "TEXT_PATH") Object.assign(out, await serializeText(node as TextNode | TextPathNode));
+  if (node.type === "TEXT" || node.type === "TEXT_PATH") Object.assign(out, await serializeText(node));
 
   // Which component prop drives this sublayer + how it diverges from its main component (sync reads).
   const propRefs = componentPropRefs(node);
@@ -420,22 +425,22 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
 
   // Tables expose NO `children` — cells are reached only via cellAt(r,c).
-  if (node.type === "TABLE" && typeof n.numRows === "number" && typeof n.numColumns === "number") {
+  if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
     // EVERY cell is an independent read, so the whole table resolves in one fan-out — row by row, a
     // 20x5 table still cost 20 serialized round-trip batches (and cell by cell, 200). The per-cell
     // try/catch keeps its exact scope: one unreadable cell is still dropped alone, not the row.
     // Nested Promise.all is still ONE fan-out: every cell promise is created before the first await.
     const grid = await Promise.all(
-      Array.from({ length: n.numRows }, (_: unknown, r: number) => Promise.all(
-        Array.from({ length: n.numColumns }, async (__: unknown, cc: number) => {
+      Array.from({ length: node.numRows }, (_: unknown, r: number) => Promise.all(
+        Array.from({ length: node.numColumns }, async (__: unknown, cc: number) => {
         try {
-          const cell = n.cellAt(r, cc);
+          const cell = node.cellAt(r, cc);
           if (!cell) return undefined;
           const co: Obj = { row: r, col: cc };
           // Delegate the cell's text to serializeText rather than reading .characters by hand — a
           // hand-rolled read here would be a second, permanently-lagging copy of the text surface
           // (runs, font, per-run tokens and styles all silently missing inside tables).
-          if (cell.text) Object.assign(co, await serializeText(cell.text as TextNode));
+          if (cell.text) Object.assign(co, await serializeText(cell.text));
           const cfills = await simplifyFills(cell.fills);
           if (cfills) co.fills = cfills;
           // NOTE: TableCellNode has NO rowSpan/columnSpan — Figma table cells cannot merge via the API.
@@ -450,10 +455,10 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
 
   // node.children is a Plugin-API getter that materializes a fresh array on each read — take it once.
-  const children: SceneNode[] | undefined = "children" in node ? n.children : undefined;
+  const children: readonly SceneNode[] | undefined = "children" in node ? node.children : undefined;
   if (children && children.length) {
     // An auto-layout or grid container positions its own children → they don't need x/y.
-    const controlsChildren = "layoutMode" in node && n.layoutMode && n.layoutMode !== "NONE";
+    const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
     const kids: Obj[] = [];
     for (const c of children) {
       const s = await serialize(c, depth + 1, controlsChildren);

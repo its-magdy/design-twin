@@ -213,7 +213,7 @@ const button = {
   fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }],
   overrides: [{ id: "9:9", overriddenFields: ["characters", "fills"] }, { id: "9:10", overriddenFields: [] }],
   reactions: [{ trigger: { type: "ON_CLICK" }, actions: [
-    { type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2", preserveScrollPosition: true, transition: { type: "SMART_ANIMATE", duration: 0.3, matchLayers: true, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } } } },
+    { type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2", preserveScrollPosition: true, transition: { type: "MOVE_IN", direction: "LEFT", duration: 0.3, matchLayers: true, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } } } },
     { type: "SET_VARIABLE", variableId: "v_primary", variableValue: { resolvedType: "COLOR", value: { type: "VARIABLE_ALIAS", id: "v_blue600" } } },
     { type: "SET_VARIABLE_MODE", variableCollectionId: "c_sem", variableModeId: "m_dark" },
     { type: "CONDITIONAL", conditionalBlocks: [{ condition: { value: true }, actions: [{ type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2" }] }] },
@@ -474,7 +474,10 @@ const sandbox = context as unknown as Sandbox;
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
   ok("text run bound variable -> token name", txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary");
   ok("effect bound variable -> token name", rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad");
+  // matchLayers lives on DirectionalTransition only (MOVE_IN/OUT, PUSH, SLIDE_IN/OUT); SimpleTransition
+  // (DISSOLVE, SMART_ANIMATE, SCROLL_ANIMATE) has no such field — developers.figma.com/docs/plugins/api/Transition/.
   ok("transition matchLayers carried", btn.reactions![0].actions![0].transition!.matchLayers === true);
+  ok("transition type/direction carried", btn.reactions![0].actions![0].transition!.type === "move_in" && btn.reactions![0].actions![0].transition!.direction === "left");
   ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && btn.reactions![0].actions![0].transition!.cubicBezier!.x1 === 0.4);
   const btnComp = ds.components.find((c) => c.name === "Button");
   ok("component description captured", btnComp && btnComp.description === "Primary action button");

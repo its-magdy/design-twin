@@ -3,15 +3,29 @@
 import { Obj, anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
 
-export async function resolveVar(alias: any): Promise<string | undefined> {
-  if (!alias || alias.type !== "VARIABLE_ALIAS") return undefined;
+// The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
+// places (bound-variable maps, valuesByMode entries, nested per-property binding objects).
+export function isVariableAlias(v: unknown): v is VariableAlias {
+  return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
+}
+
+export async function resolveVar(alias: unknown): Promise<string | undefined> {
+  if (!isVariableAlias(alias)) return undefined;
   return varName(alias.id); // e.g. "color/primary" — the semantic token name
 }
 
 // Resolve any Figma boundVariables map -> { field: tokenName } (the key win over REST).
 // Works for a node's bindings AND the sub-object bindings on effects, paints, gradient stops,
 // styled-text runs, and component properties (each carries its own boundVariables map).
-export async function resolveBoundMap(bound: any): Promise<Obj | undefined> {
+// The shape shared by every per-type `boundVariables` map this is fed (node, paint, gradient stop,
+// effect, style, text segment, component property). Node maps hold arrays for fills/strokes/effects/
+// layoutGrids/text fields and a NESTED per-property object under `componentProperties`; the nested
+// object is not an alias, so it resolves to nothing below — unchanged behaviour.
+export type BoundVariableMap = {
+  readonly [field: string]: VariableAlias | ReadonlyArray<VariableAlias> | { readonly [key: string]: VariableAlias } | undefined;
+};
+
+export async function resolveBoundMap(bound: BoundVariableMap | null | undefined): Promise<Obj | undefined> {
   if (!bound) return undefined;
   const out: Obj = {};
   for (const key of Object.keys(bound)) {
@@ -29,7 +43,7 @@ export async function resolveBoundMap(bound: any): Promise<Obj | undefined> {
 
 // node.boundVariables -> { property: tokenName }
 export async function boundTokens(node: SceneNode): Promise<Obj | undefined> {
-  return resolveBoundMap((node as any).boundVariables);
+  return resolveBoundMap(node.boundVariables);
 }
 
 // Per-node Figma STYLE references (fill/text/effect styles) — the pre-Variables way design
@@ -50,7 +64,12 @@ const STYLE_FIELDS: Array<[string, string]> = [
 
 export async function nodeStyles(node: SceneNode): Promise<Obj | undefined> {
   const names = await Promise.all(
-    STYLE_FIELDS.map(([field]) => (field in node ? styleName(anyProp(node, field) as any) : Promise.resolve(undefined)))
+    STYLE_FIELDS.map(([field]) => {
+      if (!(field in node)) return Promise.resolve(undefined);
+      // Style-id fields are `string | figma.mixed`; styleName already returns undefined for mixed.
+      const id = anyProp(node, field);
+      return typeof id === "string" || id === figma.mixed ? styleName(id) : Promise.resolve(undefined);
+    })
   );
   const out: Obj = {};
   STYLE_FIELDS.forEach(([, key], i) => {
@@ -84,7 +103,7 @@ async function resolveModeMap(raw: { [collectionId: string]: string } | undefine
 // is "Light") — the missing link for multi-theme codegen. Keyed off explicitVariableModes (the
 // actual pin points set ON this node).
 export function variableModes(node: SceneNode): Promise<Obj | undefined> {
-  return resolveModeMap((node as any).explicitVariableModes, false);
+  return resolveModeMap(node.explicitVariableModes, false);
 }
 
 // The EFFECTIVE variable mode per collection at this node, resolving pins inherited from ANY
@@ -96,15 +115,14 @@ export function variableModes(node: SceneNode): Promise<Obj | undefined> {
 // every node inherits some effective mode, so per-node emission would be pure noise. Single-mode
 // collections carry no theme choice, so they're skipped (only multi-mode/theming collections matter).
 export function resolvedModes(node: SceneNode): Promise<Obj | undefined> {
-  return resolveModeMap((node as any).resolvedVariableModes, true);
+  return resolveModeMap(node.resolvedVariableModes, true);
 }
 
 // valuesByMode does NOT resolve aliases and is keyed by opaque modeId — resolve alias targets to
 // names and re-key by mode name. COLOR values carry alpha ({r,g,b,a}) — fold to hex so alpha survives.
-async function resolveModeValue(v: VariableValue, resolvedType: VariableResolvedDataType): Promise<any> {
-  const val = v as any;
-  if (val && val.type === "VARIABLE_ALIAS") return { aliasOf: (await varName(val.id)) || val.id };
-  if (resolvedType === "COLOR" && val && typeof val.r === "number") return rgbaToHex(val);
+async function resolveModeValue(v: VariableValue, resolvedType: VariableResolvedDataType): Promise<VariableValue | { aliasOf: string }> {
+  if (isVariableAlias(v)) return { aliasOf: (await varName(v.id)) || v.id };
+  if (resolvedType === "COLOR" && v && typeof v === "object" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
   return v;
 }
 
@@ -121,8 +139,8 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   const asLibrary = !!(opts && opts.asLibrary);
   // Filled during the variable loop, resolved in ONE fan-out afterwards (one round trip per variable,
   // awaited in place, would serialize the whole dump).
-  const pendingPublish: { rec: Obj; obj: any }[] = [];
-  const publishOf = async (o: any): Promise<string | undefined> => {
+  const pendingPublish: { rec: Obj; obj: Variable }[] = [];
+  const publishOf = async (o: Variable | VariableCollection): Promise<string | undefined> => {
     try {
       if (!asLibrary || !o || typeof o.getPublishStatusAsync !== "function") return undefined;
       const s = await o.getPublishStatusAsync();
@@ -168,8 +186,8 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   const aliasTargets = (v: Variable): string[] => {
     const out: string[] = [];
     for (const modeId of Object.keys(v.valuesByMode || {})) {
-      const raw: any = (v.valuesByMode as any)[modeId];
-      if (raw && raw.type === "VARIABLE_ALIAS" && raw.id) out.push(raw.id);
+      const raw = v.valuesByMode[modeId];
+      if (isVariableAlias(raw) && raw.id) out.push(raw.id);
     }
     return out;
   };
@@ -216,11 +234,11 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     // chained ~1500 round trips onto the tail of every export.
     const modeIds = Object.keys(v.valuesByMode);
     const resolved = await Promise.all(modeIds.map((modeId) =>
-      resolveModeValue(v.valuesByMode[modeId] as any, v.resolvedType)));
+      resolveModeValue(v.valuesByMode[modeId], v.resolvedType)));
     for (let i = 0; i < modeIds.length; i++) {
       const modeId = modeIds[i];
-      const raw = v.valuesByMode[modeId] as any;
-      if (raw && raw.type === "VARIABLE_ALIAS") {
+      const raw = v.valuesByMode[modeId];
+      if (isVariableAlias(raw)) {
         hasAlias = true;
         // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
         // variables started being resolved above — so a library-consuming file's hygiene list filled
@@ -284,9 +302,9 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
       // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
       // resolution (mode.parentModeId -> root mode) is deferred.
-      extended: (c as any).isExtension === true ? true : undefined,
-      hiddenFromPublishing: (c as any).hiddenFromPublishing === true ? true : undefined,
-      key: (c as any).key || undefined, // durable cross-file collection identity
+      extended: c.isExtension === true ? true : undefined,
+      hiddenFromPublishing: c.hiddenFromPublishing === true ? true : undefined,
+      key: c.key || undefined, // durable cross-file collection identity
       publish: collPublish[c.id] || undefined, // library mode only
     })),
     variables,
