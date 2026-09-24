@@ -334,18 +334,37 @@ export interface TextFields {
 }
 
 /** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, …
- *  (absent when the keyframe carried no readable value). */
-export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } }
+ *  (absent when the keyframe carried no readable value). `easing` is the lower-cased MotionEasing type plus
+ *  its curve params, or — when the easing is bound to an EASING variable — `{type: "variable_alias", id}`
+ *  with the variable id. */
+export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown; id?: string } }
 /** One manually-keyframed field (ManualKeyframeBinding): its base value and the keyframes. */
 export interface MotionTrack { base?: JsonValue; keyframes?: MotionKeyframe[] }
 /** One timeline-animated field (KeyframeBinding): base value, the timeline's duration, and its tracks,
  *  each with a non-SET keyframe operation and keyframes. */
 export interface MotionAnimation { base?: JsonValue; duration?: number; tracks?: Array<{ op?: string; keyframes?: MotionKeyframe[] }> }
+/** A fills[i] / strokes[i] motion entry (PaintManualKeyframeTrack / PaintKeyframeBinding): either ONE binding
+ *  for the whole paint, or — for a shader paint — one binding per shader property id under `properties`. */
+export type MotionPaintTrack<T> = T | { properties: Record<string, T> };
+/** An effects[i] motion entry (EffectManualKeyframeTracks / EffectKeyframeBindings): one binding per
+ *  EffectKeyframeFieldName (`RADIUS`, `OFFSET_X`, `COLOR`, …) plus per-shader-property bindings under `properties`. */
+export type MotionEffectTracks<T> = Record<string, T> & { properties?: Record<string, T> };
+/** The indexed collections of a motion map, keyed by paint/effect index as a string ("0", "1", …). */
+export interface MotionIndexedTracks<T> {
+  fills?: Record<string, MotionPaintTrack<T>>;
+  strokes?: Record<string, MotionPaintTrack<T>>;
+  effects?: Record<string, MotionEffectTracks<T>>;
+}
+/** node.manualKeyframeTracks: one MotionTrack per KeyframePropertyFieldName (`TRANSLATION_X`, `OPACITY`, …),
+ *  plus the indexed fills/strokes/effects collections. */
+export type MotionTracks = Record<string, MotionTrack> & MotionIndexedTracks<MotionTrack>;
+/** node.animations: the same layout as MotionTracks, with MotionAnimation bindings. */
+export type MotionAnimations = Record<string, MotionAnimation> & MotionIndexedTracks<MotionAnimation>;
 /** The opt-in motion read on a node (`--motion`): timelines, per-field tracks, applied animation styles. */
 export interface NodeMotion {
   timelines?: Array<{ id: string; duration: number }>;
-  manualTracks?: Record<string, MotionTrack>;
-  animations?: Record<string, MotionAnimation>;
+  manualTracks?: MotionTracks;
+  animations?: MotionAnimations;
   styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
 }
 export interface IrNode extends Partial<TextFields> {
