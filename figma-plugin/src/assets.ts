@@ -1,7 +1,7 @@
 // Rendering nodes to assets: vector/icon -> SVG, image-fill -> PNG, whole-frame reference PNG,
 // and Dev-Mode resource links.
-import { Obj, safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
-import { Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
+import { type Obj, safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
+import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
 import { checkCancelled, progress } from "./progress";
 
 // The ONE place an asset filename is decided. `register` returns the path that goes into the node

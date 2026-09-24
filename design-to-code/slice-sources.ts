@@ -10,11 +10,13 @@
 //
 // Best effort by design: a slice file that is missing just leaves that screen out of the answer.
 import type { TokensDoc } from "./types.ts";
+import type * as NodeFs from "node:fs";
+import type * as NodePath from "node:path";
 
 // The two Node modules are PASSED IN rather than imported (the CJS-era contract, kept): every caller
 // hands over its own `fs`/`path`. Only the members actually used are required.
-export type FsLike = Pick<typeof import("node:fs"), "readFileSync" | "existsSync">;
-export type PathLike = Pick<typeof import("node:path"), "dirname" | "join" | "basename" | "resolve">;
+export type FsLike = Pick<typeof NodeFs, "readFileSync" | "existsSync">;
+export type PathLike = Pick<typeof NodePath, "dirname" | "join" | "basename" | "resolve">;
 
 /** Map(variable key -> [screen label]) */
 export type SliceSources = Map<string, string[]>;
@@ -43,7 +45,7 @@ function sourcesOf(doc: TokensDoc | null | undefined, docPath: string | null | u
       try {
         // A slice file is one this repo's own writer produced (bridge/write-out.js), so it is read as
         // the shape it was written in rather than as arbitrary JSON.
-        const slice: TokensDoc = JSON.parse(fs.readFileSync(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
+        const slice = JSON.parse(fs.readFileSync(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8")) as TokensDoc;
         for (const v of slice.variables || []) add(v && v.key, sl.screen);
         read = true;
       } catch (_) { /* not on disk — fall through to what the merge recorded */ }

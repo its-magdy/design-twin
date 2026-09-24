@@ -334,7 +334,7 @@ function platformOf(name: unknown): string | null {
 // → { file, text, warnings[] }. `platform` accepts a build-screen profile name too (android-compose).
 function toNative(designSystem: TokensDoc | null | undefined, platform: unknown, opts?: NativeOpts): NativeFile {
   const p = platformOf(platform);
-  if (!p) throw new Error(`unknown native platform "${platform}" — use one of: ${Object.keys(PLATFORMS).join(", ")}`);
+  if (!p) throw new Error(`unknown native platform "${String(platform)}" — use one of: ${Object.keys(PLATFORMS).join(", ")}`);
   const warnings: string[] = [];
   const cols = model(designSystem, warnings, opts);
   return { file: PLATFORMS[p].file, text: EMIT[p](cols, opts), warnings };

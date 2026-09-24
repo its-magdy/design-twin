@@ -46,7 +46,7 @@ interface ScreenFile { nodes: TextWalkNode[] }
 const readRoot = (dir: string): PagesRootIndex => JSON.parse(fs.readFileSync(path.join(dir, "pages", "index.json"), "utf8")) as PagesRootIndex;
 
 function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {
-  const d: ScreenFile = JSON.parse(fs.readFileSync(path.join(FIXTURE, base || "pages", pageDir, file), "utf8"));
+  const d = JSON.parse(fs.readFileSync(path.join(FIXTURE, base || "pages", pageDir, file), "utf8")) as ScreenFile;
   return d.nodes[0];
 }
 
@@ -215,8 +215,8 @@ function fixtureWithEmptyStateSibling() {
   const pagesDir = path.join(tmp, "pages", "__Organization_management_");
   fs.mkdirSync(pagesDir, { recursive: true });
   const root = readRoot(FIXTURE);
-  const sibling: ScreenFile = JSON.parse(fs.readFileSync(
-    path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), "utf8"));
+  const sibling = JSON.parse(fs.readFileSync(
+    path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), "utf8")) as ScreenFile;
   // deriveTitle/collectTexts are the same top-level import as line 29 — no need to re-require them.
   const siblingRoot = sibling.nodes[0];
   root.layers = root.layers!.concat([{

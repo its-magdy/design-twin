@@ -1,5 +1,5 @@
 // Auto Layout / Grid -> flex/grid intent. Reads either a real frame OR node.inferredAutoLayout.
-import { Obj, round } from "./util";
+import { type Obj, round } from "./util";
 
 const ALIGN: { [k: string]: string } = {
   MIN: "flex-start",
@@ -44,7 +44,9 @@ function flexIntent(src: FlexLike): Obj {
 export function simplifyGrid(g: LayoutGrid): Obj | undefined {
   if (!g) return undefined;
   const o: Obj = { pattern: g.pattern ? String(g.pattern).toLowerCase() : undefined };
-  if (g.pattern === "GRID" && typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+  // sectionSize is the cell size of a uniform GRID and the column/row width of ROWS/COLUMNS (there it is
+  // ignored by Figma only when alignment is STRETCH — RowsColsLayoutGrid in the typings) — read it for all.
+  if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
   if (g.pattern !== "GRID") {
     if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
     if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;

@@ -1,6 +1,6 @@
 // Collectors (return data; shared by manual export AND the bridge). Each resets per-run state,
 // applies read options, walks the requested scope, and returns the compact screen/layer/design-system docs.
-import { Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
+import { type Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
 // Figma URLs carry `123-456`, the API wants `123:456`. bridge/node-id.js is "the ONE place that knows
 // what a node id looks like and how it hides in a Figma URL" — esbuild inlines that dependency-free CJS
 // module into the plugin bundle exactly as it does pages-layout.js, so the plugin uses the SAME parser
@@ -298,7 +298,7 @@ export async function collectSelection(opts?: CollectOpts): Promise<Obj> {
 function pageOf(node: BaseNode): PageNode | null {
   let n: BaseNode | null = node;
   while (n && n.type !== "PAGE") n = n.parent;
-  return n && n.type === "PAGE" ? (n as PageNode) : null;
+  return n && n.type === "PAGE" ? (n) : null;
 }
 
 // Export a single node addressed by id — the plane behind "paste a Figma link and ask".
@@ -312,8 +312,8 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Ob
   try {
     const page = pageOf(node);
     if (page && page !== figma.currentPage) await figma.setCurrentPageAsync(page);
-    if ("visible" in node && node.parent) figma.currentPage.selection = [node as SceneNode];
-    if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
+    if ("visible" in node && node.parent) figma.currentPage.selection = [node];
+    if (figma.viewport && "visible" in node) figma.viewport.scrollAndZoomIntoView([node]);
   } catch (e) {}
   const tree = await rootTree(node as SceneNode);
   if (!tree) throw new Error("Node " + nodeId + " is hidden or not exportable.");

@@ -1,7 +1,7 @@
 // The recursive node serializer: one SceneNode -> compact JSON. Orchestrates the typed helper
 // modules. Reads are defensive (`"x" in node` guards) because it runs over the whole SceneNode
 // union; per-property values are typed inside the helpers it calls.
-import { Obj, round, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, anyProp, numProp } from "./util";
+import { type Obj, round, propName, rgbaToHex, nonEmpty, putNonEmpty, xy, anyProp, numProp } from "./util";
 import { stats, warn, runOpts } from "./state";
 import { layout, GRID_SELF, simplifyGrid } from "./layout";
 import { simplifyFills, simplifyStrokes } from "./paint";

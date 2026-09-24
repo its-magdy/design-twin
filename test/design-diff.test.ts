@@ -130,7 +130,7 @@ check("snapshotting ONE design-system file also snapshots its 8 siblings", (() =
   // Finding 320: the MANIFEST (design-system.json) lives at the export ROOT, one level ABOVE the
   // design-system/ subdirectory that holds the other 8 files (bridge/design-system-layout.js's own
   // header comment) — not flat alongside them, which is what this fixture used to (wrongly) assume.
-  const names = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+  const names = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-diff-ds-siblings-"));
   const dsDir = path.join(root, "design", "export", "design-system");
   fs.mkdirSync(dsDir, { recursive: true });

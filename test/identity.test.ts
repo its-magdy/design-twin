@@ -22,10 +22,12 @@ import type {
 } from "../design-to-code/types.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 import type { DtcgLeaf } from "../design-to-code/tokens.ts";
+import type * as DesignDiffMod from "../design-to-code/design-diff.ts";
+import type * as VariablesMergeMod from "../bridge/src/variables-merge.ts";
 
 // The modules loaded through tryImport (P1_SRC may point them at another checkout — same exports).
-type DesignDiffModule = typeof import("../design-to-code/design-diff.ts");
-type VariablesMergeModule = typeof import("../bridge/src/variables-merge.ts");
+type DesignDiffModule = typeof DesignDiffMod;
+type VariablesMergeModule = typeof VariablesMergeMod;
 /** mapping.reference.json: per screen, the reference matcher's verdict for every instance name. */
 type MappingReference = Record<string, { instances: number; names: Record<string, { match: string | null; firstReason: string }> }>;
 /** a screen export as this suite walks it */
@@ -231,7 +233,7 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const map = path.join(dir, "codeconnect.local.json");
   const none = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
   ok("[226] nothing confirmed → nothing written, exit 1 (proposals are never accepted automatically)", none.status === 1 && !fs.existsSync(map));
-  const rep: CrossCheckReport = JSON.parse(fs.readFileSync(report0, "utf8"));
+  const rep = JSON.parse(fs.readFileSync(report0, "utf8")) as CrossCheckReport;
   const accept = new Set(["Button", "Header", "Pagination"]);
   for (const p of rep.componentProposals || []) if (accept.has(p.name)) p.confirmed = true;
   fs.writeFileSync(report0, JSON.stringify(rep));

@@ -170,7 +170,7 @@ check("[R15] round-trip: base + context in resolutionOrder reproduces $extension
     const expected = flat(d, "", {});
     for (const p of Object.keys(expected)) {
       const leaf = p.split(".").reduce((o, k) => o[k], d);
-      const ext = leaf.$extensions && leaf.$extensions!["figma.com"];
+      const ext = leaf.$extensions && leaf.$extensions["figma.com"];
       const want = ext && ext.modes && ext.modes[mode] !== undefined ? ext.modes[mode] : expected[p];
       if (JSON.stringify(merged[p]) !== JSON.stringify(want)) return false;
     }

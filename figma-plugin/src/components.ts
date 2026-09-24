@@ -1,6 +1,6 @@
 // Components / instances: main-component name, prop references, overrides, and the whole-file
 // design-system catalog (variables + styles + component/variant catalog + hygiene).
-import { Obj, propName, errMsg, nonEmpty, putNonEmpty, round, exportedAt } from "./util";
+import { type Obj, propName, errMsg, nonEmpty, putNonEmpty, round, exportedAt } from "./util";
 import { warn, loadAllPages, runOpts } from "./state";
 import { checkCancelled, enterPage } from "./progress";
 import { simplifyFills, simplifyStrokes } from "./paint";

@@ -498,7 +498,7 @@ function previous(file: string, against: string | undefined, cwd: string = proce
 // Which OTHER files belong to the same export as `f` (finding 206). Best-effort and read-only: a file
 // this returns that doesn't exist is simply skipped by the --snapshot loop (`fs.existsSync` check
 // already there), the same as a caller-requested file that isn't there yet.
-const DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
+const DS_FILE_NAMES = Object.values<string>(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f: string): string[] {
   const abs = path.resolve(f);
   const dir = path.dirname(abs);
@@ -628,7 +628,7 @@ function main(argv: string[]): void {
   catch (e) {
     // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
     const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-    console.error(`design-diff: ${file}: ${message}`); process.exit(2);
+    console.error(`design-diff: ${file}: ${String(message)}`); process.exit(2);
   }
   diff.warnings = [...prev.notes, ...(diff.warnings || [])];
   // `warned`/`baseline` let a script decide "should I trust this diff" without re-parsing the markdown

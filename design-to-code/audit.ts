@@ -249,7 +249,7 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) — the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
     if (m.assetsFailed) add("blocker", "assets-failed", `${m.assetsFailed} asset export(s) failed in '${root.label}' — those nodes have no file (look for \`geometry\` fallbacks)`, null, { label: root.label });
     if (root.tree.devStatus && root.tree.devStatus !== "ready_for_dev" && root.tree.devStatus !== "completed") {
-      add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${root.tree.devStatus}' — confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
+      add("warning", "not-ready-for-dev", `'${root.label}' dev status is '${String(root.tree.devStatus)}' — confirm the design is final before building`, root.tree, { label: root.label, path: root.tree.name });
     }
     walk(root.tree, [], { label: root.label, rootBox: root.tree.box });
   }

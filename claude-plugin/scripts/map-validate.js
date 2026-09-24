@@ -3,13 +3,18 @@
 
 // design-to-code/catalog-input.ts
 import fs from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+
+// design-to-code/catalog-input.ts
 function readJsonFile(file, what, hint) {
   let raw;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
     const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
     process.exit(2);
@@ -17,8 +22,7 @@ function readJsonFile(file, what, hint) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
     process.exit(2);
   }
 }
@@ -36,6 +40,11 @@ function isMainFallback(metaUrl) {
   }
 }
 
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
+}
+
 // design-to-code/map-validate.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
@@ -47,7 +56,7 @@ var KEYS = {
   vo: ["when", "code"],
   voCode: ["module", "export"],
   children: ["layerNamePattern", "slot"],
-  prop: Object.assign(/* @__PURE__ */ Object.create(null), {
+  prop: Object.assign(nullProto(), {
     enum: ["kind", "codeProp", "values", "default", "omitDefault"],
     boolean: ["kind", "codeProp", "default", "omitDefault"],
     string: ["kind", "codeProp"],

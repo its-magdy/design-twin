@@ -1,5 +1,5 @@
 // Writes (code -> design): minimal, EXPLICIT, safe command set (no eval).
-import { Obj, errMsg } from "./util";
+import { type Obj, errMsg } from "./util";
 
 // Handle 3/4/6/8-digit hex (CSS Color L4). Shorthand expands by doubling each digit; the optional
 // 4th pair is alpha, which Figma carries as paint.opacity (not in .color).

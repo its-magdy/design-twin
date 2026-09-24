@@ -14,6 +14,7 @@
 import type { CodeConnectMap, MapValidationResult } from "./types.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { nullProto } from "../bridge/src/json-util.ts";
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).
@@ -35,7 +36,7 @@ const KEYS: KeyTables = {
   vo: ["when", "code"],
   voCode: ["module", "export"],
   children: ["layerNamePattern", "slot"],
-  prop: Object.assign(Object.create(null), {
+  prop: Object.assign(nullProto<string[] | undefined>(), {
     enum: ["kind", "codeProp", "values", "default", "omitDefault"],
     boolean: ["kind", "codeProp", "default", "omitDefault"],
     string: ["kind", "codeProp"],

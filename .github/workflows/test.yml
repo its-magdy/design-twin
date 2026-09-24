@@ -21,6 +21,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint (type-aware)
+        run: npm run lint:types
+
       # Committed build artifacts must match their sources: rebuild, then fail on any diff.
       # (claude-plugin/scripts/ is also checked byte-for-byte by test/verify-build.test.ts.)
       # bridge/dist/ is built here too but is gitignored, so it is not part of the diff.

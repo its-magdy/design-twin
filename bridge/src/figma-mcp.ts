@@ -75,8 +75,9 @@ async function resolveHolder(): Promise<Holder> {
   own = mine;
   // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
   // talking to a closed server — which means the memo goes with it.
-  // Object.create(mine): every bridge method, inherited from the real bridge; only close is overridden.
-  const shared: DaemonBridge = Object.assign(Object.create(mine) as Bridge, { close: () => { own = null; holding = null; mine.close(); } });
+  // A spread copy is exact: createBridge() returns a plain object literal whose members (methods, `port`,
+  // `listening`) are all own data properties — no getters, no prototype. Only close is overridden.
+  const shared: DaemonBridge = { ...mine, close: () => { own = null; holding = null; mine.close(); } };
   daemon.serve(shared, { idleMin: 0, signals: false, log: (m) => console.error("[figma-mcp] " + m) })
     .catch((e) => console.error("[figma-mcp] not sharing the bridge with other sessions: " + errMsg(e)));
   return { own: mine };
@@ -541,7 +542,8 @@ server.registerTool(
 interface WriteOp { op: string; [field: string]: unknown }
 
 /** The plugin's `write` reply — `ok: false` on a partial failure, with what was applied before it. */
-interface WriteReply { ok?: boolean; applied?: unknown; failedAt?: unknown; failedOp?: unknown; error?: unknown }
+// Field types mirror figma-plugin/src/writes.ts WriteResult (`applied` stays unknown: it is only relayed).
+interface WriteReply { ok?: boolean; applied?: unknown; failedAt?: number; failedOp?: string; error?: string }
 
 function previewWrites(ops: WriteOp[]) {
   const steps = ops.map((o, i) => {
@@ -554,7 +556,7 @@ function previewWrites(ops: WriteOp[]) {
       index: i,
       op: o.op,
       effect: creates ? "creates" : "overwrites",
-      target: creates ? (o.parentId ? `new node under ${o.parentId}` : "new node on the current page") : o.nodeId || null,
+      target: creates ? (o.parentId ? `new node under ${String(o.parentId)}` : "new node on the current page") : o.nodeId || null,
       ...(o.op === "setFill" ? { newFill: o.color } : {}),
       ...(o.op === "setText" || o.op === "createText" ? { newText: o.text } : {}),
       ...(missing.length ? { invalid: `missing ${missing.join(", ")}` } : {}),
@@ -667,6 +669,10 @@ const getComponent = async (catalogFile: string, handle: string) =>
     catalogFile,
     handle
   );
+/** A parsed components.local.json: an object whose `components`, if present, is an array (mirrors drift-lint.ts). */
+function isCatalogLike(x: unknown): x is ComponentsCatalog {
+  return typeof x === "object" && x !== null && !Array.isArray(x) && ((x as { components?: unknown }).components === undefined || Array.isArray((x as { components?: unknown }).components));
+}
 const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint");
 
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
@@ -760,7 +766,9 @@ server.registerTool(
           `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`node design-to-code/map-validate.ts ${mapPath}\`.`
       );
     }
-    const catalog: ComponentsCatalog | null = JSON.parse(fs.readFileSync(componentsLocalPath(a.exportDir), "utf8"));
+    const catalogRaw = JSON.parse(fs.readFileSync(componentsLocalPath(a.exportDir), "utf8")) as unknown;
+    // Same as the CLI (design-to-code/drift-lint.ts): a non-catalog is linted as "no catalog".
+    const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
     const res = layer.driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : undefined);
     // Drift is a FINDING, not a tool failure — return it as a normal result so the agent reads the
     // errors instead of an isError blob it may discard. `ok` is the thing to branch on.

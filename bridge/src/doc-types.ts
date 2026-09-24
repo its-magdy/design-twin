@@ -150,7 +150,9 @@ export interface Strokes {
   cap?: string;
   join?: string;
   miter?: number;
-  variableWidth?: { profile: string; points: Array<{ pos: number; weight: number }> };
+  /** Variable-width (tapered) stroke: one of Figma's named presets, or `custom` with its `variableWidthPoints`
+   *  compacted to `{pos, width}` (points only for `custom`). */
+  variableWidth?: { profile: "uniform" | "wedge" | "taper" | "quarter_taper" | "eye" | "mirrored_taper" | "custom"; points?: Array<{ pos: number; width: number }> };
 }
 
 // ---- effects (effects.ts). Discriminated on `type` (lowercased Figma Effect.type).
@@ -333,13 +335,16 @@ export interface TextFields {
 
 /** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, … */
 export interface MotionKeyframe { t: number; value: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } }
-/** One animated field: its base value, a non-SET keyframe operation, and the keyframes. */
-export interface MotionTrack { base?: JsonValue; op?: string; keyframes?: MotionKeyframe[] }
+/** One manually-keyframed field (ManualKeyframeBinding): its base value and the keyframes. */
+export interface MotionTrack { base?: JsonValue; keyframes?: MotionKeyframe[] }
+/** One timeline-animated field (KeyframeBinding): base value, the timeline's duration, and its tracks,
+ *  each with a non-SET keyframe operation and keyframes. */
+export interface MotionAnimation { base?: JsonValue; duration?: number; tracks?: Array<{ op?: string; keyframes?: MotionKeyframe[] }> }
 /** The opt-in motion read on a node (`--motion`): timelines, per-field tracks, applied animation styles. */
 export interface NodeMotion {
   timelines?: Array<{ id: string; duration: number }>;
   manualTracks?: Record<string, MotionTrack>;
-  animations?: Record<string, MotionTrack>;
+  animations?: Record<string, MotionAnimation>;
   styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
 }
 export interface IrNode extends Partial<TextFields> {

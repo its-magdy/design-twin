@@ -14,7 +14,7 @@ import { errMsg } from "./util";
 // esbuild inlines here — see bridge/pages-layout.js.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { releaseAssets, serializeRun, Asset } from "./state";
+import { releaseAssets, serializeRun, type Asset } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { serialize } from "./serialize";
@@ -22,7 +22,7 @@ import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
-import { isUIToMain, ScreenExportResult, FullExportResult, ExportFile, ExportLayerFile } from "./messages";
+import { isUIToMain, type ScreenExportResult, type FullExportResult, type ExportFile, type ExportLayerFile } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in

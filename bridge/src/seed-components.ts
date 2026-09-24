@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
+import { nullProto } from "./json-util.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const codeRoot = process.argv[2] || ".";
@@ -160,7 +161,7 @@ function main(): void {
   // `cur.x = ...` backfills below land on Object.prototype, after which every OTHER entry's
   // `=== undefined` check is false and its source/nodeId are never filled either. Object.assign onto
   // a null-prototype target turns those names back into ordinary own keys. JSON.stringify is unaffected.
-  const existing: Record<string, ComponentsEntry | undefined> = Object.assign(Object.create(null), loadJson(outPath) || {});
+  const existing: Record<string, ComponentsEntry | undefined> = Object.assign(nullProto<ComponentsEntry | undefined>(), loadJson(outPath) || {});
   let added = 0, filled = 0;
   for (const m of found) {
     const cur = existing[m.name];

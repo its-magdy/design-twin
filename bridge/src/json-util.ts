@@ -1,0 +1,22 @@
+// Small helpers for the untyped-JSON boundary, shared by bridge/ and design-to-code/ (the layer may
+// import bridge/src; bridge cannot import the layer, so both-sided helpers live here). Dependency-free.
+
+/**
+ * An empty null-prototype record. Use it wherever keys come from untrusted input (component keys, token
+ * names, a map's `kind`): on a plain `{}` those names can resolve to — or write onto — Object.prototype
+ * members ("constructor", "__proto__", "toString"). `Object.create(null)` itself is typed `any`; this is
+ * the one place that asserts its shape.
+ */
+export function nullProto<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** Array.isArray for an `unknown`, narrowing to `unknown[]` (the built-in narrows to an untyped array). */
+export function isUnknownArray(x: unknown): x is unknown[] {
+  return Array.isArray(x);
+}
+
+/** A string[] guard for untyped JSON. */
+export function isStringArray(x: unknown): x is string[] {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}

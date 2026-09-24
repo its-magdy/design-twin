@@ -13,6 +13,11 @@
     "typecheck": "npm run typecheck --workspaces && tsc -p test/tsconfig.json",
     "build": "npm run build --workspaces && node claude-plugin/build-scripts.js",
     "lint:any": "node test/lint-any.mjs",
-    "test": "npm run lint:any && node test/harness.ts && node test/bridge.test.ts && node test/design-to-code.test.ts && node test/audit.test.ts && node test/verify-build.test.ts && node test/verify-screen.test.ts && node test/cross-check.test.ts && node test/design-diff.test.ts && node test/identity.test.ts && node test/plan-skeleton.test.ts && node test/resolve-screen.test.ts && node test/ui.test.ts && node test/mcp-share.test.ts && node test/mcp-smoke.test.ts"
+    "lint:types": "oxlint --type-aware bridge/src design-to-code test figma-plugin/src",
+    "test": "npm run lint:any && npm run lint:types && node test/harness.ts && node test/bridge.test.ts && node test/design-to-code.test.ts && node test/audit.test.ts && node test/verify-build.test.ts && node test/verify-screen.test.ts && node test/cross-check.test.ts && node test/design-diff.test.ts && node test/identity.test.ts && node test/plan-skeleton.test.ts && node test/resolve-screen.test.ts && node test/ui.test.ts && node test/mcp-share.test.ts && node test/mcp-smoke.test.ts"
+  },
+  "devDependencies": {
+    "oxlint": "^1.85.0",
+    "oxlint-tsgolint": "^7.0.2002"
   }
 }

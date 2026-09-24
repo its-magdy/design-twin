@@ -248,7 +248,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const jrMeasured = load<VerifyMeasured>("JobRoles.measured.json"), gpMeasured = load<VerifyMeasured>("GlobalPolicies.measured.json");
   const clone = <T,>(o: T) => JSON.parse(JSON.stringify(o)) as T;
   // An assertion that THROWS on an older report shape is a failure of that assertion, not of the suite.
-  const ok = (name: string, cond: unknown) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, v); };
+  const ok = (name: string, cond: boolean | undefined | (() => unknown)) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, v); };
 
   // An INDEPENDENT hidden walk — the snippet from the prompt, not hidden.js — so the test does not
   // grade the code with its own predicate.

@@ -1,6 +1,6 @@
 // Variables (design tokens) + Figma style references. Resolves opaque ids/aliases to the
 // human/agent-readable token names — the key win over the REST export.
-import { Obj, anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
+import { type Obj, anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
 
 // The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
@@ -50,7 +50,7 @@ export async function boundTokens(node: SceneNode): Promise<Obj | undefined> {
 // systems name tokens; resolve the id to the style's name.
 export async function styleName(id: string | PluginAPI["mixed"] | undefined | null): Promise<string | undefined> {
   if (!id || id === figma.mixed) return undefined;
-  return styleNameLookup(id as string);
+  return styleNameLookup(id);
 }
 
 // [ node field, output key ]. textStyleId only exists on TEXT nodes, so the `in` check gates it.
@@ -198,7 +198,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   let frontier = [...new Set(varName.ids().concat(...localVars.map(aliasTargets)))].filter((id) => !seen.has(id));
   while (frontier.length) {
     for (const id of frontier) seen.add(id);
-    const fetched = ((await Promise.all(frontier.map((id) => varName.obj(id)))) as Array<Variable | null>)
+    const fetched = ((await Promise.all(frontier.map((id) => varName.obj(id)))))
       .filter(Boolean) as Variable[];
     remoteVars.push(...fetched);
     frontier = [...new Set(([] as string[]).concat(...fetched.map(aliasTargets)))].filter((id) => !seen.has(id));

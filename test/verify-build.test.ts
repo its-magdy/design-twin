@@ -751,7 +751,8 @@ check("bundles are self-contained — no require() that leaves the plugin direct
 }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
-build(tmp).then(async () => {
+// An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
+void build(tmp).then(async () => {
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
   check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.js)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   check("a bundle runs from outside the repo", (() => {

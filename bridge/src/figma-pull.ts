@@ -184,7 +184,9 @@ import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
 import { errMsg } from "./errmsg.ts";
 import * as tokenStore from "./token-store.ts";
 import { pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
-import type { ClientRow, RequestArgs } from "./server-core.ts";
+import type { Bridge, ClientRow, ConnectionInfo, RequestArgs } from "./server-core.ts";
+// Type-only (erased): cli() loads server-core itself, lazily — see above.
+import type * as ServerCore from "./server-core.ts";
 // node-id.ts is "the ONE place that knows what a node id looks like and how it hides in a Figma URL"
 // (its own header). This file used to hand --children's raw token straight to the plugin, whose only
 // normalisation is replace(/-/g, ":") — so a pasted design URL worked through the MCP twin
@@ -205,6 +207,7 @@ import type { ReadOptName } from "./read-opts.ts";
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
 import { translate, VerbError, verbHelp, distance } from "./verbs.ts";
+import { isUnknownArray } from "./json-util.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // --help / -h: print the usage header above and exit 0. Handled in cli() BEFORE server-core is loaded,
@@ -622,10 +625,14 @@ return { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, lis
 // The connected-files table. Same contract as formatLibraries below: prints for a HUMAN (and an agent
 // skimming a terminal), and the EMPTY case is the one that has to explain itself — "no files
 // connected" is the normal state before you open the plugin, not a broken bridge.
+/** A client row as formatClients reads it: every non-null object (each field is optional and checked where read). */
+function isClientRowLike(x: unknown): x is Partial<ClientRow> {
+  return typeof x === "object" && x !== null;
+}
 function formatClients(rows: unknown): string {
   // Rows from this process's own bridge, or relayed by a daemon (possibly an older one — see the
   // daemon-staleness note below), or hand-built by the test suite: every field is optional here.
-  const list: Array<Partial<ClientRow>> = Array.isArray(rows) ? rows : [];
+  const list: Array<Partial<ClientRow>> = isUnknownArray(rows) ? rows.filter(isClientRowLike) : [];
   if (!list.length) {
     return "No Figma files are connected to the bridge.\n" +
       "  Open a file in Figma and run \"Design Twin\" (Plugins → Development). The plugin\n" +
@@ -785,10 +792,8 @@ interface IndexReply {
 const topLevelLayers = (r: IndexReply): LayerSummary[] => (r.pages ?? []).flatMap((p) => p.frames ?? []);
 
 export type ParsedArgs = ReturnType<typeof parseArgs>;
-type Bridge = import("./server-core.ts").Bridge;
-type ConnectionInfo = import("./server-core.ts").ConnectionInfo;
 
-async function main(parsed: ParsedArgs, core: typeof import("./server-core.ts")): Promise<void> {
+async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> {
   const { selection, allPages, designSystemOnly, asLibrary, nodeId, readOpts, listOnly, listDepth, childrenId, screenshotId, scale, listLibraries, whoami, listClients, client, pageSel, exportTimeoutMs, listTimeoutMs, connectWaitMs, outDir, daemonCmd, tokenCmd, tokenFile, json } = parsed;
   const { createBridge } = core;
   // ---- token lifecycle commands. These run FIRST and return: they touch only the local token file,

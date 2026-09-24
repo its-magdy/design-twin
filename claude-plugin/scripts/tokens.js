@@ -7,6 +7,11 @@ import path from "node:path";
 
 // design-to-code/catalog-input.ts
 import fs from "node:fs";
+
+// bridge/src/errmsg.ts
+var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
+
+// design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
   return !!(doc && typeof doc === "object" && "files" in doc && doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) && !Array.isArray(doc[payloadKey]));
 }
@@ -26,7 +31,7 @@ function readJsonFile(file, what, hint) {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
     const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${code || e})`;
+    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
     console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
        ${hint}` : ""));
     process.exit(2);
@@ -34,8 +39,7 @@ function readJsonFile(file, what, hint) {
   try {
     return JSON.parse(raw);
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${message || e}`);
+    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
     process.exit(2);
   }
 }
@@ -380,7 +384,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
   }
   function toNative2(designSystem, platform, opts) {
     const p = platformOf2(platform);
-    if (!p) throw new Error(`unknown native platform "${platform}" \u2014 use one of: ${Object.keys(PLATFORMS2).join(", ")}`);
+    if (!p) throw new Error(`unknown native platform "${String(platform)}" \u2014 use one of: ${Object.keys(PLATFORMS2).join(", ")}`);
     const warnings = [];
     const cols = model(designSystem, warnings, opts);
     return { file: PLATFORMS2[p].file, text: EMIT[p](cols, opts), warnings };
@@ -399,6 +403,11 @@ function isMainFallback(metaUrl) {
   } catch {
     return false;
   }
+}
+
+// bridge/src/json-util.ts
+function nullProto() {
+  return /* @__PURE__ */ Object.create(null);
 }
 
 // design-to-code/tokens.ts
@@ -702,7 +711,7 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     const modeKeys = Object.keys(values);
     const ext = {};
     if (modeKeys.length > 1) {
-      const modes = /* @__PURE__ */ Object.create(null);
+      const modes = nullProto();
       for (const m of modeKeys) if (values[m] !== void 0) modes[m] = dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef);
       ext.modes = modes;
     }
@@ -779,7 +788,7 @@ function toCSS(designSystem, opts, notes) {
     return t ? plan.id(t) : cssVarName(name);
   };
   const rootLines = /* @__PURE__ */ new Map();
-  const perMode = /* @__PURE__ */ Object.create(null);
+  const perMode = nullProto();
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!plan.canonical.has(v)) continue;
@@ -843,7 +852,7 @@ function toTailwind(designSystem, opts, notes) {
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = /* @__PURE__ */ new Map();
-  const perMode = /* @__PURE__ */ Object.create(null);
+  const perMode = nullProto();
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -927,9 +936,9 @@ function toResolver(designSystem, warnings, opts) {
     takenKeys[kind].add(candidate);
     return candidate;
   }
-  const sets = /* @__PURE__ */ Object.create(null);
-  const modifiers = /* @__PURE__ */ Object.create(null);
-  const files = /* @__PURE__ */ Object.create(null);
+  const sets = nullProto();
+  const modifiers = nullProto();
+  const files = nullProto();
   const resolutionOrder = [];
   const modifierRefs = [];
   for (const [collName, groupVars] of groups) {
@@ -947,7 +956,7 @@ function toResolver(designSystem, warnings, opts) {
     for (const m of c && c.modes || []) if (!modes.includes(m)) modes.push(m);
     for (const v of groupVars) for (const m of Object.keys(v && v.values || {})) if (!modes.includes(m)) modes.push(m);
     if (modes.length < 2) continue;
-    const contexts = /* @__PURE__ */ Object.create(null);
+    const contexts = nullProto();
     let nonEmpty = 0;
     for (const m of modes) {
       const tree = buildTree(sub, warn, opts, (v) => {

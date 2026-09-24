@@ -53,7 +53,7 @@ function resolveVariantsFile(catalogFile: string, variantsFile: string): string 
 function getComponent(catalogFile: string, handle: string): GetComponentResult {
   // Both files are this repo's own writer's output (bridge/design-system-layout.js), read as the shape
   // they were written in; assertNotManifest refuses the one wrong file people pass here.
-  const catalog: ComponentsCatalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8")) as ComponentsCatalog;
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
@@ -62,7 +62,7 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
   const pointer = comp.variantsFile || comp.nodeFile;
   if (!pointer) return { found: true, component: comp, detail: null }; // no exported node tree for this entry
   const detailPath = resolveVariantsFile(catalogFile, pointer);
-  const detail: ComponentDetailFile = JSON.parse(fs.readFileSync(detailPath, "utf8"));
+  const detail = JSON.parse(fs.readFileSync(detailPath, "utf8")) as ComponentDetailFile;
   return { found: true, component: comp, detail, detailPath };
 }
 
@@ -90,7 +90,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   } catch (e) {
     // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
     const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-    console.error(`error  ${message}`);
+    console.error(`error  ${String(message)}`);
     process.exit(2);
   }
 }

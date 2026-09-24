@@ -19,7 +19,7 @@
 //     component key back to its source library. So an unattributed remote component is filed under
 //     "unknown-library" and never guessed at; a user-maintained registry (see readRegistry) is the
 //     only honest way to attribute them.
-import { Obj, propName, errMsg, nonEmpty, exportedAt } from "./util";
+import { type Obj, propName, errMsg, nonEmpty, exportedAt } from "./util";
 import { warn, loadAllPages } from "./state";
 
 // The bucket every remote component lands in until a registry says otherwise. Deliberately a visible,

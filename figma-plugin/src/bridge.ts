@@ -1,10 +1,10 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
-import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren, CollectOpts } from "./collect";
-import { applyWrites, WriteOp } from "./writes";
+import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren, type CollectOpts } from "./collect";
+import { applyWrites, type WriteOp } from "./writes";
 import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
-import { RunInfo } from "./progress";
-import { Obj } from "./util";
+import { type RunInfo } from "./progress";
+import { type Obj } from "./util";
 
 // `args` arrives over the bridge as parsed JSON — genuinely unknown shape until narrowed per command.
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -108,7 +108,7 @@ export async function handleBridge(cmd: string, args: unknown): Promise<unknown>
     // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
     // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
     case "listPages":
-      return await listPages(a as { depth?: number });
+      return await listPages(a);
     case "listChildren":
       return await listChildren(str(a, "nodeId") as string);
     // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"

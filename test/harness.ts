@@ -217,6 +217,7 @@ const button = {
     { type: "SET_VARIABLE", variableId: "v_primary", variableValue: { resolvedType: "COLOR", value: { type: "VARIABLE_ALIAS", id: "v_blue600" } } },
     { type: "SET_VARIABLE_MODE", variableCollectionId: "c_sem", variableModeId: "m_dark" },
     { type: "CONDITIONAL", conditionalBlocks: [{ condition: { value: true }, actions: [{ type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2" }] }] },
+    { type: "UPDATE_MEDIA_RUNTIME", destinationId: "frame_2", mediaAction: "PLAY" },
   ] }],
   getMainComponentAsync: async () => ({
     name: "Button", id: "comp:btn1", key: "compkey_btn", remote: false,
@@ -240,6 +241,10 @@ const scrollFrame = {
   // Motion plane (Plugin API Update 130) — opt-in via {motion:true}.
   timelines: [{ id: "tl1", duration: 0.5 }],
   manualKeyframeTracks: { TRANSLATION_X: { id: "trk1", baseValue: { type: "FLOAT", value: 0 }, keyframes: [{ id: "k1", timelinePosition: 0, value: { type: "FLOAT", value: 0 }, easing: { type: "EASE_OUT" } }, { id: "k2", timelinePosition: 0.5, value: { type: "FLOAT", value: 100 }, easing: { type: "CUSTOM_CUBIC_BEZIER", easingFunctionCubicBezier: { x1: 0.4, y1: 0, x2: 0.2, y2: 1 } } }] } },
+  // animations = KeyframeBinding {baseValue, timelineDuration, tracks:[ManualKeyframeTrack{keyframeOperation,keyframes}]}
+  // — one level deeper than manualKeyframeTracks; see https://developers.figma.com/docs/plugins/api/Motion/.
+  animations: { ROTATION: { baseValue: { type: "FLOAT", value: 0 }, timelineDuration: 1.2,
+    tracks: [{ id: "atrk1", keyframeOperation: "OFFSET", keyframes: [{ id: "ak1", timelinePosition: 0, value: { type: "FLOAT", value: 0 } }, { id: "ak2", timelinePosition: 1, value: { type: "FLOAT", value: 90 } }] }] } },
   animationStyles: [{ styleId: "as1", name: "Fade In", duration: 0.3, timelineOffset: 0 }],
   absoluteBoundingBox: { x: 0, y: 0, width: 375, height: 800 },
   constraints: { horizontal: "MIN", vertical: "MIN" },
@@ -370,6 +375,7 @@ const sandbox = context as unknown as Sandbox;
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("grid column span", abs.gridColumnSpan === 2);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0].pattern === "columns" && abs.layoutGrids[0].count === 12);
+  ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids![0].size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0].label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   ok("gradient transform carried", Array.isArray(flatPaint(abs.fills![0]).transform) && flatPaint(abs.fills![0]).transform![0][0] === 1);
@@ -512,6 +518,8 @@ const sandbox = context as unknown as Sandbox;
   ok("NODE action preserveScroll flag", acts![0].preserveScroll === true);
   ok("SET_VARIABLE resolves variable name", acts!.some((a) => a.type === "set_variable" && a.variable === "color/primary"));
   ok("SET_VARIABLE_MODE resolves collection+mode names", acts!.some((a) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
+  ok("UPDATE_MEDIA_RUNTIME keeps destinationId + resolved destination name",
+    acts!.some((a) => a.type === "update_media_runtime" && a.mediaAction === "play" && a.destinationId === "frame_2" && a.destination === "Details"));
   ok("CONDITIONAL nests actions", acts!.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions![0].destination === "Details"));
 
   ok("collection defaultModeId -> mode name", ds.collections.find((c) => c.name === "Semantic")!.default === "Light");
@@ -579,6 +587,9 @@ const sandbox = context as unknown as Sandbox;
   ok("motion keyframe track: base + keyframes + values", m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100);
   ok("motion keyframe custom cubic-bezier easing carried", m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4);
   ok("motion applied animation style captured", m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3);
+  ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",
+    m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
+    m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90);
 
   // --- sharedData (cross-plugin, e.g. Tokens Studio applied tokens) is OPT-IN ---
   ok("sharedData off by default", tree.sharedData === undefined);
@@ -1276,20 +1287,34 @@ const sandbox = context as unknown as Sandbox;
   ok("[isAsset] isAsset:true is still overridden by a real TEXT descendant — never flatten real content",
     Array.isArray(isAssetTextRun.screen.nodes[0].children));
 
-  // ---- [2026-08-13] variableWidthStrokeProperties: tapered strokes ----
+  // ---- [2026-08-13, fixed 2026-09-24] variableWidthStrokeProperties: tapered strokes ----
+  // Real shape per https://developers.figma.com/docs/plugins/api/VariableWidthStrokeProperties/ and
+  // plugin-api.d.ts ~L8669-8697: CUSTOM carries `variableWidthPoints:[{position,width}]`; presets
+  // (UNIFORM/WEDGE/TAPER/QUARTER_TAPER/EYE/MIRRORED_TAPER) carry only `widthProfile`, no points array.
   const taperedNode = { type: "VECTOR", name: "brush", visible: true, id: "vw:1", width: 40, height: 4,
     strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
     strokeWeight: 2,
-    variableWidthStrokeProperties: { strokeWeightProfile: { type: "MULTI_POINT",
-      mapping: [{ position: 0, value: 1 }, { position: 0.5, value: 4 }, { position: 1, value: 1 }] } },
+    variableWidthStrokeProperties: { widthProfile: "CUSTOM",
+      variableWidthPoints: [{ position: 0, width: 1 }, { position: 0.5, width: 4 }, { position: 1, width: 1 }] },
     fills: [], exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [taperedNode];
   const taperedRun = await sandbox.collectSelection({});
   const taperedStroke = taperedRun.screen.nodes[0].strokes;
-  ok("[variableWidth] a tapered stroke's profile type is captured",
-    !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "multi_point");
-  ok("[variableWidth] and its points, with position+weight",
-    taperedStroke!.variableWidth!.points.length === 3 && taperedStroke!.variableWidth!.points[1].pos === 0.5 && taperedStroke!.variableWidth!.points[1].weight === 4);
+  ok("[variableWidth] a CUSTOM tapered stroke's profile is captured",
+    !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "custom");
+  ok("[variableWidth] and its points, with position+width",
+    taperedStroke!.variableWidth!.points!.length === 3 && taperedStroke!.variableWidth!.points![1].pos === 0.5 && taperedStroke!.variableWidth!.points![1].width === 4);
+
+  const presetNode = { type: "VECTOR", name: "wedge", visible: true, id: "vw:3", width: 40, height: 4,
+    strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+    strokeWeight: 2,
+    variableWidthStrokeProperties: { widthProfile: "WEDGE" },
+    fills: [], exportAsync: async () => "<svg/>" };
+  sandbox.figma.currentPage.selection = [presetNode];
+  const presetRun = await sandbox.collectSelection({});
+  const presetStroke = presetRun.screen.nodes[0].strokes;
+  ok("[variableWidth] a preset (WEDGE) stroke carries only a profile, no points",
+    !!presetStroke && !!presetStroke.variableWidth && presetStroke.variableWidth.profile === "wedge" && presetStroke.variableWidth.points === undefined);
 
   const plainStrokeNode = { type: "VECTOR", name: "plain", visible: true, id: "vw:2", width: 40, height: 4,
     strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],

@@ -28,6 +28,9 @@
     // The shared bridge modules are imported as ../../bridge/src/x.ts (esbuild inlines them; nothing
     // here emits), and erasableSyntaxOnly keeps them Node-strippable for the bridge's own runtime.
     "allowImportingTsExtensions": true,
+    // Type-only imports must say `import type` (oxlint consistent-type-imports enforces the same);
+    // esbuild honours this flag when it strips them, so the bundle never keeps a type-only import.
+    "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
