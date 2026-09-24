@@ -7,27 +7,49 @@ import { styleName, resolveBoundMap } from "./variables";
 // A Figma length ({value, unit}) -> the emitted descriptor. The PERCENT -> "percent"/"px" mapping is
 // what downstream codegen keys off, so it's defined once and the three readers below only differ in
 // which values they reject.
-const lenUnit = (v: any): Obj => ({ value: round(v.value), unit: v.unit === "PERCENT" ? "percent" : "px" });
+const lenUnit = (v: { value: number; unit: "PIXELS" | "PERCENT" }): Obj => ({ value: round(v.value), unit: v.unit === "PERCENT" ? "percent" : "px" });
 
 // unit-aware line-height / letter-spacing (never coerce PERCENT/AUTO to a bare number).
-export function lineH(v: any): Obj | undefined {
+export function lineH(v: LineHeight | PluginAPI["mixed"] | undefined): Obj | undefined {
   if (!v || v === figma.mixed) return undefined;
   if (v.unit === "AUTO") return { unit: "auto" };
   return lenUnit(v);
 }
-export function letterS(v: any): Obj | undefined {
+export function letterS(v: LetterSpacing | PluginAPI["mixed"] | undefined): Obj | undefined {
   if (!v || v === figma.mixed || !v.value) return undefined;
   return lenUnit(v);
 }
 // text-decoration thickness/offset are { value:number, unit:'PIXELS'|'PERCENT' } | { unit:'AUTO' }.
 // The number lives DIRECTLY on .value (NOT .value.value). AUTO -> let CSS pick the default length.
-function decoLen(v: any): Obj | undefined {
+function decoLen(v: TextDecorationThickness | TextDecorationOffset | PluginAPI["mixed"] | null | undefined): Obj | undefined {
   if (!v || v === figma.mixed || v.unit === "AUTO" || typeof v.value !== "number") return undefined;
   return lenUnit(v);
 }
 
-// Font descriptor from a node OR a styled-text segment (both carry the same fields, so `any`).
-function fontObj(src: any): Obj {
+// Font descriptor from a node OR a styled-text segment — both carry the same fields (node-level values
+// add the `| figma.mixed` variant a single segment never has). lineHeight/textDecoration* are declared
+// only on BaseNonResizableTextMixin's TextNode extension (NonResizableTextMixin) — TEXT_PATH's mixin
+// (NonResizableTextPathMixin) is the bare base and genuinely has none of them, so a TextPathNode passed
+// through the uniform-text fallback (no styled-text segment) always no-ops on these, exactly as the
+// `any`-typed original did (the runtime property simply doesn't exist there).
+interface TextStyleSource {
+  fontSize: number | PluginAPI["mixed"];
+  fontName: FontName | PluginAPI["mixed"];
+  fontWeight: number | PluginAPI["mixed"];
+  lineHeight?: LineHeight | PluginAPI["mixed"];
+  letterSpacing: LetterSpacing | PluginAPI["mixed"];
+  textCase: TextCase | PluginAPI["mixed"];
+  textDecoration?: TextDecoration | PluginAPI["mixed"];
+  textDecorationStyle?: TextDecorationStyle | PluginAPI["mixed"] | null;
+  textDecorationColor?: TextDecorationColor | PluginAPI["mixed"] | null;
+  textDecorationThickness?: TextDecorationThickness | PluginAPI["mixed"] | null;
+  textDecorationOffset?: TextDecorationOffset | PluginAPI["mixed"] | null;
+  textDecorationSkipInk?: boolean | PluginAPI["mixed"] | null;
+  openTypeFeatures: Record<OpenTypeFeature, boolean> | PluginAPI["mixed"];
+  fills: ReadonlyArray<Paint> | PluginAPI["mixed"];
+}
+
+function fontObj(src: TextStyleSource): Obj {
   const f: Obj = {};
   f.size = src.fontSize !== figma.mixed ? src.fontSize : "mixed";
   if (src.fontName && src.fontName !== figma.mixed) {
@@ -46,8 +68,8 @@ function fontObj(src: any): Obj {
     if (src.textDecorationStyle && src.textDecorationStyle !== figma.mixed && src.textDecorationStyle !== "SOLID") f.decorationStyle = String(src.textDecorationStyle).toLowerCase();
     // Underline/strike color/thickness/offset -> CSS text-decoration-color / -thickness / text-underline-offset.
     // textDecorationColor is { value: SolidPaint } | { value: 'AUTO' } — .value is the paint directly.
-    const dcv = src.textDecorationColor && src.textDecorationColor.value;
-    const dc = solidFromFills(dcv && dcv !== "AUTO" ? [dcv] : undefined);
+    const tdc = src.textDecorationColor && src.textDecorationColor !== figma.mixed ? src.textDecorationColor.value : undefined;
+    const dc = solidFromFills(tdc && tdc !== "AUTO" ? [tdc] : undefined);
     if (dc) f.decorationColor = dc;
     const th = decoLen(src.textDecorationThickness);
     if (th) f.decorationThickness = th;
@@ -57,8 +79,9 @@ function fontObj(src: any): Obj {
   }
   // OpenType features (small-caps, tabular figures, ligatures, fractions, stylistic sets)
   // -> CSS font-feature-settings. Only the enabled features.
-  if (src.openTypeFeatures && typeof src.openTypeFeatures === "object" && src.openTypeFeatures !== figma.mixed) {
-    const on = Object.keys(src.openTypeFeatures).filter((k) => src.openTypeFeatures[k]);
+  const feats = src.openTypeFeatures;
+  if (feats && feats !== figma.mixed) {
+    const on = (Object.keys(feats) as OpenTypeFeature[]).filter((k) => feats[k]);
     if (on.length) f.openType = on;
   }
   const color = solidFromFills(src.fills);
@@ -66,17 +89,29 @@ function fontObj(src: any): Obj {
   return f;
 }
 
-const TEXT_SEG_FIELDS = [
+// The exact segment fields this extractor reads. Left as a plain mutable array (not `as const`) so its
+// element type stays `keyof Omit<StyledTextSegment, 'characters'|'start'|'end'>` — a readonly tuple
+// isn't assignable to getStyledTextSegments' `T extends (...)[]` (mutable array) constraint, and the
+// wider element type still gives every field below full compile-time checking (TS just can't narrow the
+// segment's Pick<> to exactly these 20 keys — it types it as the full StyledTextSegment shape instead).
+const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
   "textDecorationSkipInk", "fills", "hyperlink", "listOptions", "indentation", "listSpacing",
   "openTypeFeatures", "textStyleId", "fillStyleId", "boundVariables",
-] as const;
+];
 
 // Hyperlink / list / indent live on a styled-text SEGMENT or, for uniform text, on the node itself —
 // identical rules either way. One helper so a new inline attribute can't be added to the mixed-runs
 // branch and forgotten on the uniform one (the two copies this replaced had already drifted).
-function inlineExtras(src: any, out: Obj): void {
+// All fields optional: TEXT_PATH's mixin doesn't declare listOptions/indentation at node level, so the
+// uniform-text fallback (the bare node) simply has none of them — same no-op it always was.
+interface InlineExtrasSource {
+  hyperlink?: HyperlinkTarget | PluginAPI["mixed"] | null;
+  listOptions?: TextListOptions | PluginAPI["mixed"];
+  indentation?: number | PluginAPI["mixed"];
+}
+function inlineExtras(src: InlineExtrasSource, out: Obj): void {
   const hl = src.hyperlink;
   if (hl && hl !== figma.mixed && hl.value) {
     if (hl.type === "NODE") out.linkNode = hl.value;
@@ -90,12 +125,18 @@ function inlineExtras(src: any, out: Obj): void {
 // Returns the text FRAGMENT to merge into the node record. Every other helper in the serializer
 // returns a value the caller assigns; this one used to be the lone exception that wrote into the
 // caller's object, which meant it could set any key without the serializer knowing.
-export async function serializeText(node: TextNode | TextPathNode): Promise<Obj> {
-  const t = node as any;
+// TableCellNode.text (collect from serialize.ts's table-cell branch) is a TextSublayerNode — it
+// carries the same BaseNonResizableTextMixin/NonResizableTextMixin typographic surface (fonts, runs,
+// decoration, paragraph/list spacing) but NONE of BaseNodeMixin's identity fields (no `name`/`id`/
+// `width`/`type`) since a cell's text isn't a scene node in its own right. The three reads below that
+// need those fields (`node.name`, `node.id`, `node.width`) are guarded the same way the original
+// `cell.text as TextNode` cast let them silently read `undefined` for a cell — behaviour unchanged,
+// just typed instead of cast. See developers.figma.com/docs/plugins/api/TextSublayerNode/.
+export async function serializeText(node: TextNode | TextPathNode | TextSublayerNode): Promise<Obj> {
   const out: Obj = { text: node.characters };
-  let segs: any[] | undefined;
+  let segs: ReturnType<TextNode["getStyledTextSegments"]> | undefined;
   try {
-    segs = (node as TextNode).getStyledTextSegments(TEXT_SEG_FIELDS as any) as any[];
+    segs = node.getStyledTextSegments(TEXT_SEG_FIELDS);
   } catch (e) {
     segs = undefined;
   }
@@ -122,38 +163,55 @@ export async function serializeText(node: TextNode | TextPathNode): Promise<Obj>
     if (bv) out.textTokens = bv;
     // Uniform (single-run) text still carries hyperlink/list/indent — these live on the lone
     // segment (or the node), NOT only on mixed runs.
-    inlineExtras(s0 || t, out);
+    inlineExtras(s0 || node, out);
   }
-  if (t.textAlignHorizontal) out.font.align = t.textAlignHorizontal.toLowerCase();
-  if (typeof t.paragraphSpacing === "number" && t.paragraphSpacing) out.font.paragraphSpacing = t.paragraphSpacing;
-  if (typeof t.paragraphIndent === "number" && t.paragraphIndent) out.font.paragraphIndent = t.paragraphIndent;
-  if (typeof t.listSpacing === "number" && t.listSpacing) out.font.listSpacing = t.listSpacing; // gap between list items
-  if (t.leadingTrim && t.leadingTrim !== figma.mixed && t.leadingTrim !== "NONE") out.font.leadingTrim = t.leadingTrim.toLowerCase();
-  if (t.textAlignVertical && t.textAlignVertical !== "TOP") out.font.valign = t.textAlignVertical.toLowerCase();
-  // Line-breaking strategy (Plugin API update 2026-08-14; TextWrapStyle = AUTO | BALANCE | PRETTY).
-  // AUTO is the default and says nothing; BALANCE (even line lengths) and PRETTY (fewer orphans) map
-  // 1:1 onto CSS `text-wrap: balance|pretty`. The typeof-string test is also the figma.mixed guard —
-  // mixed is a Symbol, and per-paragraph wrap styles make this genuinely mixable.
-  {
-    const tw = (t as any).textWrapStyle;
-    if (typeof tw === "string" && tw && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+  if ("textAlignHorizontal" in node && node.textAlignHorizontal) out.font.align = node.textAlignHorizontal.toLowerCase();
+  // paragraphSpacing/paragraphIndent/listSpacing/leadingTrim live on NonResizableTextMixin — TEXT and
+  // the TABLE-cell TextSublayerNode both extend it; TEXT_PATH's mixin (NonResizableTextPathMixin) is
+  // the bare Base and genuinely lacks them, same no-op as before.
+  if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) out.font.paragraphSpacing = node.paragraphSpacing;
+  if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) out.font.paragraphIndent = node.paragraphIndent;
+  if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) out.font.listSpacing = node.listSpacing; // gap between list items
+  if ("leadingTrim" in node && node.leadingTrim && node.leadingTrim !== figma.mixed && node.leadingTrim !== "NONE") out.font.leadingTrim = node.leadingTrim.toLowerCase();
+  if ("textAlignVertical" in node && node.textAlignVertical && node.textAlignVertical !== "TOP") out.font.valign = node.textAlignVertical.toLowerCase();
+  // Line-breaking strategy (TextWrapStyle = AUTO | BALANCE | PRETTY). AUTO is the default and says
+  // nothing; BALANCE (even line lengths) and PRETTY (fewer orphans) map 1:1 onto CSS
+  // `text-wrap: balance|pretty`. Declared on NonResizableTextMixin (TEXT and table-cell text; TEXT_PATH's
+  // bare-Base mixin lacks it, hence the `in` guard) as `TextWrapStyle | PluginAPI['mixed']` — the
+  // typeof-string test is the figma.mixed guard, since per-paragraph wrap styles make it genuinely mixable.
+  if ("textWrapStyle" in node) {
+    const tw = node.textWrapStyle;
+    if (typeof tw === "string" && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
   }
   // List rendering: markers hanging in the margin vs. inline, and hanging punctuation into the margin.
-  if (t.hangingList === true) out.font.hangingList = true;
-  if (t.hangingPunctuation === true) out.font.hangingPunctuation = true;
-  // Text-box sizing/overflow — fixed-width vs hug vs truncate/clamp.
-  if (t.textAutoResize && t.textAutoResize !== "NONE") out.autoResize = t.textAutoResize.toLowerCase();
-  if (t.textTruncation === "ENDING") out.truncate = true; // -> text-overflow: ellipsis
-  if (typeof t.maxLines === "number" && t.maxLines) out.maxLines = t.maxLines; // -> -webkit-line-clamp
+  // hangingList/hangingPunctuation are on NonResizableTextMixin, so TEXT and the TABLE-cell
+  // TextSublayerNode both have them; TEXT_PATH's bare-Base mixin doesn't.
+  if ("hangingList" in node && node.hangingList === true) out.font.hangingList = true;
+  if ("hangingPunctuation" in node && node.hangingPunctuation === true) out.font.hangingPunctuation = true;
+  // Text-box sizing/overflow — fixed-width vs hug vs truncate/clamp. textAutoResize/textTruncation/
+  // maxLines are declared directly on TextNode (not the shared mixins) — TEXT only.
+  if ("type" in node && node.type === "TEXT") {
+    if (node.textAutoResize && node.textAutoResize !== "NONE") out.autoResize = node.textAutoResize.toLowerCase();
+    if (node.textTruncation === "ENDING") out.truncate = true; // -> text-overflow: ellipsis
+    if (typeof node.maxLines === "number" && node.maxLines) out.maxLines = node.maxLines; // -> -webkit-line-clamp
+  }
   // Font substitution signal: a font this text uses isn't available/loaded, so Figma is rendering a
   // FALLBACK — the family/weight recorded above may not match what's shown. Flag it so codegen knows
   // the type is approximate (and can warn or pin a webfont) rather than trusting the name blindly.
-  if (t.hasMissingFont === true) {
+  if (node.hasMissingFont === true) {
     out.missingFont = true;
     // Kinded: a real file has one of these per text node using the font — 80 identical sentences.
-    warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", node.name + " (" + node.id + ")");
+    // `name`/`id` are BaseNodeMixin fields the TABLE-cell TextSublayerNode doesn't have — same
+    // "undefined (undefined)" the prior `cell.text as TextNode` cast produced there, now typed.
+    const name = "name" in node ? node.name : undefined;
+    const id = "id" in node ? node.id : undefined;
+    warnKind("missing font — Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
   }
   // Zero-width text thread is a data smell (a collapsed/broken node) — surface it.
-  if (node.width === 0) warnKind("zero-width text node (possible collapsed thread)", node.name + " (" + node.id + ")");
+  if ("width" in node && node.width === 0) {
+    const name = "name" in node ? node.name : undefined;
+    const id = "id" in node ? node.id : undefined;
+    warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
+  }
   return out;
 }

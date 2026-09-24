@@ -1,9 +1,23 @@
 // Bridge dispatch (CLI / MCP over WebSocket, via the UI iframe).
 import { collectFull, collectDesignSystemOnly, collectLibraryFile, collectSelection, collectNode, collectScreenshot, listPages, listChildren, CollectOpts } from "./collect";
-import { applyWrites } from "./writes";
+import { applyWrites, WriteOp } from "./writes";
 import { listLibraries } from "./libraries";
 import { serializeRun } from "./state";
 import { RunInfo } from "./progress";
+import { Obj } from "./util";
+
+// `args` arrives over the bridge as parsed JSON — genuinely unknown shape until narrowed per command.
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === "object" && !Array.isArray(x);
+}
+function str(x: Record<string, unknown>, key: string): string | undefined {
+  const v = x[key];
+  return typeof v === "string" ? v : undefined;
+}
+function num(x: Record<string, unknown>, key: string): number | undefined {
+  const v = x[key];
+  return typeof v === "number" ? v : undefined;
+}
 
 // Every queued command announces itself to the plugin window under the SAME label the caller used, so
 // a designer watching Figma go busy can see that a CLI/MCP pull — and which one — is walking their
@@ -18,7 +32,8 @@ const bridgeRun = (cmd: string): RunInfo => ({ source: "bridge", label: cmd });
 const INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 const INSTANCE_STARTED_AT = Date.now();
 
-export async function handleBridge(cmd: string, args: any): Promise<any> {
+export async function handleBridge(cmd: string, args: unknown): Promise<unknown> {
+  const a = isRecord(args) ? args : {};
   switch (cmd) {
     // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
     // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
@@ -33,7 +48,7 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     //     a locally-imported plugin, so routing must fall back to a server-minted connection id.
     //   file / page                      — human labels for a connection listing, never routing keys.
     case "whoami": {
-      const r: any = {
+      const r: Obj = {
         instanceId: INSTANCE_ID,
         startedAt: INSTANCE_STARTED_AT,
         uptimeMs: Date.now() - INSTANCE_STARTED_AT,
@@ -48,10 +63,11 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
         // `dtwin list clients` and `dtwin doctor` can never disagree about which build is running.
         pluginVersion: __PLUGIN_VERSION__,
       };
-      // Same guarded read as `ping`: `fileKey` is typed `string | undefined` and only populated for
-      // private plugins, but touching it must never throw the probe that exists to test for it.
+      // Same guarded read as `ping`: `fileKey` is typed `string | undefined` (gated to private
+      // plugins — https://developers.figma.com/docs/plugins/api/properties/figma-filekey/), but
+      // touching it must never throw the probe that exists to test for it.
       try {
-        r.fileKey = typeof (figma as any).fileKey !== "undefined" ? (figma as any).fileKey : null;
+        r.fileKey = typeof figma.fileKey !== "undefined" ? figma.fileKey : null;
       } catch (e) {
         r.fileKey = null;
       }
@@ -59,32 +75,32 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
       return r;
     }
     case "ping": {
-      const r: any = { pong: true, page: figma.currentPage.name, file: figma.root.name };
-      try { if (typeof (figma as any).fileKey !== "undefined") r.fileKey = (figma as any).fileKey; } catch (e) {}
+      const r: Obj = { pong: true, page: figma.currentPage.name, file: figma.root.name };
+      try { if (typeof figma.fileKey !== "undefined") r.fileKey = figma.fileKey; } catch (e) { /* see whoami */ }
       return r;
     }
     // The extraction/write commands mutate shared per-run state (and the document), so they go through
     // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
     // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
     case "exportFull":
-      return await serializeRun(() => collectFull(args as CollectOpts), bridgeRun(cmd));
+      return await serializeRun(() => collectFull(a as CollectOpts), bridgeRun(cmd));
     // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
     // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
     case "exportDesignSystem":
-      return await serializeRun(() => collectDesignSystemOnly(args as CollectOpts), bridgeRun(cmd));
+      return await serializeRun(() => collectDesignSystemOnly(a as CollectOpts), bridgeRun(cmd));
     // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
     // the full catalog build and mutates the same per-run state they do.
     case "exportLibrary":
-      return await serializeRun(() => collectLibraryFile(args as CollectOpts & { asLibrary?: string }), bridgeRun(cmd));
+      return await serializeRun(() => collectLibraryFile(a as CollectOpts & { asLibrary?: string }), bridgeRun(cmd));
     case "exportSelection":
-      return await serializeRun(() => collectSelection(args as CollectOpts), bridgeRun(cmd));
+      return await serializeRun(() => collectSelection(a as CollectOpts), bridgeRun(cmd));
     case "exportNode":
-      return await serializeRun(() => collectNode(args && args.nodeId, args as CollectOpts), bridgeRun(cmd));
+      return await serializeRun(() => collectNode(str(a, "nodeId") as string, a as CollectOpts), bridgeRun(cmd));
     // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
     // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
     // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
     case "screenshot":
-      return await serializeRun(() => collectScreenshot(args && args.nodeId, { scale: args && args.scale }), bridgeRun(cmd));
+      return await serializeRun(() => collectScreenshot(str(a, "nodeId") as string, { scale: num(a, "scale") }), bridgeRun(cmd));
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
     // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
@@ -92,9 +108,9 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
     // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
     case "listPages":
-      return await listPages(args || {});
+      return await listPages(a as { depth?: number });
     case "listChildren":
-      return await listChildren(args && args.nodeId);
+      return await listChildren(str(a, "nodeId") as string);
     // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
     // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
     // behind a long export would defeat the point of asking. Its document walk is one
@@ -103,7 +119,7 @@ export async function handleBridge(cmd: string, args: any): Promise<any> {
     case "listLibraries":
       return await listLibraries();
     case "write":
-      return await serializeRun(() => applyWrites(args && args.ops), bridgeRun(cmd));
+      return await serializeRun(() => applyWrites(Array.isArray(a.ops) ? (a.ops as WriteOp[]) : []), bridgeRun(cmd));
     default:
       throw new Error("unknown cmd: " + cmd);
   }

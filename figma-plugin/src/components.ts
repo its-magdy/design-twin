@@ -34,7 +34,7 @@ export async function instanceComponentRef(node: SceneNode): Promise<ComponentRe
     if (main.key) ref.key = main.key;
     if (main.remote) ref.remote = true;
     // A REMOTE main's `.parent` may be null (plugin-api.d.ts) — this is documented shape, not a bug.
-    const parent: any = (main as any).parent;
+    const parent = main.parent;
     if (parent && parent.type === "COMPONENT_SET") {
       ref.setId = parent.id;
       if (parent.key) ref.setKey = parent.key;
@@ -49,14 +49,15 @@ export async function instanceComponentRef(node: SceneNode): Promise<ComponentRe
 
 // componentPropertyReferences: which component property drives this sublayer's visibility / text /
 // swapped instance — lets codegen wire a nested layer to a prop instead of hardcoding.
-const PROP_REF_KEYS = ["visible", "characters", "mainComponent"];
+const PROP_REF_KEYS: Array<"visible" | "characters" | "mainComponent"> = ["visible", "characters", "mainComponent"];
 export function componentPropRefs(node: SceneNode): Obj | undefined {
   if (!("componentPropertyReferences" in node)) return undefined;
-  const refs = (node as any).componentPropertyReferences;
+  const refs = node.componentPropertyReferences;
   if (!refs) return undefined;
   const out: Obj = {};
   for (const k of PROP_REF_KEYS) {
-    if (refs[k]) out[k] = propName(refs[k]);
+    const ref = refs[k];
+    if (ref) out[k] = propName(ref);
   }
   return nonEmpty(out);
 }
@@ -65,11 +66,11 @@ export function componentPropRefs(node: SceneNode): Obj | undefined {
 const OVERRIDE_CAP = 100;
 export function instanceOverrides(node: SceneNode): Obj[] | undefined {
   if (node.type !== "INSTANCE") return undefined;
-  const overrides = (node as any).overrides;
+  const overrides = node.overrides;
   if (!Array.isArray(overrides) || !overrides.length) return undefined;
   const list = overrides
-    .filter((o: any) => o && Array.isArray(o.overriddenFields) && o.overriddenFields.length)
-    .map((o: any) => ({ id: o.id, fields: o.overriddenFields }));
+    .filter((o) => o && Array.isArray(o.overriddenFields) && o.overriddenFields.length)
+    .map((o) => ({ id: o.id, fields: o.overriddenFields }));
   if (!list.length) return undefined;
   if (list.length > OVERRIDE_CAP) {
     warn("instance '" + node.name + "' has " + list.length + " overrides — truncated to " + OVERRIDE_CAP);
@@ -79,24 +80,25 @@ export function instanceOverrides(node: SceneNode): Obj[] | undefined {
 }
 
 // ComponentNode/ComponentSetNode carry their own visual properties (fills/strokes/effects/
-// cornerRadius/opacity/blendMode), same as any other SceneNode per the Plugin API, and — unlike
+// cornerRadius/opacity/blendMode), same as every other SceneNode per the Plugin API, and — unlike
 // getCSSAsync/exportAsync/measurements — reading them costs nothing extra: they are plain synchronous
 // property getters (Figma's own API only marks the genuinely expensive calls with an `Async` suffix),
 // so there is no reason to gate them behind an opt-in flag the way the page-walk read options are.
 // Mirrors serialize.ts's per-node visual reads (fills/strokes/effects/corner/opacity/blendMode) so a
 // consumer sees the same shape it would from a page walk; kept local rather than imported to avoid a
 // components.ts <-> serialize.ts import cycle (serialize.ts already imports from components.ts).
-const VISUAL_CORNER_KEYS: Array<[string, string]> = [
+type CornerKey = "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius";
+const VISUAL_CORNER_KEYS: Array<[CornerKey, string]> = [
   ["topLeftRadius", "tl"],
   ["topRightRadius", "tr"],
   ["bottomRightRadius", "br"],
   ["bottomLeftRadius", "bl"],
 ];
-async function simplifyVisuals(node: any): Promise<Obj | undefined> {
+async function simplifyVisuals(node: ComponentNode | ComponentSetNode): Promise<Obj | undefined> {
   const out: Obj = {};
   const [fills, strokes, effects] = await Promise.all([
     simplifyFills("fills" in node ? node.fills : undefined),
-    simplifyStrokes(node as SceneNode),
+    simplifyStrokes(node),
     simplifyEffects("effects" in node ? node.effects : undefined),
   ]);
   if (fills) out.fills = fills;
@@ -107,7 +109,9 @@ async function simplifyVisuals(node: any): Promise<Obj | undefined> {
     else if (node.cornerRadius === figma.mixed) {
       const corners: Obj = {};
       for (const [k, s] of VISUAL_CORNER_KEYS) {
-        if (k in node && typeof node[k] === "number" && node[k]) corners[s] = node[k];
+        if (!(k in node)) continue;
+        const r = node[k];
+        if (typeof r === "number" && r) corners[s] = r;
       }
       putNonEmpty(out, "radius", corners);
     }
@@ -120,7 +124,7 @@ async function simplifyVisuals(node: any): Promise<Obj | undefined> {
 // A variant's own prop VALUES (not definitions — componentPropertyDefinitions throws on a variant).
 // variantProperties is deprecated with no replacement (InstanceNode.componentProperties is
 // instance-only), so prefer it when present, else parse the name Figma guarantees is "Prop=Val, ...".
-function variantValues(main: any): Obj | undefined {
+function variantValues(main: ComponentNode): Obj | undefined {
   try {
     if (main.variantProperties && Object.keys(main.variantProperties).length) return { ...main.variantProperties };
   } catch (e) {}
@@ -162,18 +166,18 @@ async function serializeVariant(main: ComponentNode, serialize: SerializeFn): Pr
 // WARNED, never swallowed — an empty catalog must be distinguishable from "this page has none".
 async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, serialize?: SerializeFn): Promise<Obj[]> {
   const components: Obj[] = [];
-  const pendingPublish: { entry: Obj; node: any }[] = [];
+  const pendingPublish: { entry: Obj; node: ComponentNode | ComponentSetNode }[] = [];
   const seenNames = new Set<string>();
-  const variantsBySet = new Map<string, any[]>(); // setId -> variant COMPONENT nodes, collected in the same pass
+  const variantsBySet = new Map<string, ComponentNode[]>(); // setId -> variant COMPONENT nodes, collected in the same pass
   const entriesBySetId = new Map<string, Obj>(); // setId -> that COMPONENT_SET's catalog entry
   // findAllWithCriteria is the extractor's one full-document traversal, and the Plugin API docs call
   // out invisible instance children as its main cost ("several times faster in large documents").
   // A COMPONENT/COMPONENT_SET is never nested inside an instance, so skipping them loses no catalog
   // entry. Scoped to this traversal and restored in `finally` — serialize() deliberately KEEPS hidden
   // nodes, so the flag must not leak into the node walk.
-  const prevSkip = (figma as any).skipInvisibleInstanceChildren;
+  const prevSkip = figma.skipInvisibleInstanceChildren;
   try {
-    try { (figma as any).skipInvisibleInstanceChildren = true; } catch (e) {}
+    try { figma.skipInvisibleInstanceChildren = true; } catch (e) {}
     // This is the extractor's OTHER multi-page walk (findAllWithCriteria over every page), and on a
     // design-system file it is the slow half of a --design-system pull, which has no page walk to
     // report progress from at all. Same two safe-point rules as collect.ts: cancel between pages,
@@ -184,7 +188,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
     for (const page of catalogPages) {
       checkCancelled();
       enterPage("design-system", ++catalogIndex, catalogPages.length, page.name, page.id, { components: components.length });
-      let nodes: SceneNode[] = [];
+      let nodes: Array<ComponentNode | ComponentSetNode> = [];
       // A page that failed to load throws here (dynamic-page access) — report which page went missing.
       try {
         nodes = page.findAllWithCriteria({ types: ["COMPONENT_SET", "COMPONENT"] });
@@ -192,7 +196,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         warn("component catalog: page '" + page.name + "' could not be traversed (" + errMsg(e) + ") — its components are missing");
         continue;
       }
-      for (const n of nodes as any[]) {
+      for (const n of nodes) {
         if (n.type === "COMPONENT" && n.parent && n.parent.type === "COMPONENT_SET") {
           // A variant — findAllWithCriteria already found it in this same traversal, so record it for
           // the visuals pass below rather than walking the tree a second time to re-find it.
@@ -206,7 +210,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         if (n.description) entry.description = n.description; // free intent annotation (Code Connect stand-in)
         if (n.remote) entry.remote = true; // consumed library component vs a local one
         if (n.key) entry.key = n.key; // publish key — resolves INSTANCE_SWAP preferredValues keys back to this catalog
-        if (Array.isArray(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d: any) => d.uri).filter(Boolean);
+        if (Array.isArray(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d) => d.uri).filter(Boolean);
         try {
           const defs = n.componentPropertyDefinitions;
           if (defs && Object.keys(defs).length) {
@@ -226,7 +230,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
               if (d.defaultValue !== undefined) p.default = d.defaultValue;
               // INSTANCE_SWAP: the curated set of components allowed for this slot -> a typed enum.
               if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
-                p.preferredValues = d.preferredValues.map((v: any) => ({ type: v.type, key: v.key }));
+                p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
               }
               if (d.description) p.description = d.description;
               // A BOOLEAN/TEXT prop whose DEFAULT is driven by a variable at the definition level.
@@ -261,11 +265,11 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
         if (runOpts.variantVisuals && n.type === "COMPONENT_SET") entriesBySetId.set(n.id, entry);
         // A standalone COMPONENT (not a variant inside a set — those were already filtered out above)
         // has no COMPONENT_SET wrapper to hang variants[] off of, but it is exactly as "one master node
-        // worth walking" as any variant is, so give it the same serializeVariant treatment and attach
+        // worth walking" as every variant is, so give it the same serializeVariant treatment and attach
         // the tree directly as entry.node rather than entry.variants[].node.
         if (runOpts.variantVisuals && n.type === "COMPONENT" && serialize) {
           try {
-            const node = await serializeVariant(n as ComponentNode, serialize);
+            const node = await serializeVariant(n, serialize);
             if (node) entry.node = node;
           } catch (e) {
             warn("component '" + n.name + "': visuals unreadable (" + errMsg(e) + ") — node tree omitted");
@@ -275,7 +279,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
       }
     }
   } finally {
-    try { (figma as any).skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
+    try { figma.skipInvisibleInstanceChildren = prevSkip; } catch (e) {}
   }
   // Per-variant visual truth (opt-in). Runs AFTER skipInvisibleInstanceChildren is restored to its
   // prior value: serialize() deliberately KEEPS hidden nodes (hidden variant states are real design),
@@ -287,7 +291,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
       const out: Obj[] = [];
       for (const v of variants) {
         try {
-          const node = await serializeVariant(v as ComponentNode, serialize);
+          const node = await serializeVariant(v, serialize);
           const o: Obj = { id: v.id, name: v.name };
           if (v.key) o.key = v.key;
           const values = variantValues(v);
@@ -317,7 +321,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
 // CURRENT = published and in sync | CHANGED = published with local edits | UNPUBLISHED = never published.
 // Per-object and async (N round trips), so callers fan it out; a rejection yields undefined ("unknown"),
 // never a guessed "UNPUBLISHED".
-async function publishOf(o: any): Promise<string | undefined> {
+async function publishOf(o: PublishableMixin | null | undefined): Promise<string | undefined> {
   try {
     if (!o || typeof o.getPublishStatusAsync !== "function") return undefined;
     const s = await o.getPublishStatusAsync();
@@ -382,7 +386,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   }
 
   let colorProfile: string | undefined;
-  try { if (figma.root && (figma.root as any).documentColorProfile) colorProfile = String((figma.root as any).documentColorProfile).toLowerCase(); } catch (e) {}
+  try { if (figma.root && figma.root.documentColorProfile) colorProfile = String(figma.root.documentColorProfile).toLowerCase(); } catch (e) {}
 
   // Styles resolve BEFORE dumpVariables: every resolveBoundMap() below records the variable ids these
   // styles reference, and dumpVariables uses that record to pull in referenced LIBRARY variables that
@@ -394,13 +398,13 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   // Without it a consuming file's styleId (which resolves to a NAME only) cannot be joined back to the
   // library catalog this style came from, which is the whole point of a library export.
   // https://developers.figma.com/docs/plugins/api/PaintStyle/
-  const styleMeta = async (s: any): Promise<Obj> => {
+  const styleMeta = async (s: BaseStyle): Promise<Obj> => {
     const m: Obj = {};
     if (s.key) m.key = s.key;
     if (s.id) m.id = s.id;
     if (s.remote) m.remote = true;
     if (Array.isArray(s.documentationLinks) && s.documentationLinks.length) {
-      m.docs = s.documentationLinks.map((d: any) => d.uri).filter(Boolean);
+      m.docs = s.documentationLinks.map((d) => d.uri).filter(Boolean);
     }
     if (asLibrary) {
       const p = await publishOf(s);
@@ -413,7 +417,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
     // Paint styles carry their ACTUAL colors, not just a name.
     // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
     // variable silently lost that link — the binding is what makes it a token rather than a hex.
-    Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap((s as any).boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
+    Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap(s.boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
     Promise.all(
       text.map(async (s) => ({
           name: s.name,
@@ -431,14 +435,14 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
           // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
           // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
           // one, minus the mixed guard: a TextStyle is uniform by definition.
-          textWrap: (s as any).textWrapStyle && (s as any).textWrapStyle !== "AUTO"
-            ? String((s as any).textWrapStyle).toLowerCase() : undefined,
-        tokens: await resolveBoundMap((s as any).boundVariables),
+          textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO"
+            ? String(s.textWrapStyle).toLowerCase() : undefined,
+        tokens: await resolveBoundMap(s.boundVariables),
         description: s.description || undefined,
         ...(await styleMeta(s)),
       }))
     ),
-    Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap((s as any).boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
+    Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap(s.boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
   ]);
   const styles = {
     paint: paintStyles,
@@ -450,7 +454,7 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
       grid.map(async (s) => ({
         name: s.name,
         grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : undefined,
-        tokens: await resolveBoundMap((s as any).boundVariables),
+        tokens: await resolveBoundMap(s.boundVariables),
         description: s.description || undefined,
         ...(await styleMeta(s)),
       }))
@@ -469,13 +473,13 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
   let source: Obj | undefined;
   if (asLibrary) {
     let fileKey: string | undefined;
-    try { if (typeof (figma as any).fileKey !== "undefined") fileKey = (figma as any).fileKey || undefined; } catch (e) {}
+    try { if (typeof figma.fileKey !== "undefined") fileKey = figma.fileKey || undefined; } catch (e) {}
     if (!fileKey) hygiene.push("figma.fileKey unavailable — the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
     source = {
       role: "library",
       libraryName: (opts && opts.asLibrary) || (figma.root && figma.root.name) || undefined,
       fileKey,
-      collectionKeys: vars.collections.map((c: any) => c.key).filter(Boolean),
+      collectionKeys: vars.collections.map((c) => c.key).filter(Boolean),
     };
   }
 

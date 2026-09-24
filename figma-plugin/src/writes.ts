@@ -18,9 +18,9 @@ function parseHex(hex: string): { color: RGB; opacity?: number } {
 
 function solidPaint(hex: string): SolidPaint {
   const { color, opacity } = parseHex(hex);
-  const p: any = { type: "SOLID", color };
+  const p: { type: "SOLID"; color: RGB; opacity?: number } = { type: "SOLID", color };
   if (opacity !== undefined) p.opacity = opacity;
-  return p as SolidPaint;
+  return p;
 }
 
 // Load every font a text node uses before mutating .characters — node.fontName is figma.mixed for
@@ -51,7 +51,25 @@ async function resolveParent(parentId?: string): Promise<ChildrenMixin & BaseNod
   return p as ChildrenMixin & BaseNode;
 }
 
-async function applyWrite(op: any): Promise<Obj> {
+// Args for the small explicit write-op set above (no eval — see file header). Only the fields each
+// op actually reads are listed; the bridge/CLI callers assemble these from JSON.
+export interface WriteOp {
+  op: string;
+  parentId?: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  layoutMode?: "HORIZONTAL" | "VERTICAL";
+  itemSpacing?: number;
+  padding?: [number, number, number, number];
+  fill?: string;
+  text?: string;
+  fontSize?: number;
+  nodeId?: string;
+  color?: string;
+}
+
+async function applyWrite(op: WriteOp): Promise<Obj> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -85,14 +103,14 @@ async function applyWrite(op: any): Promise<Obj> {
     // not every node type carries fills/characters. Returning {id} in those cases reported a write
     // that never happened — over MCP the agent reads that as success and builds on a false premise.
     case "setFill": {
-      const nd = await figma.getNodeByIdAsync(op.nodeId);
+      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-      (nd as GeometryMixin).fills = [solidPaint(op.color)];
+      (nd as GeometryMixin).fills = [solidPaint(op.color || "")];
       return { id: op.nodeId };
     }
     case "setText": {
-      const nd = await figma.getNodeByIdAsync(op.nodeId);
+      const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
       if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
       if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
       await loadNodeFonts(nd);
@@ -117,7 +135,7 @@ export interface WriteResult {
   error?: string;
 }
 
-export async function applyWrites(ops: any[]): Promise<WriteResult> {
+export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
   const applied: Obj[] = [];
   // Dev Mode (manifest editorType "dev") is read-only: every op below would throw its own opaque

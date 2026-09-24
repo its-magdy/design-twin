@@ -70,7 +70,7 @@ async function screenResult(title: string, fileBase: string, nodes: Obj[], origi
   const measurements = collectMeasurements();
   if (measurements) screen.measurements = measurements;
   // Repeated at the TOP level as well as inside `screen`: write-out.js routes the file into
-  // pages/<page>/ before it has any reason to open the screen doc, and the MCP path hands the same
+  // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
   // envelope to a caller that may never write to disk at all.
   const out: Obj = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
   if (page) { out.page = page.name; out.pageId = page.id; }
@@ -80,10 +80,12 @@ async function screenResult(title: string, fileBase: string, nodes: Obj[], origi
 
 // A node's STRUCTURAL summary — the only shape the cheap index tools emit (id/name/type/size), shared
 // by listPages and listChildren so a new field can't be added to one index and missed on the other.
-function summarize(nd: SceneNode): Obj {
+// PageNode is admitted because listChildren on the DOCUMENT node lists pages; pages have neither a
+// size nor `visible`, which the `in` checks below already handle.
+function summarize(nd: SceneNode | PageNode): Obj {
   const o: Obj = { name: nd.name, id: nd.id, type: nd.type };
-  if ("width" in nd) { o.w = Math.round((nd as any).width); o.h = Math.round((nd as any).height); }
-  if ((nd as any).visible === false) o.hidden = true;
+  if ("width" in nd) { o.w = Math.round(nd.width); o.h = Math.round(nd.height); }
+  if ("visible" in nd && nd.visible === false) o.hidden = true;
   return o;
 }
 
@@ -95,9 +97,9 @@ function summarize(nd: SceneNode): Obj {
 // Returns false when the page has no loadAsync at all (older API surface / test doubles) so a caller
 // scanning for a node can skip it rather than assume it was loaded.
 async function loadPageSafely(page: PageNode, sink: (msg: string) => void, what: string): Promise<boolean> {
-  if (typeof (page as any).loadAsync !== "function") return false;
+  if (typeof page.loadAsync !== "function") return false;
   try {
-    await (page as any).loadAsync();
+    await page.loadAsync();
   } catch (e) {
     sink("page '" + page.name + "' failed to load" + (what ? " " + what : "") + ": " + errMsg(e));
     return false;
@@ -176,7 +178,7 @@ function resolvePages(wanted: ReadonlyArray<string>, all: ReadonlyArray<PageNode
 }
 
 function applyOpts(opts?: CollectOpts): void {
-  for (const k of Object.keys(runOpts) as Array<keyof typeof runOpts>) runOpts[k] = !!(opts && (opts as any)[k]);
+  for (const k of Object.keys(runOpts) as Array<keyof typeof runOpts>) runOpts[k] = !!(opts && opts[k]);
 }
 
 // getCSSAsync (Figma's own CSS oracle) is opt-in because it's one async call PER NODE — O(nodes) on a
@@ -184,21 +186,26 @@ function applyOpts(opts?: CollectOpts): void {
 // ON when the caller didn't specify AND the exported subtree is small. Large/full exports keep it off
 // unless explicitly requested. An explicit css:false/true always wins (only `undefined` auto-resolves).
 const CSS_AUTO_NODE_CAP = 60;
+// Array.isArray's built-in guard narrows a ReadonlyArray<T> to an untyped array (its elements lose T);
+// this is the same runtime check with T kept (test doubles can hand back a non-array here).
+function isList<T>(v: ReadonlyArray<T> | null | undefined): v is ReadonlyArray<T> {
+  return Array.isArray(v);
+}
 // Counts only far enough to answer "is this subtree at or under the cap?" — the exact size of a big
 // tree is never wanted, and walking to find it is the cost this gate exists to avoid.
-function subtreeIsSmall(node: any): boolean {
+function subtreeIsSmall(node: BaseNode): boolean {
   let count = 0;
-  const stack = [node];
+  const stack: BaseNode[] = [node];
   while (stack.length) {
     const n = stack.pop();
     if (++count > CSS_AUTO_NODE_CAP) return false;
-    if (n && "children" in n && Array.isArray(n.children)) {
+    if (n && "children" in n && isList<BaseNode>(n.children)) {
       for (const c of n.children) stack.push(c);
     }
   }
   return true;
 }
-function autoCss(opts: CollectOpts | undefined, node: any): CollectOpts {
+function autoCss(opts: CollectOpts | undefined, node: BaseNode): CollectOpts {
   // Spread, not a field-by-field clone: a hand-written copy silently DROPS any newly added read
   // option on exactly the single-selection / single-node paths, which is the hardest gap to notice.
   const o: CollectOpts = { ...opts };
@@ -217,11 +224,10 @@ function isDefaultBg(f: Obj[] | undefined): boolean {
 // Reuses simplifyFills rather than hand-reading `.color`: page backgrounds are full Paint[] (an image
 // or gradient canvas is legal), and a second reader here would be a permanently-lagging copy of paint.ts.
 async function pageBackground(page: PageNode): Promise<Obj | undefined> {
-  const p = page as any;
   const out: Obj = {};
-  const bg = await simplifyFills(p.backgrounds);
+  const bg = await simplifyFills(page.backgrounds);
   if (!isDefaultBg(bg)) out.background = bg;
-  const proto = await simplifyFills(p.prototypeBackgrounds);
+  const proto = await simplifyFills(page.prototypeBackgrounds);
   if (!isDefaultBg(proto)) out.prototypeBackground = proto;
   return nonEmpty(out);
 }
@@ -247,12 +253,11 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): Obj[] | undefined
   const targets = pages && pages.length ? pages : [figma.currentPage];
   const out: Obj[] = [];
   for (const page of targets) {
-    const p = page as any;
-    if (typeof p.getMeasurements !== "function") continue;
+    if (typeof page.getMeasurements !== "function") continue;
     try {
-      const ms = p.getMeasurements();
+      const ms = page.getMeasurements();
       if (!Array.isArray(ms) || !ms.length) continue;
-      const side = (e: any) => (e ? { nodeId: e.node && e.node.id, side: e.side } : undefined);
+      const side = (e: Measurement["start"] | undefined) => (e ? { nodeId: e.node && e.node.id, side: e.side } : undefined);
       for (const m of ms) {
         // Always tagged, even for a single-page run. Emitting `page` only when targets.length > 1 gave
         // consumers two shapes for one field and made the single-page case the one where you cannot
@@ -331,7 +336,7 @@ export async function collectScreenshot(rawId: string, opts?: { scale?: number }
   if (!reference) {
     throw new Error("Node " + nodeId + " could not be rendered (hidden, zero-size, or the export failed — see warnings).");
   }
-  return { id: node.id, name: node.name, type: (node as any).type, reference, manifest: manifest(), assets: assets.slice() };
+  return { id: node.id, name: node.name, type: node.type, reference, manifest: manifest(), assets: assets.slice() };
 }
 
 // Containers first, then loose top-level canvas content — a standalone TEXT note, a logo VECTOR, an
@@ -419,16 +424,16 @@ export async function listChildren(rawId: string): Promise<Obj> {
   const localWarnings: string[] = [];
   const node = await findNodeById(nodeId, (m) => localWarnings.push(m));
   if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf — it has no children to list.");
-  let kids: ReadonlyArray<SceneNode>;
+  let kids: ReadonlyArray<SceneNode | PageNode>;
   try {
-    kids = (node as any).children;
+    kids = node.children;
   } catch (e) {
     throw new Error("Node " + nodeId + "'s children could not be read: " + errMsg(e));
   }
   const children: Obj[] = [];
   for (const nd of kids) {
     const c = summarize(nd);
-    if ("children" in nd) c.hasChildren = (nd as any).children.length > 0;
+    if ("children" in nd) c.hasChildren = nd.children.length > 0;
     children.push(c);
   }
   return {
@@ -563,8 +568,8 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
     // Only once the page is known readable — the same dynamic-page rule applies to its other props.
     const bg = await pageBackground(page);
     if (bg) pageSettings.push({ page: page.name, pageId: page.id, ...bg });
-    if (Array.isArray((page as any).flowStartingPoints)) {
-      for (const fp of (page as any).flowStartingPoints) flows.push({ page: page.name, pageId: page.id, nodeId: fp.nodeId, name: fp.name });
+    if (isList(page.flowStartingPoints)) {
+      for (const fp of page.flowStartingPoints) flows.push({ page: page.name, pageId: page.id, nodeId: fp.nodeId, name: fp.name });
     }
     const frames: SceneNode[] = [];
     for (const nd of children) {

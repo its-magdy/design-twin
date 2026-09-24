@@ -405,30 +405,25 @@
     return "bin";
   }
   function collectSourceImage(hash) {
-    const f = figma;
-    if (!hash || typeof f.getImageByHash !== "function") return Promise.resolve(void 0);
+    if (!hash) return Promise.resolve(void 0);
     let p = imageSizeCache.get(hash);
     if (!p) {
-      p = readSourceImage(f, hash);
+      p = readSourceImage(hash);
       imageSizeCache.set(hash, p);
     }
     return p;
   }
-  async function readSourceImage(f, hash) {
+  async function readSourceImage(hash) {
     let size;
     try {
-      const img = f.getImageByHash(hash);
+      const img = figma.getImageByHash(hash);
       if (img) {
-        if (typeof img.getSizeAsync === "function") {
-          const s = await img.getSizeAsync();
-          if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
-        }
-        if (typeof img.getBytesAsync === "function") {
-          try {
-            const bytes = await img.getBytesAsync();
-            if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
-          } catch (e) {
-          }
+        const s = await img.getSizeAsync();
+        if (s && typeof s.width === "number") size = { w: s.width, h: s.height };
+        try {
+          const bytes = await img.getBytesAsync();
+          if (bytes && bytes.length) register({ id: "img:" + hash, name: hash, format: imageFormat(bytes), base64: toBase64(bytes), kind: "source" });
+        } catch (e) {
         }
       }
     } catch (e) {
@@ -441,46 +436,46 @@
   function paints(v) {
     return Array.isArray(v) ? v : null;
   }
-  function hasVisiblePaint(n, fills) {
+  function hasVisiblePaint(node, fills) {
     if (fills && fills.some((p) => p.visible !== false)) return true;
-    const s = paints(n.strokes);
+    const s = paints("strokes" in node ? node.strokes : void 0);
     return !!s && s.some((p) => p.visible !== false);
   }
-  function hasArea(n) {
-    if (typeof n.width !== "number" || typeof n.height !== "number") return true;
-    return n.width > 0 && n.height > 0;
+  function hasArea(node) {
+    if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
+    return node.width > 0 && node.height > 0;
   }
-  function geometryOf(n) {
-    const ds = (g) => Array.isArray(g) ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
-    const fills = ds(n.fillGeometry);
-    const strokes = ds(n.strokeGeometry);
+  function geometryOf(node) {
+    const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
+    const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
+    const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : void 0);
     if (!fills.length && !strokes.length) return void 0;
     const out = {};
     if (fills.length) out.fills = fills;
     if (strokes.length) out.strokes = strokes;
-    if (typeof n.width === "number") {
-      out.w = round(n.width);
-      out.h = round(n.height);
+    if ("width" in node && typeof node.width === "number") {
+      out.w = round(node.width);
+      out.h = round(node.height);
     }
     return out;
   }
   async function collectAsset(node) {
     const isVector = VECTOR_TYPES.has(node.type);
-    const n = node;
-    const fills = "fills" in node && Array.isArray(n.fills) ? n.fills : null;
-    const kids = "children" in node && Array.isArray(n.children) ? n.children : null;
+    const rawFills = "fills" in node ? node.fills : void 0;
+    const fills = Array.isArray(rawFills) ? rawFills : null;
+    const kids = "children" in node && Array.isArray(node.children) ? node.children : null;
     const hasImage = !!fills && fills.some((f) => f.type === "IMAGE" && f.visible !== false) && !(kids && kids.length > 0);
     let iconLike = false;
-    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && Math.max(n.width, n.height) <= 96) {
+    if (ICON_CONTAINER_TYPES.has(node.type) && node.name && /icon|logo|illustration|avatar/i.test(node.name) && "width" in node && "findOne" in node && Math.max(node.width, node.height) <= 96) {
       try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
+        iconLike = !node.findOne((x) => x.type === "TEXT");
       } catch (e) {
         iconLike = false;
       }
     }
-    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && n.isAsset === true) {
+    if (!iconLike && ICON_CONTAINER_TYPES.has(node.type) && node.isAsset === true && "findOne" in node) {
       try {
-        iconLike = !n.findOne((x) => x.type === "TEXT");
+        iconLike = !node.findOne((x) => x.type === "TEXT");
       } catch (e) {
         iconLike = false;
       }
@@ -494,21 +489,21 @@
       progress("assets", { nodes: stats.nodes, assets: assets.length });
     }
     if (isVector || iconLike) {
-      if (!hasArea(n) || isVector && !hasVisiblePaint(n, fills)) {
+      if (!hasArea(node) || isVector && !hasVisiblePaint(node, fills)) {
         stats.assetsSkippedInvisible++;
         return void 0;
       }
       let svg = null;
       let reason = "empty/invalid SVG";
       try {
-        svg = await node.exportAsync({ format: "SVG_STRING" });
+        if ("exportAsync" in node) svg = await node.exportAsync({ format: "SVG_STRING" });
       } catch (e) {
         reason = errMsg(e);
       }
       if (svg && svg.indexOf("<svg") !== -1) {
         return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
       }
-      const geo = geometryOf(n);
+      const geo = geometryOf(node);
       if (geo) {
         stats.assetsGeometry++;
         return { geometry: geo };
@@ -518,7 +513,7 @@
       return void 0;
     }
     try {
-      if (hasImage) {
+      if (hasImage && "exportAsync" in node) {
         const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 }, useAbsoluteBounds: true });
         if (!bytes || !bytes.length) {
           stats.assetsFailed++;
@@ -534,11 +529,10 @@
     return void 0;
   }
   async function collectReference(node, opts) {
-    const n = node;
     if (!node || !("exportAsync" in node) || !("width" in node)) return void 0;
     try {
-      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(n.width || 0, n.height || 0) || 1));
-      const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
+      const value = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : Math.min(2, 2048 / (Math.max(node.width || 0, node.height || 0) || 1));
+      const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value } });
       if (!bytes || !bytes.length) {
         warn("reference screenshot empty: " + node.name);
         return void 0;
@@ -550,10 +544,9 @@
     }
   }
   async function devResources(node) {
-    const n = node;
-    if (!node || typeof n.getDevResourcesAsync !== "function") return void 0;
+    if (!node) return void 0;
     try {
-      const rs = await n.getDevResourcesAsync({ includeChildren: true });
+      const rs = await node.getDevResourcesAsync({ includeChildren: true });
       if (!Array.isArray(rs) || !rs.length) return void 0;
       return rs.map((r) => {
         const o = { name: r.name, url: r.url };
@@ -786,18 +779,18 @@
   }
   function simplifyGrid(g) {
     if (!g) return void 0;
-    const gg = g;
-    const o = { pattern: gg.pattern ? String(gg.pattern).toLowerCase() : void 0 };
-    if (typeof gg.sectionSize === "number") o.size = round(gg.sectionSize);
-    if (typeof gg.gutterSize === "number") o.gutter = round(gg.gutterSize);
-    if (typeof gg.count === "number" && gg.count !== Infinity) o.count = gg.count;
-    if (typeof gg.offset === "number") o.offset = round(gg.offset);
-    if (gg.alignment) o.alignment = String(gg.alignment).toLowerCase();
-    if (gg.visible === false) o.visible = false;
+    const o = { pattern: g.pattern ? String(g.pattern).toLowerCase() : void 0 };
+    if (g.pattern === "GRID" && typeof g.sectionSize === "number") o.size = round(g.sectionSize);
+    if (g.pattern !== "GRID") {
+      if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
+      if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
+      if (typeof g.offset === "number") o.offset = round(g.offset);
+      if (g.alignment) o.alignment = String(g.alignment).toLowerCase();
+    }
+    if (g.visible === false) o.visible = false;
     return o;
   }
   function simplifyTrack(t) {
-    if (!t || typeof t !== "object") return t;
     const o = { type: t.type ? String(t.type).toLowerCase() : void 0 };
     if (typeof t.value === "number") o.value = round(t.value);
     return o;
@@ -834,8 +827,11 @@
   }
 
   // src/variables.ts
+  function isVariableAlias(v) {
+    return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
+  }
   async function resolveVar(alias) {
-    if (!alias || alias.type !== "VARIABLE_ALIAS") return void 0;
+    if (!isVariableAlias(alias)) return void 0;
     return varName(alias.id);
   }
   async function resolveBoundMap(bound) {
@@ -870,7 +866,11 @@
   ];
   async function nodeStyles(node) {
     const names = await Promise.all(
-      STYLE_FIELDS.map(([field]) => field in node ? styleName(anyProp(node, field)) : Promise.resolve(void 0))
+      STYLE_FIELDS.map(([field]) => {
+        if (!(field in node)) return Promise.resolve(void 0);
+        const id = anyProp(node, field);
+        return typeof id === "string" || id === figma.mixed ? styleName(id) : Promise.resolve(void 0);
+      })
     );
     const out = {};
     STYLE_FIELDS.forEach(([, key], i) => {
@@ -901,9 +901,8 @@
     return resolveModeMap(node.resolvedVariableModes, true);
   }
   async function resolveModeValue(v, resolvedType) {
-    const val = v;
-    if (val && val.type === "VARIABLE_ALIAS") return { aliasOf: await varName(val.id) || val.id };
-    if (resolvedType === "COLOR" && val && typeof val.r === "number") return rgbaToHex(val);
+    if (isVariableAlias(v)) return { aliasOf: await varName(v.id) || v.id };
+    if (resolvedType === "COLOR" && v && typeof v === "object" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
     return v;
   }
   async function dumpVariables(opts) {
@@ -931,7 +930,7 @@
       const out = [];
       for (const modeId of Object.keys(v.valuesByMode || {})) {
         const raw = v.valuesByMode[modeId];
-        if (raw && raw.type === "VARIABLE_ALIAS" && raw.id) out.push(raw.id);
+        if (isVariableAlias(raw) && raw.id) out.push(raw.id);
       }
       return out;
     };
@@ -966,7 +965,7 @@
       for (let i = 0; i < modeIds.length; i++) {
         const modeId = modeIds[i];
         const raw = v.valuesByMode[modeId];
-        if (raw && raw.type === "VARIABLE_ALIAS") {
+        if (isVariableAlias(raw)) {
           hasAlias = true;
           if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + raw.id + " could not be resolved");
         }
@@ -1097,7 +1096,7 @@
         } else {
           o = paintExtras(f, { type: f.type.toLowerCase() });
         }
-        const pbv = await resolveBoundMap(f.boundVariables);
+        const pbv = f.type === "SOLID" ? await resolveBoundMap(f.boundVariables) : void 0;
         if (pbv) o.tokens = pbv;
         return o;
       })
@@ -1116,7 +1115,8 @@
       const paints2 = await simplifyFills(vis);
       if (paints2) out.paints = paints2;
     }
-    const strokeWeight = node.strokeWeight;
+    const strokeNode = node;
+    const strokeWeight = strokeNode.strokeWeight;
     if (strokeWeight && strokeWeight !== figma.mixed) {
       out.weight = strokeWeight;
     } else if (strokeWeight === figma.mixed) {
@@ -1132,7 +1132,7 @@
       });
       putNonEmpty(out, "weights", sides);
     }
-    const n = node;
+    const n = strokeNode;
     if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
     if (n.dashPattern && n.dashPattern.length) out.dash = n.dashPattern;
     if ("strokeCap" in node && n.strokeCap && n.strokeCap !== figma.mixed && n.strokeCap !== "NONE") out.cap = String(n.strokeCap).toLowerCase();
@@ -1177,8 +1177,8 @@
           if (typeof ne.density === "number") o.density = round(ne.density);
           if (typeof ne.noiseSize === "number") o.noiseSize = round(ne.noiseSize);
           putXY(o, "noiseSizeVector", ne.noiseSizeVector);
-          if (ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
-          if (typeof ne.opacity === "number") o.opacity = round(ne.opacity);
+          if (ne.noiseType === "DUOTONE" && ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
+          if (ne.noiseType === "MULTITONE" && typeof ne.opacity === "number") o.opacity = round(ne.opacity);
           if (ne.blendMode && ne.blendMode !== "NORMAL") o.blendMode = ne.blendMode.toLowerCase();
         } else if (e.type === "GLASS") {
           const ge = e;
@@ -1234,8 +1234,8 @@
     if (src.textDecoration && src.textDecoration !== figma.mixed && src.textDecoration !== "NONE") f.decoration = src.textDecoration.toLowerCase();
     if (f.decoration) {
       if (src.textDecorationStyle && src.textDecorationStyle !== figma.mixed && src.textDecorationStyle !== "SOLID") f.decorationStyle = String(src.textDecorationStyle).toLowerCase();
-      const dcv = src.textDecorationColor && src.textDecorationColor.value;
-      const dc = solidFromFills(dcv && dcv !== "AUTO" ? [dcv] : void 0);
+      const tdc = src.textDecorationColor && src.textDecorationColor !== figma.mixed ? src.textDecorationColor.value : void 0;
+      const dc = solidFromFills(tdc && tdc !== "AUTO" ? [tdc] : void 0);
       if (dc) f.decorationColor = dc;
       const th = decoLen(src.textDecorationThickness);
       if (th) f.decorationThickness = th;
@@ -1243,8 +1243,9 @@
       if (off) f.decorationOffset = off;
       if (src.textDecorationSkipInk === false) f.decorationSkipInk = false;
     }
-    if (src.openTypeFeatures && typeof src.openTypeFeatures === "object" && src.openTypeFeatures !== figma.mixed) {
-      const on = Object.keys(src.openTypeFeatures).filter((k) => src.openTypeFeatures[k]);
+    const feats = src.openTypeFeatures;
+    if (feats && feats !== figma.mixed) {
+      const on = Object.keys(feats).filter((k) => feats[k]);
       if (on.length) f.openType = on;
     }
     const color = solidFromFills(src.fills);
@@ -1284,7 +1285,6 @@
     if (typeof src.indentation === "number" && src.indentation) out.indent = src.indentation;
   }
   async function serializeText(node) {
-    const t = node;
     const out = { text: node.characters };
     let segs;
     try {
@@ -1310,37 +1310,47 @@
       out.font = fontObj(s0 ? s0 : node);
       const bv = await resolveBoundMap(s0 ? s0.boundVariables : void 0);
       if (bv) out.textTokens = bv;
-      inlineExtras(s0 || t, out);
+      inlineExtras(s0 || node, out);
     }
-    if (t.textAlignHorizontal) out.font.align = t.textAlignHorizontal.toLowerCase();
-    if (typeof t.paragraphSpacing === "number" && t.paragraphSpacing) out.font.paragraphSpacing = t.paragraphSpacing;
-    if (typeof t.paragraphIndent === "number" && t.paragraphIndent) out.font.paragraphIndent = t.paragraphIndent;
-    if (typeof t.listSpacing === "number" && t.listSpacing) out.font.listSpacing = t.listSpacing;
-    if (t.leadingTrim && t.leadingTrim !== figma.mixed && t.leadingTrim !== "NONE") out.font.leadingTrim = t.leadingTrim.toLowerCase();
-    if (t.textAlignVertical && t.textAlignVertical !== "TOP") out.font.valign = t.textAlignVertical.toLowerCase();
-    {
-      const tw = t.textWrapStyle;
-      if (typeof tw === "string" && tw && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+    if ("textAlignHorizontal" in node && node.textAlignHorizontal) out.font.align = node.textAlignHorizontal.toLowerCase();
+    if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) out.font.paragraphSpacing = node.paragraphSpacing;
+    if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) out.font.paragraphIndent = node.paragraphIndent;
+    if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) out.font.listSpacing = node.listSpacing;
+    if ("leadingTrim" in node && node.leadingTrim && node.leadingTrim !== figma.mixed && node.leadingTrim !== "NONE") out.font.leadingTrim = node.leadingTrim.toLowerCase();
+    if ("textAlignVertical" in node && node.textAlignVertical && node.textAlignVertical !== "TOP") out.font.valign = node.textAlignVertical.toLowerCase();
+    if ("textWrapStyle" in node) {
+      const tw = node.textWrapStyle;
+      if (typeof tw === "string" && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
     }
-    if (t.hangingList === true) out.font.hangingList = true;
-    if (t.hangingPunctuation === true) out.font.hangingPunctuation = true;
-    if (t.textAutoResize && t.textAutoResize !== "NONE") out.autoResize = t.textAutoResize.toLowerCase();
-    if (t.textTruncation === "ENDING") out.truncate = true;
-    if (typeof t.maxLines === "number" && t.maxLines) out.maxLines = t.maxLines;
-    if (t.hasMissingFont === true) {
+    if ("hangingList" in node && node.hangingList === true) out.font.hangingList = true;
+    if ("hangingPunctuation" in node && node.hangingPunctuation === true) out.font.hangingPunctuation = true;
+    if ("type" in node && node.type === "TEXT") {
+      if (node.textAutoResize && node.textAutoResize !== "NONE") out.autoResize = node.textAutoResize.toLowerCase();
+      if (node.textTruncation === "ENDING") out.truncate = true;
+      if (typeof node.maxLines === "number" && node.maxLines) out.maxLines = node.maxLines;
+    }
+    if (node.hasMissingFont === true) {
       out.missingFont = true;
-      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", node.name + " (" + node.id + ")");
+      const name = "name" in node ? node.name : void 0;
+      const id = "id" in node ? node.id : void 0;
+      warnKind("missing font \u2014 Figma is substituting a fallback; the recorded family may differ from the render", name + " (" + id + ")");
     }
-    if (node.width === 0) warnKind("zero-width text node (possible collapsed thread)", node.name + " (" + node.id + ")");
+    if ("width" in node && node.width === 0) {
+      const name = "name" in node ? node.name : void 0;
+      const id = "id" in node ? node.id : void 0;
+      warnKind("zero-width text node (possible collapsed thread)", name + " (" + id + ")");
+    }
     return out;
   }
 
   // src/prototype.ts
   function simplifyTransition(tr) {
     const t = { type: tr.type ? tr.type.toLowerCase() : void 0 };
-    if (tr.direction) t.direction = tr.direction.toLowerCase();
-    if (typeof tr.duration === "number") t.duration = tr.duration;
-    if (typeof tr.matchLayers === "boolean") t.matchLayers = tr.matchLayers;
+    if ("direction" in tr) {
+      t.direction = tr.direction.toLowerCase();
+      t.matchLayers = tr.matchLayers;
+    }
+    t.duration = tr.duration;
     const ez = tr.easing;
     if (ez && ez.type) {
       t.easing = ez.type.toLowerCase();
@@ -1348,29 +1358,27 @@
     }
     return t;
   }
+  function isVariableAlias2(v) {
+    return !!v && typeof v === "object" && "type" in v && v.type === "VARIABLE_ALIAS";
+  }
   async function simplifyVariableData(vd) {
     if (!vd || typeof vd !== "object") return vd;
     const v = "value" in vd ? vd.value : vd;
-    if (v && v.type === "VARIABLE_ALIAS") return { token: await varName(v.id) || v.id };
+    if (isVariableAlias2(v)) {
+      return { token: await varName(v.id) || v.id };
+    }
     return v;
   }
   async function serializeAction(a) {
     if (!a) return null;
     const ao = { type: (a.type || "").toLowerCase() };
-    if (a.navigation) ao.navigation = a.navigation.toLowerCase();
-    if (a.url) ao.url = a.url;
-    if (a.destinationId) {
-      ao.destinationId = a.destinationId;
-      const dn = await nodeNameLookup(a.destinationId);
-      if (dn) ao.destination = dn;
-    }
-    if (a.preserveScrollPosition === true) ao.preserveScroll = true;
-    if (a.resetScrollPosition === true) ao.resetScroll = true;
-    if (a.resetVideoPosition === true) ao.resetVideo = true;
-    if (a.resetInteractiveComponents === true) ao.resetInteractive = true;
-    if (a.overlayRelativePosition) ao.overlayOffset = xy(a.overlayRelativePosition);
-    if (a.transition) ao.transition = simplifyTransition(a.transition);
-    if (a.type === "SET_VARIABLE") {
+    if (a.type === "URL") {
+      ao.url = a.url;
+    } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
+      ao.mediaAction = String(a.mediaAction).toLowerCase();
+      if (a.mediaAction === "SKIP_FORWARD" || a.mediaAction === "SKIP_BACKWARD") ao.amountToSkip = a.amountToSkip;
+      if (a.mediaAction === "SKIP_TO") ao.newTimestamp = a.newTimestamp;
+    } else if (a.type === "SET_VARIABLE") {
       if (a.variableId) ao.variable = await varName(a.variableId) || a.variableId;
       if (a.variableValue != null) ao.value = await simplifyVariableData(a.variableValue);
     } else if (a.type === "SET_VARIABLE_MODE") {
@@ -1382,11 +1390,7 @@
           ao.mode = m ? m.name : a.variableModeId;
         }
       }
-    } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
-      if (a.mediaAction) ao.mediaAction = String(a.mediaAction).toLowerCase();
-      if (typeof a.amountToSkip === "number") ao.amountToSkip = a.amountToSkip;
-      if (typeof a.newTimestamp === "number") ao.newTimestamp = a.newTimestamp;
-    } else if (a.type === "CONDITIONAL" && Array.isArray(a.conditionalBlocks)) {
+    } else if (a.type === "CONDITIONAL") {
       ao.conditionalBlocks = await Promise.all(
         a.conditionalBlocks.map(async (blk) => {
           const b = {};
@@ -1395,22 +1399,39 @@
           return b;
         })
       );
+    } else if (a.type === "NODE") {
+      if (a.destinationId) {
+        ao.destinationId = a.destinationId;
+        const dn = await nodeNameLookup(a.destinationId);
+        if (dn) ao.destination = dn;
+      }
+      if (a.navigation) ao.navigation = a.navigation.toLowerCase();
+      if (a.preserveScrollPosition === true) ao.preserveScroll = true;
+      if (a.resetScrollPosition === true) ao.resetScroll = true;
+      if (a.resetVideoPosition === true) ao.resetVideo = true;
+      if (a.resetInteractiveComponents === true) ao.resetInteractive = true;
+      if (a.overlayRelativePosition) ao.overlayOffset = xy(a.overlayRelativePosition);
+      if (a.transition) ao.transition = simplifyTransition(a.transition);
     }
     return ao;
   }
   async function simplifyReactions(node) {
+    if (!("reactions" in node)) return void 0;
     const reactions = node.reactions;
-    if (!("reactions" in node) || !Array.isArray(reactions) || !reactions.length) return void 0;
+    if (!Array.isArray(reactions) || !reactions.length) return void 0;
     const out = [];
     for (const r of reactions) {
       const o = {};
       if (r.trigger) {
-        o.trigger = r.trigger.type ? r.trigger.type.toLowerCase() : "unknown";
-        if (typeof r.trigger.timeout === "number") o.timeout = r.trigger.timeout;
-        if (typeof r.trigger.delay === "number") o.delay = r.trigger.delay;
-        if (Array.isArray(r.trigger.keyCodes) && r.trigger.keyCodes.length) o.keyCodes = r.trigger.keyCodes;
-        if (r.trigger.device) o.device = String(r.trigger.device).toLowerCase();
-        if (typeof r.trigger.mediaHitTime === "number") o.mediaHitTime = r.trigger.mediaHitTime;
+        const tg = r.trigger;
+        o.trigger = tg.type ? tg.type.toLowerCase() : "unknown";
+        if (tg.type === "AFTER_TIMEOUT") o.timeout = tg.timeout;
+        if (tg.type === "MOUSE_UP" || tg.type === "MOUSE_DOWN" || tg.type === "MOUSE_ENTER" || tg.type === "MOUSE_LEAVE") o.delay = tg.delay;
+        if (tg.type === "ON_KEY_DOWN") {
+          if (tg.keyCodes.length) o.keyCodes = tg.keyCodes;
+          o.device = String(tg.device).toLowerCase();
+        }
+        if (tg.type === "ON_MEDIA_HIT") o.mediaHitTime = tg.mediaHitTime;
       }
       const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
       const acts = (await Promise.all(actions.map(serializeAction))).filter(Boolean);
@@ -1424,12 +1445,16 @@
   var UNKNOWN_LIBRARY = "unknown-library";
   function readRegistry(sink) {
     try {
-      const raw = figma.root.getPluginData && figma.root.getPluginData("libraryRegistry");
+      const root = figma.root;
+      const raw = typeof root.getPluginData === "function" && root.getPluginData("libraryRegistry");
       if (!raw) return {};
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
       const out = {};
-      for (const k of Object.keys(parsed)) if (typeof parsed[k] === "string" && parsed[k]) out[k] = parsed[k];
+      for (const k of Object.keys(parsed)) {
+        const v = parsed[k];
+        if (typeof v === "string" && v) out[k] = v;
+      }
       return out;
     } catch (e) {
       sink("library registry (document pluginData 'libraryRegistry') is unreadable (" + errMsg(e) + ") \u2014 remote components stay unattributed");
@@ -1691,7 +1716,8 @@
     if (!refs) return void 0;
     const out = {};
     for (const k of PROP_REF_KEYS) {
-      if (refs[k]) out[k] = propName(refs[k]);
+      const ref = refs[k];
+      if (ref) out[k] = propName(ref);
     }
     return nonEmpty(out);
   }
@@ -1729,7 +1755,9 @@
       else if (node.cornerRadius === figma.mixed) {
         const corners = {};
         for (const [k, s] of VISUAL_CORNER_KEYS) {
-          if (k in node && typeof node[k] === "number" && node[k]) corners[s] = node[k];
+          if (!(k in node)) continue;
+          const r = node[k];
+          if (typeof r === "number" && r) corners[s] = r;
         }
         putNonEmpty(out, "radius", corners);
       }
@@ -2053,7 +2081,8 @@
   }
   function motionEasing(ez) {
     if (!ez || !ez.type) return void 0;
-    return { type: String(ez.type).toLowerCase(), ...easingCurve(ez) };
+    const curve = ez.type === "VARIABLE_ALIAS" ? {} : easingCurve(ez);
+    return { type: String(ez.type).toLowerCase(), ...curve };
   }
   function keyframes(list) {
     if (!Array.isArray(list) || !list.length) return void 0;
@@ -2080,15 +2109,20 @@
     return nonEmpty(out);
   }
   function collectMotion(node) {
-    const n = node;
     const out = {};
-    if (Array.isArray(n.timelines) && n.timelines.length) out.timelines = n.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
-    const tracks = trackMap(n.manualKeyframeTracks);
-    if (tracks) out.manualTracks = tracks;
-    const anims = trackMap(n.animations);
-    if (anims) out.animations = anims;
-    if (Array.isArray(n.animationStyles) && n.animationStyles.length) {
-      out.styles = n.animationStyles.map((s) => {
+    if ("timelines" in node && Array.isArray(node.timelines) && node.timelines.length) {
+      out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
+    }
+    if ("manualKeyframeTracks" in node) {
+      const tracks = trackMap(node.manualKeyframeTracks);
+      if (tracks) out.manualTracks = tracks;
+    }
+    if ("animations" in node) {
+      const anims = trackMap(node.animations);
+      if (anims) out.animations = anims;
+    }
+    if ("animationStyles" in node && Array.isArray(node.animationStyles) && node.animationStyles.length) {
+      out.styles = node.animationStyles.map((s) => {
         const o = { name: s.name, styleId: s.styleId };
         if (typeof s.duration === "number") o.duration = round(s.duration);
         if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
@@ -2130,11 +2164,9 @@
     return round(Math.min(w === void 0 ? Infinity : w, h === void 0 ? Infinity : h) / 2);
   }
   function pluginData(node) {
-    const n = node;
-    if (typeof n.getPluginDataKeys !== "function") return void 0;
     let keys = [];
     try {
-      keys = n.getPluginDataKeys();
+      keys = node.getPluginDataKeys();
     } catch (e) {
       return void 0;
     }
@@ -2142,7 +2174,7 @@
     const out = {};
     for (const k of keys) {
       try {
-        const v = n.getPluginData(k);
+        const v = node.getPluginData(k);
         if (v) out[k] = v;
       } catch (e) {
       }
@@ -2151,20 +2183,18 @@
   }
   var SHARED_NAMESPACES = ["tokens"];
   function sharedData(node) {
-    const n = node;
-    if (typeof n.getSharedPluginDataKeys !== "function" || typeof n.getSharedPluginData !== "function") return void 0;
     const out = {};
     for (const ns of SHARED_NAMESPACES) {
       let keys = [];
       try {
-        keys = n.getSharedPluginDataKeys(ns) || [];
+        keys = node.getSharedPluginDataKeys(ns) || [];
       } catch (e) {
         continue;
       }
       const bucket = {};
       for (const k of keys) {
         try {
-          const v = n.getSharedPluginData(ns, k);
+          const v = node.getSharedPluginData(ns, k);
           if (v) bucket[k] = v;
         } catch (e) {
         }
@@ -2174,10 +2204,8 @@
     return nonEmpty(out);
   }
   async function nodeCss(node) {
-    const n = node;
-    if (typeof n.getCSSAsync !== "function") return void 0;
     try {
-      const css = await n.getCSSAsync();
+      const css = await node.getCSSAsync();
       return css && Object.keys(css).length ? css : void 0;
     } catch (e) {
       return void 0;
@@ -2190,16 +2218,16 @@
       return null;
     }
     stats.nodes++;
-    const n = node;
     const out = { type: node.type, name: node.name, id: node.id };
-    if (n.visible === false) out.hidden = true;
+    if ("visible" in node && node.visible === false) out.hidden = true;
     if (node.type === "INSTANCE" && node.componentProperties) {
       const props = {};
       const propTokens = {};
-      const keys = Object.keys(node.componentProperties);
-      const bound = await Promise.all(keys.map((k) => resolveBoundMap(node.componentProperties[k].boundVariables)));
+      const componentProperties = node.componentProperties;
+      const keys = Object.keys(componentProperties);
+      const bound = await Promise.all(keys.map((k) => resolveBoundMap(componentProperties[k].boundVariables)));
       keys.forEach((k, i) => {
-        props[propName(k)] = node.componentProperties[k].value;
+        props[propName(k)] = componentProperties[k].value;
         const bv = bound[i];
         if (bv && bv.value) propTokens[propName(k)] = bv.value;
       });
@@ -2209,42 +2237,42 @@
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") out.component = node.name;
     const lay = layout(node);
     if (lay) out.layout = lay;
-    const absoluteInParent = "layoutPositioning" in node && n.layoutPositioning === "ABSOLUTE";
+    const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
     if (absoluteInParent) out.absolute = true;
-    if ("layoutGrow" in node && n.layoutGrow) out.grow = n.layoutGrow;
+    if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
     for (const [field, key, skip] of LOWER_ENUMS) {
-      const v = n[field];
+      const v = anyProp(node, field);
       if (typeof v === "string" && v && v !== skip) out[key] = v.toLowerCase();
     }
-    if ("gridColumnSpan" in node && typeof n.gridColumnSpan === "number" && n.gridColumnSpan !== 1) out.gridColumnSpan = n.gridColumnSpan;
-    if ("gridRowSpan" in node && typeof n.gridRowSpan === "number" && n.gridRowSpan !== 1) out.gridRowSpan = n.gridRowSpan;
-    if ("gridColumnAnchorIndex" in node && typeof n.gridColumnAnchorIndex === "number") out.gridColumnStart = n.gridColumnAnchorIndex;
-    if ("gridRowAnchorIndex" in node && typeof n.gridRowAnchorIndex === "number") out.gridRowStart = n.gridRowAnchorIndex;
+    if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
+    if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
+    if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex;
+    if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
     for (const [field, key] of GRID_SELF_ENUMS) {
-      const v = n[field];
-      if (v && v !== "AUTO") out[key] = GRID_SELF[v];
+      const v = anyProp(node, field);
+      if (v && v !== "AUTO" && typeof v === "string") out[key] = GRID_SELF[v];
     }
-    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof n.x === "number") {
-      out.x = round(n.x);
-      out.y = round(n.y);
+    if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
+      out.x = round(node.x);
+      out.y = round(node.y);
     }
-    if ("absoluteBoundingBox" in node && n.absoluteBoundingBox) {
-      const b = n.absoluteBoundingBox;
+    if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
+      const b = node.absoluteBoundingBox;
       out.box = { w: round(b.width), h: round(b.height) };
       if (!parentControlsLayout || absoluteInParent) {
         out.box.x = round(b.x);
         out.box.y = round(b.y);
       }
-      const rb = n.absoluteRenderBounds;
+      const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
       if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
         out.renderBox = { ...xy(rb), w: round(rb.width), h: round(rb.height) };
       }
     }
-    if ("layoutGrids" in node && Array.isArray(n.layoutGrids) && n.layoutGrids.length) {
-      out.layoutGrids = n.layoutGrids.map(simplifyGrid).filter(Boolean);
+    if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
+      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter(Boolean);
     }
-    if ("annotations" in node && Array.isArray(n.annotations) && n.annotations.length) {
-      out.annotations = n.annotations.map((a) => {
+    if ("annotations" in node && Array.isArray(node.annotations) && node.annotations.length) {
+      out.annotations = node.annotations.map((a) => {
         const o = {};
         if (a.label) o.label = a.label;
         if (a.labelMarkdown) o.markdown = a.labelMarkdown;
@@ -2253,45 +2281,47 @@
         return o;
       });
     }
-    if ("devStatus" in node && n.devStatus && n.devStatus.type) {
-      out.devStatus = n.devStatus.type.toLowerCase();
-      if (n.devStatus.description) out.devStatusNote = n.devStatus.description;
+    if ("devStatus" in node && node.devStatus && node.devStatus.type) {
+      out.devStatus = node.devStatus.type.toLowerCase();
+      if (node.devStatus.description) out.devStatusNote = node.devStatus.description;
     }
     let sizeLimits;
     for (const k of SIZE_LIMIT_KEYS) {
-      if (k in node && typeof n[k] === "number") (sizeLimits || (sizeLimits = {}))[k] = round(n[k]);
+      const v = numProp(node, k);
+      if (k in node && typeof v === "number") (sizeLimits || (sizeLimits = {}))[k] = round(v);
     }
     if (sizeLimits) out.sizeLimits = sizeLimits;
-    if ("constraints" in node && n.constraints && (n.constraints.horizontal !== "MIN" || n.constraints.vertical !== "MIN")) {
-      out.pin = { h: n.constraints.horizontal.toLowerCase(), v: n.constraints.vertical.toLowerCase() };
+    if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
+      out.pin = { h: node.constraints.horizontal.toLowerCase(), v: node.constraints.vertical.toLowerCase() };
     }
-    if ("numberOfFixedChildren" in node && typeof n.numberOfFixedChildren === "number" && n.numberOfFixedChildren > 0) {
-      out.fixedChildren = n.numberOfFixedChildren;
+    if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
+      out.fixedChildren = node.numberOfFixedChildren;
     }
-    if ("clipsContent" in node && n.clipsContent) out.clip = true;
+    if ("clipsContent" in node && node.clipsContent) out.clip = true;
     const [fills, strokes, effects] = await Promise.all([
-      simplifyFills("fills" in node ? n.fills : void 0),
+      simplifyFills("fills" in node ? node.fills : void 0),
       simplifyStrokes(node),
-      simplifyEffects("effects" in node ? n.effects : void 0)
+      simplifyEffects("effects" in node ? node.effects : void 0)
     ]);
     if (fills) out.fills = fills;
     if (strokes) out.strokes = strokes;
-    if ("strokesIncludedInLayout" in node && n.strokesIncludedInLayout) out.strokesInLayout = true;
+    if ("strokesIncludedInLayout" in node && node.strokesIncludedInLayout) out.strokesInLayout = true;
     if (effects) out.effects = effects;
     if ("cornerRadius" in node) {
-      if (n.cornerRadius !== figma.mixed && n.cornerRadius) out.radius = radiusOut(out, n.cornerRadius);
-      else if (n.cornerRadius === figma.mixed) {
+      if (node.cornerRadius !== figma.mixed && node.cornerRadius) out.radius = radiusOut(out, node.cornerRadius);
+      else if (node.cornerRadius === figma.mixed) {
         const corners = {};
         for (const [k, s] of CORNER_KEYS) {
-          if (k in node && typeof n[k] === "number" && n[k]) corners[s] = radiusOut(out, n[k]);
+          const v = numProp(node, k);
+          if (k in node && typeof v === "number" && v) corners[s] = radiusOut(out, v);
         }
         putNonEmpty(out, "radius", corners);
       }
     }
-    if ("opacity" in node && n.opacity < 1) out.opacity = round(n.opacity);
-    if ("rotation" in node && n.rotation) out.rotation = round(n.rotation);
-    if ("relativeTransform" in node && Array.isArray(n.relativeTransform) && n.relativeTransform.length === 2) {
-      const m = n.relativeTransform;
+    if ("opacity" in node && node.opacity < 1) out.opacity = round(node.opacity);
+    if ("rotation" in node && node.rotation) out.rotation = round(node.rotation);
+    if ("relativeTransform" in node && Array.isArray(node.relativeTransform) && node.relativeTransform.length === 2) {
+      const m = node.relativeTransform;
       const a = m[0][0], c = m[0][1], b = m[1][0], d = m[1][1];
       if (a * d - c * b < 0) out.flipped = true;
       const sx = Math.sqrt(a * a + b * b);
@@ -2300,13 +2330,13 @@
         if (Math.abs(skewDeg) > 0.01) out.skew = round(skewDeg);
       }
     }
-    if ("blendMode" in node && n.blendMode && n.blendMode !== "NORMAL" && n.blendMode !== "PASS_THROUGH") out.blendMode = n.blendMode.toLowerCase();
-    if ("isMask" in node && n.isMask) out.mask = true;
-    if (out.mask && "maskType" in node && n.maskType && n.maskType !== "ALPHA") out.maskType = String(n.maskType).toLowerCase();
-    if ("cornerSmoothing" in node && typeof n.cornerSmoothing === "number" && n.cornerSmoothing) out.cornerSmoothing = round(n.cornerSmoothing);
-    if ("targetAspectRatio" in node && n.targetAspectRatio && n.targetAspectRatio.y) out.aspectRatio = round(n.targetAspectRatio.x / n.targetAspectRatio.y);
-    if (node.type === "ELLIPSE" && n.arcData) {
-      const a = n.arcData;
+    if ("blendMode" in node && node.blendMode && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") out.blendMode = node.blendMode.toLowerCase();
+    if ("isMask" in node && node.isMask) out.mask = true;
+    if (out.mask && "maskType" in node && node.maskType && node.maskType !== "ALPHA") out.maskType = String(node.maskType).toLowerCase();
+    if ("cornerSmoothing" in node && typeof node.cornerSmoothing === "number" && node.cornerSmoothing) out.cornerSmoothing = round(node.cornerSmoothing);
+    if ("targetAspectRatio" in node && node.targetAspectRatio && node.targetAspectRatio.y) out.aspectRatio = round(node.targetAspectRatio.x / node.targetAspectRatio.y);
+    if (node.type === "ELLIPSE" && node.arcData) {
+      const a = node.arcData;
       const isFull = (!a.startingAngle || a.startingAngle === 0) && Math.abs((a.endingAngle || 0) - Math.PI * 2) < 1e-4 && !a.innerRadius;
       if (!isFull) {
         const arc = {};
@@ -2318,16 +2348,16 @@
     }
     if (node.type === "STAR") {
       const shape = {};
-      if (typeof n.pointCount === "number") shape.points = n.pointCount;
-      if (typeof n.innerRadius === "number") shape.innerRadius = round(n.innerRadius);
+      if (typeof node.pointCount === "number") shape.points = node.pointCount;
+      if (typeof node.innerRadius === "number") shape.innerRadius = round(node.innerRadius);
       putNonEmpty(out, "shape", shape);
     }
-    if (node.type === "POLYGON" && typeof n.pointCount === "number") out.shape = { points: n.pointCount };
-    if (node.type === "BOOLEAN_OPERATION" && n.booleanOperation) out.booleanOp = String(n.booleanOperation).toLowerCase();
-    if ("exportSettings" in node && Array.isArray(n.exportSettings) && n.exportSettings.length) {
-      out.exportSettings = n.exportSettings.map((es) => {
+    if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount };
+    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = String(node.booleanOperation).toLowerCase();
+    if ("exportSettings" in node && Array.isArray(node.exportSettings) && node.exportSettings.length) {
+      out.exportSettings = node.exportSettings.map((es) => {
         const o = { format: String(es.format || "").toLowerCase() };
-        if (es.suffix) o.suffix = es.suffix;
+        if ("suffix" in es && es.suffix) o.suffix = es.suffix;
         const con = es.constraint;
         if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
           o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
@@ -2335,24 +2365,24 @@
         return o;
       });
     }
-    if ("detachedInfo" in node && n.detachedInfo) {
-      out.detachedFrom = n.detachedInfo.type === "library" ? { key: n.detachedInfo.componentKey } : { componentId: n.detachedInfo.componentId };
+    if ("detachedInfo" in node && node.detachedInfo) {
+      out.detachedFrom = node.detachedInfo.type === "library" ? { key: node.detachedInfo.componentKey } : { componentId: node.detachedInfo.componentId };
     }
     if (node.type === "INSTANCE" && "exposedInstances" in node) {
       try {
-        if (Array.isArray(n.exposedInstances) && n.exposedInstances.length) out.exposedInstances = n.exposedInstances.map((i) => i.id);
+        if (Array.isArray(node.exposedInstances) && node.exposedInstances.length) out.exposedInstances = node.exposedInstances.map((i) => i.id);
       } catch (e) {
       }
     }
     if ("overlayPositionType" in node) {
-      const hasScrim = n.overlayBackground && n.overlayBackground.type === "SOLID_COLOR" && n.overlayBackground.color;
-      const closeOutside = n.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
-      const posSet = n.overlayPositionType && n.overlayPositionType !== "CENTER";
+      const hasScrim = node.overlayBackground && node.overlayBackground.type === "SOLID_COLOR" && node.overlayBackground.color;
+      const closeOutside = node.overlayBackgroundInteraction === "CLOSE_ON_CLICK_OUTSIDE";
+      const posSet = node.overlayPositionType && node.overlayPositionType !== "CENTER";
       if (hasScrim || closeOutside || posSet) {
         const ov = {};
-        if (n.overlayPositionType) ov.position = n.overlayPositionType.toLowerCase();
+        if (node.overlayPositionType) ov.position = node.overlayPositionType.toLowerCase();
         if (closeOutside) ov.closeOnClickOutside = true;
-        if (hasScrim) ov.background = rgbaToHex(n.overlayBackground.color);
+        if (hasScrim && node.overlayBackground.type === "SOLID_COLOR") ov.background = rgbaToHex(node.overlayBackground.color);
         out.overlay = ov;
       }
     }
@@ -2403,12 +2433,12 @@
       out.asset = asset.path;
       return out;
     }
-    if (node.type === "TABLE" && typeof n.numRows === "number" && typeof n.numColumns === "number") {
+    if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
       const grid = await Promise.all(
-        Array.from({ length: n.numRows }, (_, r) => Promise.all(
-          Array.from({ length: n.numColumns }, async (__, cc) => {
+        Array.from({ length: node.numRows }, (_, r) => Promise.all(
+          Array.from({ length: node.numColumns }, async (__, cc) => {
             try {
-              const cell = n.cellAt(r, cc);
+              const cell = node.cellAt(r, cc);
               if (!cell) return void 0;
               const co = { row: r, col: cc };
               if (cell.text) Object.assign(co, await serializeText(cell.text));
@@ -2424,9 +2454,9 @@
       const rows = grid.map((row) => row.filter((c) => !!c)).filter((row) => row.length);
       if (rows.length) out.tableCells = rows;
     }
-    const children = "children" in node ? n.children : void 0;
+    const children = "children" in node ? node.children : void 0;
     if (children && children.length) {
-      const controlsChildren = "layoutMode" in node && n.layoutMode && n.layoutMode !== "NONE";
+      const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
       const kids = [];
       for (const c of children) {
         const s = await serialize(c, depth + 1, controlsChildren);
@@ -2476,7 +2506,7 @@
       o.w = Math.round(nd.width);
       o.h = Math.round(nd.height);
     }
-    if (nd.visible === false) o.hidden = true;
+    if ("visible" in nd && nd.visible === false) o.hidden = true;
     return o;
   }
   async function loadPageSafely(page2, sink, what) {
@@ -2540,13 +2570,16 @@
     for (const k of Object.keys(runOpts)) runOpts[k] = !!(opts && opts[k]);
   }
   var CSS_AUTO_NODE_CAP = 60;
+  function isList(v) {
+    return Array.isArray(v);
+  }
   function subtreeIsSmall(node) {
     let count = 0;
     const stack = [node];
     while (stack.length) {
       const n = stack.pop();
       if (++count > CSS_AUTO_NODE_CAP) return false;
-      if (n && "children" in n && Array.isArray(n.children)) {
+      if (n && "children" in n && isList(n.children)) {
         for (const c of n.children) stack.push(c);
       }
     }
@@ -2562,11 +2595,10 @@
     return !f || f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1;
   }
   async function pageBackground(page2) {
-    const p = page2;
     const out = {};
-    const bg = await simplifyFills(p.backgrounds);
+    const bg = await simplifyFills(page2.backgrounds);
     if (!isDefaultBg(bg)) out.background = bg;
-    const proto = await simplifyFills(p.prototypeBackgrounds);
+    const proto = await simplifyFills(page2.prototypeBackgrounds);
     if (!isDefaultBg(proto)) out.prototypeBackground = proto;
     return nonEmpty(out);
   }
@@ -2581,10 +2613,9 @@
     const targets = pages && pages.length ? pages : [figma.currentPage];
     const out = [];
     for (const page2 of targets) {
-      const p = page2;
-      if (typeof p.getMeasurements !== "function") continue;
+      if (typeof page2.getMeasurements !== "function") continue;
       try {
-        const ms = p.getMeasurements();
+        const ms = page2.getMeasurements();
         if (!Array.isArray(ms) || !ms.length) continue;
         const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
         for (const m of ms) {
@@ -2779,7 +2810,7 @@
       if (!children) continue;
       const bg = await pageBackground(page2);
       if (bg) pageSettings.push({ page: page2.name, pageId: page2.id, ...bg });
-      if (Array.isArray(page2.flowStartingPoints)) {
+      if (isList(page2.flowStartingPoints)) {
         for (const fp of page2.flowStartingPoints) flows.push({ page: page2.name, pageId: page2.id, nodeId: fp.nodeId, name: fp.name });
       }
       const frames = [];
@@ -2894,14 +2925,14 @@
       // not every node type carries fills/characters. Returning {id} in those cases reported a write
       // that never happened — over MCP the agent reads that as success and builds on a false premise.
       case "setFill": {
-        const nd = await figma.getNodeByIdAsync(op.nodeId);
+        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
-        nd.fills = [solidPaint(op.color)];
+        nd.fills = [solidPaint(op.color || "")];
         return { id: op.nodeId };
       }
       case "setText": {
-        const nd = await figma.getNodeByIdAsync(op.nodeId);
+        const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
         if (!nd) throw new Error("setText: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
@@ -2941,10 +2972,22 @@
   }
 
   // src/bridge.ts
+  function isRecord(x) {
+    return !!x && typeof x === "object" && !Array.isArray(x);
+  }
+  function str(x, key) {
+    const v = x[key];
+    return typeof v === "string" ? v : void 0;
+  }
+  function num(x, key) {
+    const v = x[key];
+    return typeof v === "number" ? v : void 0;
+  }
   var bridgeRun = (cmd) => ({ source: "bridge", label: cmd });
   var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var INSTANCE_STARTED_AT = Date.now();
   async function handleBridge(cmd, args) {
+    const a = isRecord(args) ? args : {};
     switch (cmd) {
       // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
       // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
@@ -2994,24 +3037,24 @@
       // serializeRun — this is the same chain the UI's manual runs use, so a bridge pull and a manual
       // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
       case "exportFull":
-        return await serializeRun(() => collectFull(args), bridgeRun(cmd));
+        return await serializeRun(() => collectFull(a), bridgeRun(cmd));
       // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
       case "exportDesignSystem":
-        return await serializeRun(() => collectDesignSystemOnly(args), bridgeRun(cmd));
+        return await serializeRun(() => collectDesignSystemOnly(a), bridgeRun(cmd));
       // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
       // the full catalog build and mutates the same per-run state they do.
       case "exportLibrary":
-        return await serializeRun(() => collectLibraryFile(args), bridgeRun(cmd));
+        return await serializeRun(() => collectLibraryFile(a), bridgeRun(cmd));
       case "exportSelection":
-        return await serializeRun(() => collectSelection(args), bridgeRun(cmd));
+        return await serializeRun(() => collectSelection(a), bridgeRun(cmd));
       case "exportNode":
-        return await serializeRun(() => collectNode(args && args.nodeId, args), bridgeRun(cmd));
+        return await serializeRun(() => collectNode(str(a, "nodeId"), a), bridgeRun(cmd));
       // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
       // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
       case "screenshot":
-        return await serializeRun(() => collectScreenshot(args && args.nodeId, { scale: args && args.scale }), bridgeRun(cmd));
+        return await serializeRun(() => collectScreenshot(str(a, "nodeId"), { scale: num(a, "scale") }), bridgeRun(cmd));
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
       // UNQUEUED on purpose, both of them. These are the cheap maps you consult to decide WHICH deep
@@ -3019,9 +3062,9 @@
       // exist to avoid — a 12-minute --all-pages would block "what's in this file?" for 12 minutes.
       // They only READ page/child metadata and mutate none of the per-run state serializeRun protects.
       case "listPages":
-        return await listPages(args || {});
+        return await listPages(a);
       case "listChildren":
-        return await listChildren(args && args.nodeId);
+        return await listChildren(str(a, "nodeId"));
       // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
       // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
       // behind a long export would defeat the point of asking. Its document walk is one
@@ -3030,10 +3073,26 @@
       case "listLibraries":
         return await listLibraries();
       case "write":
-        return await serializeRun(() => applyWrites(args && args.ops), bridgeRun(cmd));
+        return await serializeRun(() => applyWrites(Array.isArray(a.ops) ? a.ops : []), bridgeRun(cmd));
       default:
         throw new Error("unknown cmd: " + cmd);
     }
+  }
+
+  // src/messages.ts
+  var UI_TO_MAIN_TYPES = /* @__PURE__ */ new Set([
+    "get-token",
+    "set-token",
+    "get-identity",
+    "run-selection",
+    "run-full",
+    "cancel",
+    "bridge"
+  ]);
+  function isUIToMain(x) {
+    if (!x || typeof x !== "object") return false;
+    const t = x.type;
+    return typeof t === "string" && UI_TO_MAIN_TYPES.has(t);
   }
 
   // src/main.ts
@@ -3052,7 +3111,9 @@
     figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
     releaseAssets();
   }
-  var runSelection = () => runExport("current selection", collectSelection, (r) => ({
+  var collectSelectionTyped = () => collectSelection();
+  var collectFullTyped = () => collectFull();
+  var runSelection = () => runExport("current selection", collectSelectionTyped, (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) }
@@ -3061,7 +3122,7 @@
     warnings: r.screen.manifest && r.screen.manifest.warnings
   }));
   var SEP = "__";
-  var runFull = () => runExport("design system + page frames", collectFull, (r) => {
+  var runFull = () => runExport("design system + page frames", collectFullTyped, (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     const ds = buildDesignSystemLayout(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
@@ -3072,7 +3133,7 @@
         { name: rootIndex, content: JSON.stringify(meta, null, 2) }
       ],
       layerFiles: batch,
-      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`,
+      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,
       warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings
     };
   });
@@ -3080,38 +3141,57 @@
     const sel = figma.currentPage.selection;
     figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
   }
-  figma.ui.onmessage = async (msg) => {
-    if (!msg) return;
-    if (msg.type === "get-token") {
-      const token = await figma.clientStorage.getAsync("bridgeToken");
-      figma.ui.postMessage({ type: "token", token: token || "" });
-    } else if (msg.type === "set-token") {
-      await figma.clientStorage.setAsync("bridgeToken", msg.token || "");
-    } else if (msg.type === "get-identity") {
-      let identity = {};
-      try {
-        identity = await handleBridge("whoami", {});
-      } catch (e) {
-        identity = { error: errMsg(e) };
+  figma.ui.onmessage = async (raw) => {
+    if (!isUIToMain(raw)) return;
+    switch (raw.type) {
+      case "get-token": {
+        const token = await figma.clientStorage.getAsync("bridgeToken");
+        figma.ui.postMessage({ type: "token", token: token || "" });
+        break;
       }
-      figma.ui.postMessage({ type: "identity", identity });
-    } else if (msg.type === "run-selection") {
-      await runSelection();
-    } else if (msg.type === "run-full") {
-      await runFull();
-    } else if (msg.type === "cancel") {
-      const hit = requestCancel();
-      figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
-    } else if (msg.type === "bridge") {
-      let result;
-      let error;
-      try {
-        result = await handleBridge(msg.cmd, msg.args);
-      } catch (e) {
-        error = errMsg(e);
+      case "set-token": {
+        await figma.clientStorage.setAsync("bridgeToken", raw.token || "");
+        break;
       }
-      figma.ui.postMessage({ type: "bridge-result", id: msg.id, ok: !error, result, error });
-      releaseAssets();
+      case "get-identity": {
+        let identity = {};
+        try {
+          identity = await handleBridge("whoami", {});
+        } catch (e) {
+          identity = { error: errMsg(e) };
+        }
+        figma.ui.postMessage({ type: "identity", identity });
+        break;
+      }
+      case "run-selection": {
+        await runSelection();
+        break;
+      }
+      case "run-full": {
+        await runFull();
+        break;
+      }
+      case "cancel": {
+        const hit = requestCancel();
+        figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+        break;
+      }
+      case "bridge": {
+        let result;
+        let error;
+        try {
+          result = await handleBridge(raw.cmd, raw.args);
+        } catch (e) {
+          error = errMsg(e);
+        }
+        figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
+        releaseAssets();
+        break;
+      }
+      default: {
+        const _exhaustive = raw;
+        void _exhaustive;
+      }
     }
   };
   figma.on("selectionchange", notifySelection);

@@ -23,16 +23,20 @@ export const CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
 // survives both, and errMsg() already carries the message through unchanged.
 const CANCELLED = "__designTwinCancelled";
 
+interface CancelledMarked {
+  [CANCELLED]?: boolean;
+}
+
 export function cancelledError(): Error {
-  const e = new Error(CANCELLED_MESSAGE);
-  (e as any)[CANCELLED] = true;
+  const e: Error & CancelledMarked = new Error(CANCELLED_MESSAGE);
+  e[CANCELLED] = true;
   return e;
 }
 
 /** Is this thrown value a cancellation rather than a real failure? Exported so a caller can tell
  *  "the designer stopped it" from "the export broke" without string-matching the message. */
 export function isCancellation(e: unknown): boolean {
-  return !!e && typeof e === "object" && (e as any)[CANCELLED] === true;
+  return !!e && typeof e === "object" && (e as CancelledMarked)[CANCELLED] === true;
 }
 
 // ---------------------------------------------------------------- the run being tracked

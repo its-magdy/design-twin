@@ -3,7 +3,7 @@
 import { Obj, round, rgbaToHex, xy, putXY } from "./util";
 import { resolveBoundMap } from "./variables";
 
-const GLASS_FIELDS = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
+const GLASS_FIELDS: Array<keyof GlassEffect> = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
 
 export async function simplifyEffects(
   effects: ReadonlyArray<Effect> | null | undefined
@@ -31,34 +31,34 @@ export async function simplifyEffects(
         if (typeof be.startRadius === "number") o.startRadius = round(be.startRadius);
       } else if (e.type === "NOISE") {
         // 2025 grain/noise. noiseType drives extra channels (DUOTONE→secondaryColor, MULTITONE→opacity).
-        const ne = e as any;
+        const ne = e;
         if (ne.noiseType) o.noiseType = String(ne.noiseType).toLowerCase();
         if (ne.color) o.color = rgbaToHex(ne.color);
         if (typeof ne.density === "number") o.density = round(ne.density);
         if (typeof ne.noiseSize === "number") o.noiseSize = round(ne.noiseSize);
         putXY(o, "noiseSizeVector", ne.noiseSizeVector);
-        if (ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
-        if (typeof ne.opacity === "number") o.opacity = round(ne.opacity);
+        if (ne.noiseType === "DUOTONE" && ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
+        if (ne.noiseType === "MULTITONE" && typeof ne.opacity === "number") o.opacity = round(ne.opacity);
         if (ne.blendMode && ne.blendMode !== "NORMAL") o.blendMode = ne.blendMode.toLowerCase();
       } else if (e.type === "GLASS") {
         // 2025 liquid-glass effect — every visual characteristic lives in these numbers.
-        const ge = e as any;
+        const ge = e;
         for (const k of GLASS_FIELDS) {
           if (typeof ge[k] === "number") o[k] = round(ge[k]);
         }
       } else if (e.type === "TEXTURE") {
-        const te = e as any;
+        const te = e;
         if (typeof te.noiseSize === "number") o.noiseSize = round(te.noiseSize);
         putXY(o, "noiseSizeVector", te.noiseSizeVector);
         if (typeof te.radius === "number") o.radius = round(te.radius);
         if (typeof te.clipToShape === "boolean") o.clipToShape = te.clipToShape;
       } else if (e.type === "SHADER") {
-        const se = e as any;
+        const se = e;
         if (se.id) o.shaderId = se.id; // opaque program id — correlates to the rendered reference PNG
       }
       // Any still-newer union member falls through as {type} only — read defensively.
       // Effect-level variable bindings (e.g. a shadow's radius/color bound to a token).
-      const bv = await resolveBoundMap((e as any).boundVariables);
+      const bv = await resolveBoundMap(e.boundVariables);
       if (bv) o.tokens = bv;
       return o;
     })

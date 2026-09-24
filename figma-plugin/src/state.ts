@@ -132,24 +132,25 @@ export function manifest() {
 // the same handful of variable/style ids across hundreds of nodes, so this collapses O(nodes)
 // Plugin-API round-trips to O(distinct ids). reset() drops the cache between export runs so a
 // re-export picks up renamed tokens.
-type NamedFetch = (id: string) => Promise<{ name: string } | null>;
-export interface MemoName {
+type Named = { name: string };
+type NamedFetch<T extends Named> = (id: string) => Promise<T | null>;
+export interface MemoName<T extends Named = Named> {
   (id: string): Promise<string | undefined>;
   reset(): void;
   /** Every id looked up during this run — i.e. every id the document actually REFERENCES. */
   ids(): string[];
   /** The FETCHED object behind an id (null if it didn't resolve), from the same cache as the name.
    *  Lets a later pass reuse what the walk already retrieved instead of re-fetching by id. */
-  obj(id: string): Promise<any>;
+  obj(id: string): Promise<T | null>;
 }
-function memoName(fetch: NamedFetch): MemoName {
+function memoName<T extends Named>(fetch: NamedFetch<T>): MemoName<T> {
   // Cache the PROMISE, not the resolved value. The extractor fans these lookups out concurrently
   // (Promise.all over text runs, paints, styles), and a value-cache is only written after `await`
   // resolves — so every duplicate reference issued while the first fetch was in flight missed the
   // cache and made its own round trip. One paragraph sharing a text style used to cost one call
   // per run; a design system where 40 styles reference color/primary cost 40.
-  const cache = new Map<string, Promise<{ name: string } | null>>();
-  const get = (id: string): Promise<{ name: string } | null> => {
+  const cache = new Map<string, Promise<T | null>>();
+  const get = (id: string): Promise<T | null> => {
     let p = cache.get(id);
     if (!p) {
       // fetch can throw synchronously as well as reject — normalise both to null.
@@ -161,7 +162,7 @@ function memoName(fetch: NamedFetch): MemoName {
   const fn = (async (id: string) => {
     const o = await get(id);
     return o ? o.name : undefined;
-  }) as MemoName;
+  }) as MemoName<T>;
   fn.reset = () => cache.clear();
   fn.obj = get;
   // The cache keys double as the run's reference set: varName.ids() is exactly the variables the
@@ -180,11 +181,11 @@ export const nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id)); // p
 // collection object per run (not just its name — we also need its .modes list). memoName is exactly
 // that cache (promise-held, throw-and-reject normalised to null, reset per run); `.obj` hands back the
 // fetched collection rather than its name, so this needs no second copy of the machinery.
-const collectionLookup = memoName((id) =>
+const collectionLookup = memoName<VariableCollection>((id) =>
   figma.variables && figma.variables.getVariableCollectionByIdAsync
     ? figma.variables.getVariableCollectionByIdAsync(id)
     : Promise.resolve(null));
-export const getCollection = collectionLookup.obj as (id: string) => Promise<VariableCollection | null>;
+export const getCollection = collectionLookup.obj;
 
 // Serialize every state-mutating run. All the singletons above (assets/stats/warnings/memo caches)
 // are shared across the one bundled scope, so two overlapping runs — a double-click, or a bridge

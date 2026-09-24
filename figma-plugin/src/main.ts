@@ -14,7 +14,7 @@ import { errMsg } from "./util";
 // esbuild inlines here — see bridge/pages-layout.js.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { releaseAssets, serializeRun } from "./state";
+import { releaseAssets, serializeRun, Asset } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
 import { serialize } from "./serialize";
@@ -22,6 +22,7 @@ import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
+import { isUIToMain, ScreenExportResult, FullExportResult, ExportFile, ExportLayerFile } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in
@@ -29,7 +30,7 @@ import { applyWrites } from "./writes";
 // serializeRun/requestCancel ride along because progress + cancellation only exist INSIDE a bracketed
 // run (see progress.ts): a harness that called a collector directly would see neither, so the test
 // surface has to be the same entry point main.ts and bridge.ts use.
-(globalThis as any).__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
+globalThis.__designExport = { serialize, collectSelection, collectNode, collectScreenshot, collectFull, collectDesignSystemOnly, collectLibraryFile, listPages, listChildren, buildDesignSystem, applyWrites, listLibraries, collectLibraryComponents, serializeRun, requestCancel };
 
 // themeColors: Figma injects its --figma-color-* variables and a figma-light/figma-dark class into the
 // iframe, which is what lets ui.html follow the user's theme instead of being a white box in dark mode.
@@ -44,12 +45,14 @@ console.log("[export] main.ts loaded (main thread)"); // visible with Plugins > 
 // Exclusive to runFull — runSelection never populates it (a hand-picked selection is a "screen", singular).
 // `label` names the run in the plugin window while it walks (and is what the Cancel button reports
 // back), so the designer can always tell a manual click from a CLI/MCP pull.
-async function runExport(
+interface ExportFilesOut { files: ExportFile[]; layerFiles?: ExportLayerFile[]; summary: string; warnings?: string[]; }
+
+async function runExport<T extends { assets: Asset[] }>(
   label: string,
-  collect: () => Promise<any>,
-  toFiles: (r: any) => { files: Array<{ name: string; content: string; copyable?: boolean }>; layerFiles?: Array<{ name: string; content: string }>; summary: string; warnings?: string[] }
+  collect: () => Promise<T>,
+  toFiles: (r: T) => ExportFilesOut
 ): Promise<void> {
-  let r: any;
+  let r: T;
   try {
     r = await serializeRun(collect, { source: "ui", label });
   } catch (e) {
@@ -66,8 +69,15 @@ async function runExport(
   releaseAssets();
 }
 
+// collectSelection/collectFull are typed `Promise<Obj>` in collect.ts (out of scope for this pass —
+// see messages.ts's ScreenExportResult/FullExportResult doc comment). The single assertion here is the
+// one place that narrows to the fields this file actually reads; it does not touch collect.ts's own
+// return type or runtime behaviour.
+const collectSelectionTyped = (): Promise<ScreenExportResult> => collectSelection() as Promise<ScreenExportResult>;
+const collectFullTyped = (): Promise<FullExportResult> => collectFull() as Promise<FullExportResult>;
+
 const runSelection = (): Promise<void> =>
-  runExport("current selection", collectSelection, (r) => ({
+  runExport<ScreenExportResult>("current selection", collectSelectionTyped, (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) },
@@ -82,7 +92,7 @@ const runSelection = (): Promise<void> =>
 // (rationale in pages-layout.js's header, where the layout lives).
 const SEP = "__";
 const runFull = (): Promise<void> =>
-  runExport("design system + page frames", collectFull, (r) => {
+  runExport<FullExportResult>("design system + page frames", collectFullTyped, (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     // Per-page index.json files ride in `layerFiles` (the batch bucket), NOT `files` — `files` gets
     // one download BUTTON per entry, and 19+ pages would mean 19+ buttons, the exact non-scaling this
@@ -92,7 +102,7 @@ const runFull = (): Promise<void> =>
     // only the slim design-system.json manifest — the file a consumer opens FIRST to find the rest —
     // gets its own button.
     const ds = buildDesignSystemLayout(r.designSystem, SEP);
-    const dsParts = ds.files.filter((f: any) => f.path !== "design-system.json");
+    const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
     const batch = [...layerFiles, ...indexFiles, ...dsParts].map((f) => ({ name: f.path, content: JSON.stringify(f.data, null, 2) }));
     return {
       files: [
@@ -100,7 +110,7 @@ const runFull = (): Promise<void> =>
         { name: rootIndex, content: JSON.stringify(meta, null, 2) },
       ],
       layerFiles: batch,
-      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${r.designSystem.variables.length} vars, ${r.designSystem.components.length} components, ${r.assets.length} asset(s)`,
+      summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,
       warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings,
     };
   });
@@ -110,53 +120,72 @@ function notifySelection(): void {
   figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
 }
 
-figma.ui.onmessage = async (msg: any) => {
-  if (!msg) return;
-  if (msg.type === "get-token") {
-    // The bridge token is persisted per-user via clientStorage (never leaves the file).
-    const token = await figma.clientStorage.getAsync("bridgeToken");
-    figma.ui.postMessage({ type: "token", token: token || "" });
-  } else if (msg.type === "set-token") {
-    await figma.clientStorage.setAsync("bridgeToken", msg.token || "");
-  } else if (msg.type === "get-identity") {
-    // Who is this file? The UI iframe asks on every socket open so it can announce itself to the
-    // bridge, which routes commands per file. It has to ask US because `figma.*` exists only on the
-    // main thread — the iframe has no access to the document at all. Reuses the `whoami` handler so
-    // the announcement and the --whoami probe can never report different identities.
-    let identity: any = {};
-    try {
-      identity = await handleBridge("whoami", {});
-    } catch (e) {
-      identity = { error: errMsg(e) };
+figma.ui.onmessage = async (raw: unknown) => {
+  if (!isUIToMain(raw)) return;
+  switch (raw.type) {
+    case "get-token": {
+      // The bridge token is persisted per-user via clientStorage (never leaves the file).
+      const token = await figma.clientStorage.getAsync("bridgeToken");
+      figma.ui.postMessage({ type: "token", token: token || "" });
+      break;
     }
-    figma.ui.postMessage({ type: "identity", identity });
-  } else if (msg.type === "run-selection") {
-    await runSelection();
-  } else if (msg.type === "run-full") {
-    await runFull();
-  } else if (msg.type === "cancel") {
-    // The designer pressed Cancel. All this does is SET a flag: there is no way to interrupt an
-    // in-flight exportAsync, so the walk aborts itself at its next safe point (progress.ts
-    // checkCancelled) by throwing — which is also what guarantees no partial doc is ever delivered,
-    // since every caller's error path posts an error instead of files.
-    // Acknowledged either way: a click that hit nothing (the run finished a moment earlier) must read
-    // as a no-op in the UI rather than leave a Cancel button spinning forever.
-    const hit = requestCancel();
-    figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
-  } else if (msg.type === "bridge") {
-    let result: any;
-    let error: string | undefined;
-    try {
-      result = await handleBridge(msg.cmd, msg.args);
-    } catch (e) {
-      // A CANCELLED bridge run lands here like any other failure, which is exactly what we want: the
-      // cancellation message (progress.ts CANCELLED_MESSAGE) rides out as `error`, the iframe forwards
-      // it to the socket, and the CLI/MCP fails FAST with "export cancelled by the designer in Figma"
-      // instead of sitting out its request timeout wondering whether Figma is still working.
-      error = errMsg(e);
+    case "set-token": {
+      await figma.clientStorage.setAsync("bridgeToken", raw.token || "");
+      break;
     }
-    figma.ui.postMessage({ type: "bridge-result", id: msg.id, ok: !error, result, error });
-    releaseAssets(); // the result carries its own assets.slice() — don't hold the bytes past the reply
+    case "get-identity": {
+      // Who is this file? The UI iframe asks on every socket open so it can announce itself to the
+      // bridge, which routes commands per file. It has to ask US because `figma.*` exists only on the
+      // main thread — the iframe has no access to the document at all. Reuses the `whoami` handler so
+      // the announcement and the --whoami probe can never report different identities.
+      let identity: unknown = {};
+      try {
+        identity = await handleBridge("whoami", {});
+      } catch (e) {
+        identity = { error: errMsg(e) };
+      }
+      figma.ui.postMessage({ type: "identity", identity });
+      break;
+    }
+    case "run-selection": {
+      await runSelection();
+      break;
+    }
+    case "run-full": {
+      await runFull();
+      break;
+    }
+    case "cancel": {
+      // The designer pressed Cancel. All this does is SET a flag: there is no way to interrupt an
+      // in-flight exportAsync, so the walk aborts itself at its next safe point (progress.ts
+      // checkCancelled) by throwing — which is also what guarantees no partial doc is ever delivered,
+      // since every caller's error path posts an error instead of files.
+      // Acknowledged either way: a click that hit nothing (the run finished a moment earlier) must read
+      // as a no-op in the UI rather than leave a Cancel button spinning forever.
+      const hit = requestCancel();
+      figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
+      break;
+    }
+    case "bridge": {
+      let result: unknown;
+      let error: string | undefined;
+      try {
+        result = await handleBridge(raw.cmd, raw.args);
+      } catch (e) {
+        // A CANCELLED bridge run lands here like any other failure, which is exactly what we want: the
+        // cancellation message (progress.ts CANCELLED_MESSAGE) rides out as `error`, the iframe forwards
+        // it to the socket, and the CLI/MCP fails FAST with "export cancelled by the designer in Figma"
+        // instead of sitting out its request timeout wondering whether Figma is still working.
+        error = errMsg(e);
+      }
+      figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
+      releaseAssets(); // the result carries its own assets.slice() — don't hold the bytes past the reply
+      break;
+    }
+    default: {
+      const _exhaustive: never = raw;
+      void _exhaustive;
+    }
   }
 };
 
