@@ -227,11 +227,30 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
               const p: ComponentPropDef = { key: k, type: propType(d.type) };
               if (d.type === "VARIANT") { p.options = d.variantOptions; variantCombos *= (d.variantOptions ? d.variantOptions.length : 1); }
               if (d.defaultValue !== undefined) p.default = d.defaultValue;
-              // INSTANCE_SWAP: the curated set of components allowed for this slot -> a typed enum.
-              if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
+              // INSTANCE_SWAP and SLOT: the curated set of components allowed -> a typed enum.
+              // plugin-api.d.ts 1.139.0 L9594 (editComponentProperty): "`preferredValues` is only supported
+              // for `'INSTANCE_SWAP'` and `'SLOT'` properties" — a SLOT's `allowPreferredValuesOnly` (below)
+              // is meaningless without this list.
+              if ((d.type === "INSTANCE_SWAP" || d.type === "SLOT") && Array.isArray(d.preferredValues) && d.preferredValues.length) {
                 p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
               }
               if (d.description) p.description = d.description;
+              // SLOT rules. plugin-api.d.ts 1.139.0 L11018, ComponentPropertyDefinitions entry:
+              // `slotSettings?: SlotSettings`, and L9596 (editComponentProperty): "`slotSettings` is only
+              // supported for `'SLOT'` properties". SlotSettings (L10993-10999) = { stretchChildOnInsert?,
+              // displayEmptyByDefault?, minChildren?: number | null, maxChildren?: number | null,
+              // allowPreferredValuesOnly? } — every member optional and no defaults documented, so each is
+              // carried as set; a null min/max (no limit) is omitted, and an all-empty object is dropped.
+              if (d.type === "SLOT" && d.slotSettings) {
+                const ss = d.slotSettings;
+                const slot: NonNullable<ComponentPropDef["slotSettings"]> = {};
+                if (typeof ss.stretchChildOnInsert === "boolean") slot.stretchChildOnInsert = ss.stretchChildOnInsert;
+                if (typeof ss.displayEmptyByDefault === "boolean") slot.displayEmptyByDefault = ss.displayEmptyByDefault;
+                if (typeof ss.minChildren === "number") slot.minChildren = ss.minChildren;
+                if (typeof ss.maxChildren === "number") slot.maxChildren = ss.maxChildren;
+                if (typeof ss.allowPreferredValuesOnly === "boolean") slot.allowPreferredValuesOnly = ss.allowPreferredValuesOnly;
+                putNonEmpty(p, "slotSettings", slot);
+              }
               // A BOOLEAN/TEXT prop whose DEFAULT is driven by a variable at the definition level.
               const dbv = boundPerKey[i];
               if (dbv) p.tokens = dbv;

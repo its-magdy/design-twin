@@ -1240,6 +1240,51 @@
     if (flt) o.filters = flt;
     return o;
   }
+  async function shaderColor(c, tokenKey, tokens) {
+    if (isVariableAlias(c)) {
+      const name = await resolveVar(c);
+      if (name) tokens[tokenKey] = name;
+      return void 0;
+    }
+    return rgbaToHex(c);
+  }
+  async function shaderValue(v, defId, tokens) {
+    if (typeof v === "boolean" || typeof v === "string") return v;
+    if (typeof v === "number") return round(v);
+    if (isVariableAlias(v)) {
+      const name = await resolveVar(v);
+      if (name) tokens[defId] = name;
+      return void 0;
+    }
+    if ("stops" in v) {
+      const stops = await Promise.all(v.stops.map(async (s, i) => {
+        const color = await shaderColor(s.color, `${defId}.stops.${i}.color`, tokens);
+        return color === void 0 ? { pos: round(s.position) } : { pos: round(s.position), color };
+      }));
+      return { stops };
+    }
+    if ("color" in v) {
+      const color = await shaderColor(v.color, `${defId}.color`, tokens);
+      return color === void 0 ? xy(v) : { ...xy(v), color };
+    }
+    if ("radius" in v) {
+      return "angle" in v ? { ...xy(v), radius: round(v.radius), angle: round(v.angle) } : { ...xy(v), radius: round(v.radius) };
+    }
+    if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
+    if ("x" in v) return xy(v);
+    return { color: rgbaToHex(v) };
+  }
+  async function putShaderProperties(o, props) {
+    if (!props || typeof props !== "object") return;
+    const out = {};
+    const tokens = {};
+    for (const defId of Object.keys(props)) {
+      const v = await shaderValue(props[defId], defId, tokens);
+      if (v !== void 0) out[defId] = v;
+    }
+    putNonEmpty(o, "properties", out);
+    putNonEmpty(o, "tokens", tokens);
+  }
   async function simplifyFills(fills) {
     if (!fills || fills === figma.mixed || !Array.isArray(fills)) return void 0;
     const vis = fills.filter((f) => f.visible !== false);
@@ -1282,6 +1327,7 @@
         } else if (f.type === "SHADER") {
           const sp = paintExtras(f, { type: "shader" });
           if (f.id) sp.shaderId = f.id;
+          await putShaderProperties(sp, f.properties);
           o = sp;
         } else {
           const future = f;
@@ -1337,7 +1383,27 @@
       }
       out.variableWidth = variableWidth;
     }
+    if ("complexStrokeProperties" in node) {
+      const complex = complexStroke(node.complexStrokeProperties);
+      if (complex) out.complex = complex;
+    }
     return out;
+  }
+  function complexStroke(c) {
+    if (!c || typeof c !== "object") return void 0;
+    if (c.type === "DYNAMIC") return { type: "dynamic", frequency: round(c.frequency), wiggle: round(c.wiggle), smoothen: round(c.smoothen) };
+    if (c.type !== "BRUSH") return void 0;
+    if (c.brushType === "STRETCH") return { type: "brush", brushType: "stretch", brushName: lower(c.brushName), direction: lower(c.direction) };
+    return {
+      type: "brush",
+      brushType: "scatter",
+      brushName: lower(c.brushName),
+      gap: round(c.gap),
+      wiggle: round(c.wiggle),
+      sizeJitter: round(c.sizeJitter),
+      angularJitter: round(c.angularJitter),
+      rotation: round(c.rotation)
+    };
   }
 
   // src/effects.ts
@@ -1405,8 +1471,9 @@
     const out = await Promise.all(
       vis.map(async (e) => {
         const o = effectBody(e);
+        if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
         const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : void 0);
-        if (bv) o.tokens = bv;
+        if (bv) o.tokens = o.tokens ? { ...o.tokens, ...bv } : bv;
         return o;
       })
     );
@@ -1485,7 +1552,8 @@
     "openTypeFeatures",
     "textStyleId",
     "fillStyleId",
-    "boundVariables"
+    "boundVariables",
+    "textWrapStyle"
   ];
   function inlineExtras(src, out) {
     const hl = src.hyperlink;
@@ -1507,6 +1575,7 @@
     }
     let font;
     if (segs && segs.length > 1) {
+      const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
       out.runs = await Promise.all(
         segs.map(async (s) => {
           const r = { text: s.characters, font: fontObj(s) };
@@ -1515,6 +1584,7 @@
           if (ts) r.textStyle = ts;
           if (fs) r.fillStyle = fs;
           if (bv) r.tokens = bv;
+          if (wrapMixed && typeof s.textWrapStyle === "string" && s.textWrapStyle !== "AUTO") r.textWrap = lower(s.textWrapStyle);
           return r;
         })
       );
@@ -2071,10 +2141,20 @@
                   variantCombos *= d.variantOptions ? d.variantOptions.length : 1;
                 }
                 if (d.defaultValue !== void 0) p.default = d.defaultValue;
-                if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
+                if ((d.type === "INSTANCE_SWAP" || d.type === "SLOT") && Array.isArray(d.preferredValues) && d.preferredValues.length) {
                   p.preferredValues = d.preferredValues.map((v) => ({ type: v.type, key: v.key }));
                 }
                 if (d.description) p.description = d.description;
+                if (d.type === "SLOT" && d.slotSettings) {
+                  const ss = d.slotSettings;
+                  const slot = {};
+                  if (typeof ss.stretchChildOnInsert === "boolean") slot.stretchChildOnInsert = ss.stretchChildOnInsert;
+                  if (typeof ss.displayEmptyByDefault === "boolean") slot.displayEmptyByDefault = ss.displayEmptyByDefault;
+                  if (typeof ss.minChildren === "number") slot.minChildren = ss.minChildren;
+                  if (typeof ss.maxChildren === "number") slot.maxChildren = ss.maxChildren;
+                  if (typeof ss.allowPreferredValuesOnly === "boolean") slot.allowPreferredValuesOnly = ss.allowPreferredValuesOnly;
+                  putNonEmpty(p, "slotSettings", slot);
+                }
                 const dbv = boundPerKey[i];
                 if (dbv) p.tokens = dbv;
                 props[propName(k)] = p;

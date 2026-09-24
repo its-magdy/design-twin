@@ -98,12 +98,17 @@ function fontObj(src: TextStyleSource): FontSpec {
 // element type stays `keyof Omit<StyledTextSegment, 'characters'|'start'|'end'>` — a readonly tuple
 // isn't assignable to getStyledTextSegments' `T extends (...)[]` (mutable array) constraint, and the
 // wider element type still gives every field below full compile-time checking (TS just can't narrow the
-// segment's Pick<> to exactly these 21 keys — it types it as the full StyledTextSegment shape instead).
+// segment's Pick<> to exactly these 22 keys — it types it as the full StyledTextSegment shape instead).
+// `textWrapStyle` (StyledTextSegment, plugin-api.d.ts 1.139.0 L5565-5568: "The text wrap style applied
+// to the paragraph." `textWrapStyle: TextWrapStyle`) is requested so a node whose node-level value is
+// figma.mixed yields one segment per wrap style (the typings' own example, L10122-10137). Requesting it
+// cannot split a node whose paragraphs all share one wrap style, so every other node's segments — and
+// output — are unchanged.
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
   "textDecorationSkipInk", "fills", "hyperlink", "listOptions", "indentation", "listSpacing",
-  "openTypeFeatures", "textStyleId", "fillStyleId", "boundVariables",
+  "openTypeFeatures", "textStyleId", "fillStyleId", "boundVariables", "textWrapStyle",
 ];
 
 // Hyperlink / list / indent live on a styled-text SEGMENT or, for uniform text, on the node itself —
@@ -147,6 +152,10 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
   }
   let font: FontSpec;
   if (segs && segs.length > 1) {
+    // Per-run wrap style only when the node-level value is figma.mixed (plugin-api.d.ts 1.139.0 L10141,
+    // NonResizableTextMixin: `textWrapStyle: TextWrapStyle | PluginAPI['mixed']`); otherwise the single
+    // value is `font.textWrap` below and the runs stay as they were. TEXT_PATH lacks it -> never mixed.
+    const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
     // Mixed runs — a heading with one bold word must not collapse to a single style.
     out.runs = await Promise.all(
       segs.map(async (s) => {
@@ -158,6 +167,8 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
         if (ts) r.textStyle = ts;
         if (fs) r.fillStyle = fs;
         if (bv) r.tokens = bv; // per-run variable bindings (color/size/etc.)
+        // Same mapping as the node-level `font.textWrap`: lowercased, AUTO (the default) omitted.
+        if (wrapMixed && typeof s.textWrapStyle === "string" && s.textWrapStyle !== "AUTO") r.textWrap = lower(s.textWrapStyle);
         return r;
       })
     );

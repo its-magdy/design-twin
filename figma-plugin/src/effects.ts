@@ -6,6 +6,7 @@ import type {
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, rgbaToHex, xy, putXY, isList } from "./util";
 import { resolveBoundMap } from "./variables";
+import { putShaderProperties } from "./paint";
 
 const GLASS_FIELDS: Array<keyof GlassEffect & Exclude<keyof IrGlassEffect, "type" | "tokens">> = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
 
@@ -84,10 +85,14 @@ export async function simplifyEffects(
   const out = await Promise.all(
     vis.map(async (e) => {
       const o = effectBody(e);
+      // A shader effect's inputs — ShaderEffect.properties (plugin-api.d.ts 1.139.0 L4574-4579, same
+      // map as ShaderPaint's; see putShaderProperties in paint.ts for the quote and the IR shape).
+      // Async (bound inputs resolve to token names), hence here rather than in the sync effectBody.
+      if (e.type === "SHADER" && o.type === "shader") await putShaderProperties(o, e.properties);
       // Effect-level variable bindings (e.g. a shadow's radius/color bound to a token).
       // ShaderEffect declares no boundVariables (the typings), so the read is guarded; absent -> no tokens.
       const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : undefined);
-      if (bv) o.tokens = bv;
+      if (bv) o.tokens = o.tokens ? { ...o.tokens, ...bv } : bv;
       return o;
     })
   );

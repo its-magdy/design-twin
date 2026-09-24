@@ -2,10 +2,11 @@
 import type {
   Paint as IrPaint, PaintBase as IrPaintBase, GradientStop as IrGradientStop, MediaPaint as IrMediaPaint,
   GradientPaint as IrGradientPaint, PatternPaint as IrPatternPaint, ShaderPaint as IrShaderPaint,
-  ImageFilters as IrImageFilters, Strokes as IrStrokes,
+  ImageFilters as IrImageFilters, Strokes as IrStrokes, ShaderPropValue as IrShaderPropValue,
+  ShaderEffect as IrShaderEffect, TokenMap, ComplexStroke as IrComplexStroke,
 } from "../../bridge/src/doc-types.ts";
 import { round, lower, solidHex, rgbaToHex, numProp, xy, nonEmpty, putNonEmpty, isList } from "./util";
-import { resolveBoundMap } from "./variables";
+import { resolveBoundMap, resolveVar, isVariableAlias } from "./variables";
 import { collectSourceImage } from "./assets";
 
 const FILTER_KEYS: Array<keyof IrImageFilters & keyof ImageFilters> = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
@@ -40,6 +41,74 @@ function mediaPaint(f: ImagePaint | VideoPaint, type: IrMediaPaint["type"], hash
   const flt = imageFilters(f);
   if (flt) o.filters = flt;
   return o;
+}
+
+// A shader's property assignments (ShaderPaint and ShaderEffect share the shape). plugin-api.d.ts
+// 1.139.0 L4829-4834 (ShaderPaint; ShaderEffect's L4574-4579 is the same with "effect's"):
+//   "The read/write map of property assignments, keyed by property-definition id (the keys of
+//    {@link Shader.propertyDefinitions}, not property names). On reads, this is populated with the
+//    paint's current assignments, including author-defined defaults, ..."
+//   readonly properties?: { [defId: string]: ShaderPropertyValue }
+// ShaderPropertyValue (L4847-4884) = boolean | string | number | RGB | RGBA | {x,y} | {x,y,x2,y2} |
+// {x,y,radius} | {x,y,radius,angle} | {x,y,color: RGB|RGBA|VariableAlias} |
+// {stops: {position, color: RGB|RGBA|VariableAlias}[]} | VariableAlias.
+// The typings expose NO shader source text anywhere (Shader, L4926-4955, is only id/name/type/imported/
+// propertyDefinitions), so there is no blob to hash: the id (`shaderId`) plus these values is all the
+// paint/effect holds. Normalised like the rest of this file: colours -> hex (8-digit when alpha < 1),
+// numbers and points rounded to 2dp. A bare colour is wrapped as `{color}` so it can't be mistaken for a
+// TEXT property's string. A variable-bound value resolves to its token NAME under `tokens` (key = defId,
+// or `defId.color` / `defId.stops.N.color` for a bound colour inside a point or gradient) and is itself
+// omitted — the "names, not values" rule `tokens` follows everywhere. Property-definition NAMES are not
+// on the node (only on figma.listAvailableShaders(), a file-level async call), so keys stay the defIds.
+type ShaderColor = RGB | RGBA | VariableAlias;
+async function shaderColor(c: ShaderColor, tokenKey: string, tokens: TokenMap): Promise<string | undefined> {
+  if (isVariableAlias(c)) {
+    const name = await resolveVar(c);
+    if (name) tokens[tokenKey] = name;
+    return undefined;
+  }
+  return rgbaToHex(c);
+}
+async function shaderValue(v: ShaderPropertyValue, defId: string, tokens: TokenMap): Promise<IrShaderPropValue | undefined> {
+  if (typeof v === "boolean" || typeof v === "string") return v;
+  if (typeof v === "number") return round(v);
+  if (isVariableAlias(v)) {
+    const name = await resolveVar(v);
+    if (name) tokens[defId] = name;
+    return undefined;
+  }
+  if ("stops" in v) {
+    const stops = await Promise.all(v.stops.map(async (s, i) => {
+      const color = await shaderColor(s.color, `${defId}.stops.${i}.color`, tokens);
+      return color === undefined ? { pos: round(s.position) } : { pos: round(s.position), color };
+    }));
+    return { stops };
+  }
+  if ("color" in v) {
+    const color = await shaderColor(v.color, `${defId}.color`, tokens);
+    return color === undefined ? xy(v) : { ...xy(v), color };
+  }
+  if ("radius" in v) {
+    return "angle" in v ? { ...xy(v), radius: round(v.radius), angle: round(v.angle) } : { ...xy(v), radius: round(v.radius) };
+  }
+  if ("x2" in v) return { ...xy(v), x2: round(v.x2), y2: round(v.y2) };
+  if ("x" in v) return xy(v);
+  return { color: rgbaToHex(v) }; // RGB | RGBA
+}
+/** Sets `properties` (and `tokens` for bound values) on a shader paint/effect; both omitted when empty. */
+export async function putShaderProperties(
+  o: IrShaderPaint | IrShaderEffect,
+  props: { readonly [defId: string]: ShaderPropertyValue } | undefined,
+): Promise<void> {
+  if (!props || typeof props !== "object") return;
+  const out: Record<string, IrShaderPropValue> = {};
+  const tokens: TokenMap = {};
+  for (const defId of Object.keys(props)) {
+    const v = await shaderValue(props[defId], defId, tokens);
+    if (v !== undefined) out[defId] = v;
+  }
+  putNonEmpty(o, "properties", out);
+  putNonEmpty(o, "tokens", tokens);
 }
 
 export async function simplifyFills(
@@ -90,6 +159,7 @@ export async function simplifyFills(
         // Procedural shader fill — the opaque program id correlates the fill to the rendered PNG.
         const sp = paintExtras<IrShaderPaint>(f, { type: "shader" });
         if (f.id) sp.shaderId = f.id;
+        await putShaderProperties(sp, f.properties); // the shader's inputs (see putShaderProperties)
         o = sp;
       } else {
         // A paint type newer than the typings reaches here only at run time. Carried as its lowercased
@@ -172,5 +242,30 @@ export async function simplifyStrokes(node: SceneNode): Promise<IrStrokes | unde
     }
     out.variableWidth = variableWidth;
   }
+  // Brush / dynamic strokes. plugin-api.d.ts 1.139.0 L8828-8839, ComplexStrokesMixin (in BaseFrameMixin
+  // and Rectangle/Line/Ellipse/Polygon/Star/Vector/Text/TextPath/BooleanOperation — not GROUP/SECTION,
+  // hence the `in` narrowing):
+  //   "The complex stroke properties for nodes using brush or dynamic strokes. ... the API will return
+  //    the brush properties for nodes that use custom brushes."
+  //   complexStrokeProperties: ComplexStrokeProperties
+  // ComplexStrokeProperties (L8704-8708) = {type:'BASIC'} | DynamicStrokeProperties {frequency, wiggle,
+  // smoothen} | ScatterBrushProperties {brushName, gap, wiggle, sizeJitter, angularJitter, rotation} |
+  // StretchBrushProperties {brushName, direction}. None of it overlaps cap/join/miter/dash/variableWidth
+  // above. BASIC (a plain stroke) is the default and is omitted; enums lowercased, numbers rounded.
+  if ("complexStrokeProperties" in node) {
+    const complex = complexStroke(node.complexStrokeProperties);
+    if (complex) out.complex = complex;
+  }
   return out;
+}
+
+function complexStroke(c: ComplexStrokeProperties | null | undefined): IrComplexStroke | undefined {
+  if (!c || typeof c !== "object") return undefined;
+  if (c.type === "DYNAMIC") return { type: "dynamic", frequency: round(c.frequency), wiggle: round(c.wiggle), smoothen: round(c.smoothen) };
+  if (c.type !== "BRUSH") return undefined; // BASIC
+  if (c.brushType === "STRETCH") return { type: "brush", brushType: "stretch", brushName: lower(c.brushName), direction: lower(c.direction) };
+  return {
+    type: "brush", brushType: "scatter", brushName: lower(c.brushName), gap: round(c.gap), wiggle: round(c.wiggle),
+    sizeJitter: round(c.sizeJitter), angularJitter: round(c.angularJitter), rotation: round(c.rotation),
+  };
 }
