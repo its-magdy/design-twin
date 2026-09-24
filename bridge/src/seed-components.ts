@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
-import { nullProto } from "./json-util.ts";
+import { ifDefined, nullProto } from "./json-util.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const codeRoot = process.argv[2] || ".";
@@ -87,7 +87,7 @@ function extractMappings(text: string): Mapping[] {
         const t = (before.match(/(?:struct|class|object)\s+([A-Za-z0-9_]+)/g) || []).pop();
         if (t) best = t.split(/\s+/).pop();
       }
-      push({ identifier: best, url: m[1] });
+      push({ ...ifDefined("identifier", best), url: m[1] });
     }
   }
   return out;

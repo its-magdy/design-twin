@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errMsg } from "./errmsg.ts";
+import { ifDefined } from "./json-util.ts";
 import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
@@ -139,10 +140,11 @@ function rejectBadToken(presented: string, expected: string): string {
 const authStats = () => ({ failures: authFailures, lastBadToken, expected: tokenStore.fingerprint(TOKEN) });
 
 // The part of ws's verifyClient `info` this reads — a real VerifyClientInfo satisfies it, and so does the
-// hand-built object the test suite drives it with.
+// hand-built object the test suite drives it with. `| undefined` on url/host because that is how
+// @types/node declares them on IncomingMessage, which the upgrade path hands over as-is.
 interface HandshakeInfo {
   origin?: string;
-  req: { url?: string; headers: { host?: string } };
+  req: { url?: string | undefined; headers: { host?: string | undefined } };
 }
 
 /** The handshake check, bound to the ONE expected token. */
@@ -387,7 +389,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // The Origin ws's verifyClient reported: Sec-WebSocket-Origin for a protocol-8 client.
     const raw = req.headers[Number(req.headers["sec-websocket-version"]) === 8 ? "sec-websocket-origin" : "origin"];
     const origin = Array.isArray(raw) ? raw[0] : raw;
-    admit({ origin, req }, (ok, code, message) => {
+    admit({ ...ifDefined("origin", origin), req }, (ok, code, message) => {
       if (!ok) return refuseUpgrade(socket, code || 401, message);
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
     });
@@ -805,7 +807,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       pending.set(id, {
         connId: client.connId,
         cmd,
-        onProgress,
+        ...ifDefined("onProgress", onProgress),
         resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); settle(v); },
         reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); reject(e); },
       });

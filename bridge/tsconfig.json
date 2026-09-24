@@ -12,6 +12,7 @@
     "noImplicitReturns": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
+    "exactOptionalPropertyTypes": true,      // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined`
     "rootDir": "src",                        // TS7 default is "." → would emit dist/src/*
     "outDir": "dist",
     "declaration": true,

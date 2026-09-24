@@ -43,6 +43,7 @@
 // design/ root = your config + screens, design/design-system/ = the regenerable catalog.
 import { safe } from "./pages-layout.ts"; // same filesystem-boundary sanitiser pages-layout.ts uses for layer files
 import type { PageLayoutFile } from "./pages-layout.ts";
+import { ifDefined } from "./json-util.ts";
 import type {
   DesignSystemStamp, DesignSystemManifest, TokensDoc, PaintStylesDoc, TextStylesDoc, EffectStylesDoc, GridStylesDoc,
   HygieneDoc, CatalogVariant, CatalogComponent, ComponentsCatalog, ComponentDetailFile, DesignSystemStyles,
@@ -96,7 +97,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   const d: DesignSystemDoc = ds || {};
   const join = (name: string): string => DIR + (sep || "/") + name;
   // The stamp every split file carries. Written through byte for byte — nothing here re-derives it.
-  const stamp: DesignSystemStamp = { exportedAt: d.exportedAt, file: d.file, colorProfile: d.colorProfile };
+  const stamp: DesignSystemStamp = { ...ifDefined("exportedAt", d.exportedAt), ...ifDefined("file", d.file), ...ifDefined("colorProfile", d.colorProfile) };
   const components = Array.isArray(d.components) ? d.components : [];
   const rawLocal = components.filter((c) => !isLibraryEntry(c));
   const library = components.filter(isLibraryEntry);
@@ -128,7 +129,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
       const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
       componentFiles.push({
         path: detailPath,
-        data: { ...stamp, id: c.id, key: c.key, name: c.name, node },
+        data: { ...stamp, ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name, node },
       });
       return { ...rest, nodeFile: detailPath };
     }
@@ -146,7 +147,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
     const detailPath = DIR + (sep || "/") + COMPONENTS_DIR + (sep || "/") + detailName + ".json";
     componentFiles.push({
       path: detailPath,
-      data: { ...stamp, setId: c.id, setKey: c.key, name: c.name, variants: c.variants },
+      data: { ...stamp, ...ifDefined("setId", c.id), ...ifDefined("setKey", c.key), name: c.name, variants: c.variants },
     });
     return { ...c, variants: slimVariants, variantsFile: detailPath };
   });
@@ -157,7 +158,7 @@ export function buildDesignSystemLayout(ds: DesignSystemDoc | null | undefined, 
   const stylesGrid = Array.isArray(styles.grid) ? styles.grid : [];
 
   const files: Array<PageLayoutFile<DesignSystemFileData>> = [
-    { path: join(TOKENS), data: { ...stamp, collections: d.collections, variables: d.variables } },
+    { path: join(TOKENS), data: { ...stamp, ...ifDefined("collections", d.collections), ...ifDefined("variables", d.variables) } },
     { path: join(STYLES_PAINT), data: { ...stamp, styles: stylesPaint } },
     { path: join(STYLES_TEXT), data: { ...stamp, styles: stylesText } },
     { path: join(STYLES_EFFECT), data: { ...stamp, styles: stylesEffect } },

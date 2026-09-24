@@ -65,21 +65,23 @@ export interface ScreenshotArgs extends NodeArgs {
 
 /** The four write ops figma-plugin/src/writes.ts implements. */
 export type WriteOpName = "createFrame" | "createText" | "setFill" | "setText";
-/** One write op (writes.ts WriteOp, mirrored): only the fields each op actually reads. */
+/** One write op (writes.ts WriteOp, mirrored): only the fields each op actually reads. Every optional
+ *  field admits `undefined` because figma_write hands over its Zod-parsed ops as-is, and Zod types an
+ *  `.optional()` field as `T | undefined`; the plugin reads an undefined field exactly as an absent one. */
 export interface WriteOp {
   op: WriteOpName;
-  parentId?: string;
-  name?: string;
-  width?: number;
-  height?: number;
-  layoutMode?: "HORIZONTAL" | "VERTICAL";
-  itemSpacing?: number;
-  padding?: [number, number, number, number];
-  fill?: string;
-  text?: string;
-  fontSize?: number;
-  nodeId?: string;
-  color?: string;
+  parentId?: string | undefined;
+  name?: string | undefined;
+  width?: number | undefined;
+  height?: number | undefined;
+  layoutMode?: "HORIZONTAL" | "VERTICAL" | undefined;
+  itemSpacing?: number | undefined;
+  padding?: [number, number, number, number] | undefined;
+  fill?: string | undefined;
+  text?: string | undefined;
+  fontSize?: number | undefined;
+  nodeId?: string | undefined;
+  color?: string | undefined;
 }
 export interface WriteArgs {
   ops: WriteOp[];

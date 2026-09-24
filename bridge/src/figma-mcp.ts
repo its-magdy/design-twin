@@ -41,6 +41,7 @@ import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
 // restate (or, as it once did, omit) a tier the CLI has.
 // The ONE registry of read options (shared with the dtwin CLI and the plugin's runOpts).
 import { READ_OPTS } from "./read-opts.ts";
+import { ifDefined } from "./json-util.ts";
 import type { ReadOptName } from "./read-opts.ts";
 import { parseNodeId, toNodeId } from "./node-id.ts";
 
@@ -100,7 +101,7 @@ const bridge = {
   async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void): Promise<Commands[C]["reply"]> {
     const h = await holder();
     if ("own" in h) return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
-    return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000, onProgress);
+    return h.via.request({ cmd, args, timeoutMs, ...ifDefined("client", target) }, timeoutMs + 30000, onProgress);
   },
   async listClients(): Promise<ClientRow[]> {
     const h = await holder();
@@ -205,8 +206,8 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
   }
 }
 
-/** The two writeShape arguments every export tool reads. */
-interface WriteArgs { writeToDisk?: boolean; outDir?: string }
+/** The two writeShape arguments every export tool reads — what Zod parses them to, not a restatement. */
+type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
 
 function exportResult(a: WriteArgs, r: ExportReply) {
   let spilled = "";
@@ -259,7 +260,7 @@ const readOptsShape = Object.fromEntries(
 // Local alias kept so the many call sites below read as before.
 type ReadOpt = ReadOptName;
 const READ_OPT_KEYS = Object.keys(readOptsShape) as ReadOpt[];
-const readOpts = (a: Partial<Record<ReadOpt, boolean>>): Record<ReadOpt, boolean> =>
+const readOpts = (a: z.output<z.ZodObject<typeof readOptsShape>>): Record<ReadOpt, boolean> =>
   Object.fromEntries(READ_OPT_KEYS.map((k) => [k, !!a[k]])) as Record<ReadOpt, boolean>;
 
 const READ_ONLY = { readOnlyHint: true } as const;
@@ -387,7 +388,7 @@ server.registerTool(
   },
   // Pass `depth` through unnormalised: listPages owns the default (and the 1-vs-2 clamp), so a third
   // tier there doesn't need a matching edit here.
-  guarded(async (a) => textResult(await bridge.request("listPages", { depth: a && a.depth }, TIMEOUTS.list, a && a.client)))
+  guarded(async (a) => textResult(await bridge.request("listPages", ifDefined("depth", a && a.depth), TIMEOUTS.list, a && a.client)))
 );
 
 // The library-scoped discovery call, and the other half of "look before you pull": figma_list_pages
@@ -497,7 +498,7 @@ server.registerTool(
     // answer faster.
     return exportResult(a, await withProgress(extra, (onTick) => bridge.request(
       "exportFull",
-      { allPages, page, ...readOpts(a) },
+      { allPages, ...ifDefined("page", page), ...readOpts(a) },
       exportTimeout({ allPages }),
       a && a.client,
       onTick
@@ -527,7 +528,7 @@ server.registerTool(
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client, onTick))))
+  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportDesignSystem", ifDefined("variantVisuals", a && a.variantVisuals), TIMEOUTS.export, a && a.client, onTick))))
 );
 
 server.registerTool(
@@ -585,7 +586,7 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return exportResult(a, await bridge.request("screenshot", { nodeId, scale: a.scale }, TIMEOUTS.export, a && a.client));
+    return exportResult(a, await bridge.request("screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client));
   })
 );
 

@@ -631,10 +631,12 @@ export interface IndexRow {
   file: string;
   nodes?: number;
   bytes?: number;
-  /** the visible on-screen title (pages-layout.js deriveTitle), absent when none could be derived */
-  title?: string;
+  /** the visible on-screen title (pages-layout.js deriveTitle), absent when none could be derived.
+   *  `| undefined` (also on texts): buildPageLayout writes both after spreading the collector's row, so a
+   *  layer with no tree must be able to mask a title/texts that row carried — undefined, not absent. */
+  title?: string | undefined;
   /** the first distinct TEXT strings, reading order */
-  texts?: string[];
+  texts?: string[] | undefined;
   exportedAt?: string;
   sourceFile?: string;
   /** sibling <Screen>.vars.json */
@@ -775,8 +777,10 @@ export interface TokensDoc extends Omit<DesignSystemStamp, "exportedAt"> {
   _slices?: SliceEntry[];
   _conflicts?: VariableConflict[];
   _note?: string;
-  /** library pulls only */
-  source?: { role: "library"; libraryName?: string; fileKey?: string; collectionKeys?: string[] };
+  /** library pulls only. `| undefined`: LibraryStamp and DesignSystemDoc declare theirs as
+   *  `TokensDoc["source"]`, and an optional property's indexed type includes undefined — without it a
+   *  library tokens file (TokensDoc & LibraryStamp) is not assignable to TokensDoc. */
+  source?: { role: "library"; libraryName?: string; fileKey?: string; collectionKeys?: string[] } | undefined;
 }
 export type VariablesDoc = TokensDoc;
 
