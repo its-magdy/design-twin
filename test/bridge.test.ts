@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import type { ClientOptions, RawData } from "ws";
 import { ok, report } from "./assert.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
   ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
@@ -65,9 +66,9 @@ interface ScreenAssetsDoc { count: number; totalBytes: number; duplicates: unkno
 const verifyClient = core.verifyClientWith(TOKEN);
 function verify({ token, origin, host }: { token?: string; origin?: string; host?: string }): { accepted?: boolean; code?: number } {
   const url = token === undefined ? "/" : "/?token=" + encodeURIComponent(token);
-  const info = { origin, req: { url, headers: { host: host === undefined ? "127.0.0.1:8787" : host } } };
+  const info = { ...ifDefined("origin", origin), req: { url, headers: { host: host === undefined ? "127.0.0.1:8787" : host } } };
   const result: { accepted?: boolean; code?: number } = {};
-  verifyClient(info, (accepted, code) => { result.accepted = accepted; result.code = code; });
+  verifyClient(info, (accepted, code) => { result.accepted = accepted; if (code !== undefined) result.code = code; });
   return result;
 }
 
@@ -92,7 +93,7 @@ ok("[auth] bare localhost Host (no port) allowed", verify({ token: TOKEN, origin
 ok("[auth] empty Host rejected 403", (() => { const r = verify({ token: TOKEN, origin: "null", host: "" }); return r.accepted === false && r.code === 403; })());
 ok("[auth] missing Host header rejected 403", (() => {
   const r: { accepted?: boolean; code?: number } = {};
-  verifyClient({ origin: "null", req: { url: "/?token=" + TOKEN, headers: {} } }, (accepted, code) => { r.accepted = accepted; r.code = code; });
+  verifyClient({ origin: "null", req: { url: "/?token=" + TOKEN, headers: {} } }, (accepted, code) => { r.accepted = accepted; if (code !== undefined) r.code = code; });
   return r.accepted === false && r.code === 403;
 })());
 ok("[auth] userinfo trick (127.0.0.1@evil.example) rejected 403", verify({ token: TOKEN, origin: "null", host: "127.0.0.1@evil.example" }).code === 403);
@@ -307,7 +308,7 @@ void (async () => {
       const c = new WebSocket(url, opts);
       let opened = false;
       c.on("open", () => { opened = true; c.send(JSON.stringify({ type: "hello", file: "intruder" })); });
-      c.on("unexpected-response", (_req, r) => res({ opened, http: r.statusCode }));
+      c.on("unexpected-response", (_req, r) => res({ opened, ...ifDefined("http", r.statusCode) }));
       c.on("close", (code) => res({ opened, code, clients: bridge.listClients().length }));
       c.on("error", () => {});
     });
@@ -2436,7 +2437,7 @@ void (async () => {
   {
     const other = core.verifyClientWith("other-token-xyz");
     const r: { accepted?: boolean; code?: number } = {};
-    other({ origin: "null", req: { url: "/?token=" + TOKEN, headers: { host: "127.0.0.1:8787" } } }, (accepted, code) => { r.accepted = accepted; r.code = code; });
+    other({ origin: "null", req: { url: "/?token=" + TOKEN, headers: { host: "127.0.0.1:8787" } } }, (accepted, code) => { r.accepted = accepted; if (code !== undefined) r.code = code; });
     ok("[auth] verifyClientWith(token) checks against THAT token, not the module's", r.accepted === false && r.code === 401);
     const n: { accepted?: boolean } = {};
     other({ origin: "null", req: { url: "/?token=null", headers: { host: "127.0.0.1:8787" } } }, (accepted) => { n.accepted = accepted; });

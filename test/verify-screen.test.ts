@@ -22,6 +22,7 @@ import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { check as ok, report } from "./assert.ts";
+import { ifDefined } from "../bridge/src/json-util.ts";
 const okOuter = ok;
 
 // A one-frame screen export around the given children (typed IR nodes: fixtures.ts node()).
@@ -317,7 +318,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present in 0/.test(w)));
   const renamed = clone(jrMeasured);
   const asRadius = (r: unknown): MeasuredStyles["borderRadius"] => (typeof r === "number" || typeof r === "string" ? r : Array.isArray(r) && r.every((x) => typeof x === "number") ? r.map(Number) : undefined);
-  for (const n of renamed.nodes || []) { if ("radius" in n) { n.borderRadius = asRadius(n.radius); delete n.radius; } }
+  for (const n of renamed.nodes || []) { if ("radius" in n) { const br = asRadius(n.radius); if (br === undefined) delete n.borderRadius; else n.borderRadius = br; delete n.radius; } }
   const jrRad = compare(jrExp, renamed);
   const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`)!; // ts-port: callers guard with rd(…) && first
   ok("[lt3-radius] with the canonical key, the four dropped Job Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
@@ -348,7 +349,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   {
     const m = clone(gpMeasured);
     const st = m.nodes?.find((n) => n.nodeId === "18580:60861");
-    st!.styles!.textBox = { x: pos["18580:60861"].textBoxX };
+    st!.styles!.textBox = { ...ifDefined("x", pos["18580:60861"].textBoxX) };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
     ok("[lt3-xy] Global Policies pre-fix: the Status header is +18.94px right of the design (1296.81 → 1315.75)",

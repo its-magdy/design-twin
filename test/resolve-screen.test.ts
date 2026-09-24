@@ -218,7 +218,7 @@ function fixtureWithEmptyStateSibling() {
   const sibling = readFixture(path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), isScreenExport);
   // deriveTitle/collectTexts are the same top-level import as line 29 — no need to re-require them.
   const siblingRoot = sibling.nodes[0];
-  root.layers = root.layers?.concat([{
+  if (root.layers) root.layers = root.layers.concat([{
     name: "Job roles",
     id: "7314:83742",
     type: "FRAME",

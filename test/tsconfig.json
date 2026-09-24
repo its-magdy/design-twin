@@ -12,6 +12,8 @@
     "noImplicitReturns": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
+    // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (as in bridge/tsconfig.json)
+    "exactOptionalPropertyTypes": true,
     "noEmit": true,
     // Every bridge/ and design-to-code/ module is TypeScript now. allowJs remains ONLY because
     // test/verify-build.test.ts imports the JS build script claude-plugin/build-scripts.js (build

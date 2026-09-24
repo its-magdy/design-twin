@@ -127,7 +127,7 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
   const vm = await tryImport<VariablesMergeModule>(path.join(SRC, "bridge", "src", "variables-merge.ts"));
   const merged = read<MergedVariablesDoc>("variables.json");
   let acc: MergedVariablesDoc | null = null;
-  for (const s of merged._slices) acc = vm!.mergeVariablesDoc(acc, read<VariablesDoc>(s.file!.replace(/\.json$/, ".vars.json")), { screen: s.screen, file: s.file, at: s.at }).doc;
+  for (const s of merged._slices) acc = vm!.mergeVariablesDoc(acc, read<VariablesDoc>(s.file!.replace(/\.json$/, ".vars.json")), { screen: s.screen, ...(s.file === undefined ? {} : { file: s.file }), at: s.at }).doc;
   const doc = acc!;
   // a same-name conflict by name (a value-only conflict of that name is not the record these checks want)
   const sameName = (c: VariableConflict | undefined) => (c && c.kind === "same-name" ? c : undefined);
@@ -216,7 +216,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
   const keyOf = new Map<string, string | undefined>();
   const walk = (n: IrNode) => { if (n.type === "INSTANCE" && n.mainComponent) keyOf.set(n.mainComponent.setName || n.mainComponent.name, n.mainComponent.setKey || n.mainComponent.key); (n.children || []).forEach(walk); };
   screen.nodes.forEach(walk);
-  for (const c of same.components) if (keyOf.has(c.name)) c.key = keyOf.get(c.name);
+  for (const c of same.components) if (keyOf.has(c.name)) { const k = keyOf.get(c.name); if (k === undefined) delete c.key; else c.key = k; }
   fs.writeFileSync(path.join(ds, "components.local.json"), JSON.stringify(same));
   const r2 = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res2: Partial<CrossCheckReport> = {}; try { res2 = JSON.parse(r2.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
