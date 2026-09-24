@@ -71,6 +71,8 @@ how a value becomes code on your stack, see the profile.
   `hangingList`/`hangingPunctuation`.
 - **`runs[]`** — mixed-format text: render each run (`text`, `font`, `textStyle`, `fillStyle`, `tokens`,
   `href` external link / `linkNode` internal link, `list` ordered/unordered, `indent`).
+  **`runs[].textWrap`** (`balance`/`pretty`) appears only when paragraphs use different wrap styles
+  (the node then has no `font.textWrap`); apply it to that run's paragraph.
 - **`autoResize`** — `width_and_height` (hugs both axes) | `height` (fixed width, wraps and grows
   down) | `truncate`. **Absent = fixed-size box** — it will clip longer text; decide an overflow rule.
 - **`truncate:true`** (ellipsis at end) and **`maxLines:N`** (clamp) — the design's overflow rule.
@@ -133,12 +135,17 @@ how a value becomes code on your stack, see the profile.
     `fill` = cover, `fit` = contain, `crop` = the `transform` crop rect, `tile` = repeat at `scale`;
     `filters` (`exposure`/`contrast`/`saturation`/`temperature`/`tint`/`highlights`/`shadows`, −1..1).
   - `video`, `pattern` (`sourceNodeId`, `tileType`, `spacing`), `shader` (use the asset).
+    A shader paint/effect carries `shaderId` + **`properties`** `{defId: value}` — its inputs keyed by
+    Figma's opaque property id (colours `{color:"#hex"}`, points `{x,y,…}`, gradients `{stops}`; bound
+    inputs named in `tokens` instead). Context for the asset, not something to re-implement.
 - **Node `opacity`** (whole subtree, < 1 only) is different from paint alpha/`opacity` — don't merge them.
 - **`strokes`** — `colors[]` (solid hex), `paints[]` (non-solid stroke paints, same shape as fills),
   `weight` or per-side `weights{top,right,bottom,left}` (a one-sided stroke = divider/underline),
   **`align`** `inside` | `outside` | `center` (inside ≈ a border within the box; outside/center extend
   past it and don't take layout space unless the stack draws them that way), `dash[]`, `cap`, `join`,
-  `miter`, `variableWidth` (tapered — SVG only).
+  `miter`, `variableWidth` (tapered — SVG only), **`complex`** — a brush (`{type:"brush", brushType:
+  "scatter"|"stretch", brushName, …}`) or `dynamic` (`frequency`/`wiggle`/`smoothen`) hand-drawn stroke:
+  no code equivalent, use the exported asset.
 
 ## Effects, blend, masks and transforms
 
@@ -239,6 +246,7 @@ Undesigned states use the audit's default (derived from tokens) and are reported
 |---|---|
 | Variant states | `design-system/components.local.json` `components[].props[*] {key, type:"VARIANT", options[], default}` — states are option VALUES (property often "Property 1") |
 | Per-variant trees | entry `variantsFile` / `nodeFile` (opt-in `--variant-visuals`) |
+| Slot rules | `components.local.json` `props[*]` with `type:"SLOT"` → `slotSettings {minChildren, maxChildren, allowPreferredValuesOnly, stretchChildOnInsert, displayEmptyByDefault}` (each only as set; no min/max = unlimited) |
 | Library components | `components.library.json` — props SAMPLED from instances in this file |
 | Token catalog | `design-system/tokens.json` — `collections[] {name, modes, default, theming}`, `variables[] {name, type, collection, tier, values{mode: hex \| number \| {aliasOf}}, scopes, codeSyntax{WEB,ANDROID,iOS}, key}` |
 | Text/paint/effect/grid styles | `design-system/styles.{text,paint,effect,grid}.json` |

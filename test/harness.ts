@@ -2135,5 +2135,118 @@ const sandbox = context as unknown as Sandbox;
     }
   }
 
+  // ---------- [UNREAD] typed-but-previously-unread Figma fields: shader properties, complex strokes,
+  // SLOT slotSettings, per-run textWrapStyle. Each: a node WITH the field -> exact IR; WITHOUT / at the
+  // default -> the key is absent and the rest of the record is byte-identical to before. ----------
+  {
+    const alias = (id: string) => ({ type: "VARIABLE_ALIAS", id });
+    const shape = (id: string, extra: Record<string, unknown>): FakeNode =>
+      ({ type: "RECTANGLE", name: "Shape " + id, visible: true, id, width: 10, height: 10, ...extra });
+
+    // 1a. ShaderPaint.properties — every ShaderPropertyValue member, bound values -> tokens.
+    const shaderFill = await sandbox.serialize(shape("un:1", { fills: [{ type: "SHADER", visible: true, id: "shd_wave", properties: {
+      "p:bool": true, "p:text": "hello", "p:num": 0.12345, "p:rgb": { r: 1, g: 0, b: 0 }, "p:rgba": { r: 0, g: 0, b: 1, a: 0.5 },
+      "p:point": { x: 0.333, y: 0.5 }, "p:line": { x: 0, y: 0, x2: 1, y2: 0.556 }, "p:circle": { x: 0.5, y: 0.5, radius: 0.25 },
+      "p:cpoint": { x: 0.5, y: 0.5, radius: 0.25, angle: 45.678 }, "p:colorpt": { x: 0.1, y: 0.2, color: { r: 0, g: 1, b: 0 } },
+      "p:colorptBound": { x: 0.1, y: 0.2, color: alias("v_primary") },
+      "p:grad": { stops: [{ position: 0, color: { r: 1, g: 1, b: 1 } }, { position: 1, color: alias("v_blue600") }] },
+      "p:bound": alias("v_allscope"),
+    } }] }), 0, false);
+    const shaderBare = await sandbox.serialize(shape("un:2", { fills: [
+      { type: "SHADER", visible: true, id: "shd_a" }, { type: "SHADER", visible: true, id: "shd_b", properties: {} }] }), 0, false);
+    ok("[UNREAD] shader fill: properties normalised (hex / {color} / rounded points / stops), bound inputs named under tokens; " +
+      "without properties / with an empty map: no properties, no tokens key (unchanged shape)",
+      JSON.stringify(shaderBare.fills) === '[{"type":"shader","shaderId":"shd_a"},{"type":"shader","shaderId":"shd_b"}]' &&
+      JSON.stringify(shaderFill.fills) === JSON.stringify([{ type: "shader", shaderId: "shd_wave", properties: {
+        "p:bool": true, "p:text": "hello", "p:num": 0.12, "p:rgb": { color: "#ff0000" }, "p:rgba": { color: "#0000ff80" },
+        "p:point": { x: 0.33, y: 0.5 }, "p:line": { x: 0, y: 0, x2: 1, y2: 0.56 }, "p:circle": { x: 0.5, y: 0.5, radius: 0.25 },
+        "p:cpoint": { x: 0.5, y: 0.5, radius: 0.25, angle: 45.68 }, "p:colorpt": { x: 0.1, y: 0.2, color: "#00ff00" },
+        "p:colorptBound": { x: 0.1, y: 0.2 }, "p:grad": { stops: [{ pos: 0, color: "#ffffff" }, { pos: 1 }] },
+      }, tokens: { "p:colorptBound.color": "color/primary", "p:grad.stops.1.color": "blue/600", "p:bound": "misc/bad" } }]));
+
+    // 1b. ShaderEffect.properties — same map, through the effects path.
+    const shaderFx = await sandbox.serialize(shape("un:3", { effects: [
+      { type: "SHADER", visible: true, id: "shd_glow", properties: { "g:amt": 0.75, "g:tint": { r: 0, g: 0, b: 0, a: 0.25 }, "g:bound": alias("v_primary") } },
+      { type: "SHADER", visible: true, id: "shd_plain" }] }), 0, false);
+    ok("[UNREAD] shader effect: properties + token for the bound input; a shader effect without properties stays {type, shaderId}",
+      JSON.stringify(shaderFx.effects) === JSON.stringify([
+        { type: "shader", shaderId: "shd_glow", properties: { "g:amt": 0.75, "g:tint": { color: "#00000040" } }, tokens: { "g:bound": "color/primary" } },
+        { type: "shader", shaderId: "shd_plain" }]));
+
+    // 2. complexStrokeProperties -> strokes.complex (BASIC = default -> absent).
+    const stroked = (id: string, csp?: Record<string, unknown>) => sandbox.serialize(shape(id, {
+      strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], strokeWeight: 2, strokeAlign: "CENTER",
+      ...(csp ? { complexStrokeProperties: csp } : {}) }), 0, false);
+    const base = '{"colors":["#000000"],"weight":2,"align":"center"';
+    const dyn = await stroked("un:4", { type: "DYNAMIC", frequency: 2.346, wiggle: 3, smoothen: 0.5 });
+    const basic = await stroked("un:7", { type: "BASIC" });
+    const noCsp = await stroked("un:8");
+    ok("[UNREAD] dynamic stroke -> strokes.complex {type:dynamic, frequency, wiggle, smoothen}; BASIC and a node without " +
+      "complexStrokeProperties: no complex key, strokes byte-identical",
+      JSON.stringify(basic.strokes) === base + "}" && JSON.stringify(noCsp.strokes) === base + "}" &&
+      JSON.stringify(dyn.strokes) === base + ',"complex":{"type":"dynamic","frequency":2.35,"wiggle":3,"smoothen":0.5}}');
+    const scatter = await stroked("un:5", { type: "BRUSH", brushType: "SCATTER", brushName: "WITCH_HOUSE", gap: 0.25, wiggle: 0, sizeJitter: 1.5, angularJitter: -30, rotation: 90 });
+    ok("[UNREAD] scatter brush -> strokes.complex with every scatter parameter, enums lowercased",
+      JSON.stringify(scatter.strokes) === base + ',"complex":{"type":"brush","brushType":"scatter","brushName":"witch_house","gap":0.25,"wiggle":0,"sizeJitter":1.5,"angularJitter":-30,"rotation":90}}');
+    const stretch = await stroked("un:6", { type: "BRUSH", brushType: "STRETCH", brushName: "NOIR", direction: "BACKWARD" });
+    ok("[UNREAD] stretch brush -> strokes.complex {brushType:stretch, brushName, direction}",
+      JSON.stringify(stretch.strokes) === base + ',"complex":{"type":"brush","brushType":"stretch","brushName":"noir","direction":"backward"}}');
+
+    // 3. SLOT slotSettings on the component catalogue.
+    const slotComp = { type: "COMPONENT", id: "c:panel", name: "Panel", key: "compkey_panel", parent: null, visible: true, children: [],
+      componentPropertyDefinitions: {
+        "Content#5:0": { type: "SLOT", defaultValue: "", description: "Body area",
+          preferredValues: [{ type: "COMPONENT", key: "card_key" }],
+          slotSettings: { minChildren: 1, maxChildren: null, allowPreferredValuesOnly: true, stretchChildOnInsert: false } },
+        "Aside#5:1": { type: "SLOT", defaultValue: "", slotSettings: { minChildren: null, maxChildren: null } },
+        "Footer#5:2": { type: "SLOT", defaultValue: "" },
+        "Title#5:3": { type: "TEXT", defaultValue: "Hi", slotSettings: { minChildren: 2 } },
+      } };
+    const slotPage = { name: "Slots", id: "p:slots", loadAsync: async () => {},
+      findAllWithCriteria: ({ types }: { types: string[] }) => (types.indexOf("COMPONENT") !== -1 ? [slotComp] : []) };
+    const kidsBeforeSlotPage = sandbox.figma.root.children;
+    sandbox.figma.root.children = [slotPage];
+    const slotDs = await sandbox.collectDesignSystemOnly();
+    sandbox.figma.root.children = kidsBeforeSlotPage;
+    const panelProps = slotDs.designSystem.components.find((c) => c.id === "c:panel")?.props;
+    ok("[UNREAD] SLOT prop -> preferredValues (typings L9594: INSTANCE_SWAP and SLOT) + slotSettings as set (null max " +
+      "omitted, false kept); a SLOT with only null limits / no slotSettings, and a non-SLOT prop carrying one: no slotSettings key",
+      JSON.stringify(panelProps?.Content) === JSON.stringify({ key: "Content#5:0", type: "SLOT", default: "",
+        preferredValues: [{ type: "COMPONENT", key: "card_key" }], description: "Body area",
+        slotSettings: { stretchChildOnInsert: false, minChildren: 1, allowPreferredValuesOnly: true } }) &&
+      JSON.stringify(panelProps?.Aside) === '{"key":"Aside#5:1","type":"SLOT","default":""}' &&
+      JSON.stringify(panelProps?.Footer) === '{"key":"Footer#5:2","type":"SLOT","default":""}' &&
+      JSON.stringify(panelProps?.Title) === '{"key":"Title#5:3","type":"TEXT","default":"Hi"}');
+
+    // 4. Per-segment textWrapStyle. The fake honours the requested field list like the real API: a
+    // segment only carries textWrapStyle when the extractor asked for it.
+    type Seg = Record<string, unknown>;
+    const segFont = { fontName: { family: "Inter", style: "Regular" }, fontSize: 14, fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }] };
+    const wrapText = (id: string, nodeWrap: unknown, segs: Seg[]): FakeNode => ({
+      type: "TEXT", name: "Copy", visible: true, id, width: 100, characters: segs.map((s) => String(s.characters)).join(""),
+      fontName: { family: "Inter", style: "Regular" }, fontSize: 14, textWrapStyle: nodeWrap,
+      getStyledTextSegments: (fields: string[]) => segs.map((s) => {
+        const o: Seg = {};
+        for (const [k, v] of Object.entries(s)) if (k !== "textWrapStyle" || fields.indexOf(k) !== -1) o[k] = v;
+        return o;
+      }),
+    });
+    const mixedWrap = await sandbox.serialize(wrapText("un:9", MIXED, [
+      { characters: "Intro\n", ...segFont, textWrapStyle: "AUTO" },
+      { characters: "Balanced\n", ...segFont, textWrapStyle: "BALANCE" },
+      { characters: "Pretty", ...segFont, textWrapStyle: "PRETTY" }]), 0, false);
+    const uniformSegs = [{ characters: "One ", ...segFont, textWrapStyle: "BALANCE" },
+      { characters: "Two", ...segFont, fontSize: 18, textWrapStyle: "BALANCE" }];
+    const uniformWrap = await sandbox.serialize(wrapText("un:10", "BALANCE", uniformSegs), 0, false);
+    const uniformNoSegWrap = await sandbox.serialize(wrapText("un:10", "BALANCE", uniformSegs.map(({ textWrapStyle: _w, ...s }) => s)), 0, false);
+    ok("[UNREAD] node-level textWrapStyle mixed -> runs[].textWrap per segment (AUTO omitted), no font.textWrap; not mixed -> " +
+      "no runs[].textWrap, node font.textWrap kept, output byte-identical to segments without the field",
+      JSON.stringify((mixedWrap.runs || []).map((r) => r.textWrap === undefined ? null : r.textWrap)) === '[null,"balance","pretty"]' &&
+      mixedWrap.font !== undefined && !("textWrap" in mixedWrap.font) &&
+      (uniformWrap.runs || []).length === 2 && (uniformWrap.runs || []).every((r) => !("textWrap" in r)) &&
+      uniformWrap.font !== undefined && uniformWrap.font.textWrap === "balance" &&
+      JSON.stringify(uniformWrap) === JSON.stringify(uniformNoSegWrap));
+  }
+
   report();
 })().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });

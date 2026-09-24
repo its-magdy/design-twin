@@ -133,7 +133,20 @@ export interface PatternPaint extends PaintBase {
   spacing?: XY;
   align?: string;
 }
-export interface ShaderPaint extends PaintBase { type: "shader"; shaderId?: string }
+/** One shader property assignment (paint.ts putShaderProperties), keyed in `properties` by Figma's opaque
+ *  property-definition id. Colours are hex (8-digit when alpha < 1); a bare COLOR is wrapped as `{color}`
+ *  so it can't be mistaken for a TEXT string. A value (or the colour inside a point/gradient) bound to a
+ *  variable is omitted here and named in the paint/effect `tokens` instead (`defId`, `defId.color`,
+ *  `defId.stops.N.color`). */
+export type ShaderPropValue =
+  | boolean | string | number
+  | { color: string }
+  | XY
+  | { x: number; y: number; x2: number; y2: number }
+  | { x: number; y: number; radius: number; angle?: number }
+  | { x: number; y: number; color?: string }
+  | { stops: Array<{ pos: number; color?: string }> };
+export interface ShaderPaint extends PaintBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
 export type Paint = SolidPaint | GradientPaint | MediaPaint | PatternPaint | ShaderPaint;
 
 /** `strokes` is an OBJECT (paint.ts simplifyStrokes), never an array of paints. */
@@ -153,7 +166,14 @@ export interface Strokes {
   /** Variable-width (tapered) stroke: one of Figma's named presets, or `custom` with its `variableWidthPoints`
    *  compacted to `{pos, width}` (points only for `custom`). */
   variableWidth?: { profile: "uniform" | "wedge" | "taper" | "quarter_taper" | "eye" | "mirrored_taper" | "custom"; points?: Array<{ pos: number; width: number }> };
+  /** Brush / dynamic stroke (complexStrokeProperties); absent for a plain (BASIC) stroke. */
+  complex?: ComplexStroke;
 }
+/** complexStrokeProperties, enums lowercased, numbers rounded. `brushName` is `custom` for a custom brush. */
+export type ComplexStroke =
+  | { type: "dynamic"; frequency: number; wiggle: number; smoothen: number }
+  | { type: "brush"; brushType: "scatter"; brushName: string; gap: number; wiggle: number; sizeJitter: number; angularJitter: number; rotation: number }
+  | { type: "brush"; brushType: "stretch"; brushName: string; direction: "forward" | "backward" };
 
 // ---- effects (effects.ts). Discriminated on `type` (lowercased Figma Effect.type).
 export interface EffectBase { tokens?: TokenMap }
@@ -183,7 +203,7 @@ export interface GlassEffect extends EffectBase {
   lightIntensity?: number; lightAngle?: number; refraction?: number; depth?: number; dispersion?: number; radius?: number;
 }
 export interface TextureEffect extends EffectBase { type: "texture"; noiseSize?: number; noiseSizeVector?: XY; radius?: number; clipToShape?: boolean }
-export interface ShaderEffect extends EffectBase { type: "shader"; shaderId?: string }
+export interface ShaderEffect extends EffectBase { type: "shader"; shaderId?: string; properties?: Record<string, ShaderPropValue> }
 export type Effect = ShadowEffect | BlurEffect | NoiseEffect | GlassEffect | TextureEffect | ShaderEffect;
 
 // ---- text (text.ts)
@@ -233,6 +253,9 @@ export interface TextRun {
   textStyle?: string;
   fillStyle?: string;
   tokens?: TokenMap;
+  /** This run's paragraph wrap style — only when the node-level `textWrapStyle` is mixed (else it is
+   *  `font.textWrap` on the node); AUTO omitted. */
+  textWrap?: "balance" | "pretty";
 }
 
 // ---- prototype (prototype.ts)
@@ -798,6 +821,8 @@ export interface ComponentPropDef {
   default?: string | boolean;
   preferredValues?: Array<{ type: string; key: string }>;
   description?: string;
+  /** SLOT only: Figma's SlotSettings as set (a null min/max = no limit, omitted). */
+  slotSettings?: { stretchChildOnInsert?: boolean; displayEmptyByDefault?: boolean; minChildren?: number; maxChildren?: number; allowPreferredValuesOnly?: boolean };
   tokens?: TokenMap;
   /** library entries with derivedFrom:"instances" — the values SEEN, not the option list */
   observed?: Array<string | boolean>;
