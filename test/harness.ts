@@ -181,6 +181,11 @@ const VARS: Record<string, FakeVariable> = {
     scopes: [], codeSyntax: {}, remote: false, valuesByMode: { m_val: { r: 0.5, g: 0.7, b: 1, a: 1 } } },
   v_allscope: { id: "v_allscope", name: "misc/bad", resolvedType: "FLOAT", variableCollectionId: "c_sem",
     scopes: ["ALL_SCOPES"], codeSyntax: {}, remote: false, valuesByMode: { m_light: 4, m_dark: 4 } },
+  // Named EASING variable — a motion easing/style-prop alias resolves to {aliasOf: "easing/emphasized"}
+  // through the same getVariableByIdAsync memo (state.ts varName) variables.ts uses. Keyed by the
+  // "VariableID:2" id the animationStyles fixture below binds to.
+  "VariableID:2": { id: "VariableID:2", name: "easing/emphasized", resolvedType: "EASING", variableCollectionId: "c_sem",
+    scopes: [], codeSyntax: {}, remote: false, valuesByMode: { m_light: { type: "EASE_OUT" } } },
 };
 const COLLECTIONS: FakeCollection[] = [
   { id: "c_prim", name: "Primitives", modes: [{ modeId: "m_val", name: "Value" }], defaultModeId: "m_val" },
@@ -705,14 +710,15 @@ const sandbox = context as unknown as Sandbox;
   const m3 = sel3.screen.nodes[0].motion;
   ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5));
   ok("motion keyframe track: base + keyframes + values", !!(m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100));
-  ok("motion keyframe custom cubic-bezier easing carried", !!(m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4));
+  const tx1Easing = m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing;
+  ok("motion keyframe custom cubic-bezier easing carried", !!(tx1Easing && "cubicBezier" in tx1Easing && tx1Easing.cubicBezier!.x1 === 0.4));
   ok("motion applied animation style captured", !!(m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3));
   ok("motion applied animation style carries the applied instance id", !!(m3 && m3.styles![0].id === "applied1"));
   ok("motion applied animation style props: number value carried verbatim", !!(m3 && m3.styles![0].props && m3.styles![0].props.distance === 24));
   ok("motion applied animation style props: MotionEasing value converted like a keyframe easing",
     JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.easing) === '{"type":"ease_out"}');
-  ok("motion applied animation style props: VariableAlias value emits {type:\"variable_alias\", id}",
-    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.color) === '{"type":"variable_alias","id":"VariableID:2"}');
+  ok("motion applied animation style props: VariableAlias value resolves to {aliasOf: <variable name>} (unified with variables.ts)",
+    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.color) === '{"aliasOf":"easing/emphasized"}');
   ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
     m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
     m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90));
@@ -724,14 +730,15 @@ const sandbox = context as unknown as Sandbox;
   const f0 = mt.fills?.["0"];
   ok("motion manualTracks.fills[\"0\"]: base + 2 keyframes", !!(f0 && !("properties" in f0) && f0.base === "#ff0000" &&
     f0.keyframes!.length === 2 && f0.keyframes![1].value === "#0000ff" && f0.keyframes![1].t === 1));
-  ok("motion keyframe easing bound to a variable emits the alias id",
-    JSON.stringify(f0 && !("properties" in f0) && f0.keyframes![1].easing) === '{"type":"variable_alias","id":"VariableID:1"}');
+  ok("motion keyframe easing bound to an unresolvable variable id falls back to {aliasOf: <id>} (VariableID:1 is not in VARS)",
+    JSON.stringify(f0 && !("properties" in f0) && f0.keyframes![1].easing) === '{"aliasOf":"VariableID:1"}');
   const f1 = mt.fills?.["1"];
   ok("motion manualTracks.fills shader track under properties", !!(f1 && "properties" in f1 &&
     f1.properties["shader:speed"].base === 1 && f1.properties["shader:speed"].keyframes![1].value === 3));
   const s0 = mt.strokes?.["0"];
+  const s0Easing = s0 && !("properties" in s0) && s0.keyframes![0].easing;
   ok("motion manualTracks.strokes[\"0\"] track", !!(s0 && !("properties" in s0) && s0.base === 0 &&
-    s0.keyframes!.length === 1 && s0.keyframes![0].value === 0.5 && s0.keyframes![0].easing!.type === "ease_in"));
+    s0.keyframes!.length === 1 && s0.keyframes![0].value === 0.5 && s0Easing && "type" in s0Easing && s0Easing.type === "ease_in"));
   const e0 = mt.effects?.["0"];
   ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0 && e0.RADIUS.base === 4 && e0.RADIUS.keyframes!.length === 2 && e0.RADIUS.keyframes![1].value === 12));
   ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0 && e0.properties && e0.properties["shader:glow"].keyframes![0].value === 0.8));
@@ -1860,7 +1867,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
   ok("[LIB] and the component half still reports without it", noPerm.libraries.some((l) => l.componentCount === 2));
   ok("[LIB] the local file is listed as kind:local", noPerm.libraries.some((l) => l.kind === "local" && l.name === "My File"));
-  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local")!.variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 2));
+  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local")!.variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 3));
   ok("[LIB] the unknown-library bucket says counts are USED-IN-THIS-FILE, not what the library offers",
     /USED IN THIS FILE/.test(noPerm.libraries.find((l) => l.name === "unknown-library")!.note!));
 
