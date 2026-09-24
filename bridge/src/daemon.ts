@@ -21,9 +21,19 @@ import { errMsg } from "./errmsg.ts";
 import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import { isCmd, replyShapeError } from "./commands.ts";
 import type { Cmd, Commands } from "./commands.ts";
-import type { ClientRow, ConnectionInfo } from "./server-core.ts";
+import type { ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 
 // ---- the daemon socket protocol (newline-delimited JSON, one request -> one reply per connection)
+//
+// Progress (opt-in). A command frame that carries `progress: true` may be answered with any number of
+// PROGRESS frames `{ id?, progress: ProgressTick }` before its one reply frame `{ ok, id?, … }` — the
+// plugin's ticks as server-core hands them to the bridge request's `onProgress` listener. A progress
+// frame has NO `ok` field, so it can never be mistaken for a reply; and it is only ever sent to a
+// client that asked, because a client from before this field reads every frame as the reply and would
+// reject a progress frame ("bad reply frame: not a daemon reply"). A daemon from before this field
+// ignores `progress: true` and never sends one; the client below copes (it simply sees the reply).
+// Why: an MCP export routed through a daemon owes its caller notifications/progress (MCP spec
+// 2025-06-18, basic/utilities/progress) exactly as one that holds the bridge does.
 
 /** A bridge command to forward, typed per command from commands.ts (`switch (msg.cmd)` narrows `args`). */
 export type DaemonCommandRequest<C extends Cmd = Cmd> = {
@@ -37,6 +47,9 @@ export type DaemonCommandRequest<C extends Cmd = Cmd> = {
     client?: string | null;
     /** ms to wait for a plugin to connect before sending */
     waitForConnection?: number;
+    /** opt in to progress frames before the reply (the protocol note above). Set by the client when
+     *  the caller passes an `onProgress` listener — never needed by hand. */
+    progress?: boolean;
   };
 }[C];
 
@@ -74,6 +87,7 @@ export function daemonRequestError(x: unknown): string | null {
   if (x.timeoutMs !== undefined && !(typeof x.timeoutMs === "number" && Number.isFinite(x.timeoutMs) && x.timeoutMs > 0)) return "`timeoutMs` is not a positive number";
   if (x.client !== undefined && x.client !== null && typeof x.client !== "string") return "`client` is not a string";
   if (x.waitForConnection !== undefined && !(typeof x.waitForConnection === "number" && Number.isFinite(x.waitForConnection) && x.waitForConnection >= 0)) return "`waitForConnection` is not a number";
+  if (x.progress !== undefined && typeof x.progress !== "boolean") return "`progress` is not a boolean";
   return null;
 }
 
@@ -86,6 +100,23 @@ export function isDaemonRequest(x: unknown): x is DaemonRequest {
 type DaemonReply =
   | { ok: true; id?: string; result: unknown; client?: ClientRow }
   | { ok: false; id?: string; error: string };
+
+/** A progress frame: one plugin tick, relayed while request `id` is in flight (opt-in, see above). */
+type DaemonProgressFrame = { id?: string; progress: ProgressTick };
+
+const finiteOrNull = (v: unknown): v is number | null => v === null || (typeof v === "number" && Number.isFinite(v));
+const stringOrNull = (v: unknown): v is string | null => v === null || typeof v === "string";
+/** The tick exactly as server-core's parseTick normalises it (every field present, null when absent).
+ *  Foreign JSON from another process — possibly another build — so it is checked, never cast. */
+function isProgressTick(x: unknown): x is ProgressTick {
+  if (!isRecord(x)) return false;
+  const p = x.page;
+  const pageOk = p === null || (isRecord(p) && typeof p.index === "number" && Number.isFinite(p.index) && typeof p.of === "number" && Number.isFinite(p.of) && stringOrNull(p.name));
+  return stringOrNull(x.phase) && pageOk && finiteOrNull(x.nodes) && finiteOrNull(x.assets);
+}
+
+/** Is this frame a progress frame at all: `progress` present and no `ok` (every reply has `ok`). */
+const isProgressShaped = (x: unknown): x is Record<string, unknown> => isRecord(x) && !("ok" in x) && "progress" in x;
 
 function parseDaemonReply(x: unknown): DaemonReply | null {
   if (!isRecord(x)) return null;
@@ -120,8 +151,10 @@ export interface DaemonBridge {
   isConnected(): boolean;
   waitForConnection(timeoutMs: number): Promise<void>;
   request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
-  /** The same, also naming the client the command went to (server-core has it; a fake may not). */
-  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<{ reply: unknown; client: ClientRow }>;
+  /** The same, also naming the client the command went to (server-core has it; a fake may not).
+   *  `stallMs` is server-core's own opt-in (the daemon never passes it); `onProgress` receives every
+   *  tick the chosen connection sends while the request is in flight — the source of progress frames. */
+  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ reply: unknown; client: ClientRow }>;
   /** Waits (bounded) for a named target to match a live client; never throws (server-core has it; a fake may not). */
   waitForClient?(target: string, timeoutMs: number): Promise<void>;
   close(): void;
@@ -140,12 +173,16 @@ export interface ServeOptions {
   crashHandlers?: boolean;
 }
 
-/** connect()'s answer when a daemon is live: its socket, and request functions bound to it. */
+/** connect()'s answer when a daemon is live: its socket, and request functions bound to it.
+ *  `onProgress` (optional, LAST, so every existing call site is unchanged) opts the request into
+ *  progress frames and receives each tick, in order, before the promise settles. A daemon older than
+ *  progress frames sends none; the request still answers. While ticks arrive, `timeoutMs` is a SILENCE
+ *  budget — each tick re-arms it (request() below says why). */
 export interface DaemonConnection {
   sock: string;
-  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number): Promise<Commands[C]["reply"]>;
+  request<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<Commands[C]["reply"]>;
   /** As request(), plus the connected file the daemon's bridge used (null from an older daemon). */
-  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
+  requestWithClient<C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ reply: Commands[C]["reply"]; client: ClientRow | null }>;
 }
 
 // Keyed by PORT so two bridges on different ports get two daemons rather than fighting over one
@@ -295,8 +332,16 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             // verbatim: the bridge owns the matching rules, so the daemon never has to know them.
             // The client the bridge picked rides back on the reply (a fake bridge without
             // requestWithClient simply doesn't say).
+            // Progress frames only for a client that opted in (`progress: true`) — an older client
+            // reads every frame as the reply. Written on the same socket ahead of the reply, so the
+            // client sees the ticks in the order they arrived, and all of them before the reply.
+            // Only a bridge with requestWithClient can take a listener (server-core's does).
+            const id = msg.id;
+            const onProgress = msg.progress === true
+              ? (tick: ProgressTick) => { send(conn, id === undefined ? { progress: tick } : { id, progress: tick }); }
+              : undefined;
             if (typeof bridge.requestWithClient === "function") {
-              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client);
+              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress);
               reply(conn, { ok: true, id: msg.id, result: o.reply, client: o.client });
             } else {
               const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
@@ -383,6 +428,9 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
 }
 
 function reply(conn: net.Socket, obj: DaemonReply): void {
+  send(conn, obj);
+}
+function send(conn: net.Socket, obj: DaemonReply | DaemonProgressFrame): void {
   try { conn.write(JSON.stringify(obj) + "\n"); } catch { /* client went away mid-reply */ }
 }
 
@@ -407,7 +455,20 @@ export function probe(sock: string, timeoutMs = 1500): Promise<boolean> {
 // One request through a running daemon. Rejects (rather than falling back) once connected: a daemon
 // that answered __ping and then failed is a real error the caller should see, not a reason to
 // silently open a second bridge that would then hit EADDRINUSE against the daemon itself.
-function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number): Promise<{ result: unknown; client: ClientRow | null }> {
+//
+// `onProgress` opts the request into progress frames (`progress: true` on the wire) and receives each
+// well-formed tick. A progress frame is never the reply: it is dispatched and the reader reads on. A
+// malformed one (a bad tick, or a frame this client never asked for) is DROPPED, not fatal — a tick is
+// advisory, and losing one must never cost the caller its export. A throwing listener is its own
+// failure, as in server-core's relay.
+//
+// Timeout: `timeoutMs` is the outer guard for a daemon that stopped answering entirely (the daemon's
+// own per-command budget, msg.timeoutMs, still bounds the whole command on the bridge side). Every
+// progress frame RE-ARMS it: a tick is proof the daemon and the plugin are both alive, which is how
+// the CLI's own bridge path treats activity (figma-pull.ts STALL_MS over server-core's
+// `lastActivity`). So with progress flowing the guard is a silence budget; without progress it is the
+// same total budget it always was.
+function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | DaemonControlRequest, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ result: unknown; client: ClientRow | null }> {
   return new Promise<{ result: unknown; client: ClientRow | null }>((resolve, reject) => {
     const c = net.createConnection(sock);
     c.setEncoding("utf8");
@@ -415,19 +476,36 @@ function request<C extends Cmd>(sock: string, msg: DaemonCommandRequest<C> | Dae
     const done = <V>(fn: (v: V) => void, v: V) => { if (!settled) { settled = true; try { c.end(); } catch { /* already gone */ } fn(v); } };
     // The daemon's own per-command budget still applies; this is the outer guard for a daemon that
     // stopped answering entirely. Generous by design — an --all-pages export legitimately runs long.
-    const t = timeoutMs ? setTimeout(() => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s")), timeoutMs) : null;
-    c.on("error", (e) => { if (t) clearTimeout(t); done(reject, e); });
-    c.on("close", () => { if (t) clearTimeout(t); done(reject, new Error("daemon closed the connection before replying")); });
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const disarm = () => { if (t) clearTimeout(t); t = null; };
+    const arm = () => {
+      disarm();
+      if (timeoutMs) t = setTimeout(() => done(reject, new Error("daemon did not respond within " + Math.round(timeoutMs / 1000) + "s")), timeoutMs);
+    };
+    arm();
+    c.on("error", (e) => { disarm(); done(reject, e); });
+    c.on("close", () => { disarm(); done(reject, new Error("daemon closed the connection before replying")); });
     c.on("data", framer((line) => {
-      if (t) clearTimeout(t);
+      if (settled) return;
       let parsed: unknown;
-      try { parsed = JSON.parse(line) as unknown; } catch (e) { return done(reject, new Error("bad reply frame: " + errMsg(e))); }
+      try { parsed = JSON.parse(line) as unknown; } catch (e) { disarm(); return done(reject, new Error("bad reply frame: " + errMsg(e))); }
+      if (isProgressShaped(parsed)) {
+        arm(); // activity: the silence budget starts over (see above)
+        if (onProgress && isProgressTick(parsed.progress)) {
+          try { onProgress(parsed.progress); } catch { /* a listener's failure is its own; the request goes on */ }
+        }
+        return;
+      }
+      disarm();
       const r = parseDaemonReply(parsed);
       if (!r) return done(reject, new Error("bad reply frame: not a daemon reply"));
       if (r.ok) done(resolve, { result: r.result, client: r.client ?? null });
       else done(reject, new Error(r.error));
     }));
-    c.on("connect", () => c.write(JSON.stringify(msg) + "\n"));
+    // `progress: true` only with a listener: a request without one is byte-identical on the wire to
+    // what it always was, so no daemon ever has a reason to send it a progress frame.
+    const frame = onProgress && !CONTROL.has(msg.cmd) ? { ...msg, progress: true } : msg;
+    c.on("connect", () => c.write(JSON.stringify(frame) + "\n"));
   });
 }
 
@@ -440,8 +518,8 @@ export async function connect(port?: number): Promise<DaemonConnection | null> {
   // checked it against commands.ts on arrival, but that was another process (and possibly an older
   // build), so it is checked again here — which is what makes the typed reply below honest rather
   // than a guess about what came over the socket.
-  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number) => {
-    const r = await request(sock, msg, timeoutMs);
+  const requestWithClient = async <C extends Cmd>(msg: DaemonCommandRequest<C>, timeoutMs?: number, onProgress?: (tick: ProgressTick) => void) => {
+    const r = await request(sock, msg, timeoutMs, onProgress);
     const bad = replyShapeError(msg.cmd, r.result);
     if (bad) throw new Error(`the daemon relayed an unexpected shape for ${msg.cmd}: ${bad}`);
     return { reply: r.result as Commands[C]["reply"], client: r.client };
@@ -449,7 +527,7 @@ export async function connect(port?: number): Promise<DaemonConnection | null> {
   return {
     sock,
     requestWithClient,
-    request: async (msg, timeoutMs) => (await requestWithClient(msg, timeoutMs)).reply,
+    request: async (msg, timeoutMs, onProgress) => (await requestWithClient(msg, timeoutMs, onProgress)).reply,
   };
 }
 

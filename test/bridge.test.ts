@@ -29,7 +29,7 @@ import type { Stamped } from "../bridge/src/write-out.ts";
 import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
 import type { Cmd, DesignSystemReply, FullExportReply, ScreenReply, ScreenshotReply } from "../bridge/src/commands.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
-import type { DaemonStatus } from "../bridge/src/daemon.ts";
+import type { DaemonBridge, DaemonStatus } from "../bridge/src/daemon.ts";
 import type { Check, PluginProbe, Report } from "../bridge/src/doctor.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 
@@ -1975,6 +1975,7 @@ void (async () => {
     ['{"cmd":"listPages","timeoutMs":"x"}', /bad request frame: `timeoutMs` is not a positive number/],
     ['{"cmd":"listPages","args":[]}', /bad request frame: `args` is not an object/],
     ['{"cmd":"listPages","client":7}', /bad request frame: `client` is not a string/],
+    ['{"cmd":"listPages","progress":"yes"}', /bad request frame: `progress` is not a boolean/],
     ["not json", /bad request frame: /],
   ];
   for (const [frame, want] of badFrames) {
@@ -2030,10 +2031,134 @@ void (async () => {
   ok("[daemon] a client probe counts as activity — idleForMs stays small while in use",
     (dstat?.idleForMs ?? NaN) < 60000);
 
+  // A bridge with no requestWithClient cannot take a progress listener (the shape an older bridge has):
+  // a client that asks for progress still gets its reply, and simply no ticks.
+  let noTicks = 0;
+  const optedNoSource = await dcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, () => { noTicks++; });
+  ok("[daemon-progress] a listener against a bridge with no progress source still gets the reply, and no ticks",
+    optedNoSource.file === "echo:ping" && noTicks === 0);
+
   ok("[daemon] --stop stops it", (await daemon.stop(D_PORT)) === true);
   ok("[daemon] and removes the socket file, so the next --serve is not blocked",
     !fs.existsSync(daemon.sockPath(D_PORT)));
   ok("[daemon] stopping closes the underlying bridge", calls.includes("close"));
+
+  // ---------------------------------------------------------------- daemon: progress frames
+  // An MCP export routed through a daemon owes its caller notifications/progress (MCP spec 2025-06-18,
+  // basic/utilities/progress) just as one that holds the bridge does, so the daemon relays the
+  // bridge's ticks as `{ id, progress }` frames ahead of the reply — to a client that opted in only.
+  // A second daemon, over a fake bridge WITH requestWithClient that emits ticks through its listener.
+  {
+    const P_PORT = 19788; // a socket name only: the fake bridge binds no TCP port
+    const TICKS: ProgressTick[] = [
+      { phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null },
+      { phase: "assets", page: null, nodes: null, assets: 3 },
+    ];
+    const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
+    const listeners: string[] = []; // whether each forwarded request carried a listener
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const tickBridge: DaemonBridge = {
+      port: P_PORT,
+      isConnected: () => true,
+      waitForConnection: async () => {},
+      close: () => {},
+      request: async () => { throw new Error("a bridge with requestWithClient is never asked through request()"); },
+      requestWithClient: async (cmd, _args, _timeoutMs, _target, _stallMs, onProgress) => {
+        listeners.push(onProgress ? "yes" : "none");
+        // ping: both ticks, then the reply in the same turn (the tightest ordering case).
+        if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
+        // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
+        // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
+        if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICKS[0]); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
+        // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
+        await sleep(10); onProgress?.(TICKS[1]); await sleep(1500);
+        return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
+      },
+    };
+    await daemon.serve(tickBridge, { port: P_PORT, crashHandlers: false });
+    const pcli = await daemon.connect(P_PORT);
+    if (!pcli) throw new Error("daemon.connect() returned null right after serve() (progress daemon)");
+
+    // Typed client, opted in: both ticks, exact values, in order, and before the promise settles.
+    const events: string[] = [];
+    const got: ProgressTick[] = [];
+    const withTicks = await pcli.requestWithClient({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => { got.push(t); events.push("tick"); });
+    events.push("reply");
+    ok("[daemon-progress] an opted-in client receives both ticks, exact values, in order",
+      JSON.stringify(got) === JSON.stringify(TICKS));
+    ok("[daemon-progress] …all before the reply, and the reply (and its client) is unchanged",
+      events.join(",") === "tick,tick,reply" && withTicks.reply.file === "ticked" && withTicks.client?.connId === "c1" && listeners.at(-1) === "yes");
+
+    // Over the raw socket: what an OLD client (one that never sends `progress`) sees vs an opted-in one.
+    const rawLines = (frame: string) => new Promise<string[]>((resolve, reject) => {
+      const c = net.createConnection(daemon.sockPath(P_PORT));
+      c.setEncoding("utf8");
+      const lines: string[] = [];
+      c.on("data", daemon.framer((l) => { lines.push(l); if (l.includes('"ok":')) { c.end(); resolve(lines); } }));
+      c.on("error", reject);
+      c.on("connect", () => c.write(frame + "\n"));
+    });
+    const plain = await rawLines('{"id":"n1","cmd":"ping"}');
+    const opted = await rawLines('{"id":"y1","cmd":"ping","progress":true}');
+    ok("[daemon-progress] a client that did not opt in gets ONLY the reply frame, unchanged — while an opted-in one gets the ticks first",
+      plain.length === 1 && plain[0] === JSON.stringify({ ok: true, id: "n1", result: { pong: true, page: "P", file: "ticked" }, client: row })
+      && listeners.at(-2) === "none"
+      && opted.length === 3 && opted[0] === JSON.stringify({ id: "y1", progress: TICKS[0] }) && opted[1] === JSON.stringify({ id: "y1", progress: TICKS[1] }));
+    const noOpt = await pcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000);
+    ok("[daemon-progress] the typed client without a listener does not opt in, and its reply is unchanged",
+      noOpt.file === "ticked" && listeners.at(-1) === "none");
+
+    // Timeout: each tick re-arms the client's outer guard (a silence budget, like the CLI's stall check).
+    let slowTicks = 0;
+    const slow = await pcli.request({ cmd: "whoami", timeoutMs: 5000 }, 400, () => { slowTicks++; }).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+    ok("[daemon-progress] ticks keep a request alive past the client's guard (each one re-arms it)", slow === "slow" && slowTicks === 4);
+    const t0 = Date.now();
+    const silent = await pcli.request({ cmd: "listPages", timeoutMs: 5000 }, 400, () => {}).then(() => "resolved", (e: unknown) => asErr(e).message);
+    ok("[daemon-progress] …but silence after a tick still times out, on the guard, not on the late reply",
+      /daemon did not respond within 0s/.test(silent) && Date.now() - t0 < 1200);
+    await sleep(1400); // let the daemon's queue drain the late listPages before stopping it
+    ok("[daemon-progress] the progress daemon stops", (await daemon.stop(P_PORT)) === true);
+
+    // A daemon that sends malformed progress frames (or sends them unasked) must not break the reply:
+    // bad ticks are dropped, a good one is still delivered, and the reply is the answer.
+    const F_PORT = 19790;
+    const fsock = daemon.sockPath(F_PORT);
+    try { fs.unlinkSync(fsock); } catch { /* none */ }
+    const seenFrames: unknown[] = [];
+    const fake = net.createServer((conn) => {
+      conn.setEncoding("utf8");
+      conn.on("error", () => {});
+      conn.on("data", daemon.framer((line) => {
+        const m = JSON.parse(line) as unknown;
+        const rec = typeof m === "object" && m !== null && !Array.isArray(m) ? m : {};
+        const cmd = "cmd" in rec ? rec.cmd : undefined;
+        const id = "id" in rec && typeof rec.id === "string" ? rec.id : undefined;
+        if (cmd === "__ping") { conn.write(JSON.stringify({ ok: true, id, result: { daemon: true } }) + "\n"); return; }
+        seenFrames.push(m);
+        conn.write([
+          '{"id":"z","progress":"nope"}',
+          '{"progress":{"phase":5,"page":null,"nodes":null,"assets":null}}',
+          '{"progress":{"phase":"pages","page":{"index":"1","of":2,"name":null},"nodes":null,"assets":null}}',
+          '{"progress":null}',
+          JSON.stringify({ progress: TICKS[1] }),
+          JSON.stringify({ ok: true, id, result: { pong: true, page: "P", file: "fake" } }),
+        ].join("\n") + "\n");
+      }));
+    });
+    await new Promise<void>((r) => fake.listen(fsock, r));
+    const fcli = await daemon.connect(F_PORT);
+    if (!fcli) throw new Error("daemon.connect() returned null against the hand-rolled daemon");
+    const fgot: ProgressTick[] = [];
+    const fr = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000, (t) => fgot.push(t)).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+    ok("[daemon-progress] malformed progress frames are dropped — the reply still arrives, and only the well-formed tick is delivered",
+      fr === "fake" && JSON.stringify(fgot) === JSON.stringify([TICKS[1]]));
+    const fr2 = await fcli.request({ cmd: "ping", timeoutMs: 5000 }, 5000).then((r) => r.file, (e: unknown) => "rejected: " + asErr(e).message);
+    const optIn = seenFrames.map((f) => typeof f === "object" && f !== null && "progress" in f ? f.progress : "absent");
+    ok("[daemon-progress] the client opts in on the wire only with a listener, and copes with frames it never asked for",
+      fr2 === "fake" && optIn.join(",") === "true,absent");
+    await new Promise<void>((r) => fake.close(() => r()));
+    try { fs.unlinkSync(fsock); } catch { /* closed server removed it */ }
+  }
 
   // ---------------------------------------------------------------- is-main.ts: the import.meta.main fallback
   // isMainFallback is what every CLI guard falls back to on a Node without import.meta.main (< 24.2):

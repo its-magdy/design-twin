@@ -157,6 +157,42 @@ void (async () => {
     client.setNotificationHandler(ProgressNotificationSchema, (n) => { quiet.push(n); });
     await client.callTool({ name: "figma_export_selection", arguments: {} });
     ok("…and a call WITHOUT a progressToken is sent none", quiet.length === 0);
+
+    // Daemon-routed: a SECOND MCP server on the same port cannot bind it (this one holds the bridge), so
+    // it can only answer an export by routing through the daemon socket this one serves (figma-mcp.ts
+    // resolveHolder). The plugin's ticks must reach ITS client as notifications/progress too (MCP spec
+    // 2025-06-18, basic/utilities/progress) — relayed as daemon progress frames (daemon.ts).
+    const transport2 = new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(import.meta.dirname, "..", "bridge", "src", "figma-mcp.ts")],
+      env: { ...process.env, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "smoke-test-token", MAX_MCP_OUTPUT_TOKENS: "" },
+      cwd: CWD,
+      stderr: "ignore",
+    });
+    const client2 = new Client({ name: "mcp-smoke-2", version: "0.0.0" });
+    try {
+      await client2.connect(transport2);
+      const seen2: Array<{ progress: number; message?: string }> = [];
+      const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
+      ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
+        !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0].children?.length === 3
+        && seen2.length === 2 && seen2[0].progress < seen2[1].progress && seen2[1].message === "pages, page 2 of 2 (P2), 20 nodes");
+      burst = true;
+      const wire2: string[] = [];
+      const prev2 = transport2.onmessage;
+      transport2.onmessage = (m: JSONRPCMessage) => {
+        if ("method" in m && m.method === "notifications/progress") wire2.push("progress");
+        else if ("id" in m && "result" in m) wire2.push("result");
+        prev2?.(m);
+      };
+      for (let i = 0; i < 3; i++) await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
+      transport2.onmessage = prev2;
+      ok("…and with ticks and the reply sent in ONE turn, every daemon-relayed notifications/progress is on the wire before its result (3 runs)",
+        wire2.join(",") === Array(3).fill("progress,progress,result").join(","));
+      burst = false;
+    } finally {
+      await client2.close().catch(() => {});
+    }
     ticks = 0;
     plugin.close();
   } catch (e) {
