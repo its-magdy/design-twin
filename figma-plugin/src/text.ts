@@ -57,7 +57,8 @@ function fontObj(src: TextStyleSource): FontSpec {
     f.family = src.fontName.family;
     f.weight = src.fontName.style; // e.g. "Semibold Italic" — keep verbatim
   }
-  // Numeric CSS weight when the API exposes it (node-level; segments don't carry it).
+  // Numeric CSS weight when the API exposes it (both node-level and per-segment; figma.mixed for
+  // mixed-weight uniform text falls through and leaves weightValue unset).
   if (typeof src.fontWeight === "number") f.weightValue = src.fontWeight;
   const lh = lineH(src.lineHeight);
   if (lh) f.lineHeight = lh;
@@ -96,7 +97,7 @@ function fontObj(src: TextStyleSource): FontSpec {
 // wider element type still gives every field below full compile-time checking (TS just can't narrow the
 // segment's Pick<> to exactly these 20 keys — it types it as the full StyledTextSegment shape instead).
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
-  "fontName", "fontSize", "lineHeight", "letterSpacing", "textCase", "textDecoration",
+  "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
   "textDecorationSkipInk", "fills", "hyperlink", "listOptions", "indentation", "listSpacing",
   "openTypeFeatures", "textStyleId", "fillStyleId", "boundVariables",

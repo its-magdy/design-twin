@@ -457,8 +457,16 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error("No node id provided.");
   const localWarnings: string[] = [];
-  const node = await findNodeById(nodeId, (m) => localWarnings.push(m));
+  const sink = (m: string) => localWarnings.push(m);
+  const node = await findNodeById(nodeId, sink);
   if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf — it has no children to list.");
+  // PageNode.children THROWS under dynamic-page access unless the page is loaded (and unless it's the
+  // CURRENT page, which is always implicitly loaded) — https://developers.figma.com/docs/plugins/
+  // migrating-to-dynamic-loading/: "Before traversing into PageNode.children, plugins will have to
+  // explicitly call PageNode.loadAsync()". findNodeById already loaded `node` itself when it's a plain
+  // scene node reached via a page scan, but a PAGE node reached directly (rawId is a page id) never goes
+  // through that path, so load it explicitly here.
+  if (node.type === "PAGE" && node.id !== figma.currentPage.id) await loadPageSafely(node, sink, "before listing its children");
   let kids: ReadonlyArray<SceneNode | PageNode>;
   try {
     kids = node.children;
@@ -466,9 +474,22 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
     throw new Error("Node " + nodeId + "'s children could not be read: " + errMsg(e));
   }
   const children: NodeSummary[] = [];
+  // node === figma.root (the DOCUMENT) means these `kids` are PageNodes, each of which has the SAME
+  // dynamic-page rule as above — reading .children.length on one that isn't current/loaded throws.
+  // This is a one-off (listChildren on the document id), so loading every page (rather than skipping
+  // hasChildren for pages) is the cheap and complete choice, done concurrently like listPages does.
+  if (node.type === "DOCUMENT") {
+    await Promise.all((kids as ReadonlyArray<PageNode>).map((p) => loadPageSafely(p, sink, "— hasChildren omitted")));
+  }
   for (const nd of kids) {
     const c = summarize(nd);
-    if ("children" in nd) c.hasChildren = nd.children.length > 0;
+    if ("children" in nd) {
+      try {
+        c.hasChildren = nd.children.length > 0;
+      } catch (e) {
+        // A page that failed to load above: hasChildren simply omitted (already warned by loadPageSafely).
+      }
+    }
     children.push(c);
   }
   return {

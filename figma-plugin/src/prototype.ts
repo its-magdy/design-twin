@@ -49,6 +49,10 @@ async function serializeAction(a: Action | undefined | null): Promise<IrAction |
   const ao: IrAction = { type: (a.type || "").toLowerCase() };
   if (a.type === "URL") {
     ao.url = a.url;
+    // typings 5660-5663 declare `openInNewTab?: boolean` on the URL action; the public Action docs
+    // page (developers.figma.com/docs/plugins/api/Action/) doesn't list it — following the typings
+    // (generated from the runtime) since they're the source of truth here.
+    if (a.openInNewTab === true) ao.openInNewTab = true;
   } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
     // destinationId is the media node the action controls (required for PLAY/PAUSE/MUTE…, optional for
     // the SKIP_* variants) — typings 5664-5681; the same name-resolved `destination` as a NODE action.
