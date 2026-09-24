@@ -166,19 +166,37 @@ const wlog = (m: string) => console.error("[figma-mcp] " + m);
 // each notification". The plugin's relayed progress ticks become those notifications — progress is a
 // running tick count (the plugin's own counters can reset per page), the message says where the walk
 // is. No token, no listener: nothing is sent to a client that did not ask.
+//
+// Ordering: the bridge hands a tick to the callback synchronously from the socket's message handler,
+// so a tick and the reply that lands in the same event-loop turn would otherwise race — the tool
+// result could reach stdout before the last notification, which the client then drops (it no longer
+// knows the token). The SDK's own progressExample.js `await`s each sendNotification; a callback cannot,
+// so `withProgress` collects every send and awaits them all before the tool result is returned (the
+// stdio transport's send() resolves once the frame is written, so the order on the wire is
+// notifications first, result last). A send that fails (the client went away) is swallowed: the
+// export itself carries on and its result is still the answer.
 type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
-function progressFor(extra: ToolExtra | undefined): ((t: ProgressTick) => void) | undefined {
+type OnTick = (t: ProgressTick) => void;
+async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTick | undefined) => Promise<R>): Promise<R> {
   const progressToken = extra?._meta?.progressToken;
-  if (!extra || progressToken === undefined) return undefined;
+  if (!extra || progressToken === undefined) return run(undefined);
   let progress = 0;
-  return (t) => {
+  const pending: Promise<void>[] = [];
+  const onTick: OnTick = (t) => {
     const parts = [t.phase ?? "export"];
     if (t.page) parts.push(`page ${t.page.index} of ${t.page.of}${t.page.name ? ` (${t.page.name})` : ""}`);
     if (t.nodes !== null) parts.push(`${t.nodes} nodes`);
     if (t.assets !== null) parts.push(`${t.assets} assets`);
-    extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: ++progress, message: parts.join(", ") } })
-      .catch(() => { /* the client went away; the export itself carries on */ });
+    pending.push(extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: ++progress, message: parts.join(", ") } })
+      .catch(() => { /* the client went away; the export itself carries on */ }));
   };
+  try {
+    return await run(onTick);
+  } finally {
+    // Every entry already has its rejection handled, so this never throws and never masks run()'s
+    // own error; it only holds the result until the last notification is on the wire.
+    await Promise.all(pending);
+  }
 }
 
 /** The two writeShape arguments every export tool reads. */
@@ -471,13 +489,13 @@ server.registerTool(
     // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
     // of the rule here. This path always needs a connected plugin anyway, so there is nothing to
     // answer faster.
-    return exportResult(a, await bridge.request(
+    return exportResult(a, await withProgress(extra, (onTick) => bridge.request(
       "exportFull",
       { allPages, page, ...readOpts(a) },
       exportTimeout({ allPages }),
       a && a.client,
-      progressFor(extra)
-    ));
+      onTick
+    )));
   })
 );
 
@@ -503,7 +521,7 @@ server.registerTool(
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a, extra) => exportResult(a, await bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client, progressFor(extra))))
+  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client, onTick))))
 );
 
 server.registerTool(
@@ -513,7 +531,7 @@ server.registerTool(
     inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a, extra) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client, progressFor(extra))))
+  guarded(async (a, extra) => exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client, onTick))))
 );
 
 server.registerTool(
@@ -535,7 +553,7 @@ server.registerTool(
   guarded(async (a, extra) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client, progressFor(extra)));
+    return exportResult(a, await withProgress(extra, (onTick) => bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client, onTick)));
   })
 );
 

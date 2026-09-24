@@ -11,6 +11,7 @@ import { ok, report } from "./assert.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 // "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { RawData } from "ws";
@@ -100,6 +101,7 @@ void (async () => {
     await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });
     let kids = 3;
     let ticks = 0; // progress frames to send before the reply, as ui.html relays a bridge-triggered run's
+    let burst = false;
     plugin.on("message", (raw: RawData) => {
       const m = JSON.parse(String(raw)) as CommandFrame;
       if (m.cmd !== "exportSelection") return;
@@ -109,9 +111,13 @@ void (async () => {
       // checks every reply against commands.ts before a tool sees it.
       const screen = { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] };
       const answer = () => plugin.send(JSON.stringify({ id: m.id, ok: true, result: { screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] } }));
-      // A real run's ticks are >=250 ms apart and long before its reply; sent in the SAME tick as the
-      // reply, the last notification can lose the race to the result and be dropped by the client.
-      if (ticks) setTimeout(answer, 50); else answer();
+      // `burst` = the WORST timing: every tick and the reply in the same event-loop turn. Otherwise
+      // the reply trails the ticks by 50 ms (a real run's ticks are >=250 ms apart and long before
+      // its reply). The SDK CLIENT (1.30: Protocol._onnotification dispatches on a microtask,
+      // _onresponse deletes the progress handler synchronously) drops a notification that shares a
+      // stdout read chunk with the response, so `onprogress` delivery is only asserted with the
+      // delay; the burst case asserts what the SERVER owns — the order on the wire.
+      if (ticks && !burst) setTimeout(answer, 50); else answer();
     });
     const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
     ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0].children?.length === 3);
@@ -130,6 +136,23 @@ void (async () => {
     const withProgress = await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen.push(p) });
     ok("export tools forward the plugin's progress as notifications/progress (increasing, with a message)",
       !withProgress.isError && seen.length === 2 && seen[0].progress < seen[1].progress && seen[1].message === "pages, page 2 of 2 (P2), 20 nodes");
+    // Wire order under the worst timing: the raw frames the client transport hands up, in order.
+    // Before withProgress held the result back, the last notification was written AFTER the result
+    // (fire-and-forget sendNotification vs. the reply resolving in the same turn) — and a
+    // notifications/progress after its result is one no client can use.
+    burst = true;
+    const wire: string[] = [];
+    const prev = transport.onmessage;
+    transport.onmessage = (m: JSONRPCMessage) => {
+      if ("method" in m && m.method === "notifications/progress") wire.push("progress");
+      else if ("id" in m && "result" in m) wire.push("result");
+      prev?.(m);
+    };
+    for (let i = 0; i < 5; i++) await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: () => {} });
+    transport.onmessage = prev;
+    ok("…and with ticks and the reply sent in ONE turn, every notifications/progress is on the wire before its result (5 runs)",
+      wire.join(",") === Array(5).fill("progress,progress,result").join(","));
+    burst = false;
     const quiet: unknown[] = [];
     client.setNotificationHandler(ProgressNotificationSchema, (n) => { quiet.push(n); });
     await client.callTool({ name: "figma_export_selection", arguments: {} });
