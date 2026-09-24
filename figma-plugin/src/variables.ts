@@ -2,6 +2,7 @@
 // human/agent-readable token names — the key win over the REST export.
 import type {
   TokenMap, StyleRefs, ModeMap, Variable as IrVariable, VariableCollection as IrVariableCollection, VariableValue as IrVariableValue,
+  VariableAlias as IrVariableAlias, VariableComposedColor as IrVariableComposedColor,
 } from "../../bridge/src/doc-types.ts";
 import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
@@ -122,18 +123,58 @@ export function resolvedModes(node: SceneNode): Promise<ModeMap | undefined> {
   return resolveModeMap(node.resolvedVariableModes, true);
 }
 
+// A composed colour (typings 1.139, Update 139): {color, opacity} where the colour, the opacity or both
+// are aliases. The only VariableValue member with an `opacity` key (RGB/RGBA/MotionEasing/VariableAlias
+// have none), so this is the one test.
+function isComposedColor(v: VariableValue): v is VariableComposedColor {
+  return typeof v === "object" && "opacity" in v && "color" in v;
+}
+// Figma's two members are told apart by whether `color` is an alias; a guard narrows the whole union
+// (a property check alone would narrow `color` but not `opacity`).
+function colorIsAlias(v: VariableComposedColor): v is Extract<VariableComposedColor, { color: VariableAlias }> {
+  return isVariableAlias(v.color);
+}
+// Every alias id a raw per-mode value holds: a top-level alias, or the nested alias(es) of a composed
+// colour. ONE place, so the library pull (aliasTargets) and the "broken alias" hygiene check see a
+// composed colour's aliases exactly as they see a top-level one.
+function aliasIds(v: VariableValue): string[] {
+  if (isVariableAlias(v)) return v.id ? [v.id] : [];
+  if (!isComposedColor(v)) return [];
+  const out: string[] = [];
+  if (isVariableAlias(v.color) && v.color.id) out.push(v.color.id);
+  if (isVariableAlias(v.opacity) && v.opacity.id) out.push(v.opacity.id);
+  return out;
+}
+
+// An alias -> {aliasOf: target name}, falling back to the raw id when the target cannot be resolved.
+async function aliasValue(a: VariableAlias): Promise<IrVariableAlias> {
+  return { aliasOf: (await varName(a.id)) || a.id };
+}
+
+// Each half of a composed colour is emitted the way it would be on its own: an alias as {aliasOf}, the
+// raw colour folded to hex (alpha kept), the raw opacity as Figma's number verbatim (see doc-types
+// ComposedColor — the typings do not state its range, so it is not rescaled).
+async function composedValue(v: VariableComposedColor): Promise<IrVariableComposedColor> {
+  if (colorIsAlias(v)) {
+    const [color, opacity] = await Promise.all([aliasValue(v.color), isVariableAlias(v.opacity) ? aliasValue(v.opacity) : v.opacity]);
+    return { composed: { color, opacity } };
+  }
+  return { composed: { color: rgbaToHex(v.color), opacity: await aliasValue(v.opacity) } };
+}
+
 // valuesByMode does NOT resolve aliases and is keyed by opaque modeId — resolve alias targets to
 // names and re-key by mode name. COLOR values carry alpha ({r,g,b,a}) — fold to hex so alpha survives.
 async function resolveModeValue(v: VariableValue, resolvedType: VariableResolvedDataType): Promise<IrVariableValue> {
-  if (isVariableAlias(v)) return { aliasOf: (await varName(v.id)) || v.id };
+  if (isVariableAlias(v)) return aliasValue(v);
   if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+  if (isComposedColor(v)) return composedValue(v);
   if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
   return verbatimValue(v);
 }
 
 // An EASING variable's value is a MotionEasing OBJECT (and an RGB under a non-COLOR type cannot occur).
 // It is emitted verbatim, as it always was — but doc-types' VariableValue has no object member other
-// than {aliasOf}, and widening it there breaks design-to-code's token emitters (tokens.ts dtcgValue,
+// than {aliasOf} and {composed}, and widening it there breaks design-to-code's token emitters (tokens.ts dtcgValue,
 // tokens-native.ts resolve), which hand the raw value on as a primitive. Until those handle it, this is
 // the one place a value is widened into the documented union.
 function verbatimValue(v: RGB | RGBA | MotionEasing): IrVariableValue {
@@ -200,10 +241,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // new ids appear rather than doing one extra pass.
   const aliasTargets = (v: Variable): string[] => {
     const out: string[] = [];
-    for (const modeId of Object.keys(v.valuesByMode || {})) {
-      const raw = v.valuesByMode[modeId];
-      if (isVariableAlias(raw) && raw.id) out.push(raw.id);
-    }
+    for (const modeId of Object.keys(v.valuesByMode || {})) out.push(...aliasIds(v.valuesByMode[modeId]));
     return out;
   };
   const remoteVars: Variable[] = [];
@@ -253,12 +291,15 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     for (let i = 0; i < modeIds.length; i++) {
       const modeId = modeIds[i];
       const raw = v.valuesByMode[modeId];
-      if (isVariableAlias(raw)) {
-        hasAlias = true;
+      // A composed colour always holds at least one alias (Figma's own constraint), so it is an alias
+      // for the tier and for the "raw value in a multi-mode collection" hygiene check below.
+      if (isVariableAlias(raw) || isComposedColor(raw)) hasAlias = true;
+      // Top-level alias: its id as before (even an empty one); composed colour: each nested alias id.
+      for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
         // Was `!localIds.has(raw.id)`, which fired on every LEGITIMATE library alias once remote
         // variables started being resolved above — so a library-consuming file's hygiene list filled
         // with non-issues. Only report an alias whose target we genuinely could not resolve.
-        if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' — target " + raw.id + " could not be resolved");
+        if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' — target " + id + " could not be resolved");
       }
       values[modeName[modeId] || modeId] = resolved[i];
     }

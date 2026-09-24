@@ -324,6 +324,7 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
     if (v.type === "FLOAT") return unitDecision2(v, opts) === "px" ? isFontSize(v) ? "fontSize" : "dimension" : "number";
     return null;
   }
+  const isComposed2 = (x) => !!x && typeof x === "object" && "composed" in x;
   const isNativeScalar = (x) => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
   function resolve(byName, collections, v, mode, seen) {
     const values = v.values || {};
@@ -357,6 +358,10 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
         if (!segs2(v.name).length) continue;
         if (!kind) {
           warnings.push(`${v.name}: skipped \u2014 a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`);
+          continue;
+        }
+        if (Object.values(v.values || {}).some(isComposed2)) {
+          warnings.push(`${v.name}: skipped \u2014 a composed colour (colour + separate opacity) has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
           continue;
         }
         const values = {};
@@ -776,6 +781,22 @@ var webNumber = (v, raw) => isSentinel(v, raw) ? WEB_FULL_ROUND : raw;
 var isHexish = (v) => typeof v === "string" && /^#/.test(v);
 var isScalar = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 var isAlias = (v) => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+var isComposed = (v) => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+function aliasNames(v) {
+  if (isAlias(v)) return [v.aliasOf];
+  if (!isComposed(v)) return [];
+  const out = [];
+  if (isAlias(v.composed.color)) out.push(v.composed.color.aliasOf);
+  if (isAlias(v.composed.opacity)) out.push(v.composed.opacity.aliasOf);
+  return out;
+}
 var CSS_UNSAFE = /[\\\n\r\f;{}]/g;
 var hexEsc = (c) => "\\" + c.codePointAt(0).toString(16) + " ";
 function cssUnbalanced(s) {
@@ -829,6 +850,10 @@ function baseValue(variable, collections, def) {
 }
 function dtcgValue(raw, colorProfile, dimension, ref) {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
+  if (isComposed(raw)) {
+    const { color } = raw.composed;
+    return isAlias(color) ? ref ? ref(color.aliasOf) : dtcgRef(color.aliasOf) : hexToColorValue(color, colorProfile);
+  }
   if (!isScalar(raw)) return null;
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
@@ -836,6 +861,11 @@ function dtcgValue(raw, colorProfile, dimension, ref) {
   }
   const c = isHexish(raw) ? hexToColorValue(raw, colorProfile) : null;
   return c || raw;
+}
+function dtcgOpacity(raw, ref) {
+  if (!isComposed(raw)) return void 0;
+  const { opacity } = raw.composed;
+  return isAlias(opacity) ? ref ? ref(opacity.aliasOf) : dtcgRef(opacity.aliasOf) : opacity;
 }
 var SKIP = /* @__PURE__ */ Symbol("resolver-set omits this token");
 var DTCG_SEP = "\0";
@@ -909,6 +939,10 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     if (v.type === "COLOR" && isHexish(bv) && !normHex(bv)) warn(`token '${v.name}' has malformed hex '${bv}'`);
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
+    if (isComposed(bv) && v.type !== "COLOR") {
+      warn(`token '${v.name}' is a ${v.type} variable holding a composed colour value \u2014 skipped`);
+      continue;
+    }
     const aliasRef = ref(v);
     const dv = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
     if (dv === null) {
@@ -927,13 +961,16 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     }
     const leaf = { $type: type, $value: value };
     if (v.description) leaf.$description = v.description;
+    const opacity = dtcgOpacity(bv, aliasRef);
     if (!withExtensions) {
+      if (opacity !== void 0) leaf.$extensions = { "figma.com": { opacity } };
       node[leafKey] = leaf;
       continue;
     }
     const values = v.values || {};
     const modeKeys = Object.keys(values);
     const ext = {};
+    if (opacity !== void 0) ext.opacity = opacity;
     if (modeKeys.length > 1) {
       const modes = nullProto();
       for (const m of modeKeys) {
@@ -941,6 +978,14 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
         if (mv !== null) modes[m] = mv;
       }
       ext.modes = modes;
+    }
+    if (modeKeys.length > 1 && modeKeys.some((m) => isComposed(values[m]))) {
+      const byMode = nullProto();
+      for (const m of modeKeys) {
+        const o = dtcgOpacity(values[m], aliasRef);
+        if (o !== void 0) byMode[m] = o;
+      }
+      ext.modeOpacity = byMode;
     }
     if (typeof v.key === "string" && v.key) ext.key = v.key;
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded \u2014 emitted as the platform idiom" };
@@ -963,7 +1008,7 @@ function toDTCG(designSystem, warnings, opts, notes) {
   else for (const m of collisionMessages(plan.notes, opts)) warn(m);
   return tree;
 }
-var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "FONT_WEIGHT"]);
+var UNITLESS_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
 var UNITLESS_NAME_SEGMENTS = /* @__PURE__ */ new Set(["opacity", "fontweight"]);
 function unitlessName(name) {
   return segs(name).some((seg) => UNITLESS_NAME_SEGMENTS.has(seg.replace(/[-_ ]/g, "").toLowerCase()));
@@ -984,6 +1029,7 @@ function numberUnit(variable, opts) {
 }
 function cssValue(raw, unit, ref) {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
+  if (isComposed(raw)) return cssValue(raw.composed.color, unit, ref);
   const e = isHexish(raw) ? normHex(raw) : null;
   if (e) return e;
   const fmtNum = (s) => s === "0" ? "0" : unit ? s + unit : s;
@@ -1239,8 +1285,14 @@ function lintNames(designSystem, opts, warnings) {
   const vars = designSystem && designSystem.variables || [];
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
-    const val = v.values[m];
-    if (isAlias(val) && !names.has(segs(val.aliasOf).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${val.aliasOf}'`);
+    for (const target of aliasNames(v.values[m])) {
+      if (!names.has(segs(target).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${target}'`);
+    }
+  }
+  for (const v of vars) {
+    if (v.type !== "COLOR") continue;
+    const m = Object.keys(v.values || {}).find((k) => isComposed(v.values[k]));
+    if (m !== void 0) warnings.push(`token '${v.name}' (mode ${m}) is a composed colour (colour + separate opacity); tokens.css/theme.css carry the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
   }
   for (const v of vars) {
     if (v.type !== "STRING") continue;

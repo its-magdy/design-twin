@@ -650,8 +650,21 @@ export interface DesignSystemManifest extends DesignSystemStamp {
 /** Figma's VariableResolvedDataType, verbatim (EASING/TIMING are the motion variable types). */
 export type VariableType = "COLOR" | "FLOAT" | "STRING" | "BOOLEAN" | "EASING" | "TIMING";
 export interface VariableAlias { aliasOf: string }
-/** A per-mode value: COLOR → hex string (alpha kept); FLOAT → number; STRING/BOOLEAN → as is; alias → {aliasOf}. */
-export type VariableValue = string | number | boolean | VariableAlias;
+/**
+ * Figma's VariableComposedColor (plugin-typings 1.139, Update 139): a COLOR value authored as a colour
+ * plus a SEPARATE opacity, where the colour, the opacity, or both are variable aliases. Each alias half
+ * is emitted exactly like a top-level alias (`{aliasOf: <target name, or id when unresolvable>}`); a raw
+ * colour is a hex string like any COLOR value; a raw opacity is Figma's number VERBATIM — not rescaled
+ * (the typings call it "a separate opacity percentage" without stating the range, so no unit is assumed).
+ * The two members are Figma's two, so "neither half is an alias" is unrepresentable here too.
+ */
+export type ComposedColor =
+  | { color: string; opacity: VariableAlias }
+  | { color: VariableAlias; opacity: number | VariableAlias };
+export interface VariableComposedColor { composed: ComposedColor }
+/** A per-mode value: COLOR → hex string (alpha kept); FLOAT → number; STRING/BOOLEAN → as is; alias → {aliasOf};
+ *  composed colour → {composed: {color, opacity}} (see ComposedColor). */
+export type VariableValue = string | number | boolean | VariableAlias | VariableComposedColor;
 export interface VariableCollection {
   name: string;
   modes: string[];

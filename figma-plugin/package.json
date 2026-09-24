@@ -9,7 +9,7 @@
     "watch": "node build.js --watch"
   },
   "devDependencies": {
-    "@figma/plugin-typings": "^1.138.0",
+    "@figma/plugin-typings": "^1.139.0",
     "esbuild": "^0.28.1",
     "typescript": "^7.0.2"
   }

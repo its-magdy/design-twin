@@ -852,6 +852,52 @@ console.log("tokens — non-scalar variable types:");
   check("[easing] toNative skips it with a warning instead of emitting a broken literal", !n.text.includes("[object Object]") && !/easeOut/.test(n.text) && n.warnings.some((m) => /ease\/out.*EASING/.test(m)));
 }
 
+// ---------- tokens: COMPOSED colour variables (Figma Update 139: colour + separate opacity, one or both aliases) ----------
+console.log("tokens — composed colours:");
+{
+  const composed = tokens({ colorProfile: "srgb",
+    collections: [{ name: "Prim", modes: ["Value"], default: "Value" }, { name: "Theme", modes: ["Light", "Dark"], default: "Light", theming: true }],
+    variables: [
+      { name: "ink", type: "COLOR", collection: "Prim", values: { Value: "#111111" } },
+      { name: "opacity/60", type: "FLOAT", collection: "Prim", scopes: ["COLOR_OPACITY"], values: { Value: 60 } },
+      // form 1: raw colour + opacity alias
+      { name: "overlay/scrim", type: "COLOR", collection: "Theme", values: {
+        Light: { composed: { color: "#000000", opacity: { aliasOf: "opacity/60" } } },
+        Dark: { composed: { color: "#ffffff", opacity: { aliasOf: "opacity/60" } } } } },
+      // form 2: colour alias + raw opacity (Light) / + opacity alias (Dark)
+      { name: "text/muted", type: "COLOR", collection: "Theme", values: {
+        Light: { composed: { color: { aliasOf: "ink" }, opacity: 50 } },
+        Dark: { composed: { color: { aliasOf: "ink" }, opacity: { aliasOf: "opacity/60" } } } } }] });
+  const w: string[] = [];
+  const d = toDTCG(composed, w);
+  const muted = leafAt(d, "text.muted"), scrim = leafAt(d, "overlay.scrim");
+  check("[composed] colour alias + number opacity: a colour token whose $value is the reference, opacity under $extensions",
+    muted.$type === "color" && muted.$value === "{ink}" && figmaExt(muted).opacity === 50);
+  check("[composed] per mode: the colour half in .modes, the opacity half (number or reference) in .modeOpacity",
+    modesOf(muted).Dark === "{ink}" && JSON.stringify(figmaExt(muted).modeOpacity) === JSON.stringify({ Light: 50, Dark: "{opacity.60}" }));
+  check("[composed] raw colour + opacity alias: a structured DTCG colour $value + the opacity reference",
+    scrim.$type === "color" && asColor(scrim.$value).hex === "#000000" && asColor(scrim.$value).alpha === undefined && figmaExt(scrim).opacity === "{opacity.60}"
+    && asColor(modesOf(scrim).Dark).hex === "#ffffff");
+  check("[composed] neither token is skipped as non-scalar", !w.some((m) => /overlay\/scrim|text\/muted/.test(m)));
+  check("[composed] a COLOR_OPACITY-scoped FLOAT stays a unitless number", leafAt(d, "opacity.60").$type === "number" && leafAt(d, "opacity.60").$value === 60);
+  const { resolver: cr, files: cf } = toResolver(composed);
+  const base = fileAt(cf, cr.sets.Theme.sources[0].$ref), dark = fileAt(cf, modifierOf(cr, "Theme").contexts.Dark[0].$ref);
+  check("[composed] resolver set files carry the opacity with the value they pick (default mode and Dark context)",
+    leafAt(base, "text.muted").$value === "{ink}" && figmaExt(leafAt(base, "text.muted")).opacity === 50
+    && leafAt(dark, "text.muted").$value === "{ink}" && figmaExt(leafAt(dark, "text.muted")).opacity === "{opacity.60}");
+  const css = toCSS(composed);
+  check("[composed] tokens.css writes the colour half (a var() or the hex), never [object Object]",
+    !css.includes("[object Object]") && css.includes("--text-muted: var(--ink);") && css.includes("--overlay-scrim: #000000;"));
+  const lint = lintTokens(composed);
+  check("[composed] lint says tokens.css dropped the opacity (never silent), and calls no nested alias dangling",
+    lint.some((m) => /text\/muted.*composed colour/.test(m)) && !lint.some((m) => /undefined token/.test(m)));
+  check("[composed] a DANGLING nested alias is reported like a top-level one", lintTokens(tokens({ variables: [
+    { name: "a", type: "COLOR", values: { v: { composed: { color: "#000000", opacity: { aliasOf: "gone/op" } } } } }] })).some((m) => /'a'.*undefined token 'gone\/op'/.test(m)));
+  const n = toNative(composed, "swiftui");
+  check("[composed] toNative skips it with a composed-colour warning, not a broken literal",
+    !n.text.includes("[object Object]") && n.warnings.some((m) => /text\/muted.*composed colour/.test(m)));
+}
+
 // ---------- kinds.ts: a SLOT component property maps to an instance slot (the plugin emits SLOT) ----------
 console.log("map — SLOT props:");
 {
