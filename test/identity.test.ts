@@ -182,7 +182,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
       (res.componentResidual || []).length === refResidual.length &&
         refResidual.every(([n, r]) => (res.componentResidual || []).some((x) => x.name === n && x.reasons[0] === r.firstReason)));
     ok(`[226] ${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p) => p.confirmed === false));
-    ok(`[226] ${k}: counts are over VISIBLE instances (${ref[k].instances}), like the build`, res.coverage && res.coverage.instances === ref[k].instances);
+    ok(`[226] ${k}: counts are over VISIBLE instances (${ref[k].instances}), like the build`, !!(res.coverage && res.coverage.instances === ref[k].instances));
   }
   // Tie-breaks the reference needed, checked individually.
   const byName = (res: CcResult) => new Map<string, ComponentProposal>((res.componentProposals || []).map((p) => [p.name, p]));

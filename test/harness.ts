@@ -324,15 +324,15 @@ const sandbox = context as unknown as Sandbox;
   ok("manifest counted nodes (>=4)", sel.screen.manifest.nodes >= 4);
   ok("scroll frame -> clip", tree.clip === true);
   ok("scroll frame -> scroll:vertical", tree.scroll === "vertical");
-  ok("scroll frame -> sizeLimits.maxWidth", tree.sizeLimits && tree.sizeLimits.maxWidth === 400);
-  ok("layout flex column + gap + padding", tree.layout && tree.layout.flexDirection === "column" && tree.layout.gap === 12 && Array.isArray(tree.layout.padding));
+  ok("scroll frame -> sizeLimits.maxWidth", !!(tree.sizeLimits && tree.sizeLimits.maxWidth === 400));
+  ok("layout flex column + gap + padding", !!(tree.layout && tree.layout.flexDirection === "column" && tree.layout.gap === 12 && Array.isArray(tree.layout.padding)));
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
   ok("text run underline decoration", txt.runs![1].font.decoration === "underline");
   ok("text run href", txt.runs![1].href === "https://x.com");
-  ok("lineHeight unit carried (percent)", txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent");
-  ok("letterSpacing unit carried (px)", txt.font!.letterSpacing && txt.font!.letterSpacing.unit === "px");
+  ok("lineHeight unit carried (percent)", !!(txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent"));
+  ok("letterSpacing unit carried (px)", !!(txt.font!.letterSpacing && txt.font!.letterSpacing.unit === "px"));
   ok("paragraphSpacing", txt.font!.paragraphSpacing === 8);
 
   // --- new READ additions (Batch: close the read gap) ---
@@ -380,16 +380,16 @@ const sandbox = context as unknown as Sandbox;
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   ok("gradient transform carried", Array.isArray(flatPaint(abs.fills![0]).transform) && flatPaint(abs.fills![0]).transform![0][0] === 1);
   ok("image hash carried", flatPaint(abs.fills![1]).hash === "abc123");
-  ok("image intrinsicSize via getImageByHash", flatPaint(abs.fills![1]).intrinsicSize && flatPaint(abs.fills![1]).intrinsicSize!.w === 800 && flatPaint(abs.fills![1]).intrinsicSize!.h === 600);
+  ok("image intrinsicSize via getImageByHash", !!(flatPaint(abs.fills![1]).intrinsicSize && flatPaint(abs.fills![1]).intrinsicSize!.w === 800 && flatPaint(abs.fills![1]).intrinsicSize!.h === 600));
   ok("stroke cap + join carried", abs.strokes!.cap === "round" && abs.strokes!.join === "round");
 
   ok("gradient stops carried", rect.fills![0].type === "gradient" && Array.isArray(rect.fills![0].stops) && rect.fills![0].stops.length === 2);
   ok("gradient stop color hex", flatPaint(rect.fills![0]).stops![0].color === "#ff0000");
-  ok("per-side stroke weights (mixed fallback)", rect.strokes!.weights && rect.strokes!.weights.bottom === 2);
+  ok("per-side stroke weights (mixed fallback)", !!(rect.strokes!.weights && rect.strokes!.weights.bottom === 2));
   ok("effects ordered array len 2", Array.isArray(rect.effects) && rect.effects.length === 2);
   ok("drop_shadow discriminated", rect.effects![0].type === "drop_shadow" && rect.effects![0].offset!.y === 2);
   ok("background_blur no offset", rect.effects![1].type === "background_blur" && flatEffect(rect.effects![1]).offset === undefined);
-  ok("per-corner radius (mixed fallback)", rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined);
+  ok("per-corner radius (mixed fallback)", !!(rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined));
 
   // Two things used to land in `radius` that a builder then copied verbatim into CSS.
   const pill = await sandbox.serialize(
@@ -405,7 +405,7 @@ const sandbox = context as unknown as Sandbox;
   ok("radius: an ordinary radius carries no radiusFull flag", dusty.radiusFull === undefined);
 
   ok("instance main component name", btn.component === "Button");
-  ok("mainComponent join keys captured (id/key)", btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn");
+  ok("mainComponent join keys captured (id/key)", !!(btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn"));
   ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent!.setId === "set:btn" && btn.mainComponent!.setKey === "setkey_btn");
   ok("mainComponent variant name kept separately from the set name", btn.mainComponent!.setName === "ButtonSet" && btn.mainComponent!.variant === "Button");
 
@@ -413,8 +413,8 @@ const sandbox = context as unknown as Sandbox;
   // must emit id/key with NO setId/setKey (there is no set to join to).
   const remoteInst = { type: "INSTANCE", name: "RemoteBtn", visible: true, getMainComponentAsync: async () => ({ name: "Icon", id: "rc:1", key: "rk:1", remote: true, parent: null }) };
   const remoteSer = await sandbox.serialize(remoteInst, 0, false);
-  ok("remote main with null parent: id/key captured, no setId/setKey", remoteSer.mainComponent && remoteSer.mainComponent.id === "rc:1" && remoteSer.mainComponent.remote === true && remoteSer.mainComponent.setId === undefined);
-  ok("bound token resolved to name", btn.tokens && btn.tokens.fills === "color/primary");
+  ok("remote main with null parent: id/key captured, no setId/setKey", !!(remoteSer.mainComponent && remoteSer.mainComponent.id === "rc:1" && remoteSer.mainComponent.remote === true && remoteSer.mainComponent.setId === undefined));
+  ok("bound token resolved to name", !!(btn.tokens && btn.tokens.fills === "color/primary"));
   ok("reactions extracted", Array.isArray(btn.reactions) && btn.reactions.length === 1);
   ok("reaction trigger", btn.reactions![0].trigger === "on_click");
   ok("reaction navigation + destination name", btn.reactions![0].actions![0].navigation === "navigate" && btn.reactions![0].actions![0].destination === "Details");
@@ -422,9 +422,9 @@ const sandbox = context as unknown as Sandbox;
 
   const ds = await sandbox.buildDesignSystem();
   const primary = ds.variables.find((v) => v.name === "color/primary");
-  ok("variable tier semantic", primary && primary.tier === "semantic");
-  ok("variable codeSyntax carried", primary && primary.codeSyntax && primary.codeSyntax.WEB === "var(--color-primary)");
-  ok("variable alias re-keyed by mode name", primary && primary.values.Light && aliasOf(primary.values.Light) === "blue/600");
+  ok("variable tier semantic", !!(primary && primary.tier === "semantic"));
+  ok("variable codeSyntax carried", !!(primary && primary.codeSyntax && primary.codeSyntax.WEB === "var(--color-primary)"));
+  ok("variable alias re-keyed by mode name", !!(primary && primary.values.Light && aliasOf(primary.values.Light) === "blue/600"));
   ok("COLOR primitive folded to hex", ds.variables.find((v) => v.name === "blue/600")!.values.Value === "#1a4de6");
   ok("variable hiddenFromPublishing captured", ds.variables.find((v) => v.name === "blue/600")!.hiddenFromPublishing === true);
   ok("variable key captured (durable identity)", ds.variables.find((v) => v.name === "blue/600")!.key === "varkey_blue600");
@@ -433,7 +433,7 @@ const sandbox = context as unknown as Sandbox;
   // tier regression: a raw (non-alias) variable whose only scope is the ALL_SCOPES default is a
   // primitive, not semantic — ALL_SCOPES must not be treated as a meaningful scope.
   ok("tier: raw + ALL_SCOPES-only => primitive", (ds.variables.find((v) => v.name === "misc/bad") || {}).tier === "primitive");
-  ok("paint style carries color value", ds.styles.paint[0] && ds.styles.paint[0].paints && flatPaint(ds.styles.paint[0].paints[0]).color === "#1a4de6");
+  ok("paint style carries color value", !!(ds.styles.paint[0] && ds.styles.paint[0].paints && flatPaint(ds.styles.paint[0].paints[0]).color === "#1a4de6"));
   ok("grid style exported", ds.styles.grid && ds.styles.grid[0] && Array.isArray(ds.styles.grid[0].grids) && ds.styles.grid[0].grids[0].count === 12);
 
   // collectDesignSystemOnly — the --design-system / figma_export_design_system path: no page/frame
@@ -452,11 +452,11 @@ const sandbox = context as unknown as Sandbox;
     dsOnly.designSystem.hygiene.some((h) => /library \(remote\) variables/.test(h)));
 
   // --- new READ additions (Tier 1: variable modes, prop-driven wiring, reference render, token bindings) ---
-  ok("variable mode pin resolved to names", tree.variableModes && tree.variableModes.Semantic === "Dark");
+  ok("variable mode pin resolved to names", !!(tree.variableModes && tree.variableModes.Semantic === "Dark"));
   // Effective/inherited theme at the export root (resolvedVariableModes) — the fix for ancestor/page
   // pins on single-node exports. Multi-mode collection reported by name; single-mode one filtered out.
-  ok("resolved (inherited) modes at root", tree.resolvedModes && tree.resolvedModes.Semantic === "Dark");
-  ok("resolvedModes filters single-mode collections", tree.resolvedModes && tree.resolvedModes.Primitives === undefined);
+  ok("resolved (inherited) modes at root", !!(tree.resolvedModes && tree.resolvedModes.Semantic === "Dark"));
+  ok("resolvedModes filters single-mode collections", !!(tree.resolvedModes && tree.resolvedModes.Primitives === undefined));
   ok("reference screenshot path on tree", typeof tree.reference === "string" && tree.reference.indexOf("assets/") === 0 && tree.reference.indexOf("ref") !== -1);
   ok("reference asset flagged kind:reference", sel.assets.some((a) => a.kind === "reference" && a.format === "png"));
   // The asset-naming contract: the producer names the file ONCE, and every `asset:`/`reference:` path
@@ -476,36 +476,36 @@ const sandbox = context as unknown as Sandbox;
     sel.assets.some((a) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
   ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
     sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
-  ok("componentPropertyReferences -> propRefs (stripped)", txt.propRefs && txt.propRefs.characters === "Label");
+  ok("componentPropertyReferences -> propRefs (stripped)", !!(txt.propRefs && txt.propRefs.characters === "Label"));
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
-  ok("text run bound variable -> token name", txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary");
-  ok("effect bound variable -> token name", rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad");
+  ok("text run bound variable -> token name", !!(txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary"));
+  ok("effect bound variable -> token name", !!(rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad"));
   // matchLayers lives on DirectionalTransition only (MOVE_IN/OUT, PUSH, SLIDE_IN/OUT); SimpleTransition
   // (DISSOLVE, SMART_ANIMATE, SCROLL_ANIMATE) has no such field — developers.figma.com/docs/plugins/api/Transition/.
   ok("transition matchLayers carried", btn.reactions![0].actions![0].transition!.matchLayers === true);
   ok("transition type/direction carried", btn.reactions![0].actions![0].transition!.type === "move_in" && btn.reactions![0].actions![0].transition!.direction === "left");
   ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && btn.reactions![0].actions![0].transition!.cubicBezier!.x1 === 0.4);
   const btnComp = ds.components.find((c) => c.name === "Button");
-  ok("component description captured", btnComp && btnComp.description === "Primary action button");
-  ok("INSTANCE_SWAP preferredValues captured", btnComp && btnComp.props!.Icon && btnComp.props!.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props!.Icon.preferredValues) && btnComp.props!.Icon.preferredValues.length === 2);
+  ok("component description captured", !!(btnComp && btnComp.description === "Primary action button"));
+  ok("INSTANCE_SWAP preferredValues captured", !!(btnComp && btnComp.props!.Icon && btnComp.props!.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props!.Icon.preferredValues) && btnComp.props!.Icon.preferredValues.length === 2));
 
   // --- READ additions (verified vs developers.figma.com 2026-07-23): bug fix + HIGH tier + MED ---
   // BUG FIX: progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (were dropped).
-  ok("progressive blur endOffset Vector kept", flatEffect(abs.effects![0]).blurType === "progressive" && flatEffect(abs.effects![0]).endOffset && flatEffect(abs.effects![0]).endOffset!.y === 1);
+  ok("progressive blur endOffset Vector kept", !!(flatEffect(abs.effects![0]).blurType === "progressive" && flatEffect(abs.effects![0]).endOffset && flatEffect(abs.effects![0]).endOffset!.y === 1));
   ok("noise effect fields", abs.effects![1].type === "noise" && abs.effects![1].noiseType === "multitone" && abs.effects![1].opacity === 0.3);
   ok("glass effect fields", abs.effects![2].type === "glass" && abs.effects![2].refraction === 0.2 && abs.effects![2].depth === 4);
-  ok("image filters carried", flatPaint(abs.fills![1]).filters && flatPaint(abs.fills![1]).filters!.saturation === -0.5 && flatPaint(abs.fills![1]).filters!.exposure === undefined);
+  ok("image filters carried", !!(flatPaint(abs.fills![1]).filters && flatPaint(abs.fills![1]).filters!.saturation === -0.5 && flatPaint(abs.fills![1]).filters!.exposure === undefined));
   ok("pattern paint fields", abs.fills![2].type === "pattern" && abs.fills![2].sourceNodeId === "9:99" && abs.fills![2].tileType === "rectangular");
-  ok("absolute bounding box -> box", abs.box && abs.box.w === 100 && abs.box.h === 50);
-  ok("render box emitted when it differs", abs.renderBox && abs.renderBox.h === 56);
+  ok("absolute bounding box -> box", !!(abs.box && abs.box.w === 100 && abs.box.h === 50));
+  ok("render box emitted when it differs", !!(abs.renderBox && abs.renderBox.h === 56));
   ok("maskType (luminance) carried", abs.maskType === "luminance");
   ok("cornerSmoothing carried", abs.cornerSmoothing === 0.6);
   ok("targetAspectRatio -> ratio", abs.aspectRatio === 1.78);
-  ok("detachedInfo (library key)", abs.detachedFrom && abs.detachedFrom.key === "libkey123");
-  ok("overlay settings (scrim + close-on-click-outside)", abs.overlay && abs.overlay.closeOnClickOutside === true && abs.overlay.background && abs.overlay.position === "center");
+  ok("detachedInfo (library key)", !!(abs.detachedFrom && abs.detachedFrom.key === "libkey123"));
+  ok("overlay settings (scrim + close-on-click-outside)", !!(abs.overlay && abs.overlay.closeOnClickOutside === true && abs.overlay.background && abs.overlay.position === "center"));
   ok("annotation categoryId", Array.isArray(abs.annotations) && abs.annotations[0].categoryId === "cat_spacing");
 
-  ok("resolved box on auto-layout root", tree.box && tree.box.w === 375);
+  ok("resolved box on auto-layout root", !!(tree.box && tree.box.w === 375));
   ok("strokesIncludedInLayout flagged", tree.strokesInLayout === true);
   ok("dev-resource links batched at root", Array.isArray(tree.devResources) && tree.devResources[0].url.indexOf("sb.example.com") !== -1);
 
@@ -536,8 +536,8 @@ const sandbox = context as unknown as Sandbox;
 
   // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
   // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
-  ok("text decoration thickness (value+unit)", txt.runs![1].font.decorationThickness && txt.runs![1].font.decorationThickness.value === 2 && txt.runs![1].font.decorationThickness.unit === "px");
-  ok("text decoration offset (value+unit)", txt.runs![1].font.decorationOffset && txt.runs![1].font.decorationOffset.value === 1);
+  ok("text decoration thickness (value+unit)", !!(txt.runs![1].font.decorationThickness && txt.runs![1].font.decorationThickness.value === 2 && txt.runs![1].font.decorationThickness.unit === "px"));
+  ok("text decoration offset (value+unit)", !!(txt.runs![1].font.decorationOffset && txt.runs![1].font.decorationOffset.value === 1));
   ok("text decoration skip-ink (only when false)", txt.runs![1].font.decorationSkipInk === false);
 
   // GRID fidelity: per-track sizes + child anchor index + child cell alignment.
@@ -557,11 +557,11 @@ const sandbox = context as unknown as Sandbox;
 
   ok("shader paint id captured", abs.fills![3] && abs.fills![3].type === "shader" && abs.fills![3].shaderId === "shader_1");
   ok("devStatus free-text note captured", abs.devStatusNote === "blocked on API");
-  ok("instance component-prop variable binding -> propTokens", btn.propTokens && btn.propTokens.Label === "color/primary");
+  ok("instance component-prop variable binding -> propTokens", !!(btn.propTokens && btn.propTokens.Label === "color/primary"));
 
   const bodyStyle = ds.styles.text.find((s) => s.name === "Body/Regular");
-  ok("text style leadingTrim + listSpacing + paragraphIndent", bodyStyle && bodyStyle.leadingTrim === "cap_height" && bodyStyle.listSpacing === 6 && bodyStyle.paragraphIndent === 4);
-  ok("text style variable binding (fontSize -> token)", bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad");
+  ok("text style leadingTrim + listSpacing + paragraphIndent", !!(bodyStyle && bodyStyle.leadingTrim === "cap_height" && bodyStyle.listSpacing === 6 && bodyStyle.paragraphIndent === 4));
+  ok("text style variable binding (fontSize -> token)", !!(bodyStyle && bodyStyle.tokens && bodyStyle.tokens.fontSize === "misc/bad"));
 
   // --- Tier-1 read additions ---
   // [AUDIT-6b] inferredVariables USED to be emitted as `inferredTokens` for every unbound field. It
@@ -573,39 +573,39 @@ const sandbox = context as unknown as Sandbox;
   // css / measurements / pluginData are OPT-IN — off by default.
   // css now AUTO-ENABLES for a small single selection (the "inspect one component" path). scrollFrame
   // is tiny (4 nodes), so the CSS oracle comes back without an explicit opt-in.
-  ok("css auto-on for small single selection", tree.css && tree.css.display === "flex" && tree.css.padding === "16px");
+  ok("css auto-on for small single selection", !!(tree.css && tree.css.display === "flex" && tree.css.padding === "16px"));
   ok("pluginData still off by default (not auto-enabled)", tree.pluginData === undefined);
   const sel2 = await sandbox.collectSelection({ css: true, measurements: true, pluginData: true });
   const tree2 = sel2.screen.nodes[0];
-  ok("getCSSAsync -> css oracle (opt-in)", tree2.css && tree2.css.display === "flex" && tree2.css.padding === "16px");
-  ok("own-scope plugin data captured (opt-in)", tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary");
+  ok("getCSSAsync -> css oracle (opt-in)", !!(tree2.css && tree2.css.display === "flex" && tree2.css.padding === "16px"));
+  ok("own-scope plugin data captured (opt-in)", !!(tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary"));
   ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start!.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
   const sel3 = await sandbox.collectSelection({ motion: true });
   const m3 = sel3.screen.nodes[0].motion;
-  ok("motion timelines captured (opt-in)", m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5);
-  ok("motion keyframe track: base + keyframes + values", m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100);
-  ok("motion keyframe custom cubic-bezier easing carried", m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4);
-  ok("motion applied animation style captured", m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3);
-  ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",
+  ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5));
+  ok("motion keyframe track: base + keyframes + values", !!(m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100));
+  ok("motion keyframe custom cubic-bezier easing carried", !!(m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4));
+  ok("motion applied animation style captured", !!(m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3));
+  ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
     m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
-    m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90);
+    m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90));
 
   // --- sharedData (cross-plugin, e.g. Tokens Studio applied tokens) is OPT-IN ---
   ok("sharedData off by default", tree.sharedData === undefined);
   const sel4 = await sandbox.collectSelection({ sharedData: true });
   const tree4 = sel4.screen.nodes[0];
-  ok("sharedData: Tokens Studio applied tokens captured (opt-in)", tree4.sharedData && tree4.sharedData.tokens && tree4.sharedData.tokens.fill === "color.primary" && tree4.sharedData.tokens.borderRadius === "radius.md");
+  ok("sharedData: Tokens Studio applied tokens captured (opt-in)", !!(tree4.sharedData && tree4.sharedData.tokens && tree4.sharedData.tokens.fill === "color.primary" && tree4.sharedData.tokens.borderRadius === "radius.md"));
 
   // --- parametric shape intent: ellipse arc/donut, star/polygon points, boolean op ---
   const donut = await sandbox.serialize({ type: "ELLIPSE", name: "Ring", visible: true, id: "e:1", arcData: { startingAngle: 0, endingAngle: Math.PI * 1.5, innerRadius: 0.6 } }, 0, false);
-  ok("ellipse arc/donut captured (start/end/innerRadius)", donut.arc && donut.arc.end === 4.71 && donut.arc.innerRadius === 0.6);
+  ok("ellipse arc/donut captured (start/end/innerRadius)", !!(donut.arc && donut.arc.end === 4.71 && donut.arc.innerRadius === 0.6));
   const fullEllipse = await sandbox.serialize({ type: "ELLIPSE", name: "Dot", visible: true, id: "e:2", arcData: { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 } }, 0, false);
   ok("full ellipse emits no arc (noise-free)", fullEllipse.arc === undefined);
   const star = await sandbox.serialize({ type: "STAR", name: "Star", visible: true, id: "st:1", pointCount: 5, innerRadius: 0.4 }, 0, false);
-  ok("star pointCount + innerRadius captured", star.shape && star.shape.points === 5 && star.shape.innerRadius === 0.4);
+  ok("star pointCount + innerRadius captured", !!(star.shape && star.shape.points === 5 && star.shape.innerRadius === 0.4));
   const poly = await sandbox.serialize({ type: "POLYGON", name: "Tri", visible: true, id: "pg:1", pointCount: 3 }, 0, false);
-  ok("polygon pointCount captured", poly.shape && poly.shape.points === 3);
+  ok("polygon pointCount captured", !!(poly.shape && poly.shape.points === 3));
   const boolOp = await sandbox.serialize({ type: "BOOLEAN_OPERATION", name: "Cut", visible: true, id: "bo:1", booleanOperation: "SUBTRACT", children: [] }, 0, false);
   ok("boolean operation kind captured (lowercased)", boolOp.booleanOp === "subtract");
 
@@ -723,12 +723,12 @@ const sandbox = context as unknown as Sandbox;
     icons.every((a) => a.file.indexOf("/") === -1) && fileOf("vuesax/linear/element-4")!.indexOf("-") !== -1);
   ok("[ASSET-NAME] a slash-pathed layer name files under its LAST segment, trimmed", fileOf("Linear / School / Diploma") === "Diploma.svg");
   ok("[ASSET-DEDUPE] the same artwork reached through two instance paths produces ONE file", icons.length === 3);
-  ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",
-    (() => { const a = icons.find((x) => x.file === "element-4.svg"); return a!.from && a!.from.indexOf("I1:2:3") !== -1 && a!.from.indexOf("I9:8:7") !== -1; })());
+  ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",!!(
+    (() => { const a = icons.find((x) => x.file === "element-4.svg"); return a!.from && a!.from.indexOf("I1:2:3") !== -1 && a!.from.indexOf("I9:8:7") !== -1; })()));
   ok("[ASSET-DEDUPE] the deduped node's tree path points at that same one file",
     named.screen.nodes[0].children![1].asset === "assets/element-4.svg");
-  ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",
-    (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })());
+  ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",!!(
+    (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })()));
   ok("[ASSET-NAME] every filename is still separator-free and ends in its format",
     named.assets.every((a) => a.file.indexOf("/") === -1 && a.file.endsWith("." + a.format)));
   sandbox.figma.currentPage.selection = [iconSheet];
@@ -787,11 +787,11 @@ const sandbox = context as unknown as Sandbox;
   const libSel = await sandbox.collectSelection({ css: false });
   const libDump = libSel.variables.variables.find((v) => v.name === "brand/accent");
   ok("library var referenced by a node IS included in the dump", !!libDump);
-  ok("library var flagged remote:true", libDump && libDump.remote === true);
-  ok("library var values keyed by readable mode names", libDump && libDump.values && libDump.values.Light === "#ff6600");
+  ok("library var flagged remote:true", !!(libDump && libDump.remote === true));
+  ok("library var values keyed by readable mode names", !!(libDump && libDump.values && libDump.values.Light === "#ff6600"));
   ok("library var's collection is emitted (default mode for :root)", libSel.variables.collections.some((c) => c.name === "Library/Brand" && c.default === "Light"));
   ok("library pull is reported in hygiene (never silent)", libSel.variables.hygiene.some((h) => /published LIBRARY/.test(h)));
-  ok("node still resolves the library token by name", libSel.screen.nodes[0].tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent");
+  ok("node still resolves the library token by name", !!(libSel.screen.nodes[0].tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent"));
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
   ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
 
@@ -828,8 +828,8 @@ const sandbox = context as unknown as Sandbox;
   ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
   ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
     !!cv("brand/gray-100") && cv("brand/gray-100")!.values.Light === "#e6e6e6");
-  ok("[RD-alias] the intermediate still reads as an alias", !!cv("brand/mid") && cv("brand/mid")!.values.Light &&
-    aliasOf(cv("brand/mid")!.values.Light) === "brand/gray-100");
+  ok("[RD-alias] the intermediate still reads as an alias", !!(!!cv("brand/mid") && cv("brand/mid")!.values.Light &&
+    aliasOf(cv("brand/mid")!.values.Light) === "brand/gray-100"));
   // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
   ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
     !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
@@ -902,10 +902,10 @@ const sandbox = context as unknown as Sandbox;
   let fullErr: Thrown | null = null, full: FullResult | null = null;
   try { full = await sandbox.collectFull({ allPages: true, css: false }); } catch (e) { fullErr = thrown(e); }
   ok("unreadable page does NOT abort the export", fullErr === null && !!full);
-  ok("readable pages still exported alongside the bad one", full && full.layersDoc.layers.length > 0);
-  ok("unreadable page is warned, not silently dropped", full && full.layersDoc.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
-  ok("untraversable page warned in the component catalog too", full && full.layersDoc.manifest.warnings.some((w) => /component catalog.*Locked Page/.test(w)));
-  ok("loadAllPagesAsync failure is itself reported", full && full.layersDoc.manifest.warnings.some((w) => /loadAllPagesAsync failed/.test(w)));
+  ok("readable pages still exported alongside the bad one", !!(full && full.layersDoc.layers.length > 0));
+  ok("unreadable page is warned, not silently dropped", !!(full && full.layersDoc.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w))));
+  ok("untraversable page warned in the component catalog too", !!(full && full.layersDoc.manifest.warnings.some((w) => /component catalog.*Locked Page/.test(w))));
+  ok("loadAllPagesAsync failure is itself reported", !!(full && full.layersDoc.manifest.warnings.some((w) => /loadAllPagesAsync failed/.test(w))));
   // ---- [LIST] listPages: the cheap structural index ----
   // Reuses the unreadable-page fixture above (root.children is still [goodPage, badPage] and
   // loadAllPagesAsync still throws) — the case where an index is most tempting to get wrong.
@@ -1247,7 +1247,7 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.currentPage.selection = [vecHost("geo", [brokenVec])];
   const geoRun = await sandbox.collectSelection({ css: false });
   const geoNode = geoRun.screen.nodes[0].children![0];
-  ok("[AUDIT-1] a real export failure falls back to fillGeometry", geoNode.geometry && geoNode.geometry.fills![0] === "M0 0h24v24H0z");
+  ok("[AUDIT-1] a real export failure falls back to fillGeometry", !!(geoNode.geometry && geoNode.geometry.fills![0] === "M0 0h24v24H0z"));
   ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry!.strokes![0] === "M2 2h20");
   // Without w/h the path data has no coordinate space — a consumer cannot build a viewBox from it.
   ok("[AUDIT-1] geometry carries the node's own w/h so it can be rendered as inline SVG",
@@ -1436,9 +1436,9 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.root.children = [bgPage, defaultPage];
   const bgRun = await sandbox.collectFull({ allPages: true, css: false });
   const bgEntry = (bgRun.layersDoc.pageSettings || []).find((p) => p.pageId === "p:bg");
-  ok("[AUDIT-5] a page's chosen canvas background is captured", bgEntry && flatPaint(bgEntry.background![0]).color === "#1a1a1a");
-  ok("[AUDIT-5] prototypeBackgrounds is captured separately", bgEntry && flatPaint(bgEntry.prototypeBackground![0]).color === "#000000");
-  ok("[AUDIT-5] the page entry is keyed by pageId, not by the non-unique name", bgEntry && bgEntry.page === "Dark");
+  ok("[AUDIT-5] a page's chosen canvas background is captured", !!(bgEntry && flatPaint(bgEntry.background![0]).color === "#1a1a1a"));
+  ok("[AUDIT-5] prototypeBackgrounds is captured separately", !!(bgEntry && flatPaint(bgEntry.prototypeBackground![0]).color === "#000000"));
+  ok("[AUDIT-5] the page entry is keyed by pageId, not by the non-unique name", !!(bgEntry && bgEntry.page === "Dark"));
   // Figma's own default carries no designer intent — emitting it would put a line on every page.
   ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p) => p.pageId === "p:plain"));
   sandbox.figma.root.children = prevKids2;
@@ -1539,28 +1539,28 @@ const sandbox = context as unknown as Sandbox;
   const dsOff = await sandbox.collectDesignSystemOnly();
   const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
   const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
-  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", tagOff && tagOff.visuals && flatPaint(tagOff.visuals.fills![0]).color === "#9947ff");
-  ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", tagOff && tagOff.variants === undefined);
-  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", soloOff && soloOff.node === undefined);
+  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", !!(tagOff && tagOff.visuals && flatPaint(tagOff.visuals.fills![0]).color === "#9947ff"));
+  ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", !!(tagOff && tagOff.variants === undefined));
+  ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", !!(soloOff && soloOff.node === undefined));
 
   const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
   const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
   const soloOn = dsOn.designSystem.components.find((c) => c.id === "c:solo");
-  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", soloOn && soloOn.node && soloOn.node.fills && flatPaint(soloOn.node.fills[0]).color === "#ff0000" && soloOn.node.radius === 8);
-  ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", soloOn && soloOn.variants === undefined);
-  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", tagOn && tagOn.visuals && flatPaint(tagOn.visuals.fills![0]).color === "#9947ff");
-  ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
-    tagOn.variants.every((v) => v.id && v.name && v.key));
+  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", !!(soloOn && soloOn.node && soloOn.node.fills && flatPaint(soloOn.node.fills[0]).color === "#ff0000" && soloOn.node.radius === 8));
+  ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", !!(soloOn && soloOn.variants === undefined));
+  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", !!(tagOn && tagOn.visuals && flatPaint(tagOn.visuals.fills![0]).color === "#9947ff"));
+  ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", !!(tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
+    tagOn.variants.every((v) => v.id && v.name && v.key)));
   const va = tagOn!.variants!.find((v) => v.id === "v:a");
   const vb = tagOn!.variants!.find((v) => v.id === "v:b");
-  ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", va && va.values && va.values.Type === "Default" && va.values.Status === "Default");
-  ok("[VARIANTVIS] variant values read from variantProperties when present", vb && vb.values && vb.values.Status === "Hover");
-  ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",
-    va && va.node && va.node.fills && flatPaint(va.node.fills[0]).color === "#009900" && va.node.radius === 16);
-  ok("[VARIANTVIS] a variant whose own componentPropertyDefinitions throws still gets its node captured, not dropped",
-    vb && vb.node && vb.node.fills && flatPaint(vb.node.fills[0]).color === "#006600");
-  ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",
-    va && va.node && va.node.props === undefined);
+  ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", !!(va && va.values && va.values.Type === "Default" && va.values.Status === "Default"));
+  ok("[VARIANTVIS] variant values read from variantProperties when present", !!(vb && vb.values && vb.values.Status === "Hover"));
+  ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",!!(
+    va && va.node && va.node.fills && flatPaint(va.node.fills[0]).color === "#009900" && va.node.radius === 16));
+  ok("[VARIANTVIS] a variant whose own componentPropertyDefinitions throws still gets its node captured, not dropped",!!(
+    vb && vb.node && vb.node.fills && flatPaint(vb.node.fills[0]).color === "#006600"));
+  ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",!!(
+    va && va.node && va.node.props === undefined));
   sandbox.figma.root.children = kidsBeforeVariantPage;
 
   // A user-maintained registry is the ONLY honest attribution route.
@@ -1629,7 +1629,7 @@ const sandbox = context as unknown as Sandbox;
     const lib = await sandbox.collectLibraryFile({ asLibrary: "NERA" });
     const d = lib.designSystem;
 
-    ok("[LIB-FILE] stamps source.role=library", d.source && d.source.role === "library");
+    ok("[LIB-FILE] stamps source.role=library", !!(d.source && d.source.role === "library"));
     ok("[LIB-FILE] carries the library name the user typed", d.source!.libraryName === "NERA");
     ok("[LIB-FILE] records fileKey as the durable directory identity", d.source!.fileKey === "FILEKEY1234567");
     ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(d.source!.collectionKeys));
@@ -1639,7 +1639,7 @@ const sandbox = context as unknown as Sandbox;
     // Publish status: gated to library mode because Figma answers UNPUBLISHED for everything when
     // asked from a consuming file or a branch.
     const btn = d.components.find((c) => c.name === "Button");
-    ok("[LIB-FILE] component carries publish status", btn && btn.publish === "current");
+    ok("[LIB-FILE] component carries publish status", !!(btn && btn.publish === "current"));
     const paint = d.styles.paint[0];
     ok("[LIB-FILE] style carries publish status", paint && paint.publish === "changed");
     ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
@@ -1648,7 +1648,7 @@ const sandbox = context as unknown as Sandbox;
 
     // The style fixes, which apply on BOTH paths — `key` is what makes a library style joinable at all.
     ok("[LIB-FILE] paint style carries its cross-file key", paint.key === "paintkey123");
-    ok("[LIB-FILE] paint style carries bound variables (tokens)", paint.tokens && Object.keys(paint.tokens).length > 0);
+    ok("[LIB-FILE] paint style carries bound variables (tokens)", !!(paint.tokens && Object.keys(paint.tokens).length > 0));
     ok("[LIB-FILE] paint style carries documentationLinks", Array.isArray(paint.docs) && paint.docs.length === 1);
 
     // The default path must NOT gain a publish field: it would read as authoritative and be wrong.
@@ -1714,7 +1714,7 @@ const sandbox = context as unknown as Sandbox;
     // (a): this exact string is what main.ts puts in `bridge-result.error`, so the CLI/MCP fails fast
     // with a human cause instead of sitting out its request timeout.
     ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(cancelErr!.message));
-    ok("[CANCEL] the cancel was matched to the live run", cancelHit && cancelHit.source === "bridge" && cancelHit.label === "exportFull");
+    ok("[CANCEL] the cancel was matched to the live run", !!(cancelHit && cancelHit.source === "bridge" && cancelHit.label === "exportFull"));
     ok("[CANCEL] the bridge-triggered run was visible in the plugin window, and for whom",
       posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportFull"));
     ok("[CANCEL] the run is still closed out, so the UI cannot hang on a cancelled export",
