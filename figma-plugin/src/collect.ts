@@ -13,6 +13,7 @@ import { safe, errMsg, exportedAt, nonEmpty, isList } from "./util";
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
 import { toNodeId } from "../../bridge/src/node-id.ts";
+import { NO_NODE_ID, type ListPagesArgs } from "../../bridge/src/commands.ts";
 import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
@@ -48,7 +49,7 @@ export interface ScreenshotResult { id: string; name: string; type: string; refe
 export interface NodeSummary { name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean }
 export interface PageListing { name: string; id: string; current?: true; unreadable?: true; frames?: NodeSummary[] }
 export interface ListPagesResult {
-  exportedAt: string; file: string; depth: number; pages: PageListing[];
+  exportedAt: string; file: string; depth: 1 | 2; pages: PageListing[];
   manifest: { pages: number; frames?: number; warnings: string[] };
 }
 export interface ListChildrenResult {
@@ -340,7 +341,7 @@ function pageOf(node: BaseNode): PageNode | null {
 export async function collectNode(rawId: string, opts?: CollectOpts): Promise<ScreenResult> {
   resetRun();
   const nodeId = toNodeId(rawId);
-  if (!nodeId) throw new Error("No node id provided.");
+  if (!nodeId) throw new Error(NO_NODE_ID);
   const node = await findNodeById(nodeId, warn);
   applyOpts(autoCss(opts, node)); // single-node export → auto-enable the CSS oracle when the tree is small
   // Bring it into view so you can see what's being read. Best-effort.
@@ -365,7 +366,7 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Sc
 export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotResult> {
   resetRun();
   const nodeId = toNodeId(rawId);
-  if (!nodeId) throw new Error("No node id provided.");
+  if (!nodeId) throw new Error(NO_NODE_ID);
   const node = await findNodeById(nodeId, warn);
   const reference = await collectReference(node as SceneNode, opts);
   if (!reference) {
@@ -401,7 +402,7 @@ const TOP_LEVEL_TYPES = new Set([
 // soft, driftable numbers an agent would treat as decision-grade, and they belong in their own op.
 //
 // Reuses TOP_LEVEL_TYPES so "what counts as a frame" cannot drift from collectFull's own index.
-export async function listPages(opts?: { depth?: number }): Promise<ListPagesResult> {
+export async function listPages(opts?: ListPagesArgs): Promise<ListPagesResult> {
   const depth = opts && opts.depth === 1 ? 1 : 2;
   const localWarnings: string[] = [];
   const sink = (m: string) => localWarnings.push(m);
@@ -455,7 +456,7 @@ export async function listPages(opts?: { depth?: number }): Promise<ListPagesRes
 // (TEXT, VECTOR, INSTANCE...), so nothing here should be silently dropped from the count.
 export async function listChildren(rawId: string): Promise<ListChildrenResult> {
   const nodeId = toNodeId(rawId);
-  if (!nodeId) throw new Error("No node id provided.");
+  if (!nodeId) throw new Error(NO_NODE_ID);
   const localWarnings: string[] = [];
   const sink = (m: string) => localWarnings.push(m);
   const node = await findNodeById(nodeId, sink);
