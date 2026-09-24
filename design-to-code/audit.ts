@@ -37,7 +37,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isHidden, hiddenSelf } from "./hidden.ts";
-import { parseHex, contrastRatio } from "./color.ts";
+import { parseHex, contrastRatio, compositeOver } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
 import { crossCheck } from "./cross-check.ts";
@@ -67,12 +67,8 @@ const isPlatform = (p: unknown): p is AuditPlatform => typeof p === "string" && 
 
 // ---------------------------------------------------------------- color math (WCAG 2.2)
 type Lab = [number, number, number];
-const over = (fg: Rgba, bg: Rgba): Rgba => ({
-  r: fg.r * fg.a + bg.r * (1 - fg.a),
-  g: fg.g * fg.a + bg.g * (1 - fg.a),
-  b: fg.b * fg.a + bg.b * (1 - fg.a),
-  a: 1,
-});
+// Source-over compositing lives in color.ts (`compositeOver`) since 350deb2; `over` is the local name.
+const over = compositeOver;
 // CIE76 ΔE in Lab — a coarse "these two raw colors are probably meant to be one token" signal.
 function toLab(c: Rgba): Lab {
   const lin = (v: number): number => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };

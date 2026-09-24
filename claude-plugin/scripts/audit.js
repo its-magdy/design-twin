@@ -1243,12 +1243,7 @@ var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48
 var PLATFORMS = Object.keys(TOUCH_MIN);
 var AUDIT_CATEGORIES = ["color", "typography", "spacing", "radius", "effects"];
 var isPlatform = (p) => typeof p === "string" && PLATFORMS.includes(p);
-var over = (fg, bg) => ({
-  r: fg.r * fg.a + bg.r * (1 - fg.a),
-  g: fg.g * fg.a + bg.g * (1 - fg.a),
-  b: fg.b * fg.a + bg.b * (1 - fg.a),
-  a: 1
-});
+var over = compositeOver;
 function toLab(c) {
   const lin = (v) => {
     v /= 255;
