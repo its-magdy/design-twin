@@ -44,7 +44,7 @@ function mediaPaint(f: ImagePaint | VideoPaint, type: IrMediaPaint["type"], hash
 }
 
 // A shader's property assignments (ShaderPaint and ShaderEffect share the shape). plugin-api.d.ts
-// 1.139.0 L4829-4834 (ShaderPaint; ShaderEffect's L4574-4579 is the same with "effect's"):
+// 1.139.0 L4827-4832 (ShaderPaint; ShaderEffect's L4574-4579 is the same with "effect's"):
 //   "The read/write map of property assignments, keyed by property-definition id (the keys of
 //    {@link Shader.propertyDefinitions}, not property names). On reads, this is populated with the
 //    paint's current assignments, including author-defined defaults, ..."
@@ -242,13 +242,13 @@ export async function simplifyStrokes(node: SceneNode): Promise<IrStrokes | unde
     }
     out.variableWidth = variableWidth;
   }
-  // Brush / dynamic strokes. plugin-api.d.ts 1.139.0 L8828-8839, ComplexStrokesMixin (in BaseFrameMixin
+  // Brush / dynamic strokes. plugin-api.d.ts 1.139.0 L8830-8840, ComplexStrokesMixin (in BaseFrameMixin
   // and Rectangle/Line/Ellipse/Polygon/Star/Vector/Text/TextPath/BooleanOperation — not GROUP/SECTION,
   // hence the `in` narrowing):
   //   "The complex stroke properties for nodes using brush or dynamic strokes. ... the API will return
   //    the brush properties for nodes that use custom brushes."
   //   complexStrokeProperties: ComplexStrokeProperties
-  // ComplexStrokeProperties (L8704-8708) = {type:'BASIC'} | DynamicStrokeProperties {frequency, wiggle,
+  // ComplexStrokeProperties (L8704-8709) = {type:'BASIC'} | DynamicStrokeProperties {frequency, wiggle,
   // smoothen} | ScatterBrushProperties {brushName, gap, wiggle, sizeJitter, angularJitter, rotation} |
   // StretchBrushProperties {brushName, direction}. None of it overlaps cap/join/miter/dash/variableWidth
   // above. BASIC (a plain stroke) is the default and is omitted; enums lowercased, numbers rounded.
