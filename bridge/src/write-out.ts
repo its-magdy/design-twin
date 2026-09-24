@@ -21,45 +21,16 @@ import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-
 import { mergeVariablesDoc } from "./variables-merge.ts";
 import { sha1Hex, normalizeForCompare } from "./asset-compare.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
-import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, ScreenExport, VariablesDoc, LibraryCounts } from "./doc-types.ts";
+import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
 import type { DesignSystemReply, ExportReply, FullExportReply, ScreenReply, ScreenshotReply } from "./commands.ts";
 
 // ---- what the plugin hands this module (the `r` of every writer below): the per-command replies of
 // commands.ts. writeAny tells them apart by the field only that reply carries (`screen`, `reference`),
 // which is a real narrowing of the union, not a guess over one optional bag.
 
-/** One exported asset — doc-types.ts Asset, the plugin's own definition. `file` is the producer-owned
- *  name; writeAssets rewrites it (and `text`/`base64`) in place to what actually landed on disk. */
-export type ExportAsset = Asset;
-
 /** `sourceFile`/`sourceFileKey` are stamped by figma-pull.ts (P4 #33) onto the reply before it reaches a
  *  writer — never by the plugin. */
 export type Stamped<R> = R & { sourceFile?: string; sourceFileKey?: string };
-
-/**
- * The ONE optional-bag view of every export reply, kept for test/harness.ts (which extends it per
- * collector) and for readers that only probe a field or two. The writers below take the precise
- * per-command reply instead; nothing here dispatches on this shape any more.
- */
-export interface ExportResult {
-  designSystem?: DesignSystemDoc;
-  layersDoc?: LayersDoc;
-  assets?: ExportAsset[];
-  screenName?: string;
-  screen?: ScreenExport;
-  variables?: VariablesDoc;
-  page?: string;
-  pageId?: string;
-  nodeId?: string;
-  id?: string;
-  name?: string;
-  type?: string;
-  reference?: string;
-  manifest?: Manifest;
-  warnings?: string[];
-  sourceFile?: string;
-  sourceFileKey?: string;
-}
 
 export type Log = (m: string) => void;
 
@@ -234,7 +205,7 @@ function readExistingDirByContent(adir: string): Map<string, string> {
   return map;
 }
 
-function shortHashOf(a: ExportAsset, bytes: Buffer): string {
+function shortHashOf(a: Asset, bytes: Buffer): string {
   // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
   // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
   if (typeof a.hash === "string" && a.hash) return a.hash.replace(/[^a-z0-9]/gi, "").slice(0, 6);
@@ -246,13 +217,13 @@ function shortHashOf(a: ExportAsset, bytes: Buffer): string {
 // hashes what is really there — a normalised-equal-but-byte-different re-pull must never record a hash
 // for content that was never written (findings 23/104's "recorded hash matches nothing on disk", just
 // introduced by a naive fix instead of closed by one).
-function reuseExisting(a: ExportAsset, dirPrefix: string, existingName: string, priorBytes: Buffer): void {
+function reuseExisting(a: Asset, dirPrefix: string, existingName: string, priorBytes: Buffer): void {
   a.file = dirPrefix + "/" + existingName;
   if (a.text != null) a.text = priorBytes.toString("utf8");
   else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
 }
 
-function writeAssets(dir: string, assets: ExportAsset[] | null | undefined, log?: Log, subdir?: string): number {
+function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string): number {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
@@ -583,7 +554,7 @@ export interface AssetIndexEntry {
   paths?: number;
 }
 
-function writeScreenAssets(dir: string, paths: ScreenPaths, assets: ExportAsset[] | null | undefined): { count: number; duplicates: number; totalBytes: number } | null {
+function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined): { count: number; duplicates: number; totalBytes: number } | null {
   if (!Array.isArray(assets) || !assets.length) return null;
   const shared = sharedAssetHashes(path.join(dir, "assets"));
   const files: AssetIndexEntry[] = [];

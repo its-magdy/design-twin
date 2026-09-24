@@ -1,5 +1,5 @@
 // Writes (code -> design): minimal, EXPLICIT, safe command set (no eval).
-import { type Obj, errMsg } from "./util";
+import { errMsg } from "./util";
 
 // Handle 3/4/6/8-digit hex (CSS Color L4). Shorthand expands by doubling each digit; the optional
 // 4th pair is alpha, which Figma carries as paint.opacity (not in .color).
@@ -69,7 +69,7 @@ export interface WriteOp {
   color?: string;
 }
 
-async function applyWrite(op: WriteOp): Promise<Obj> {
+async function applyWrite(op: WriteOp): Promise<AppliedWrite> {
   switch (op.op) {
     case "createFrame": {
       const parent = await resolveParent(op.parentId); // before createFrame — no orphan on a bad parent
@@ -127,9 +127,12 @@ async function applyWrite(op: WriteOp): Promise<Obj> {
 // ALREADY committed. Throwing here discarded the ids of everything just created, leaving orphan nodes
 // the caller couldn't find or clean up. Resolve with an explicit outcome instead: `applied` always
 // lists what landed, and ok:false carries the failure point so the caller can report both.
+// What one applied op reports: the id of the node it created or changed.
+export interface AppliedWrite { id?: string }
+
 export interface WriteResult {
   ok: boolean;
-  applied: Obj[];
+  applied: AppliedWrite[];
   failedAt?: number;
   failedOp?: string;
   error?: string;
@@ -137,7 +140,7 @@ export interface WriteResult {
 
 export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   const list = Array.isArray(ops) ? ops : [];
-  const applied: Obj[] = [];
+  const applied: AppliedWrite[] = [];
   // Dev Mode (manifest editorType "dev") is read-only: every op below would throw its own opaque
   // Plugin-API error, the first one partway into the batch. Refuse the whole batch up front, with the
   // fix, in the same shape a mid-batch failure reports.

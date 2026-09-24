@@ -9,7 +9,7 @@ import { type RunInfo } from "./progress";
 // bridge's `request()` promises its callers. esbuild inlines the module like read-opts.ts.
 import { isCmd } from "../../bridge/src/commands.ts";
 import type {
-  Cmd, CommandRequest, Commands, DesignSystemReply, FullExportReply, PingReply, ScreenReply, ScreenshotReply, WhoamiReply,
+  Cmd, CommandRequest, Commands, PingReply, WhoamiReply,
 } from "../../bridge/src/commands.ts";
 
 // `args` arrives over the bridge as parsed JSON — genuinely unknown shape until narrowed per command.
@@ -49,8 +49,8 @@ export async function handleBridge(cmd: string, args: unknown): Promise<unknown>
   return dispatch(req);
 }
 
-// The collectors are typed `Promise<Obj>` in collect.ts (an untyped record); each branch below is
-// where their result is taken as the reply the contract promises for that command.
+// The collectors return their own typed envelopes (collect.ts ScreenResult/FullResult/…), which are
+// subtypes of the replies the contract promises; each branch below is where that is checked.
 async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
   switch (req.cmd) {
     // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
@@ -97,27 +97,27 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
     case "exportFull": {
       const a = req.args;
-      return serializeRun(() => collectFull(a) as Promise<FullExportReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectFull(a), bridgeRun(req.cmd));
     }
     // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
     // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
     case "exportDesignSystem": {
       const a = req.args;
-      return serializeRun(() => collectDesignSystemOnly(a) as Promise<DesignSystemReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd));
     }
     // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
     // the full catalog build and mutates the same per-run state they do.
     case "exportLibrary": {
       const a = req.args;
-      return serializeRun(() => collectLibraryFile(a) as Promise<DesignSystemReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd));
     }
     case "exportSelection": {
       const a = req.args;
-      return serializeRun(() => collectSelection(a) as Promise<ScreenReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectSelection(a), bridgeRun(req.cmd));
     }
     case "exportNode": {
       const a = req.args;
-      return serializeRun(() => collectNode(a.nodeId, a) as Promise<ScreenReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd));
     }
     // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
     // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
@@ -126,7 +126,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
       const a = req.args;
       // `scale` is re-checked at runtime: the frame is JSON, and a non-number here must read as "default".
       const scale = typeof a.scale === "number" ? a.scale : undefined;
-      return serializeRun(() => collectScreenshot(a.nodeId, { scale }) as Promise<ScreenshotReply>, bridgeRun(req.cmd));
+      return serializeRun(() => collectScreenshot(a.nodeId, { scale }), bridgeRun(req.cmd));
     }
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -137,14 +137,14 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     case "listPages":
       return (await listPages(req.args)) as Commands["listPages"]["reply"];
     case "listChildren":
-      return (await listChildren(req.args.nodeId)) as Commands["listChildren"]["reply"];
+      return listChildren(req.args.nodeId);
     // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
     // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
     // behind a long export would defeat the point of asking. Its document walk is one
     // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
     // listPages depth 2, not that of an export.
     case "listLibraries":
-      return (await listLibraries()) as Commands["listLibraries"]["reply"];
+      return listLibraries();
     case "write": {
       const ops = req.args.ops;
       return serializeRun(() => applyWrites(Array.isArray(ops) ? ops : []), bridgeRun(req.cmd));

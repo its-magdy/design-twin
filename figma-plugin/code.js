@@ -130,8 +130,12 @@
 
   // src/util.ts
   var exportedAt = () => (/* @__PURE__ */ new Date()).toISOString();
-  var round = (n) => typeof n === "number" ? Math.round(n * 100) / 100 : n;
+  function round(n) {
+    return typeof n === "number" ? Math.round(n * 100) / 100 : n;
+  }
+  var lower = (s) => s.toLowerCase();
   var propName = (k) => k.split("#")[0];
+  var propType = (t) => t;
   var nonEmpty = (o) => Object.keys(o).length ? o : void 0;
   function putNonEmpty(o, key, v) {
     const kept = v && nonEmpty(v);
@@ -146,6 +150,25 @@
     if (ez.easingFunctionCubicBezier) o.cubicBezier = ez.easingFunctionCubicBezier;
     if (ez.easingFunctionSpring) o.spring = ez.easingFunctionSpring;
     return o;
+  }
+  function asJson(v) {
+    if (v === null || typeof v === "string" || typeof v === "boolean" || typeof v === "number") return v;
+    if (Array.isArray(v)) return v.map((x) => {
+      const j = asJson(x);
+      return j === void 0 ? null : j;
+    });
+    if (typeof v === "object") {
+      const out = {};
+      for (const [k, x] of Object.entries(v)) {
+        const j = asJson(x);
+        if (j !== void 0) out[k] = j;
+      }
+      return out;
+    }
+    return void 0;
+  }
+  function isList(v) {
+    return Array.isArray(v);
   }
   function numProp(node, key) {
     const v = node[key];
@@ -779,19 +802,19 @@
   }
   function simplifyGrid(g) {
     if (!g) return void 0;
-    const o = { pattern: g.pattern ? String(g.pattern).toLowerCase() : void 0 };
+    const o = { pattern: g.pattern ? lower(g.pattern) : void 0 };
     if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
     if (g.pattern !== "GRID") {
       if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
       if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
       if (typeof g.offset === "number") o.offset = round(g.offset);
-      if (g.alignment) o.alignment = String(g.alignment).toLowerCase();
+      if (g.alignment) o.alignment = lower(g.alignment);
     }
     if (g.visible === false) o.visible = false;
     return o;
   }
   function simplifyTrack(t) {
-    const o = { type: t.type ? String(t.type).toLowerCase() : void 0 };
+    const o = { type: t.type ? lower(t.type) : void 0 };
     if (typeof t.value === "number") o.value = round(t.value);
     return o;
   }
@@ -840,7 +863,7 @@
     for (const key of Object.keys(bound)) {
       const val = bound[key];
       if (Array.isArray(val)) {
-        const names = (await Promise.all(val.map(resolveVar))).filter(Boolean);
+        const names = (await Promise.all(val.map(resolveVar))).filter((x) => !!x);
         if (names.length) out[key] = names.length === 1 ? names[0] : names;
       } else {
         const n = await resolveVar(val);
@@ -874,7 +897,8 @@
     );
     const out = {};
     STYLE_FIELDS.forEach(([, key], i) => {
-      if (names[i]) out[key] = names[i];
+      const n = names[i];
+      if (n) out[key] = n;
     });
     return nonEmpty(out);
   }
@@ -902,8 +926,13 @@
   }
   async function resolveModeValue(v, resolvedType) {
     if (isVariableAlias(v)) return { aliasOf: await varName(v.id) || v.id };
-    if (resolvedType === "COLOR" && v && typeof v === "object" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
-    return v;
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+    if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
+    return verbatimValue(v);
+  }
+  function verbatimValue(v) {
+    const o = v;
+    return o;
   }
   async function dumpVariables(opts) {
     const asLibrary = !!(opts && opts.asLibrary);
@@ -1002,7 +1031,10 @@
     const collPublish = {};
     if (asLibrary) {
       const st = await Promise.all(allCollections.map((c) => publishOf2(c)));
-      for (let i = 0; i < allCollections.length; i++) if (st[i]) collPublish[allCollections[i].id] = st[i];
+      for (let i = 0; i < allCollections.length; i++) {
+        const s = st[i];
+        if (s) collPublish[allCollections[i].id] = s;
+      }
     }
     return {
       // Local collections plus any LIBRARY collection a referenced remote variable belongs to — the
@@ -1035,7 +1067,8 @@
     const src = f.filters;
     const out = {};
     for (const k of FILTER_KEYS) {
-      if (typeof src[k] === "number" && src[k]) out[k] = round(src[k]);
+      const v = src[k];
+      if (typeof v === "number" && v) out[k] = round(v);
     }
     return nonEmpty(out);
   }
@@ -1045,7 +1078,7 @@
     return o;
   }
   function mediaPaint(f, type, hash, transform) {
-    const o = paintExtras(f, { type, scaleMode: f.scaleMode ? f.scaleMode.toLowerCase() : void 0 });
+    const o = paintExtras(f, { type, scaleMode: f.scaleMode ? lower(f.scaleMode) : void 0 });
     if (hash) o.hash = hash;
     if (f.scaleMode === "TILE" && typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
     if (typeof f.rotation === "number" && f.rotation) o.rotation = f.rotation;
@@ -1065,9 +1098,9 @@
           if (f.blendMode && f.blendMode !== "NORMAL") o.blend = f.blendMode.toLowerCase();
         } else if (f.type.startsWith("GRADIENT")) {
           const g = f;
-          o = paintExtras(g, { type: "gradient", kind: g.type });
-          if (Array.isArray(g.gradientStops)) {
-            o.stops = await Promise.all(
+          const gp = paintExtras(g, { type: "gradient", kind: g.type });
+          if (isList(g.gradientStops)) {
+            gp.stops = await Promise.all(
               g.gradientStops.map(async (s) => {
                 const stop = { pos: round(s.position), color: rgbaToHex(s.color) };
                 const bv = await resolveBoundMap(s.boundVariables);
@@ -1076,25 +1109,30 @@
               })
             );
           }
-          if (Array.isArray(g.gradientTransform)) o.transform = g.gradientTransform;
+          if (Array.isArray(g.gradientTransform)) gp.transform = g.gradientTransform;
+          o = gp;
         } else if (f.type === "IMAGE") {
-          o = mediaPaint(f, "image", f.imageHash, f.imageTransform);
+          const mp = mediaPaint(f, "image", f.imageHash, f.imageTransform);
           const size = await collectSourceImage(f.imageHash);
-          if (size) o.intrinsicSize = size;
+          if (size) mp.intrinsicSize = size;
+          o = mp;
         } else if (f.type === "VIDEO") {
           o = mediaPaint(f, "video", f.videoHash, f.videoTransform);
         } else if (f.type === "PATTERN") {
-          o = paintExtras(f, { type: "pattern" });
-          if (f.sourceNodeId) o.sourceNodeId = f.sourceNodeId;
-          if (f.tileType) o.tileType = String(f.tileType).toLowerCase();
-          if (typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
-          if (f.spacing) o.spacing = xy(f.spacing);
-          if (f.horizontalAlignment) o.align = String(f.horizontalAlignment).toLowerCase();
+          const pp = paintExtras(f, { type: "pattern" });
+          if (f.sourceNodeId) pp.sourceNodeId = f.sourceNodeId;
+          if (f.tileType) pp.tileType = String(f.tileType).toLowerCase();
+          if (typeof f.scalingFactor === "number") pp.scale = f.scalingFactor;
+          if (f.spacing) pp.spacing = xy(f.spacing);
+          if (f.horizontalAlignment) pp.align = String(f.horizontalAlignment).toLowerCase();
+          o = pp;
         } else if (f.type === "SHADER") {
-          o = paintExtras(f, { type: "shader" });
-          if (f.id) o.shaderId = f.id;
+          const sp = paintExtras(f, { type: "shader" });
+          if (f.id) sp.shaderId = f.id;
+          o = sp;
         } else {
-          o = paintExtras(f, { type: f.type.toLowerCase() });
+          const future = f;
+          o = paintExtras(future, { type: future.type.toLowerCase() });
         }
         const pbv = f.type === "SOLID" ? await resolveBoundMap(f.boundVariables) : void 0;
         if (pbv) o.tokens = pbv;
@@ -1103,8 +1141,14 @@
     );
     return out.length ? out : void 0;
   }
+  var SIDE_WEIGHTS = [
+    ["strokeTopWeight", "top"],
+    ["strokeRightWeight", "right"],
+    ["strokeBottomWeight", "bottom"],
+    ["strokeLeftWeight", "left"]
+  ];
   async function simplifyStrokes(node) {
-    if (!("strokes" in node) || !Array.isArray(node.strokes)) return void 0;
+    if (!("strokes" in node) || !isList(node.strokes)) return void 0;
     const vis = node.strokes.filter((s) => s.visible !== false);
     if (!vis.length) return void 0;
     const out = {};
@@ -1120,27 +1164,22 @@
       out.weight = strokeWeight;
     } else if (strokeWeight === figma.mixed) {
       const sides = {};
-      [
-        ["strokeTopWeight", "top"],
-        ["strokeRightWeight", "right"],
-        ["strokeBottomWeight", "bottom"],
-        ["strokeLeftWeight", "left"]
-      ].forEach(([k, s]) => {
+      SIDE_WEIGHTS.forEach(([k, s]) => {
         const v = numProp(node, k);
         if (v != null) sides[s] = v;
       });
       putNonEmpty(out, "weights", sides);
     }
     const n = strokeNode;
-    if (n.strokeAlign) out.align = String(n.strokeAlign).toLowerCase();
-    if (n.dashPattern && n.dashPattern.length) out.dash = n.dashPattern;
+    if (n.strokeAlign) out.align = lower(n.strokeAlign);
+    if (n.dashPattern && n.dashPattern.length) out.dash = [...n.dashPattern];
     if ("strokeCap" in node && n.strokeCap && n.strokeCap !== figma.mixed && n.strokeCap !== "NONE") out.cap = String(n.strokeCap).toLowerCase();
     if ("strokeJoin" in node && n.strokeJoin && n.strokeJoin !== figma.mixed && n.strokeJoin !== "MITER") out.join = String(n.strokeJoin).toLowerCase();
     if ("strokeMiterLimit" in node && typeof n.strokeMiterLimit === "number" && n.strokeMiterLimit !== 4) out.miter = n.strokeMiterLimit;
     const vw = n.variableWidthStrokeProperties;
     if (vw && vw.widthProfile) {
-      const variableWidth = { profile: vw.widthProfile.toLowerCase() };
-      if (vw.widthProfile === "CUSTOM" && Array.isArray(vw.variableWidthPoints) && vw.variableWidthPoints.length) {
+      const variableWidth = { profile: lower(vw.widthProfile) };
+      if (vw.widthProfile === "CUSTOM" && isList(vw.variableWidthPoints) && vw.variableWidthPoints.length) {
         variableWidth.points = vw.variableWidthPoints.map((p) => ({ pos: round(p.position), width: round(p.width) }));
       }
       out.variableWidth = variableWidth;
@@ -1150,52 +1189,70 @@
 
   // src/effects.ts
   var GLASS_FIELDS = ["lightIntensity", "lightAngle", "refraction", "depth", "dispersion", "radius"];
+  function effectBody(e) {
+    if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
+      const o = { type: lower(e.type) };
+      if (e.color) o.color = rgbaToHex(e.color);
+      if (e.offset) o.offset = xy(e.offset);
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (typeof e.spread === "number" && e.spread) o.spread = round(e.spread);
+      if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
+      if (e.type === "DROP_SHADOW" && e.showShadowBehindNode) o.behindNode = true;
+      return o;
+    }
+    if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
+      const o = { type: lower(e.type) };
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (e.blurType && e.blurType !== "NORMAL") o.blurType = lower(e.blurType);
+      const be = e;
+      putXY(o, "startOffset", be.startOffset);
+      putXY(o, "endOffset", be.endOffset);
+      if (typeof be.startRadius === "number") o.startRadius = round(be.startRadius);
+      return o;
+    }
+    if (e.type === "NOISE") {
+      const o = { type: "noise" };
+      if (e.noiseType) o.noiseType = String(e.noiseType).toLowerCase();
+      if (e.color) o.color = rgbaToHex(e.color);
+      if (typeof e.density === "number") o.density = round(e.density);
+      if (typeof e.noiseSize === "number") o.noiseSize = round(e.noiseSize);
+      putXY(o, "noiseSizeVector", e.noiseSizeVector);
+      if (e.noiseType === "DUOTONE" && e.secondaryColor) o.secondaryColor = rgbaToHex(e.secondaryColor);
+      if (e.noiseType === "MULTITONE" && typeof e.opacity === "number") o.opacity = round(e.opacity);
+      if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
+      return o;
+    }
+    if (e.type === "GLASS") {
+      const o = { type: "glass" };
+      for (const k of GLASS_FIELDS) {
+        const v = e[k];
+        if (typeof v === "number") o[k] = round(v);
+      }
+      return o;
+    }
+    if (e.type === "TEXTURE") {
+      const o = { type: "texture" };
+      if (typeof e.noiseSize === "number") o.noiseSize = round(e.noiseSize);
+      putXY(o, "noiseSizeVector", e.noiseSizeVector);
+      if (typeof e.radius === "number") o.radius = round(e.radius);
+      if (typeof e.clipToShape === "boolean") o.clipToShape = e.clipToShape;
+      return o;
+    }
+    if (e.type === "SHADER") {
+      const o = { type: "shader" };
+      if (e.id) o.shaderId = e.id;
+      return o;
+    }
+    const future = e;
+    return { type: future.type.toLowerCase() };
+  }
   async function simplifyEffects(effects) {
-    if (!Array.isArray(effects)) return void 0;
+    if (!isList(effects)) return void 0;
     const vis = effects.filter((e) => e.visible !== false);
     const out = await Promise.all(
       vis.map(async (e) => {
-        const o = { type: e.type.toLowerCase() };
-        if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW") {
-          if (e.color) o.color = rgbaToHex(e.color);
-          if (e.offset) o.offset = xy(e.offset);
-          if (typeof e.radius === "number") o.radius = round(e.radius);
-          if (typeof e.spread === "number" && e.spread) o.spread = round(e.spread);
-          if (e.blendMode && e.blendMode !== "NORMAL") o.blendMode = e.blendMode.toLowerCase();
-          if (e.type === "DROP_SHADOW" && e.showShadowBehindNode) o.behindNode = true;
-        } else if (e.type === "LAYER_BLUR" || e.type === "BACKGROUND_BLUR") {
-          if (typeof e.radius === "number") o.radius = round(e.radius);
-          if (e.blurType && e.blurType !== "NORMAL") o.blurType = e.blurType.toLowerCase();
-          const be = e;
-          putXY(o, "startOffset", be.startOffset);
-          putXY(o, "endOffset", be.endOffset);
-          if (typeof be.startRadius === "number") o.startRadius = round(be.startRadius);
-        } else if (e.type === "NOISE") {
-          const ne = e;
-          if (ne.noiseType) o.noiseType = String(ne.noiseType).toLowerCase();
-          if (ne.color) o.color = rgbaToHex(ne.color);
-          if (typeof ne.density === "number") o.density = round(ne.density);
-          if (typeof ne.noiseSize === "number") o.noiseSize = round(ne.noiseSize);
-          putXY(o, "noiseSizeVector", ne.noiseSizeVector);
-          if (ne.noiseType === "DUOTONE" && ne.secondaryColor) o.secondaryColor = rgbaToHex(ne.secondaryColor);
-          if (ne.noiseType === "MULTITONE" && typeof ne.opacity === "number") o.opacity = round(ne.opacity);
-          if (ne.blendMode && ne.blendMode !== "NORMAL") o.blendMode = ne.blendMode.toLowerCase();
-        } else if (e.type === "GLASS") {
-          const ge = e;
-          for (const k of GLASS_FIELDS) {
-            if (typeof ge[k] === "number") o[k] = round(ge[k]);
-          }
-        } else if (e.type === "TEXTURE") {
-          const te = e;
-          if (typeof te.noiseSize === "number") o.noiseSize = round(te.noiseSize);
-          putXY(o, "noiseSizeVector", te.noiseSizeVector);
-          if (typeof te.radius === "number") o.radius = round(te.radius);
-          if (typeof te.clipToShape === "boolean") o.clipToShape = te.clipToShape;
-        } else if (e.type === "SHADER") {
-          const se = e;
-          if (se.id) o.shaderId = se.id;
-        }
-        const bv = await resolveBoundMap(e.boundVariables);
+        const o = effectBody(e);
+        const bv = await resolveBoundMap("boundVariables" in e ? e.boundVariables : void 0);
         if (bv) o.tokens = bv;
         return o;
       })
@@ -1230,8 +1287,8 @@
     if (lh) f.lineHeight = lh;
     const ls = letterS(src.letterSpacing);
     if (ls) f.letterSpacing = ls;
-    if (src.textCase && src.textCase !== figma.mixed && src.textCase !== "ORIGINAL") f.case = src.textCase.toLowerCase();
-    if (src.textDecoration && src.textDecoration !== figma.mixed && src.textDecoration !== "NONE") f.decoration = src.textDecoration.toLowerCase();
+    if (src.textCase && src.textCase !== figma.mixed && src.textCase !== "ORIGINAL") f.case = lower(src.textCase);
+    if (src.textDecoration && src.textDecoration !== figma.mixed && src.textDecoration !== "NONE") f.decoration = lower(src.textDecoration);
     if (f.decoration) {
       if (src.textDecorationStyle && src.textDecorationStyle !== figma.mixed && src.textDecorationStyle !== "SOLID") f.decorationStyle = String(src.textDecorationStyle).toLowerCase();
       const tdc = src.textDecorationColor && src.textDecorationColor !== figma.mixed ? src.textDecorationColor.value : void 0;
@@ -1292,6 +1349,7 @@
     } catch (e) {
       segs = void 0;
     }
+    let font;
     if (segs && segs.length > 1) {
       out.runs = await Promise.all(
         segs.map(async (s) => {
@@ -1304,28 +1362,28 @@
           return r;
         })
       );
-      out.font = fontObj(segs[0]);
+      font = out.font = fontObj(segs[0]);
     } else {
       const s0 = segs && segs[0];
-      out.font = fontObj(s0 ? s0 : node);
+      font = out.font = fontObj(s0 ? s0 : node);
       const bv = await resolveBoundMap(s0 ? s0.boundVariables : void 0);
       if (bv) out.textTokens = bv;
       inlineExtras(s0 || node, out);
     }
-    if ("textAlignHorizontal" in node && node.textAlignHorizontal) out.font.align = node.textAlignHorizontal.toLowerCase();
-    if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) out.font.paragraphSpacing = node.paragraphSpacing;
-    if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) out.font.paragraphIndent = node.paragraphIndent;
-    if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) out.font.listSpacing = node.listSpacing;
-    if ("leadingTrim" in node && node.leadingTrim && node.leadingTrim !== figma.mixed && node.leadingTrim !== "NONE") out.font.leadingTrim = node.leadingTrim.toLowerCase();
-    if ("textAlignVertical" in node && node.textAlignVertical && node.textAlignVertical !== "TOP") out.font.valign = node.textAlignVertical.toLowerCase();
+    if ("textAlignHorizontal" in node && node.textAlignHorizontal) font.align = lower(node.textAlignHorizontal);
+    if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) font.paragraphSpacing = node.paragraphSpacing;
+    if ("paragraphIndent" in node && typeof node.paragraphIndent === "number" && node.paragraphIndent) font.paragraphIndent = node.paragraphIndent;
+    if ("listSpacing" in node && typeof node.listSpacing === "number" && node.listSpacing) font.listSpacing = node.listSpacing;
+    if ("leadingTrim" in node && node.leadingTrim && node.leadingTrim !== figma.mixed && node.leadingTrim !== "NONE") font.leadingTrim = node.leadingTrim.toLowerCase();
+    if ("textAlignVertical" in node && node.textAlignVertical && node.textAlignVertical !== "TOP") font.valign = lower(node.textAlignVertical);
     if ("textWrapStyle" in node) {
       const tw = node.textWrapStyle;
-      if (typeof tw === "string" && tw !== "AUTO") out.font.textWrap = tw.toLowerCase();
+      if (typeof tw === "string" && tw !== "AUTO") font.textWrap = lower(tw);
     }
-    if ("hangingList" in node && node.hangingList === true) out.font.hangingList = true;
-    if ("hangingPunctuation" in node && node.hangingPunctuation === true) out.font.hangingPunctuation = true;
+    if ("hangingList" in node && node.hangingList === true) font.hangingList = true;
+    if ("hangingPunctuation" in node && node.hangingPunctuation === true) font.hangingPunctuation = true;
     if ("type" in node && node.type === "TEXT") {
-      if (node.textAutoResize && node.textAutoResize !== "NONE") out.autoResize = node.textAutoResize.toLowerCase();
+      if (node.textAutoResize && node.textAutoResize !== "NONE") out.autoResize = lower(node.textAutoResize);
       if (node.textTruncation === "ENDING") out.truncate = true;
       if (typeof node.maxLines === "number" && node.maxLines) out.maxLines = node.maxLines;
     }
@@ -1369,6 +1427,7 @@
     }
     return v;
   }
+  var isAction = (a) => !!a;
   async function serializeAction(a) {
     if (!a) return null;
     const ao = { type: (a.type || "").toLowerCase() };
@@ -1400,7 +1459,7 @@
         a.conditionalBlocks.map(async (blk) => {
           const b = {};
           if (blk.condition) b.condition = await simplifyVariableData(blk.condition);
-          if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(Boolean);
+          if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(isAction);
           return b;
         })
       );
@@ -1423,7 +1482,7 @@
   async function simplifyReactions(node) {
     if (!("reactions" in node)) return void 0;
     const reactions = node.reactions;
-    if (!Array.isArray(reactions) || !reactions.length) return void 0;
+    if (!isList(reactions) || !reactions.length) return void 0;
     const out = [];
     for (const r of reactions) {
       const o = {};
@@ -1433,13 +1492,13 @@
         if (tg.type === "AFTER_TIMEOUT") o.timeout = tg.timeout;
         if (tg.type === "MOUSE_UP" || tg.type === "MOUSE_DOWN" || tg.type === "MOUSE_ENTER" || tg.type === "MOUSE_LEAVE") o.delay = tg.delay;
         if (tg.type === "ON_KEY_DOWN") {
-          if (tg.keyCodes.length) o.keyCodes = tg.keyCodes;
+          if (tg.keyCodes.length) o.keyCodes = [...tg.keyCodes];
           o.device = String(tg.device).toLowerCase();
         }
         if (tg.type === "ON_MEDIA_HIT") o.mediaHitTime = tg.mediaHitTime;
       }
-      const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-      const acts = (await Promise.all(actions.map(serializeAction))).filter(Boolean);
+      const actions = isList(r.actions) ? r.actions : r.action ? [r.action] : [];
+      const acts = (await Promise.all(actions.map(serializeAction))).filter(isAction);
       if (acts.length) o.actions = acts;
       if (o.trigger || o.actions) out.push(o);
     }
@@ -1509,7 +1568,7 @@
       const props = {};
       for (const k of Object.keys(defs)) {
         const d = defs[k];
-        const p = { key: k, type: d.type };
+        const p = { key: k, type: propType(d.type) };
         if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
         if (d.defaultValue !== void 0) p.default = d.defaultValue;
         if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
@@ -1537,7 +1596,7 @@
         const v = cp[k];
         if (!v) continue;
         const name = propName(k);
-        const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] });
+        const p = props[name] || (props[name] = { key: k, type: propType(v.type), observed: [] });
         if (v.value !== void 0 && p.observed.indexOf(v.value) === -1) p.observed.push(v.value);
       }
     }
@@ -1641,7 +1700,10 @@
       })
     ]);
     const compBySource = /* @__PURE__ */ new Map();
-    for (const c of components) compBySource.set(c.source, (compBySource.get(c.source) || 0) + 1);
+    for (const c of components) {
+      const src = c.source || UNKNOWN_LIBRARY;
+      compBySource.set(src, (compBySource.get(src) || 0) + 1);
+    }
     const libraries = [];
     const localCollections = [];
     try {
@@ -1834,18 +1896,19 @@
           if (n.description) entry.description = n.description;
           if (n.remote) entry.remote = true;
           if (n.key) entry.key = n.key;
-          if (Array.isArray(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d) => d.uri).filter(Boolean);
+          if (isList(n.documentationLinks) && n.documentationLinks.length) entry.docs = n.documentationLinks.map((d) => d.uri).filter(Boolean);
           try {
             const defs = n.componentPropertyDefinitions;
             if (defs && Object.keys(defs).length) {
-              entry.props = {};
+              const props = {};
+              entry.props = props;
               let variantCombos = 1;
               const keys = Object.keys(defs);
               const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
               for (let i = 0; i < keys.length; i++) {
                 const k = keys[i];
                 const d = defs[k];
-                const p = { key: k, type: d.type };
+                const p = { key: k, type: propType(d.type) };
                 if (d.type === "VARIANT") {
                   p.options = d.variantOptions;
                   variantCombos *= d.variantOptions ? d.variantOptions.length : 1;
@@ -1857,7 +1920,7 @@
                 if (d.description) p.description = d.description;
                 const dbv = boundPerKey[i];
                 if (dbv) p.tokens = dbv;
-                entry.props[propName(k)] = p;
+                props[propName(k)] = p;
               }
               if (variantCombos > 30) hygiene.push("variant explosion: '" + n.name + "' has " + variantCombos + " combinations (>30 \u2014 consider boolean/instance-swap props)");
             }
@@ -1916,7 +1979,8 @@
     if (pendingPublish.length) {
       const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
       for (let i = 0; i < pendingPublish.length; i++) {
-        if (statuses[i]) pendingPublish[i].entry.publish = statuses[i];
+        const s = statuses[i];
+        if (s) pendingPublish[i].entry.publish = s;
       }
     }
     return components;
@@ -1980,7 +2044,7 @@
       if (s.key) m.key = s.key;
       if (s.id) m.id = s.id;
       if (s.remote) m.remote = true;
-      if (Array.isArray(s.documentationLinks) && s.documentationLinks.length) {
+      if (isList(s.documentationLinks) && s.documentationLinks.length) {
         m.docs = s.documentationLinks.map((d) => d.uri).filter(Boolean);
       }
       if (asLibrary) {
@@ -2028,7 +2092,7 @@
       grid: await Promise.all(
         grid.map(async (s) => ({
           name: s.name,
-          grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter(Boolean) : void 0,
+          grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g) => !!g) : void 0,
           tokens: await resolveBoundMap(s.boundVariables),
           description: s.description || void 0,
           ...await styleMeta(s)
@@ -2048,7 +2112,7 @@
         role: "library",
         libraryName: opts && opts.asLibrary || figma.root && figma.root.name || void 0,
         fileKey,
-        collectionKeys: vars.collections.map((c) => c.key).filter(Boolean)
+        collectionKeys: vars.collections.map((c) => c.key).filter((k) => !!k)
       };
     }
     return {
@@ -2056,7 +2120,7 @@
       file: figma.root && figma.root.name || void 0,
       source,
       colorProfile,
-      // legacy | srgb | display-p3 — whether emitted colors should be sRGB or wide-gamut
+      // legacy | srgb | display_p3 — whether emitted colors should be sRGB or wide-gamut
       collections: vars.collections,
       variables: vars.variables,
       styles,
@@ -2075,7 +2139,7 @@
       case "COLOR":
         return kv.value ? rgbaToHex(kv.value) : void 0;
       case "VECTOR":
-        return kv.value ? xy(kv.value) : void 0;
+        return kv.value ? { ...xy(kv.value) } : void 0;
       case "CIRCLE":
         return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : void 0;
       case "LINE":
@@ -2083,12 +2147,17 @@
       case "BOOL":
       case "TEXT_DATA":
       case "CIRCLE_POINT":
-      case "COLOR_POINT":
         return kv.value;
       // no transformation needed
+      // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
+      // same keys, same order, same JSON.
+      case "COLOR_POINT": {
+        const cp = kv.value;
+        return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
+      }
       default: {
         const unknownMember = kv;
-        return unknownMember.value;
+        return asJson(unknownMember.value);
       }
     }
   }
@@ -2098,7 +2167,7 @@
     return { type: String(ez.type).toLowerCase(), ...curve };
   }
   function keyframes(list) {
-    if (!Array.isArray(list) || !list.length) return void 0;
+    if (!isList(list) || !list.length) return void 0;
     return list.map((k) => {
       const o = { t: round(k.timelinePosition), value: keyframeValue(k.value) };
       const ez = motionEasing(k.easing);
@@ -2129,7 +2198,7 @@
       const o = {};
       if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
       if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-      if (Array.isArray(binding.tracks) && binding.tracks.length) {
+      if (isList(binding.tracks) && binding.tracks.length) {
         const tracks = binding.tracks.map((t) => {
           const to = {};
           if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
@@ -2145,7 +2214,7 @@
   }
   function collectMotion(node) {
     const out = {};
-    if ("timelines" in node && Array.isArray(node.timelines) && node.timelines.length) {
+    if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
       out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
     }
     if ("manualKeyframeTracks" in node) {
@@ -2156,7 +2225,7 @@
       const anims = animationsMap(node.animations);
       if (anims) out.animations = anims;
     }
-    if ("animationStyles" in node && Array.isArray(node.animationStyles) && node.animationStyles.length) {
+    if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
       out.styles = node.animationStyles.map((s) => {
         const o = { name: s.name, styleId: s.styleId };
         if (typeof s.duration === "number") o.duration = round(s.duration);
@@ -2169,18 +2238,6 @@
 
   // src/serialize.ts
   var MAX_DEPTH = 60;
-  var LOWER_ENUMS = [
-    ["layoutAlign", "alignSelf", "INHERIT"],
-    // FIXED is the default on nearly every node — two keys of pure noise per node. Only FILL/HUG
-    // (the values that actually change the generated CSS) are worth emitting.
-    ["layoutSizingHorizontal", "widthMode", "FIXED"],
-    ["layoutSizingVertical", "heightMode", "FIXED"],
-    ["overflowDirection", "scroll", "NONE"]
-  ];
-  var GRID_SELF_ENUMS = [
-    ["gridChildHorizontalAlign", "gridJustifySelf"],
-    ["gridChildVerticalAlign", "gridAlignSelf"]
-  ];
   var SIZE_LIMIT_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"];
   var CORNER_KEYS = [
     ["topLeftRadius", "tl"],
@@ -2275,28 +2332,27 @@
     const absoluteInParent = "layoutPositioning" in node && node.layoutPositioning === "ABSOLUTE";
     if (absoluteInParent) out.absolute = true;
     if ("layoutGrow" in node && node.layoutGrow) out.grow = node.layoutGrow;
-    for (const [field, key, skip] of LOWER_ENUMS) {
-      const v = anyProp(node, field);
-      if (typeof v === "string" && v && v !== skip) out[key] = v.toLowerCase();
-    }
+    if ("layoutAlign" in node && node.layoutAlign && node.layoutAlign !== "INHERIT") out.alignSelf = lower(node.layoutAlign);
+    if ("layoutSizingHorizontal" in node && node.layoutSizingHorizontal && node.layoutSizingHorizontal !== "FIXED") out.widthMode = lower(node.layoutSizingHorizontal);
+    if ("layoutSizingVertical" in node && node.layoutSizingVertical && node.layoutSizingVertical !== "FIXED") out.heightMode = lower(node.layoutSizingVertical);
+    if ("overflowDirection" in node && node.overflowDirection && node.overflowDirection !== "NONE") out.scroll = lower(node.overflowDirection);
     if ("gridColumnSpan" in node && typeof node.gridColumnSpan === "number" && node.gridColumnSpan !== 1) out.gridColumnSpan = node.gridColumnSpan;
     if ("gridRowSpan" in node && typeof node.gridRowSpan === "number" && node.gridRowSpan !== 1) out.gridRowSpan = node.gridRowSpan;
     if ("gridColumnAnchorIndex" in node && typeof node.gridColumnAnchorIndex === "number") out.gridColumnStart = node.gridColumnAnchorIndex;
     if ("gridRowAnchorIndex" in node && typeof node.gridRowAnchorIndex === "number") out.gridRowStart = node.gridRowAnchorIndex;
-    for (const [field, key] of GRID_SELF_ENUMS) {
-      const v = anyProp(node, field);
-      if (v && v !== "AUTO" && typeof v === "string") out[key] = GRID_SELF[v];
-    }
+    if ("gridChildHorizontalAlign" in node && node.gridChildHorizontalAlign && node.gridChildHorizontalAlign !== "AUTO") out.gridJustifySelf = GRID_SELF[node.gridChildHorizontalAlign];
+    if ("gridChildVerticalAlign" in node && node.gridChildVerticalAlign && node.gridChildVerticalAlign !== "AUTO") out.gridAlignSelf = GRID_SELF[node.gridChildVerticalAlign];
     if ((!parentControlsLayout || absoluteInParent) && "x" in node && typeof node.x === "number") {
       out.x = round(node.x);
       out.y = round(node.y);
     }
     if ("absoluteBoundingBox" in node && node.absoluteBoundingBox) {
       const b = node.absoluteBoundingBox;
-      out.box = { w: round(b.width), h: round(b.height) };
+      const box = { w: round(b.width), h: round(b.height) };
+      out.box = box;
       if (!parentControlsLayout || absoluteInParent) {
-        out.box.x = round(b.x);
-        out.box.y = round(b.y);
+        box.x = round(b.x);
+        box.y = round(b.y);
       }
       const rb = "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null;
       if (rb && (rb.x !== b.x || rb.y !== b.y || rb.width !== b.width || rb.height !== b.height)) {
@@ -2304,20 +2360,20 @@
       }
     }
     if ("layoutGrids" in node && Array.isArray(node.layoutGrids) && node.layoutGrids.length) {
-      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter(Boolean);
+      out.layoutGrids = node.layoutGrids.map(simplifyGrid).filter((g) => !!g);
     }
-    if ("annotations" in node && Array.isArray(node.annotations) && node.annotations.length) {
+    if ("annotations" in node && isList(node.annotations) && node.annotations.length) {
       out.annotations = node.annotations.map((a) => {
         const o = {};
         if (a.label) o.label = a.label;
         if (a.labelMarkdown) o.markdown = a.labelMarkdown;
         if (a.categoryId) o.categoryId = a.categoryId;
-        if (Array.isArray(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
+        if (isList(a.properties) && a.properties.length) o.props = a.properties.map((p) => p.type);
         return o;
       });
     }
     if ("devStatus" in node && node.devStatus && node.devStatus.type) {
-      out.devStatus = node.devStatus.type.toLowerCase();
+      out.devStatus = lower(node.devStatus.type);
       if (node.devStatus.description) out.devStatusNote = node.devStatus.description;
     }
     let sizeLimits;
@@ -2327,7 +2383,7 @@
     }
     if (sizeLimits) out.sizeLimits = sizeLimits;
     if ("constraints" in node && node.constraints && (node.constraints.horizontal !== "MIN" || node.constraints.vertical !== "MIN")) {
-      out.pin = { h: node.constraints.horizontal.toLowerCase(), v: node.constraints.vertical.toLowerCase() };
+      out.pin = { h: lower(node.constraints.horizontal), v: lower(node.constraints.vertical) };
     }
     if ("numberOfFixedChildren" in node && typeof node.numberOfFixedChildren === "number" && node.numberOfFixedChildren > 0) {
       out.fixedChildren = node.numberOfFixedChildren;
@@ -2388,12 +2444,12 @@
       putNonEmpty(out, "shape", shape);
     }
     if (node.type === "POLYGON" && typeof node.pointCount === "number") out.shape = { points: node.pointCount };
-    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = String(node.booleanOperation).toLowerCase();
-    if ("exportSettings" in node && Array.isArray(node.exportSettings) && node.exportSettings.length) {
+    if (node.type === "BOOLEAN_OPERATION" && node.booleanOperation) out.booleanOp = lower(node.booleanOperation);
+    if ("exportSettings" in node && isList(node.exportSettings) && node.exportSettings.length) {
       out.exportSettings = node.exportSettings.map((es) => {
         const o = { format: String(es.format || "").toLowerCase() };
         if ("suffix" in es && es.suffix) o.suffix = es.suffix;
-        const con = es.constraint;
+        const con = "constraint" in es ? es.constraint : void 0;
         if (con && typeof con.value === "number" && !(con.type === "SCALE" && con.value === 1)) {
           o.constraint = { type: String(con.type || "").toLowerCase(), value: round(con.value) };
         }
@@ -2605,9 +2661,6 @@
     for (const k of Object.keys(runOpts)) runOpts[k] = !!(opts && opts[k]);
   }
   var CSS_AUTO_NODE_CAP = 60;
-  function isList(v) {
-    return Array.isArray(v);
-  }
   function subtreeIsSmall(node) {
     let count = 0;
     const stack = [node];
@@ -2627,7 +2680,9 @@
   }
   var DEFAULT_PAGE_BG = ["#ffffff", "#f5f5f5", "#e5e5e5"];
   function isDefaultBg(f) {
-    return !f || f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1;
+    if (!f) return true;
+    const only = f[0];
+    return f.length === 1 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
   }
   async function pageBackground(page2) {
     const out = {};
@@ -3131,14 +3186,14 @@
       case "listPages":
         return await listPages(req.args);
       case "listChildren":
-        return await listChildren(req.args.nodeId);
+        return listChildren(req.args.nodeId);
       // UNQUEUED for the same reason as the two above: it is the cheap "which libraries feed this file?"
       // map you consult BEFORE deciding what to pull, it mutates no per-run state, and queueing it
       // behind a long export would defeat the point of asking. Its document walk is one
       // findAllWithCriteria per page with skipInvisibleInstanceChildren on — the same cost class as
       // listPages depth 2, not that of an export.
       case "listLibraries":
-        return await listLibraries();
+        return listLibraries();
       case "write": {
         const ops = req.args.ops;
         return serializeRun(() => applyWrites(Array.isArray(ops) ? ops : []), bridgeRun(req.cmd));
@@ -3182,9 +3237,7 @@
     figma.ui.postMessage({ type: "files", files, layerFiles, assets: r.assets, summary, warnings: warnings2 ? warnings2.length : 0 });
     releaseAssets();
   }
-  var collectSelectionTyped = () => collectSelection();
-  var collectFullTyped = () => collectFull();
-  var runSelection = () => runExport("current selection", collectSelectionTyped, (r) => ({
+  var runSelection = () => runExport("current selection", () => collectSelection(), (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) }
@@ -3193,7 +3246,7 @@
     warnings: r.screen.manifest && r.screen.manifest.warnings
   }));
   var SEP = "__";
-  var runFull = () => runExport("design system + page frames", collectFullTyped, (r) => {
+  var runFull = () => runExport("design system + page frames", () => collectFull(), (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     const ds = buildDesignSystemLayout(r.designSystem, SEP);
     const dsParts = ds.files.filter((f) => f.path !== "design-system.json");
@@ -3217,7 +3270,7 @@
     switch (raw.type) {
       case "get-token": {
         const token = await figma.clientStorage.getAsync("bridgeToken");
-        figma.ui.postMessage({ type: "token", token: token || "" });
+        figma.ui.postMessage({ type: "token", token: typeof token === "string" ? token : "" });
         break;
       }
       case "set-token": {

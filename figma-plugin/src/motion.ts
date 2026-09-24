@@ -1,27 +1,33 @@
 // Motion / animation reads (Plugin API Update 130, 2026-06). Keyframe/timeline VALUES are now
 // readable FREE via the Plugin API — this is a new plane the paid get_motion_context used to own.
 // Opt-in (runOpts.motion) because it's niche and can be verbose.
-import { type Obj, round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty } from "./util";
+import type { JsonValue, MotionKeyframe, MotionTrack, MotionAnimation, NodeMotion } from "../../bridge/src/doc-types.ts";
+import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
 // the typings' union (lint: switch-exhaustiveness-check) so a new member is a compile-time prompt; the
 // `default` still carries the raw value of a runtime-only newer member rather than dropping it.
-function keyframeValue(kv: KeyframeValue | undefined | null): unknown {
+function keyframeValue(kv: KeyframeValue | undefined | null): JsonValue | undefined {
   if (!kv || typeof kv !== "object") return kv;
   switch (kv.type) {
     case "FLOAT": return round(kv.value);
     case "COLOR": return kv.value ? rgbaToHex(kv.value) : undefined;
-    case "VECTOR": return kv.value ? xy(kv.value) : undefined;
+    case "VECTOR": return kv.value ? { ...xy(kv.value) } : undefined;
     case "CIRCLE": return kv.value ? { ...xy(kv.value), radius: round(kv.value.radius) } : undefined;
     case "LINE": return kv.value ? { ...xy(kv.value), x2: round(kv.value.x2), y2: round(kv.value.y2) } : undefined;
     case "BOOL":
     case "TEXT_DATA":
     case "CIRCLE_POINT":
-    case "COLOR_POINT":
       return kv.value; // no transformation needed
+    // RGBA is an interface (no index signature), so the colour is re-spread into a plain object literal —
+    // same keys, same order, same JSON.
+    case "COLOR_POINT": {
+      const cp = kv.value;
+      return cp ? { ...cp, color: { ...cp.color } } : asJson(cp);
+    }
     default: {
       const unknownMember: { value?: unknown } = kv; // `never` here; a newer runtime-only member at run time
-      return unknownMember.value;
+      return asJson(unknownMember.value);
     }
   }
 }
@@ -30,7 +36,7 @@ function keyframeValue(kv: KeyframeValue | undefined | null): unknown {
 // `easing` on a keyframe is `MotionEasing | VariableAlias` (Motion supports binding easing to an EASING
 // variable) — a VariableAlias has only {type:'VARIABLE_ALIAS', id}, so it falls through with no curve
 // params, same as an unrecognised MotionEasing would.
-function motionEasing(ez: MotionEasing | VariableAlias | undefined): Obj | undefined {
+function motionEasing(ez: MotionEasing | VariableAlias | undefined): MotionKeyframe["easing"] {
   if (!ez || !ez.type) return undefined;
   const curve = ez.type === "VARIABLE_ALIAS" ? {} : easingCurve(ez);
   return { type: String(ez.type).toLowerCase(), ...curve };
@@ -64,10 +70,10 @@ interface AnimationBinding {
   tracks?: ReadonlyArray<KeyframeTrack>;
 }
 
-function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): Obj[] | undefined {
-  if (!Array.isArray(list) || !list.length) return undefined;
+function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): MotionKeyframe[] | undefined {
+  if (!isList(list) || !list.length) return undefined;
   return list.map((k) => {
-    const o: Obj = { t: round(k.timelinePosition), value: keyframeValue(k.value) }; // t = timeline position (s)
+    const o: MotionKeyframe = { t: round(k.timelinePosition), value: keyframeValue(k.value) }; // t = timeline position (s)
     const ez = motionEasing(k.easing);
     if (ez) o.easing = ez;
     return o;
@@ -75,13 +81,13 @@ function keyframes(list: ReadonlyArray<FlatKeyframe> | undefined): Obj[] | undef
 }
 
 // manualKeyframeTracks -> { field: {base?, keyframes[]} }.
-function manualTrackMap(map: Record<string, ManualBinding | undefined> | undefined): Obj | undefined {
+function manualTrackMap(map: Record<string, ManualBinding | undefined> | undefined): Record<string, MotionTrack> | undefined {
   if (!map || typeof map !== "object") return undefined;
-  const out: Obj = {};
+  const out: Record<string, MotionTrack> = {};
   for (const field of Object.keys(map)) {
     const binding = map[field];
     if (!binding || typeof binding !== "object") continue;
-    const o: Obj = {};
+    const o: MotionTrack = {};
     if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
     const kf = keyframes(binding.keyframes);
     if (kf) o.keyframes = kf;
@@ -91,18 +97,18 @@ function manualTrackMap(map: Record<string, ManualBinding | undefined> | undefin
 }
 
 // animations -> { field: {base?, duration?, tracks:[{op?, keyframes[]}]} }.
-function animationsMap(map: Record<string, AnimationBinding | undefined> | undefined): Obj | undefined {
+function animationsMap(map: Record<string, AnimationBinding | undefined> | undefined): Record<string, MotionAnimation> | undefined {
   if (!map || typeof map !== "object") return undefined;
-  const out: Obj = {};
+  const out: Record<string, MotionAnimation> = {};
   for (const field of Object.keys(map)) {
     const binding = map[field];
     if (!binding || typeof binding !== "object") continue;
-    const o: Obj = {};
+    const o: MotionAnimation = {};
     if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
     if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
-    if (Array.isArray(binding.tracks) && binding.tracks.length) {
+    if (isList(binding.tracks) && binding.tracks.length) {
       const tracks = binding.tracks.map((t) => {
-        const to: Obj = {};
+        const to: NonNullable<MotionAnimation["tracks"]>[number] = {};
         if (typeof t.keyframeOperation === "string" && t.keyframeOperation !== "SET") to.op = t.keyframeOperation.toLowerCase();
         const kf = keyframes(t.keyframes);
         if (kf) to.keyframes = kf;
@@ -118,9 +124,9 @@ function animationsMap(map: Record<string, AnimationBinding | undefined> | undef
 // The whole motion surface on a node -> compact { timelines?, manualTracks?, animations?, styles? }.
 // timelines/manualKeyframeTracks/animations/animationStyles live on MotionNodeMixin, which not every
 // SceneNode variant carries — hence the `in` guards.
-export function collectMotion(node: SceneNode): Obj | undefined {
-  const out: Obj = {};
-  if ("timelines" in node && Array.isArray(node.timelines) && node.timelines.length) {
+export function collectMotion(node: SceneNode): NodeMotion | undefined {
+  const out: NodeMotion = {};
+  if ("timelines" in node && isList(node.timelines) && node.timelines.length) {
     out.timelines = node.timelines.map((t) => ({ id: t.id, duration: round(t.duration) }));
   }
   if ("manualKeyframeTracks" in node) {
@@ -131,9 +137,9 @@ export function collectMotion(node: SceneNode): Obj | undefined {
     const anims = animationsMap(node.animations);
     if (anims) out.animations = anims;
   }
-  if ("animationStyles" in node && Array.isArray(node.animationStyles) && node.animationStyles.length) {
+  if ("animationStyles" in node && isList(node.animationStyles) && node.animationStyles.length) {
     out.styles = node.animationStyles.map((s) => {
-      const o: Obj = { name: s.name, styleId: s.styleId };
+      const o: NonNullable<NodeMotion["styles"]>[number] = { name: s.name, styleId: s.styleId };
       if (typeof s.duration === "number") o.duration = round(s.duration);
       if (typeof s.timelineOffset === "number" && s.timelineOffset) o.timelineOffset = round(s.timelineOffset);
       return o;

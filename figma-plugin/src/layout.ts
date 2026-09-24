@@ -1,7 +1,8 @@
 // Auto Layout / Grid -> flex/grid intent. Reads either a real frame OR node.inferredAutoLayout.
-import { type Obj, round } from "./util";
+import type { LayoutSpec, LayoutGridSpec, GridTrack, FlexAlign } from "../../bridge/src/doc-types.ts";
+import { round, lower } from "./util";
 
-const ALIGN: { [k: string]: string } = {
+const ALIGN: { [k: string]: FlexAlign } = {
   MIN: "flex-start",
   CENTER: "center",
   MAX: "flex-end",
@@ -11,21 +12,22 @@ const ALIGN: { [k: string]: string } = {
 
 // Build flex intent from any auto-layout-shaped source (a real frame OR node.inferredAutoLayout —
 // both carry the same fields via AutoLayoutMixin, so a small structural interface covers either).
+// The four paddings are required, as they are on AutoLayoutMixin.
 interface FlexLike {
   layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
   itemSpacing?: number;
-  paddingTop?: number;
-  paddingRight?: number;
-  paddingBottom?: number;
-  paddingLeft?: number;
+  paddingTop: number;
+  paddingRight: number;
+  paddingBottom: number;
+  paddingLeft: number;
   primaryAxisAlignItems?: "MIN" | "MAX" | "CENTER" | "SPACE_BETWEEN" | "SPACE_EVENLY" | "SPACE_AROUND";
   counterAxisAlignItems?: "MIN" | "MAX" | "CENTER" | "BASELINE";
   layoutWrap?: "NO_WRAP" | "WRAP";
   counterAxisSpacing?: number | null;
   counterAxisAlignContent?: "AUTO" | "SPACE_BETWEEN";
 }
-function flexIntent(src: FlexLike): Obj {
-  const l: Obj = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
+function flexIntent(src: FlexLike): LayoutSpec {
+  const l: LayoutSpec = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
   if (src.itemSpacing) l.gap = src.itemSpacing;
   const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
   if (pad.some((p) => p)) l.padding = pad;
@@ -41,9 +43,9 @@ function flexIntent(src: FlexLike): Obj {
 }
 
 // A Figma LayoutGrid (column/row grid or uniform grid) -> a compact descriptor.
-export function simplifyGrid(g: LayoutGrid): Obj | undefined {
+export function simplifyGrid(g: LayoutGrid): LayoutGridSpec | undefined {
   if (!g) return undefined;
-  const o: Obj = { pattern: g.pattern ? String(g.pattern).toLowerCase() : undefined };
+  const o: LayoutGridSpec = { pattern: g.pattern ? lower(g.pattern) : undefined };
   // sectionSize is the cell size of a uniform GRID and the column/row width of ROWS/COLUMNS (there it is
   // ignored by Figma only when alignment is STRETCH — RowsColsLayoutGrid in the typings) — read it for all.
   if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
@@ -51,21 +53,21 @@ export function simplifyGrid(g: LayoutGrid): Obj | undefined {
     if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
     if (typeof g.count === "number" && g.count !== Infinity) o.count = g.count;
     if (typeof g.offset === "number") o.offset = round(g.offset);
-    if (g.alignment) o.alignment = String(g.alignment).toLowerCase();
+    if (g.alignment) o.alignment = lower(g.alignment);
   }
   if (g.visible === false) o.visible = false;
   return o;
 }
 
-// A GridTrackSize ({ type:'FLEX'|'FIXED', value?:number }) -> compact track descriptor.
-function simplifyTrack(t: GridTrackSize): Obj {
-  const o: Obj = { type: t.type ? String(t.type).toLowerCase() : undefined };
+// A GridTrackSize ({ type:'FLEX'|'FIXED'|'HUG', value?:number }) -> compact track descriptor.
+function simplifyTrack(t: GridTrackSize): GridTrack {
+  const o: GridTrack = { type: t.type ? lower(t.type) : undefined };
   if (typeof t.value === "number") o.value = round(t.value);
   return o;
 }
 
 // Grid child cell alignment (justify-self / align-self analog): MIN|CENTER|MAX|AUTO.
-export const GRID_SELF: { [k: string]: string } = { MIN: "start", CENTER: "center", MAX: "end" };
+export const GRID_SELF: { [k: string]: "start" | "center" | "end" } = { MIN: "start", CENTER: "center", MAX: "end" };
 
 // The auto-layout/grid-shaped fields layout() reads, on top of a real SceneNode — the plugin manifest
 // targets `documentAccess: "dynamic-page"`, so not every SceneNode variant carries these (hence the
@@ -86,7 +88,7 @@ interface LayoutNode extends FlexLike {
 }
 
 // Auto Layout -> flex intent. NONE with an inferred layout -> flex (flagged). NONE otherwise -> absolute.
-export function layout(node: SceneNode): Obj | undefined {
+export function layout(node: SceneNode): LayoutSpec | undefined {
   const n = node as SceneNode & LayoutNode;
   if (!("layoutMode" in node) || n.layoutMode === "NONE") {
     // inferredAutoLayout upgrades a non-auto-layout frame to flex intent (better than raw coords).
@@ -102,7 +104,7 @@ export function layout(node: SceneNode): Obj | undefined {
     // Real grid geometry — track counts + per-axis gaps (itemSpacing is NOT the grid gap).
     // Padding is derived here rather than above the branch: the flex path never used this copy —
     // flexIntent builds its own from the same four fields — so two expressions had to stay in step.
-    const g: Obj = { display: "grid" };
+    const g: LayoutSpec = { display: "grid" };
     const pad = [n.paddingTop, n.paddingRight, n.paddingBottom, n.paddingLeft]; // [top, right, bottom, left]
     if (pad.some((p) => p)) g.padding = pad;
     if ("gridColumnCount" in node && typeof n.gridColumnCount === "number") g.columns = n.gridColumnCount;

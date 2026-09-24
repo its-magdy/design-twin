@@ -1,6 +1,10 @@
 // Collectors (return data; shared by manual export AND the bridge). Each resets per-run state,
 // applies read options, walks the requested scope, and returns the compact screen/layer/design-system docs.
-import { type Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
+import type {
+  IrNode, ScreenExport, Manifest, Measurement as IrMeasurement, DevResource as IrDevResource, Paint as IrPaint,
+  PageSettings, PrototypeFlow, LayersDoc, LayersDocLayer, LayersDocIndexRow,
+} from "../../bridge/src/doc-types.ts";
+import { safe, errMsg, exportedAt, nonEmpty, isList } from "./util";
 // Figma URLs carry `123-456`, the API wants `123:456`. bridge/node-id.js is "the ONE place that knows
 // what a node id looks like and how it hides in a Figma URL" — esbuild inlines that dependency-free CJS
 // module into the plugin bundle exactly as it does pages-layout.js, so the plugin uses the SAME parser
@@ -9,14 +13,48 @@ import { type Obj, safe, errMsg, exportedAt, nonEmpty } from "./util";
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
 import { toNodeId } from "../../bridge/src/node-id.ts";
-import { assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
+import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
 import { serialize } from "./serialize";
 import { collectReference, devResources } from "./assets";
 import { simplifyFills } from "./paint";
-import { buildDesignSystem } from "./components";
-import { dumpVariables, resolvedModes } from "./variables";
+import { type BuiltDesignSystem, buildDesignSystem } from "./components";
+import { type VariablesDump, dumpVariables, resolvedModes } from "./variables";
+
+// ---------------------------------------------------------------- what the collectors return
+// The envelopes around the documented docs (doc-types.ts): subtypes of the per-command replies in
+// bridge/src/commands.ts that write-out.ts receives, the UI's download path unpacks (main.ts), and
+// test/harness.ts asserts on.
+
+/** collectSelection / collectNode: the screen doc + its sibling variables dump + the run's assets.
+ *  page/pageId/nodeId are repeated at the top level (see screenResult). */
+export interface ScreenResult {
+  screenName: string;
+  screen: ScreenExport & { manifest: Manifest };
+  variables: VariablesDump;
+  assets: Asset[];
+  page?: string;
+  pageId?: string;
+  nodeId?: string;
+}
+/** collectFull: the design system, the page-walk layers doc pages-layout.ts splits, and the assets. */
+export interface FullResult { designSystem: BuiltDesignSystem; layersDoc: LayersDoc; assets: Asset[] }
+/** collectDesignSystemOnly / collectLibraryFile. */
+export interface DesignSystemResult { designSystem: BuiltDesignSystem }
+/** collectScreenshot: one node's reference PNG (its path; the bytes ride in `assets`). */
+export interface ScreenshotResult { id: string; name: string; type: string; reference: string; manifest: Manifest; assets: Asset[] }
+/** summarize(): the ONLY shape the cheap index reads emit — structure, never an export. */
+export interface NodeSummary { name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean }
+export interface PageListing { name: string; id: string; current?: true; unreadable?: true; frames?: NodeSummary[] }
+export interface ListPagesResult {
+  exportedAt: string; file: string; depth: number; pages: PageListing[];
+  manifest: { pages: number; frames?: number; warnings: string[] };
+}
+export interface ListChildrenResult {
+  exportedAt: string; id: string; name: string; type: string; children: NodeSummary[];
+  manifest: { children: number; warnings: string[] };
+}
 
 // The read options are NOT restated here: they come from bridge/read-opts.js's ReadOptName, the same
 // registry the CLI flag table and the MCP tool schema derive from. Only the options this entrypoint
@@ -35,7 +73,7 @@ export interface CollectOpts extends Partial<Record<ReadOptName, boolean>> {
 // emits a stray reference asset. Keeping every root-only read here (rather than a `depth === 0`
 // branch inside the recursive serializer) means "computed once per exported root" has ONE home.
 // Callers attach ref/dev where their own doc shape wants them (inline vs sibling fields).
-async function serializeWithRefs(node: SceneNode): Promise<{ tree: Obj | null; ref?: string; dev?: Obj[] }> {
+async function serializeWithRefs(node: SceneNode): Promise<{ tree: IrNode | null; ref?: string; dev?: IrDevResource[] }> {
   const tree = await serialize(node, 0);
   if (!tree) return { tree: null };
   const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
@@ -44,7 +82,7 @@ async function serializeWithRefs(node: SceneNode): Promise<{ tree: Obj | null; r
 }
 
 // Serialize a root and attach the enrichment inline (the shape both single-scope collectors want).
-async function rootTree(node: SceneNode): Promise<Obj | null> {
+async function rootTree(node: SceneNode): Promise<IrNode | null> {
   const { tree, ref, dev } = await serializeWithRefs(node);
   if (!tree) return null;
   if (ref) tree.reference = ref;
@@ -62,8 +100,8 @@ async function rootTree(node: SceneNode): Promise<Obj | null> {
 // both called "Popup" silently overwrote each other and why a --node pull could not join the pages/
 // layout a --page pull writes (live findings 47/63). pageId (not the page NAME) is the identity:
 // PageNode.name is user-editable and the Plugin API documents no uniqueness constraint on it.
-async function screenResult(title: string, fileBase: string, nodes: Obj[], origin?: { page: PageNode | null; nodeId?: string }): Promise<Obj> {
-  const screen: Obj = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
+async function screenResult(title: string, fileBase: string, nodes: IrNode[], origin?: { page: PageNode | null; nodeId?: string }): Promise<ScreenResult> {
+  const screen: ScreenResult["screen"] = { exportedAt: exportedAt(), screen: title, nodes, manifest: manifest() };
   const page = origin && origin.page;
   if (page) { screen.page = page.name; screen.pageId = page.id; }
   if (origin && origin.nodeId) screen.nodeId = origin.nodeId;
@@ -72,7 +110,7 @@ async function screenResult(title: string, fileBase: string, nodes: Obj[], origi
   // Repeated at the TOP level as well as inside `screen`: write-out.js routes the file into
   // pages/<page>/ before it has a reason to open the screen doc, and the MCP path hands the same
   // envelope to a caller that may never write to disk at all.
-  const out: Obj = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
+  const out: ScreenResult = { screenName: safe(fileBase), screen, variables: await dumpVariables(), assets: assets.slice() };
   if (page) { out.page = page.name; out.pageId = page.id; }
   if (origin && origin.nodeId) out.nodeId = origin.nodeId;
   return out;
@@ -82,8 +120,8 @@ async function screenResult(title: string, fileBase: string, nodes: Obj[], origi
 // by listPages and listChildren so a new field can't be added to one index and missed on the other.
 // PageNode is admitted because listChildren on the DOCUMENT node lists pages; pages have neither a
 // size nor `visible`, which the `in` checks below already handle.
-function summarize(nd: SceneNode | PageNode): Obj {
-  const o: Obj = { name: nd.name, id: nd.id, type: nd.type };
+function summarize(nd: SceneNode | PageNode): NodeSummary {
+  const o: NodeSummary = { name: nd.name, id: nd.id, type: nd.type };
   if ("width" in nd) { o.w = Math.round(nd.width); o.h = Math.round(nd.height); }
   if ("visible" in nd && nd.visible === false) o.hidden = true;
   return o;
@@ -186,11 +224,6 @@ function applyOpts(opts?: CollectOpts): void {
 // ON when the caller didn't specify AND the exported subtree is small. Large/full exports keep it off
 // unless explicitly requested. An explicit css:false/true always wins (only `undefined` auto-resolves).
 const CSS_AUTO_NODE_CAP = 60;
-// Array.isArray's built-in guard narrows a ReadonlyArray<T> to an untyped array (its elements lose T);
-// this is the same runtime check with T kept (test doubles can hand back a non-array here).
-function isList<T>(v: ReadonlyArray<T> | null | undefined): v is ReadonlyArray<T> {
-  return Array.isArray(v);
-}
 // Counts only far enough to answer "is this subtree at or under the cap?" — the exact size of a big
 // tree is never wanted, and walking to find it is the cost this gate exists to avoid.
 function subtreeIsSmall(node: BaseNode): boolean {
@@ -218,13 +251,15 @@ function autoCss(opts: CollectOpts | undefined, node: BaseNode): CollectOpts {
 // renders white without it. Figma's own defaults (white / the #f5f5f5 canvas grey) carry no intent, so
 // they are omitted: this field appearing at all means the designer chose something.
 const DEFAULT_PAGE_BG = ["#ffffff", "#f5f5f5", "#e5e5e5"];
-function isDefaultBg(f: Obj[] | undefined): boolean {
-  return !f || (f.length === 1 && f[0].type === "solid" && DEFAULT_PAGE_BG.indexOf(f[0].color) !== -1);
+function isDefaultBg(f: IrPaint[] | undefined): boolean {
+  if (!f) return true;
+  const only = f[0];
+  return f.length === 1 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
 }
 // Reuses simplifyFills rather than hand-reading `.color`: page backgrounds are full Paint[] (an image
 // or gradient canvas is legal), and a second reader here would be a permanently-lagging copy of paint.ts.
-async function pageBackground(page: PageNode): Promise<Obj | undefined> {
-  const out: Obj = {};
+async function pageBackground(page: PageNode): Promise<Pick<PageSettings, "background" | "prototypeBackground"> | undefined> {
+  const out: Pick<PageSettings, "background" | "prototypeBackground"> = {};
   const bg = await simplifyFills(page.backgrounds);
   if (!isDefaultBg(bg)) out.background = bg;
   const proto = await simplifyFills(page.prototypeBackgrounds);
@@ -237,7 +272,7 @@ async function pageBackground(page: PageNode): Promise<Obj | undefined> {
 // blows its context or has to open the file to find out how big it is. `bytes` is the serialized
 // length of exactly what lands in that layer's file; `nodes` is its subtree count. Both are computed
 // from the tree already in hand, so neither costs a Plugin-API read.
-function countNodes(tree: Obj): number {
+function countNodes(tree: IrNode): number {
   let n = 1;
   const kids = tree.children;
   if (Array.isArray(kids)) for (const k of kids) n += countNodes(k);
@@ -248,10 +283,10 @@ function countNodes(tree: Obj): number {
 // note: getMeasurements(), not getMeasurementsAsync(). Read from the page(s) BEING EXPORTED: this
 // used to hardcode figma.currentPage, so a --page export of a non-current page silently attached the
 // open page's redlines to a doc about a different page. Each entry is tagged with its page.
-function collectMeasurements(pages?: ReadonlyArray<PageNode>): Obj[] | undefined {
+function collectMeasurements(pages?: ReadonlyArray<PageNode>): IrMeasurement[] | undefined {
   if (!runOpts.measurements) return undefined;
   const targets = pages && pages.length ? pages : [figma.currentPage];
-  const out: Obj[] = [];
+  const out: IrMeasurement[] = [];
   for (const page of targets) {
     if (typeof page.getMeasurements !== "function") continue;
     try {
@@ -262,7 +297,7 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): Obj[] | undefined
         // Always tagged, even for a single-page run. Emitting `page` only when targets.length > 1 gave
         // consumers two shapes for one field and made the single-page case the one where you cannot
         // tell WHICH page a redline came from without cross-referencing the doc's own scope.
-        const o: Obj = { page: page.name, pageId: page.id, start: side(m.start), end: side(m.end) };
+        const o: IrMeasurement = { page: page.name, pageId: page.id, start: side(m.start), end: side(m.end) };
         if (m.freeText) o.text = m.freeText;
         if (m.offset != null) o.offset = m.offset;
         out.push(o);
@@ -277,14 +312,14 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): Obj[] | undefined
   return out.length ? out : undefined;
 }
 
-export async function collectSelection(opts?: CollectOpts): Promise<Obj> {
+export async function collectSelection(opts?: CollectOpts): Promise<ScreenResult> {
   resetRun();
   const sel = figma.currentPage.selection;
   if (!sel.length) throw new Error("Select at least one frame first.");
   // Single small selection ("inspect one component") auto-enables the CSS oracle; multi-select keeps
   // it opt-in (a several-frame selection is closer to a full export than a component inspect).
   applyOpts(sel.length === 1 ? autoCss(opts, sel[0]) : opts);
-  const nodes: Obj[] = [];
+  const nodes: IrNode[] = [];
   for (const nd of sel) {
     const tree = await rootTree(nd);
     if (tree) nodes.push(tree);
@@ -302,7 +337,7 @@ function pageOf(node: BaseNode): PageNode | null {
 }
 
 // Export a single node addressed by id — the plane behind "paste a Figma link and ask".
-export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Obj> {
+export async function collectNode(rawId: string, opts?: CollectOpts): Promise<ScreenResult> {
   resetRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error("No node id provided.");
@@ -327,7 +362,7 @@ export async function collectNode(rawId: string, opts?: CollectOpts): Promise<Ob
 // Figma's own get_screenshot (single-node/selection scope, pulled on demand for visual validation)
 // rather than a bulk pre-render pass over every node/instance in a dense screen, which would pay the
 // same O(nodes) cost --no-assets exists to avoid for a much bigger payload (PNG > structural JSON).
-export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<Obj> {
+export async function collectScreenshot(rawId: string, opts?: { scale?: number }): Promise<ScreenshotResult> {
   resetRun();
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error("No node id provided.");
@@ -366,7 +401,7 @@ const TOP_LEVEL_TYPES = new Set([
 // soft, driftable numbers an agent would treat as decision-grade, and they belong in their own op.
 //
 // Reuses TOP_LEVEL_TYPES so "what counts as a frame" cannot drift from collectFull's own index.
-export async function listPages(opts?: { depth?: number }): Promise<Obj> {
+export async function listPages(opts?: { depth?: number }): Promise<ListPagesResult> {
   const depth = opts && opts.depth === 1 ? 1 : 2;
   const localWarnings: string[] = [];
   const sink = (m: string) => localWarnings.push(m);
@@ -376,7 +411,7 @@ export async function listPages(opts?: { depth?: number }): Promise<Obj> {
   // each read crosses the sandbox bridge and materialises a fresh wrapper array.
   const roots = figma.root.children;
   const currentId = figma.currentPage && figma.currentPage.id;
-  const pages: Obj[] = [];
+  const pages: PageListing[] = [];
   let frameCount = 0;
   // At depth 2 EVERY page gets loaded (there is no early exit, unlike listChildren's lookup scan), and
   // the loads are independent — so issue them together rather than paying 25 round trips end-to-end on
@@ -386,7 +421,7 @@ export async function listPages(opts?: { depth?: number }): Promise<Obj> {
     await Promise.all(roots.map((p) => loadPageSafely(p, sink, "— its frames may be missing")));
   }
   for (const page of roots) {
-    const entry: Obj = { name: page.name, id: page.id };
+    const entry: PageListing = { name: page.name, id: page.id };
     if (page.id === currentId) entry.current = true;
     if (depth >= 2) {
       const children = pageChildren(page, sink, "its frames are NOT listed");
@@ -418,7 +453,7 @@ export async function listPages(opts?: { depth?: number }): Promise<Obj> {
 // Deliberately does NOT filter by TOP_LEVEL_TYPES — that filter exists to drop loose canvas litter at
 // a PAGE's top level (SLICE, etc.); once you're a level inside a frame every child type is real content
 // (TEXT, VECTOR, INSTANCE...), so nothing here should be silently dropped from the count.
-export async function listChildren(rawId: string): Promise<Obj> {
+export async function listChildren(rawId: string): Promise<ListChildrenResult> {
   const nodeId = toNodeId(rawId);
   if (!nodeId) throw new Error("No node id provided.");
   const localWarnings: string[] = [];
@@ -430,7 +465,7 @@ export async function listChildren(rawId: string): Promise<Obj> {
   } catch (e) {
     throw new Error("Node " + nodeId + "'s children could not be read: " + errMsg(e));
   }
-  const children: Obj[] = [];
+  const children: NodeSummary[] = [];
   for (const nd of kids) {
     const c = summarize(nd);
     if ("children" in nd) c.hasChildren = nd.children.length > 0;
@@ -459,7 +494,7 @@ export async function listChildren(rawId: string): Promise<Obj> {
 // only those five keys + the exportedAt/file/colorProfile stamp. A `manifest` field attached here would
 // be silently dropped by that split, and dropped again by figma_export_design_system's
 // `writeToDisk: true` MCP path — the one place a caller can't fall back to reading the CLI's stderr.
-export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Obj> {
+export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult> {
   resetRun();
   applyOpts(opts);
   const designSystem = await buildDesignSystem(undefined, serialize);
@@ -481,7 +516,7 @@ export async function collectDesignSystemOnly(opts?: CollectOpts): Promise<Obj> 
 // from a consuming file, but the import* family MATERIALIZES into the current document (the typings say
 // exactly that of its sibling importShaderAsync), i.e. it would make a read-plane command mutate the
 // user's file — hundreds of subscribed variables, undoable but real. This path reads and writes nothing.
-export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<Obj> {
+export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult> {
   resetRun();
   applyOpts(opts);
   const asLibrary = (opts && opts.asLibrary) || (figma.root && figma.root.name) || "library";
@@ -499,7 +534,7 @@ export async function collectLibraryFile(opts?: CollectOpts & { asLibrary?: stri
 
 // Export the design system + frame trees. Frame trees default to the CURRENT page; pass
 // { allPages:true } to walk every page (opt-in — a whole multi-page file can be very large).
-export async function collectFull(opts?: CollectOpts): Promise<Obj> {
+export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
   resetRun();
   applyOpts(opts);
   const allPages = !!(opts && opts.allPages);
@@ -550,10 +585,10 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
   // real UI frames alongside design-system specimen sections and individual icon components (verified
   // live: a "🎨 Design System" page's top-level layers were mostly swatches/icons, not app screens).
   // "Screen" stays reserved for collectSelection/collectNode, where a human deliberately picked one node.
-  const layers: Obj[] = [];
-  const index: Obj[] = [];
-  const flows: Obj[] = []; // prototype entry points = the app's navigation-graph roots
-  const pageSettings: Obj[] = []; // per-page canvas backgrounds (only where the designer set one)
+  const layers: LayersDocLayer[] = [];
+  const index: LayersDocIndexRow[] = [];
+  const flows: PrototypeFlow[] = []; // prototype entry points = the app's navigation-graph roots
+  const pageSettings: PageSettings[] = []; // per-page canvas backgrounds (only where the designer set one)
   // 1-based, and counted over the pages actually WALKED (not figma.root.children) so "page 3 of 4"
   // means what it says on a --page pull of four named pages.
   let pageIndex = 0;
@@ -608,7 +643,7 @@ export async function collectFull(opts?: CollectOpts): Promise<Obj> {
   // page attached another page's redlines to this doc — silently, and mislabelled. Read them from
   // the page(s) actually walked.
   const measurements = collectMeasurements(pages);
-  const layersDoc: Obj = {
+  const layersDoc: LayersDoc = {
     exportedAt: exportedAt(),
     // Three cases, not two. Folding an explicit --page into "current-page" left the consumer unable
     // to tell whether it got the page it asked for, next to a `page` field naming a page that was
