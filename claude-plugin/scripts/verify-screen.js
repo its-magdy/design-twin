@@ -527,7 +527,7 @@ function expectNode(n, ctxOrPath) {
       const dir = L.flexDirection === "column" ? "column" : "row";
       const flow = inFlowChildren(n);
       if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) \u2014 a gap has nothing to separate`);
-      else if (L.justifyContent === "space-between") skip("gap", g, "space-between: Figma ignores item spacing here, so the stored value is slack, not a gap");
+      else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
       else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off \u2014 placement is checked through the children's positions and sizes instead");
       else spec.gap = g;
     }

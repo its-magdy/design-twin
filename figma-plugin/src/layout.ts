@@ -2,14 +2,6 @@
 import type { LayoutSpec, LayoutGridSpec, GridTrack, FlexAlign } from "../../bridge/src/doc-types.ts";
 import { round, lower } from "./util";
 
-const ALIGN: { [k: string]: FlexAlign } = {
-  MIN: "flex-start",
-  CENTER: "center",
-  MAX: "flex-end",
-  SPACE_BETWEEN: "space-between",
-  BASELINE: "baseline",
-};
-
 // Build flex intent from any auto-layout-shaped source (a real frame OR node.inferredAutoLayout —
 // both carry the same fields via AutoLayoutMixin, so a small structural interface covers either).
 // The four paddings are required, as they are on AutoLayoutMixin.
@@ -26,6 +18,26 @@ interface FlexLike {
   counterAxisSpacing?: number | null;
   counterAxisAlignContent?: "AUTO" | "SPACE_BETWEEN";
 }
+
+// Every value the three Figma alignment enums (primaryAxisAlignItems / counterAxisAlignItems /
+// counterAxisAlignContent) can take, keyed as a Record so a future member added to any of the three
+// enums is a compile error here rather than a silent `ALIGN[...]` -> undefined drop.
+type AlignKey =
+  | NonNullable<FlexLike["primaryAxisAlignItems"]>
+  | NonNullable<FlexLike["counterAxisAlignItems"]>
+  | NonNullable<FlexLike["counterAxisAlignContent"]>;
+const ALIGN: Record<AlignKey, FlexAlign> = {
+  MIN: "flex-start",
+  CENTER: "center",
+  MAX: "flex-end",
+  SPACE_BETWEEN: "space-between",
+  SPACE_EVENLY: "space-evenly",
+  SPACE_AROUND: "space-around",
+  BASELINE: "baseline",
+  // AUTO is never looked up (counterAxisAlignContent skips it via the `!== "AUTO"` check below); the
+  // value exists only to make this Record total over AlignKey.
+  AUTO: "flex-start",
+};
 function flexIntent(src: FlexLike): LayoutSpec {
   const l: LayoutSpec = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
   if (src.itemSpacing) l.gap = src.itemSpacing;

@@ -360,6 +360,24 @@ const sandbox = context as unknown as Sandbox;
   ok("scroll frame -> sizeLimits.maxWidth", !!(tree.sizeLimits && tree.sizeLimits.maxWidth === 400));
   ok("layout flex column + gap + padding", !!(tree.layout && tree.layout.flexDirection === "column" && tree.layout.gap === 12 && Array.isArray(tree.layout.padding)));
 
+  // ---- primaryAxisAlignItems SPACE_EVENLY / SPACE_AROUND (Figma Update 137) -> justifyContent ----
+  const evenlyFrame = { type: "FRAME", name: "Evenly", visible: true, id: "al:1", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "SPACE_EVENLY", counterAxisAlignItems: "MIN", children: [] };
+  const evenlyOut = await sandbox.serialize(evenlyFrame, 0, false);
+  ok("[SPACE_EVENLY] -> justifyContent: space-evenly", evenlyOut.layout!.justifyContent === "space-evenly");
+  const aroundFrame = { type: "FRAME", name: "Around", visible: true, id: "al:2", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
+  const aroundOut = await sandbox.serialize(aroundFrame, 0, false);
+  ok("[SPACE_AROUND] -> justifyContent: space-around", aroundOut.layout!.justifyContent === "space-around");
+  // counterAxisAlignItems still maps as before (unaffected by the SPACE_EVENLY/SPACE_AROUND addition).
+  const counterFrame = { type: "FRAME", name: "Counter", visible: true, id: "al:3", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "MIN", counterAxisAlignItems: "CENTER", children: [] };
+  const counterOut = await sandbox.serialize(counterFrame, 0, false);
+  ok("[counterAxisAlignItems] CENTER -> alignItems: center (unchanged)", counterOut.layout!.alignItems === "center");
+
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
   ok("text run underline decoration", txt.runs![1].font.decoration === "underline");

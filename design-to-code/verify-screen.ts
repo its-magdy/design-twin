@@ -315,7 +315,12 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
       const dir = L.flexDirection === "column" ? "column" : "row";
       const flow = inFlowChildren(n);
       if (flow.length < 2) skip("gap", g, `fewer than two laid-out children (${flow.length}) — a gap has nothing to separate`);
-      else if (L.justifyContent === "space-between") skip("gap", g, "space-between: Figma ignores item spacing here, so the stored value is slack, not a gap");
+      // primaryAxisAlignItems distribution modes (SPACE_BETWEEN/SPACE_EVENLY/SPACE_AROUND) all space
+      // children by dividing the frame's free space along the primary axis, ignoring itemSpacing
+      // (plugin-typings plugin-api.d.ts primaryAxisAlignItems remarks: each "will space the children
+      // evenly along the primary axis" using the extra space, not the configured gap) — so the stored
+      // value is slack for all three, not just space-between.
+      else if (L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around") skip("gap", g, `${L.justifyContent}: Figma ignores item spacing here, so the stored value is slack, not a gap`);
       else if (flow.some((c) => growsAlong(c, dir))) skip("gap", g, "a child fills the main axis, so the stored gap and that child's size trade off — placement is checked through the children's positions and sizes instead");
       else spec.gap = g;
     }
