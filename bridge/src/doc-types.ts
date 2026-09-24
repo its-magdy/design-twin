@@ -339,9 +339,12 @@ export interface TextFields {
 
 /** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, …
  *  (absent when the keyframe carried no readable value). `easing` is the lower-cased MotionEasing type plus
- *  its curve params, or — when the easing is bound to an EASING variable — `{type: "variable_alias", id}`
- *  with the variable id. */
-export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown; id?: string } }
+ *  its curve params, or — when the easing is bound to an EASING variable (typings `MotionEasing |
+ *  VariableAlias`) — the SAME alias shape a top-level variable reference uses: `{aliasOf: <variable
+ *  name>}`, falling back to `{aliasOf: <id>}` when the name can't be resolved (variables.ts's
+ *  VariableAlias -> {aliasOf} resolution, via state.ts's `varName` memo over
+ *  `figma.variables.getVariableByIdAsync`). */
+export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } | VariableAlias }
 /** One manually-keyframed field (ManualKeyframeBinding): its base value and the keyframes. */
 export interface MotionTrack { base?: JsonValue; keyframes?: MotionKeyframe[] }
 /** One timeline-animated field (KeyframeBinding): base value, the timeline's duration, and its tracks,
@@ -367,7 +370,7 @@ export type MotionAnimations = Record<string, MotionAnimation> & MotionIndexedTr
 /** The opt-in motion read on a node (`--motion`): timelines, per-field tracks, applied animation styles. */
 /** One configured value of an applied animation style's `props` (AnimationStyleConfiguration.props):
  *  a plain string/number/boolean, or — for a MotionEasing / VariableAlias value — the same compacted
- *  shape as a keyframe's `easing` (lower-cased curve type + params, or `{type:"variable_alias", id}`). */
+ *  shape as a keyframe's `easing` (lower-cased curve type + params, or `{aliasOf: <name or id>}`). */
 export type MotionStylePropValue = string | number | boolean | NonNullable<MotionKeyframe["easing"]>;
 export interface NodeMotion {
   timelines?: Array<{ id: string; duration: number }>;

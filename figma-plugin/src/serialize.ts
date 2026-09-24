@@ -360,7 +360,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   }
   // Motion/animation keyframes & timelines (opt-in) — new free read plane (Plugin API Update 130).
   if (runOpts.motion) {
-    const m = collectMotion(node);
+    const m = await collectMotion(node);
     if (m) out.motion = m;
   }
   // Cross-plugin shared data (opt-in) — e.g. Tokens Studio applied tokens.
