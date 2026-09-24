@@ -20,12 +20,12 @@ import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
   ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
   HygieneDoc, IrNode, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
-  TextStylesDoc, TokensDoc,
+  TextStylesDoc, TokensDoc, Asset,
 } from "../bridge/src/doc-types.ts";
 import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
-import type { ExportAsset, Stamped } from "../bridge/src/write-out.ts";
+import type { Stamped } from "../bridge/src/write-out.ts";
 import type { ClientRow } from "../bridge/src/server-core.ts";
 import type { Cmd, DesignSystemReply, FullExportReply, ScreenReply, ScreenshotReply } from "../bridge/src/commands.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
@@ -50,7 +50,7 @@ interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
 // reply type is assignable to each writer's own parameter, so ONE cast target serves them all.
 type ExportFixture = Stamped<FullExportReply & DesignSystemReply & ScreenReply & ScreenshotReply>;
 // A fixture asset with the producer-owned identity fields filled in (doc-types.ts Asset).
-const asset = (a: { id: string; file: string; text?: string; base64?: string; hash?: string; kind?: "reference" | "source" }): ExportAsset =>
+const asset = (a: { id: string; file: string; text?: string; base64?: string; hash?: string; kind?: "reference" | "source" }): Asset =>
   ({ name: a.id, format: a.text !== undefined ? "svg" : "png", ...a });
 // design/target.json as bridge/src/init.ts writes it (built inline there, no exported type): the fields read below.
 interface TargetJson { profile: string | null; note?: string }

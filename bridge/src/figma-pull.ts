@@ -674,10 +674,6 @@ function formatClients(rows: unknown): string {
   return lines.join("\n");
 }
 
-/** The plugin's listLibraries reply — commands.ts ListLibrariesReply. The name is kept because
- *  test/harness.ts imports it from here; the shape is the contract's, not a second declaration. */
-export type LibrariesReply = ListLibrariesReply;
-
 /** The renderer tolerates gaps (`--json` fixtures, older plugins): every row field is read as optional. */
 type LibraryRowView = Partial<ListLibrariesReply["libraries"][number]>;
 

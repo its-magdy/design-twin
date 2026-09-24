@@ -8,7 +8,23 @@
 // OUTSIDE the run (the UI's Cancel click lands on the main thread while the walk is mid-await), and
 // the only one whose whole job is to talk to the iframe. state.ts imports it — never the reverse — so
 // there is no cycle, and a collector can be unit-driven with no run bracketing it at all (see `running`).
-import { type Obj } from "./util";
+
+// ---------------------------------------------------------------- what this module posts to the UI
+/** The page the walk is on: 1-based `index` of `of` pages walked. `pageId` is the identity (page names
+ *  are not unique); absent only when a caller had no id to give. */
+export interface ProgressPage { index: number; of: number; name: string; pageId?: string }
+/** The running counters a progress frame carries (each phase reports the ones it has). */
+export interface ProgressCounters { nodes?: number; assets?: number; components?: number }
+export interface RunBeginMsg { type: "run-begin"; source: RunInfo["source"]; label: string }
+export interface RunEndMsg { type: "run-end" }
+export interface ProgressMsg extends ProgressCounters {
+  type: "progress";
+  phase: Phase;
+  source: RunInfo["source"];
+  label: string;
+  page?: ProgressPage;
+}
+export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg;
 
 // ---------------------------------------------------------------- the cancellation error
 /** The message a cancelled run fails with. The BRIDGE sees this string VERBATIM: main.ts turns a
@@ -58,7 +74,7 @@ let lastPost = 0;
 // per-asset ticks below) can still say WHERE they are without every caller threading it through.
 // Carries `pageId` next to `name` for the usual reason: Figma allows duplicate page names, so the name
 // is a display label and the id is the identity (see collect.ts resolvePages).
-let page: { index: number; of: number; name: string; pageId?: string } | undefined;
+let page: ProgressPage | undefined;
 
 // Throttle floor for the ticks INSIDE a page. postMessage crosses the main-thread -> iframe boundary,
 // and the per-asset checkpoint fires once per exported icon/image — thousands of times on a real file.
@@ -67,7 +83,7 @@ let page: { index: number; of: number; name: string; pageId?: string } | undefin
 // and dropping one would leave the status line naming a page the walk already finished.
 const MIN_INTERVAL_MS = 250;
 
-function post(m: Obj): void {
+function post(m: ProgressPost): void {
   try {
     // Guarded rather than assumed: `figma.ui` exists only once showUI has run, and progress is never
     // worth failing an export over.
@@ -120,7 +136,7 @@ export type Phase = "pages" | "assets" | "design-system";
 
 /** Emit a throttled progress frame for the current phase. `extra` carries the running counters
  *  (`nodes`, `assets`) the UI renders next to the page name. */
-export function progress(phase: Phase, extra?: Obj, force?: boolean): void {
+export function progress(phase: Phase, extra?: ProgressCounters, force?: boolean): void {
   if (!running) return;
   const now = Date.now();
   if (!force && now - lastPost < MIN_INTERVAL_MS) return;
@@ -130,7 +146,7 @@ export function progress(phase: Phase, extra?: Obj, force?: boolean): void {
 
 /** Cross a page boundary: remember the page and emit an UNTHROTTLED frame for it. `index` is 1-based
  *  so the UI can render it as "page 3 of 25" without doing arithmetic on the wire format. */
-export function enterPage(phase: Phase, index: number, of: number, name: string, pageId?: string, extra?: Obj): void {
+export function enterPage(phase: Phase, index: number, of: number, name: string, pageId?: string, extra?: ProgressCounters): void {
   page = { index, of, name, pageId };
   progress(phase, extra, true);
 }

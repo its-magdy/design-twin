@@ -1,6 +1,9 @@
 // Variables (design tokens) + Figma style references. Resolves opaque ids/aliases to the
 // human/agent-readable token names — the key win over the REST export.
-import { type Obj, anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
+import type {
+  TokenMap, StyleRefs, ModeMap, Variable as IrVariable, VariableCollection as IrVariableCollection, VariableValue as IrVariableValue,
+} from "../../bridge/src/doc-types.ts";
+import { anyProp, rgbaToHex, nonEmpty, putNonEmpty } from "./util";
 import { varName, styleNameLookup, getCollection } from "./state";
 
 // The one VARIABLE_ALIAS test. Takes `unknown` because it is fed from several untyped-at-runtime
@@ -25,13 +28,13 @@ export type BoundVariableMap = {
   readonly [field: string]: VariableAlias | ReadonlyArray<VariableAlias> | { readonly [key: string]: VariableAlias } | undefined;
 };
 
-export async function resolveBoundMap(bound: BoundVariableMap | null | undefined): Promise<Obj | undefined> {
+export async function resolveBoundMap(bound: BoundVariableMap | null | undefined): Promise<TokenMap | undefined> {
   if (!bound) return undefined;
-  const out: Obj = {};
+  const out: TokenMap = {};
   for (const key of Object.keys(bound)) {
     const val = bound[key];
     if (Array.isArray(val)) {
-      const names = (await Promise.all(val.map(resolveVar))).filter(Boolean);
+      const names = (await Promise.all(val.map(resolveVar))).filter((x): x is string => !!x);
       if (names.length) out[key] = names.length === 1 ? names[0] : names;
     } else {
       const n = await resolveVar(val);
@@ -42,7 +45,7 @@ export async function resolveBoundMap(bound: BoundVariableMap | null | undefined
 }
 
 // node.boundVariables -> { property: tokenName }
-export async function boundTokens(node: SceneNode): Promise<Obj | undefined> {
+export async function boundTokens(node: SceneNode): Promise<TokenMap | undefined> {
   return resolveBoundMap(node.boundVariables);
 }
 
@@ -54,7 +57,7 @@ export async function styleName(id: string | PluginAPI["mixed"] | undefined | nu
 }
 
 // [ node field, output key ]. textStyleId only exists on TEXT nodes, so the `in` check gates it.
-const STYLE_FIELDS: Array<[string, string]> = [
+const STYLE_FIELDS: Array<[string, keyof StyleRefs]> = [
   ["fillStyleId", "fill"],
   ["strokeStyleId", "stroke"],
   ["effectStyleId", "effect"],
@@ -62,7 +65,7 @@ const STYLE_FIELDS: Array<[string, string]> = [
   ["gridStyleId", "grid"], // a frame referencing a shared layout-grid style
 ];
 
-export async function nodeStyles(node: SceneNode): Promise<Obj | undefined> {
+export async function nodeStyles(node: SceneNode): Promise<StyleRefs | undefined> {
   const names = await Promise.all(
     STYLE_FIELDS.map(([field]) => {
       if (!(field in node)) return Promise.resolve(undefined);
@@ -71,9 +74,10 @@ export async function nodeStyles(node: SceneNode): Promise<Obj | undefined> {
       return typeof id === "string" || id === figma.mixed ? styleName(id) : Promise.resolve(undefined);
     })
   );
-  const out: Obj = {};
+  const out: StyleRefs = {};
   STYLE_FIELDS.forEach(([, key], i) => {
-    if (names[i]) out[key] = names[i];
+    const n = names[i];
+    if (n) out[key] = n;
   });
   return nonEmpty(out);
 }
@@ -82,9 +86,9 @@ export async function nodeStyles(node: SceneNode): Promise<Obj | undefined> {
 // below share this: the remote-collection fallback and the modes lookup live in ONE place, so a
 // future change (e.g. resolving mode.parentModeId for extended collections) can't be applied to one
 // and missed on the other.
-async function resolveModeMap(raw: { [collectionId: string]: string } | undefined, skipSingleMode: boolean): Promise<Obj | undefined> {
+async function resolveModeMap(raw: { [collectionId: string]: string } | undefined, skipSingleMode: boolean): Promise<ModeMap | undefined> {
   if (!raw || !Object.keys(raw).length) return undefined;
-  const out: Obj = {};
+  const out: ModeMap = {};
   for (const collectionId of Object.keys(raw)) {
     const c = await getCollection(collectionId);
     const modeId = raw[collectionId];
@@ -102,7 +106,7 @@ async function resolveModeMap(raw: { [collectionId: string]: string } | undefine
 // Which variable MODE(s) a subtree is pinned to (e.g. a card forced to "Dark" while the page
 // is "Light") — the missing link for multi-theme codegen. Keyed off explicitVariableModes (the
 // actual pin points set ON this node).
-export function variableModes(node: SceneNode): Promise<Obj | undefined> {
+export function variableModes(node: SceneNode): Promise<ModeMap | undefined> {
   return resolveModeMap(node.explicitVariableModes, false);
 }
 
@@ -114,21 +118,32 @@ export function variableModes(node: SceneNode): Promise<Obj | undefined> {
 // at build time rather than cascading names at runtime like CSS). Emitted at the EXPORT ROOT only —
 // every node inherits some effective mode, so per-node emission would be pure noise. Single-mode
 // collections carry no theme choice, so they're skipped (only multi-mode/theming collections matter).
-export function resolvedModes(node: SceneNode): Promise<Obj | undefined> {
+export function resolvedModes(node: SceneNode): Promise<ModeMap | undefined> {
   return resolveModeMap(node.resolvedVariableModes, true);
 }
 
 // valuesByMode does NOT resolve aliases and is keyed by opaque modeId — resolve alias targets to
 // names and re-key by mode name. COLOR values carry alpha ({r,g,b,a}) — fold to hex so alpha survives.
-async function resolveModeValue(v: VariableValue, resolvedType: VariableResolvedDataType): Promise<VariableValue | { aliasOf: string }> {
+async function resolveModeValue(v: VariableValue, resolvedType: VariableResolvedDataType): Promise<IrVariableValue> {
   if (isVariableAlias(v)) return { aliasOf: (await varName(v.id)) || v.id };
-  if (resolvedType === "COLOR" && v && typeof v === "object" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
-  return v;
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+  if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
+  return verbatimValue(v);
+}
+
+// An EASING variable's value is a MotionEasing OBJECT (and an RGB under a non-COLOR type cannot occur).
+// It is emitted verbatim, as it always was — but doc-types' VariableValue has no object member other
+// than {aliasOf}, and widening it there breaks design-to-code's token emitters (tokens.ts dtcgValue,
+// tokens-native.ts resolve), which hand the raw value on as a primitive. Until those handle it, this is
+// the one place a value is widened into the documented union.
+function verbatimValue(v: RGB | RGBA | MotionEasing): IrVariableValue {
+  const o: object = v;
+  return o as IrVariableValue;
 }
 
 export interface VariablesDump {
-  collections: Array<{ name: string; modes: string[]; default?: string; theming: boolean; extended?: boolean; hiddenFromPublishing?: boolean; key?: string }>;
-  variables: Obj[];
+  collections: IrVariableCollection[];
+  variables: IrVariable[];
   hygiene: string[];
 }
 
@@ -139,7 +154,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   const asLibrary = !!(opts && opts.asLibrary);
   // Filled during the variable loop, resolved in ONE fan-out afterwards (one round trip per variable,
   // awaited in place, would serialize the whole dump).
-  const pendingPublish: { rec: Obj; obj: Variable }[] = [];
+  const pendingPublish: { rec: IrVariable; obj: Variable }[] = [];
   const publishOf = async (o: Variable | VariableCollection): Promise<string | undefined> => {
     try {
       if (!asLibrary || !o || typeof o.getPublishStatusAsync !== "function") return undefined;
@@ -159,7 +174,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   const collById = new Map<string, VariableCollection>(collections.map((c) => [c.id, c]));
   const collOf = (cid: string): VariableCollection | undefined => collById.get(cid);
   const localIds = new Set(localVars.map((v) => v.id));
-  const variables: Obj[] = [];
+  const variables: IrVariable[] = [];
   const hygiene: string[] = [];
 
   // Library (remote) variables this file CONSUMES. getLocalVariablesAsync returns only variables
@@ -227,7 +242,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   }
 
   for (const v of localVars.concat(remoteVars)) {
-    const values: Obj = {};
+    const values: IrVariable["values"] = {};
     let hasAlias = false;
     // Mode values resolve independently, so the (async) resolution fans out while the synchronous
     // alias/hygiene bookkeeping stays a plain loop. Awaited per mode, a 500-variable x 3-mode file
@@ -247,7 +262,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
       }
       values[modeName[modeId] || modeId] = resolved[i];
     }
-    const rec: Obj = {
+    const rec: IrVariable = {
       name: v.name,
       type: v.resolvedType,
       collection: (collOf(v.variableCollectionId) || ({} as VariableCollection)).name,
@@ -284,10 +299,10 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     const st = await Promise.all(pendingPublish.map((p) => publishOf(p.obj)));
     for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
   }
-  const collPublish: Obj = {};
+  const collPublish: Record<string, string> = {};
   if (asLibrary) {
     const st = await Promise.all(allCollections.map((c) => publishOf(c)));
-    for (let i = 0; i < allCollections.length; i++) if (st[i]) collPublish[allCollections[i].id] = st[i];
+    for (let i = 0; i < allCollections.length; i++) { const s = st[i]; if (s) collPublish[allCollections[i].id] = s; }
   }
 
   return {

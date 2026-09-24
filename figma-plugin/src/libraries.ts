@@ -19,8 +19,23 @@
 //     component key back to its source library. So an unattributed remote component is filed under
 //     "unknown-library" and never guessed at; a user-maintained registry (see readRegistry) is the
 //     only honest way to attribute them.
-import { type Obj, propName, errMsg, nonEmpty, exportedAt } from "./util";
+import type { CatalogComponent, ComponentPropDef } from "../../bridge/src/doc-types.ts";
+import { propName, propType, errMsg, nonEmpty, exportedAt } from "./util";
 import { warn, loadAllPages } from "./state";
+
+// ---- listLibraries' reply (commands.ts ListLibrariesReply, rendered by bridge/src/figma-pull.ts)
+/** One variable collection of a library (or of this file). */
+export interface LibraryCollectionRow { key: string; name: string; variableCount?: number }
+/** One row of listLibraries(): this file, a library with variable collections, or a component-only source. */
+export interface LibraryRow {
+  key: string;
+  name: string;
+  kind: "local" | "library";
+  variableCollections: LibraryCollectionRow[];
+  componentCount?: number;
+  note: string;
+}
+export interface LibrariesListing { exportedAt: string; file?: string; libraries: LibraryRow[]; warnings: string[] }
 
 // The bucket every remote component lands in until a registry says otherwise. Deliberately a visible,
 // greppable string in the output rather than an omitted field: "I don't know" must be readable.
@@ -109,14 +124,14 @@ function mainNames(main: ComponentNode): { name: string; variantOf?: string } {
 // failure. Returns undefined for "unavailable", which is the caller's signal to fall back to observed
 // instance props. Never conflate the two: an inferred option list is a SAMPLE, a definition list is
 // COMPLETE, and downstream codegen that mistakes one for the other emits a type with missing cases.
-function tryDefinitions(main: ComponentNode): Obj | undefined {
+function tryDefinitions(main: ComponentNode): Record<string, ComponentPropDef> | undefined {
   try {
     const defs = main.componentPropertyDefinitions;
     if (!defs || !Object.keys(defs).length) return undefined;
-    const props: Obj = {};
+    const props: Record<string, ComponentPropDef> = {};
     for (const k of Object.keys(defs)) {
       const d = defs[k];
-      const p: Obj = { key: k, type: d.type };
+      const p: ComponentPropDef = { key: k, type: propType(d.type) };
       if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
       if (d.defaultValue !== undefined) p.default = d.defaultValue;
       if (d.type === "INSTANCE_SWAP" && Array.isArray(d.preferredValues) && d.preferredValues.length) {
@@ -136,8 +151,8 @@ function tryDefinitions(main: ComponentNode): Obj | undefined {
 // key. Three instances at Size=sm/md/lg tell us those three options EXIST; they cannot tell us whether
 // an "xl" also exists. Hence `derivedFrom:"instances"` on the entry and `observed` (not `options`) as
 // the field name — the vocabulary itself has to stop a caller treating a sample as an enum.
-function aggregateFromInstances(instances: InstanceNode[]): Obj | undefined {
-  const props: Obj = {};
+function aggregateFromInstances(instances: InstanceNode[]): Record<string, ComponentPropDef> | undefined {
+  const props: Record<string, ComponentPropDef & { observed: Array<string | boolean> }> = {};
   for (const inst of instances) {
     let cp: ComponentProperties | undefined;
     try { cp = inst.componentProperties; } catch (e) { continue; }
@@ -146,7 +161,7 @@ function aggregateFromInstances(instances: InstanceNode[]): Obj | undefined {
       const v = cp[k];
       if (!v) continue;
       const name = propName(k);
-      const p = props[name] || (props[name] = { key: k, type: v.type, observed: [] as Array<string | boolean> });
+      const p = props[name] || (props[name] = { key: k, type: propType(v.type), observed: [] });
       // Values are primitives (string/boolean) for VARIANT/TEXT/BOOLEAN and a component key for
       // INSTANCE_SWAP — all safely comparable with indexOf. Uniqued so an option list of 3 does not
       // become a list of 300 on a file with 300 buttons.
@@ -160,7 +175,7 @@ function aggregateFromInstances(instances: InstanceNode[]): Obj | undefined {
 // Every LIBRARY (remote) component this file uses, deduped by publish key.
 // Deduped by `.key` and NOT by name: two libraries can ship a "Button", and a component that was
 // renamed in the library still has to merge with its older instances. The key is the durable identity.
-export async function collectLibraryComponents(sinkIn?: (m: string) => void): Promise<Obj[]> {
+export async function collectLibraryComponents(sinkIn?: (m: string) => void): Promise<CatalogComponent[]> {
   const sink = sinkIn || warn;
   const registry = readRegistry(sink);
   const instances = await allInstances(sink);
@@ -184,10 +199,10 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
   }
   if (unkeyed) sink(unkeyed + " remote component instance(s) have a main component with no publish key — omitted from the library catalog");
 
-  const out: Obj[] = [];
+  const out: CatalogComponent[] = [];
   for (const [key, bucket] of byKey) {
     const names = mainNames(bucket.main);
-    const entry: Obj = {
+    const entry: CatalogComponent = {
       name: names.name,
       key,
       type: "COMPONENT",
@@ -216,8 +231,8 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
 // Variable collections per enabled library. Wrapped whole: a missing "teamlibrary" permission and a
 // plan without shared libraries BOTH throw here, and neither is a reason to fail the call — the
 // component half below works regardless and is the half that needs no permission at all.
-async function libraryVariableCollections(sink: (m: string) => void): Promise<Map<string, Obj[]>> {
-  const byLibrary = new Map<string, Obj[]>();
+async function libraryVariableCollections(sink: (m: string) => void): Promise<Map<string, LibraryCollectionRow[]>> {
+  const byLibrary = new Map<string, LibraryCollectionRow[]>();
   let collections: Array<{ name: string; key: string; libraryName: string }> = [];
   try {
     collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
@@ -257,7 +272,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
   for (let i = 0; i < collections.length; i++) {
     const c = collections[i];
     const lib = c.libraryName || UNKNOWN_LIBRARY;
-    const entry: Obj = { key: c.key, name: c.name };
+    const entry: LibraryCollectionRow = { key: c.key, name: c.name };
     if (counts[i] !== undefined) entry.variableCount = counts[i];
     const list = byLibrary.get(lib);
     if (list) list.push(entry);
@@ -268,7 +283,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
 
 // The CHEAP discovery call: which libraries feed this file, so a caller can decide what to pull.
 // Deliberately NOT part of an export — it is the "what's out there?" map, the twin of listPages.
-export async function listLibraries(): Promise<Obj> {
+export async function listLibraries(): Promise<LibrariesListing> {
   const warnings: string[] = [];
   const sink = (m: string) => warnings.push(m);
 
@@ -278,7 +293,7 @@ export async function listLibraries(): Promise<Obj> {
     libraryVariableCollections(sink),
     collectLibraryComponents(sink).catch((e) => {
       sink("library component scan failed (" + errMsg(e) + ") — component counts are missing, variable collections below are unaffected");
-      return [] as Obj[];
+      return [] as CatalogComponent[];
     }),
   ]);
 
@@ -287,13 +302,15 @@ export async function listLibraries(): Promise<Obj> {
   // them under a plausible-looking library name would be a guess, and a guess here is worse than a
   // blank: it invites a caller to "pull the rest of that library", which cannot be done at all.
   const compBySource = new Map<string, number>();
-  for (const c of components) compBySource.set(c.source, (compBySource.get(c.source) || 0) + 1);
+  // `source` is always set on a collectLibraryComponents entry; the `|| UNKNOWN_LIBRARY` only satisfies
+  // CatalogComponent's optional field.
+  for (const c of components) { const src = c.source || UNKNOWN_LIBRARY; compBySource.set(src, (compBySource.get(src) || 0) + 1); }
 
-  const libraries: Obj[] = [];
+  const libraries: LibraryRow[] = [];
 
   // The local file first — it is a "library" from the consumer's point of view (its own variables and
   // components), and listing it makes the remote entries interpretable by contrast.
-  const localCollections: Obj[] = [];
+  const localCollections: LibraryCollectionRow[] = [];
   try {
     const [colls, vars] = await Promise.all([
       figma.variables.getLocalVariableCollectionsAsync(),

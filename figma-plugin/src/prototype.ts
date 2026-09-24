@@ -2,12 +2,13 @@
 // the paid get_motion_context. trigger -> action(s) -> navigation + transition/easing/duration.
 // Action/Trigger/Transition are typed exactly per @figma/plugin-typings' discriminated unions;
 // each branch below narrows on `.type` (or `.mediaAction`) before reading its fields.
-import { type Obj, easingCurve, xy } from "./util";
+import type { Action as IrAction, Reaction as IrReaction, Transition as IrTransition } from "../../bridge/src/doc-types.ts";
+import { easingCurve, xy, isList } from "./util";
 import { varName, nodeNameLookup, getCollection } from "./state";
 
 // A prototype Transition -> compact descriptor (type/direction/duration + the exact easing curve).
-function simplifyTransition(tr: Transition): Obj {
-  const t: Obj = { type: tr.type ? tr.type.toLowerCase() : undefined };
+function simplifyTransition(tr: Transition): IrTransition {
+  const t: IrTransition = { type: tr.type ? tr.type.toLowerCase() : undefined };
   if ("direction" in tr) {
     // DirectionalTransition — the only variant carrying direction/matchLayers.
     t.direction = tr.direction.toLowerCase();
@@ -40,10 +41,12 @@ async function simplifyVariableData(vd: VariableData | undefined): Promise<unkno
   return v;
 }
 
+const isAction = (a: IrAction | null): a is IrAction => !!a;
+
 // One prototype Action -> compact object. Recursive: CONDITIONAL nests actions inside its blocks.
-async function serializeAction(a: Action | undefined | null): Promise<Obj | null> {
+async function serializeAction(a: Action | undefined | null): Promise<IrAction | null> {
   if (!a) return null;
-  const ao: Obj = { type: (a.type || "").toLowerCase() };
+  const ao: IrAction = { type: (a.type || "").toLowerCase() };
   if (a.type === "URL") {
     ao.url = a.url;
   } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
@@ -72,9 +75,9 @@ async function serializeAction(a: Action | undefined | null): Promise<Obj | null
   } else if (a.type === "CONDITIONAL") {
     ao.conditionalBlocks = await Promise.all(
       a.conditionalBlocks.map(async (blk) => {
-        const b: Obj = {};
+        const b: NonNullable<IrAction["conditionalBlocks"]>[number] = {};
         if (blk.condition) b.condition = await simplifyVariableData(blk.condition);
-        if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(Boolean);
+        if (Array.isArray(blk.actions)) b.actions = (await Promise.all(blk.actions.map(serializeAction))).filter(isAction);
         return b;
       })
     );
@@ -97,26 +100,26 @@ async function serializeAction(a: Action | undefined | null): Promise<Obj | null
   return ao;
 }
 
-export async function simplifyReactions(node: SceneNode): Promise<Obj[] | undefined> {
+export async function simplifyReactions(node: SceneNode): Promise<IrReaction[] | undefined> {
   if (!("reactions" in node)) return undefined;
   const reactions = node.reactions;
-  if (!Array.isArray(reactions) || !reactions.length) return undefined;
-  const out: Obj[] = [];
+  if (!isList(reactions) || !reactions.length) return undefined;
+  const out: IrReaction[] = [];
   for (const r of reactions) {
-    const o: Obj = {};
+    const o: IrReaction = {};
     if (r.trigger) {
       const tg = r.trigger;
       o.trigger = tg.type ? tg.type.toLowerCase() : "unknown";
       if (tg.type === "AFTER_TIMEOUT") o.timeout = tg.timeout;
       if (tg.type === "MOUSE_UP" || tg.type === "MOUSE_DOWN" || tg.type === "MOUSE_ENTER" || tg.type === "MOUSE_LEAVE") o.delay = tg.delay; // MOUSE_* triggers
       if (tg.type === "ON_KEY_DOWN") {
-        if (tg.keyCodes.length) o.keyCodes = tg.keyCodes; // ON_KEY_DOWN
+        if (tg.keyCodes.length) o.keyCodes = [...tg.keyCodes]; // ON_KEY_DOWN
         o.device = String(tg.device).toLowerCase(); // keyboard vs gamepad
       }
       if (tg.type === "ON_MEDIA_HIT") o.mediaHitTime = tg.mediaHitTime; // ON_MEDIA_HIT scrub time
     }
-    const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
-    const acts = (await Promise.all(actions.map(serializeAction))).filter(Boolean);
+    const actions = isList(r.actions) ? r.actions : r.action ? [r.action] : [];
+    const acts = (await Promise.all(actions.map(serializeAction))).filter(isAction);
     if (acts.length) o.actions = acts;
     if (o.trigger || o.actions) out.push(o);
   }

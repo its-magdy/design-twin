@@ -8,10 +8,9 @@ import vm from "node:vm";
 import { ok, report } from "./assert.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc,
-  Paint, Effect, VariableValue, RadiusCorners,
+  Paint, Effect, VariableValue, RadiusCorners, Asset,
 } from "../bridge/src/doc-types.ts";
-import type { ExportResult, ExportAsset } from "../bridge/src/write-out.ts";
-import type { LibrariesReply } from "../bridge/src/figma-pull.ts";
+import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
@@ -80,9 +79,10 @@ interface FakeFigma {
 }
 
 // ---- what code.js's `__designExport` hands back, typed by the producer contract the bridge consumes
-// (bridge/src/doc-types.ts, write-out.ts ExportResult, figma-pull.ts LibrariesReply). The plugin source
-// itself returns `Obj` (figma-plugin/src/util.ts — an untyped record), so these are the declared
-// contract, not something inferred from the plugin.
+// (bridge/src/doc-types.ts and the per-command replies in bridge/src/commands.ts). The plugin source
+// builds these same doc-types shapes (serialize() returns IrNode, buildDesignSystem a DesignSystemDoc,
+// the collectors the envelopes in figma-plugin/src/collect.ts), but its program — Plugin API typings
+// included — is not visible to test/tsconfig.json, so the contract is restated here from doc-types.
 
 /** A variables dump (variables.ts dumpVariables): all three arrays are always present. */
 type DumpedVariables = VariablesDoc & Required<Pick<VariablesDoc, "collections" | "variables" | "hygiene">>;
@@ -90,15 +90,15 @@ type DumpedVariables = VariablesDoc & Required<Pick<VariablesDoc, "collections" 
 type DesignSystemOut = DesignSystemDoc & Required<Pick<DesignSystemDoc, "collections" | "variables" | "components" | "hygiene">> &
   { styles: Required<DesignSystemStyles> };
 /** collect.ts screenResult */
-interface SelectionResult extends ExportResult { screen: ScreenExport & { manifest: Manifest }; variables: DumpedVariables; assets: ExportAsset[] }
+interface SelectionResult extends ScreenReply { screen: ScreenExport & { manifest: Manifest }; variables: DumpedVariables; assets: Asset[] }
 /** collect.ts collectFull */
-interface FullResult extends ExportResult {
+interface FullResult extends FullExportReply {
   designSystem: DesignSystemOut;
   layersDoc: LayersDoc & Required<Pick<LayersDoc, "layers" | "index" | "manifest">>;
-  assets: ExportAsset[];
+  assets: Asset[];
 }
 /** collect.ts collectDesignSystemOnly / collectLibraryFile */
-interface DesignSystemResult extends ExportResult { designSystem: DesignSystemOut }
+interface DesignSystemResult extends DesignSystemReply { designSystem: DesignSystemOut }
 /** collect.ts summarize(): the ONLY shape the cheap index reads emit. The `undefined` fields are
  *  never emitted — an index is not an export (the [LIST]/[CHILDREN] checks assert exactly that). */
 interface NodeSummary {
@@ -118,7 +118,7 @@ interface ListChildrenResult {
   /** never emitted (asserted) */
   assets?: undefined;
 }
-type LibrariesOut = LibrariesReply & Required<Pick<LibrariesReply, "libraries" | "warnings">>;
+type LibrariesOut = ListLibrariesReply;
 /** writes.ts WriteResult (applied rows are `{ id }`) */
 interface WriteResult { ok: boolean; applied: Array<{ id?: string }>; failedAt?: number; failedOp?: string; error?: string }
 interface WriteOp { op: string; [field: string]: unknown }
@@ -441,7 +441,7 @@ const sandbox = context as unknown as Sandbox;
   // directly), since collectDesignSystemOnly is a resetRun()+applyOpts() wrapper around it.
   const dsOnly = await sandbox.collectDesignSystemOnly();
   ok("collectDesignSystemOnly returns ONLY a designSystem (no layersDoc/assets keys)",
-    dsOnly.designSystem && dsOnly.layersDoc === undefined && dsOnly.assets === undefined);
+    !!dsOnly.designSystem && !("layersDoc" in dsOnly) && !("assets" in dsOnly));
   ok("collectDesignSystemOnly's designSystem carries the same variable/style/component data as buildDesignSystem",
     dsOnly.designSystem.variables.some((v) => v.name === "color/primary") &&
     Array.isArray(dsOnly.designSystem.styles.paint) && Array.isArray(dsOnly.designSystem.components));

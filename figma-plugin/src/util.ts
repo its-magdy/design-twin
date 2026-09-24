@@ -1,8 +1,5 @@
 // Pure helpers shared across the extractor. No Figma API calls here.
-
-// A compact-output bag. The extractor emits heterogeneous JSON objects; the type safety we
-// care about is on the INPUT (Figma API reads), so outputs stay intentionally loose.
-export type Obj = Record<string, any>;
+import type { JsonObject, JsonValue, XY, CubicBezier, ComponentPropType } from "../../bridge/src/doc-types.ts";
 
 // The filesystem-boundary sanitiser lives in pages-layout.js, which names the page dirs and layer
 // files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
@@ -13,8 +10,24 @@ export { safe } from "../../bridge/src/pages-layout.ts";
 // The timestamp every emitted doc carries. One place to change the format for all of them.
 export const exportedAt = (): string => new Date().toISOString();
 
-export const round = (n: unknown): number | unknown => (typeof n === "number" ? Math.round(n * 100) / 100 : n);
+// 2dp — the single knob on emitted-number precision. A non-number (an optional read that came back
+// undefined/null) passes through unchanged.
+export function round(n: number): number;
+export function round<T>(n: number | T): number | T;
+export function round<T>(n: number | T): number | T {
+  return typeof n === "number" ? Math.round(n * 100) / 100 : n;
+}
+
+// A Figma enum literal -> the lowercased token the IR emits. `toLowerCase()` is typed `string`, so this
+// is the ONE place that mapping is asserted — Lowercase<T> is exactly what it computes for an ASCII enum.
+export const lower = <T extends string>(s: T): Lowercase<T> => s.toLowerCase() as Lowercase<T>;
+
 export const propName = (k: string): string => k.split("#")[0]; // strip Figma's "#nnn:nn" suffix
+
+// Figma's ComponentPropertyType, emitted verbatim. doc-types' ComponentPropType lists the same five
+// members (SLOT included — kinds.ts maps it to "instance"); this is the one place the two unions are
+// held equal, so a new Figma member fails here rather than in design-to-code.
+export const propType = (t: ComponentPropertyType): ComponentPropType => t;
 
 // Thrown value -> message string. Same reasoning as `safe` above: one definition in a dependency-free
 // CJS module that esbuild inlines into this bundle, so the Node side and the plugin cannot drift.
@@ -26,37 +39,62 @@ export { errMsg } from "../../bridge/src/errmsg.ts";
 export { normalizeSvgText } from "../../bridge/src/svg-normalize.ts";
 
 // The extractor's compaction rule: emit nothing rather than an empty object. One place to change it.
-export const nonEmpty = (o: Obj): Obj | undefined => (Object.keys(o).length ? o : undefined);
+export const nonEmpty = <T extends object>(o: T): T | undefined => (Object.keys(o).length ? o : undefined);
 
 // The same compaction rule applied as an ASSIGNMENT rather than a return: set `key` only when the bag
 // has something in it. Callers used to inline `if (Object.keys(x).length) o.k = x`, which put the rule
 // in eight places and quietly diverged from `nonEmpty`; going through here keeps it at one. Assigning
 // `nonEmpty(x)` directly is NOT equivalent — that leaves an undefined-valued key on the in-memory
 // object (invisible after JSON.stringify, visible to anything that walks Object.keys).
-export function putNonEmpty(o: Obj, key: string, v: Obj | null | undefined): void {
+export function putNonEmpty<T, K extends keyof T>(o: T, key: K, v: (T[K] & object) | null | undefined): void {
   const kept = v && nonEmpty(v);
   if (kept) o[key] = kept;
 }
 
 // A Figma Vector -> a compact rounded pair. `round`'s precision is meant to be the single knob on
 // emitted-geometry size, so every {x,y} in the output goes through here.
-export const xy = (v: { x: number; y: number }): Obj => ({ x: round(v.x), y: round(v.y) });
+export const xy = (v: { x: number; y: number }): XY => ({ x: round(v.x), y: round(v.y) });
 
 // Assign `key` = the rounded vector, but only when the source really is a Vector object. Progressive
 // blur / noise offsets are Vectors in normalized object space, so a `typeof === "number"` guard drops
 // them silently — this keeps that one correct guard in one place.
-export function putXY(o: Obj, key: string, v: unknown): void {
-  if (v && typeof v === "object") o[key] = xy(v as { x: number; y: number });
+export function putXY<K extends string>(o: Partial<Record<K, XY>>, key: K, v: { x: number; y: number } | null | undefined): void {
+  if (v && typeof v === "object") o[key] = xy(v);
 }
 
 // The exact animation-curve params on a Figma easing — cubic-bezier control points {x1,y1,x2,y2}
 // and/or the spring config (its payload shape varies by surface, so pass it through verbatim).
 // Shared by prototype transitions and motion keyframes so a new curve field is carried in one place.
-export function easingCurve(ez: { easingFunctionCubicBezier?: unknown; easingFunctionSpring?: unknown }): Obj {
-  const o: Obj = {};
+export interface EasingCurve { cubicBezier?: CubicBezier; spring?: unknown }
+export function easingCurve(ez: { easingFunctionCubicBezier?: CubicBezier; easingFunctionSpring?: unknown }): EasingCurve {
+  const o: EasingCurve = {};
   if (ez.easingFunctionCubicBezier) o.cubicBezier = ez.easingFunctionCubicBezier;
   if (ez.easingFunctionSpring) o.spring = ez.easingFunctionSpring;
   return o;
+}
+
+// A value read off a union member NEWER than the pinned typings (a `default` branch typed `never`),
+// carried through when it is JSON. A real structural walk, not an assertion; it mirrors what
+// JSON.stringify would have written (undefined object members dropped, undefined array slots -> null).
+export function asJson(v: unknown): JsonValue | undefined {
+  if (v === null || typeof v === "string" || typeof v === "boolean" || typeof v === "number") return v;
+  if (Array.isArray(v)) return v.map((x: unknown) => { const j = asJson(x); return j === undefined ? null : j; });
+  if (typeof v === "object") {
+    const out: JsonObject = {};
+    for (const [k, x] of Object.entries(v)) {
+      const j = asJson(x);
+      if (j !== undefined) out[k] = j;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+// Array.isArray's built-in guard narrows a ReadonlyArray<T> to an untyped array (its elements lose T — every
+// Plugin API list is readonly); this is the same runtime check with T kept. Test doubles can hand back
+// a non-array, and some reads are `T[] | figma.mixed`, hence the wide parameter.
+export function isList<T>(v: ReadonlyArray<T> | PluginAPI["mixed"] | null | undefined): v is ReadonlyArray<T> {
+  return Array.isArray(v);
 }
 
 // Dynamic numeric-property read over the SceneNode union (TS can't index a union by a string var).

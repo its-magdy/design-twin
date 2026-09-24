@@ -2,10 +2,8 @@
 // Derived from what figma-plugin/ui.html actually sends (`parent.postMessage({pluginMessage:{...}})`)
 // and what main.ts actually posts back (`figma.ui.postMessage({...})`) — see ui.html around the
 // `send()` helper (line ~216) and its handlers (~430-562), and main.ts's figma.ui.onmessage.
-import type { Obj } from "./util";
 import type { Asset } from "./state";
-import type { ScreenDoc, LayersDoc, DesignSystemDoc } from "../../bridge/src/doc-types.ts";
-import type { VariablesDump } from "./variables";
+import type { ProgressPost } from "./progress";
 
 // ---------- UI -> main ----------
 
@@ -15,9 +13,9 @@ export interface GetIdentityMsg { type: "get-identity"; }
 export interface RunSelectionMsg { type: "run-selection"; }
 export interface RunFullMsg { type: "run-full"; }
 export interface CancelMsg { type: "cancel"; }
-// `args` is the bridge command's own payload — shape varies per `cmd` (handleBridge in bridge.ts is
-// itself untyped at the boundary), so it stays structurally loose here rather than widening handleBridge.
-export interface BridgeMsg { type: "bridge"; id?: string; cmd: string; args?: Obj; }
+// `args` is the bridge command's own payload, parsed JSON whose shape varies per `cmd` — `unknown`
+// until handleBridge (bridge.ts) narrows it per command.
+export interface BridgeMsg { type: "bridge"; id?: string; cmd: string; args?: unknown; }
 
 export type UIToMain =
   | GetTokenMsg
@@ -64,23 +62,6 @@ export type MainToUI =
   | IdentityMsg
   | SelectionMsg
   | CancelAckMsg
-  | BridgeResultMsg;
-
-// ---------- export-result shapes runExport's `toFiles` helpers read ----------
-// Fields actually accessed in main.ts, typed against the SAME doc shapes the bridge side already
-// declares (bridge/src/doc-types.ts) plus variables.ts's own VariablesDump — collect.ts's
-// collectSelection/collectFull are still typed `Promise<Obj>` (out of scope for this pass), so main.ts
-// asserts its result to these interfaces once (see the `collectSelectionTyped`/`collectFullTyped`
-// wrappers) rather than reading through `any`.
-export interface ScreenExportResult {
-  screenName: string;
-  screen: ScreenDoc;
-  variables: VariablesDump;
-  assets: Asset[];
-}
-
-export interface FullExportResult {
-  layersDoc: LayersDoc;
-  designSystem: DesignSystemDoc;
-  assets: Asset[];
-}
+  | BridgeResultMsg
+  // run-begin / progress / run-end, posted by progress.ts
+  | ProgressPost;

@@ -40,11 +40,6 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const DIRS = ["test", "design-to-code", "bridge/src", "figma-plugin/src"];
 const SELF = path.resolve(import.meta.filename);
 const LITERAL = /: any|as any|<any>|any\[\]|Record<string, any>/;
-// The ONE tolerated literal: the plugin's `Obj = Record<string, any>` output-accumulator alias
-// (figma-plugin/src/util.ts). Every other `any` in the plugin was removed 2026-09-24; this alias is
-// swapped for bridge/src/doc-types.ts's JsonObject in its own step (it touches every serializer's
-// return type). Remove this entry when that lands.
-const TOLERATED = new Set(["figma-plugin/src/util.ts:export type Obj = Record<string, any>;"]);
 const TS = /\.(ts|mts|cts)$/;
 
 function* walk(dir) {
@@ -78,7 +73,7 @@ for (const dir of DIRS) {
     const src = fs.readFileSync(file, "utf8");
     const rel = path.relative(ROOT, file);
     const lines = src.split("\n");
-    lines.forEach((l, i) => { if (LITERAL.test(l) && !TOLERATED.has(`${rel}:${l.trim()}`)) hits.push(`${rel}:${i + 1}: literal any: ${l.trim()}`); });
+    lines.forEach((l, i) => { if (LITERAL.test(l)) hits.push(`${rel}:${i + 1}: literal any: ${l.trim()}`); });
     if (!TS.test(file)) continue;
     const lineStarts = [0];
     for (let i = 0; i < src.length; i++) if (src[i] === "\n") lineStarts.push(i + 1);

@@ -333,8 +333,9 @@ export interface TextFields {
   missingFont?: true;
 }
 
-/** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, … */
-export interface MotionKeyframe { t: number; value: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } }
+/** One keyframe of an opt-in motion track (motion.ts). `value` is already compacted: number, hex colour, {x,y}, …
+ *  (absent when the keyframe carried no readable value). */
+export interface MotionKeyframe { t: number; value?: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier; spring?: unknown } }
 /** One manually-keyframed field (ManualKeyframeBinding): its base value and the keyframes. */
 export interface MotionTrack { base?: JsonValue; keyframes?: MotionKeyframe[] }
 /** One timeline-animated field (KeyframeBinding): base value, the timeline's duration, and its tracks,
@@ -495,7 +496,9 @@ export interface Asset {
 export interface Measurement {
   page: string; pageId: string;
   start?: { nodeId?: string; side?: string }; end?: { nodeId?: string; side?: string };
-  text?: string; offset?: number;
+  text?: string;
+  /** Figma's MeasurementOffset, verbatim: `{type:"INNER", relative}` or `{type:"OUTER", fixed}`. */
+  offset?: { type: "INNER"; relative: number } | { type: "OUTER"; fixed: number };
 }
 
 /** A `--node` / `--selection` pull: pages/<Page>/<Screen>__<id>.json (collect.ts screenResult → write-out.js writeScreen). */
@@ -606,7 +609,8 @@ export interface PagesRootIndex {
 export interface DesignSystemStamp {
   exportedAt?: string;
   file?: string;
-  colorProfile?: "legacy" | "srgb" | "display-p3" | (string & {});
+  /** Lowercased DocumentNode.documentColorProfile (components.ts): note the UNDERSCORE in "display_p3". */
+  colorProfile?: "legacy" | "srgb" | "display_p3" | (string & {});
 }
 
 /** design-system.json — the slim POINTER manifest (never a payload; catalog-input.js refuses it). */
@@ -623,7 +627,8 @@ export interface DesignSystemManifest extends DesignSystemStamp {
   };
 }
 
-export type VariableType = "COLOR" | "FLOAT" | "STRING" | "BOOLEAN";
+/** Figma's VariableResolvedDataType, verbatim (EASING/TIMING are the motion variable types). */
+export type VariableType = "COLOR" | "FLOAT" | "STRING" | "BOOLEAN" | "EASING" | "TIMING";
 export interface VariableAlias { aliasOf: string }
 /** A per-mode value: COLOR → hex string (alpha kept); FLOAT → number; STRING/BOOLEAN → as is; alias → {aliasOf}. */
 export type VariableValue = string | number | boolean | VariableAlias;
@@ -727,7 +732,7 @@ export type GridStylesDoc = StylesDoc<GridStyle>;
 /** design-system/hygiene.json */
 export interface HygieneDoc extends DesignSystemStamp { hygiene: string[] }
 
-export type ComponentPropType = "VARIANT" | "BOOLEAN" | "TEXT" | "INSTANCE_SWAP";
+export type ComponentPropType = "VARIANT" | "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
 /** One componentPropertyDefinitions entry (real "#uid" key kept under `key`). */
 export interface ComponentPropDef {
   key: string;

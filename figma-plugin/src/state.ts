@@ -1,29 +1,14 @@
 // Per-run mutable state + id->name memo caches. esbuild bundles every module into one scope,
 // so these module-level singletons are genuinely shared across the extractor.
 
+import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
 import { beginRun, endRun, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
-export interface Asset {
-  id: string;
-  name: string;
-  format: string;
-  /** Basename this asset must be written as. The PRODUCER names the file (assets.ts) and the node
-   *  tree's `asset` path is built from the same string, so a consumer never re-derives the convention
-   *  — a mismatch here would silently point every `asset:` path at a file that isn't on disk. */
-  file: string;
-  base64?: string;
-  text?: string;
-  kind?: string;
-  /** Content hash of the bytes (assets.ts contentHash). Written into the per-screen asset index so a
-   *  consumer can see which files are byte-identical without diffing them. */
-  hash?: string;
-  /** Every node id that resolved to THIS file. Present only when more than one did — i.e. when the
-   *  same artwork was reached through several instance paths and deduped to one file. */
-  from?: string[];
-}
+/** One exported asset — doc-types' Asset, re-exported under the name every module here imports it by. */
+export type { Asset };
 
 export interface RunStats {
   nodes: number;
@@ -108,7 +93,7 @@ const SKIP_ASSETS_NOTE = (n: number): string =>
 // The documented manifest shape (ARCHITECTURE.md / TESTING.md) is {nodes, skipped, truncated,
 // assetsFailed, warnings}. `skipped` is DERIVED, not counted: depth truncation is the only thing that
 // drops a node, so a second counter incremented at the same single site could only ever drift.
-export function manifest() {
+export function manifest(): Manifest {
   // Derived HERE rather than at each collect entrypoint: the warning belongs to every doc that carries
   // a manifest, and putting it at one call site (as it first was) meant a --no-assets SELECTION dropped
   // its assets silently — the exact never-silent break the counter exists to prevent.

@@ -1,6 +1,7 @@
 // Rendering nodes to assets: vector/icon -> SVG, image-fill -> PNG, whole-frame reference PNG,
 // and Dev-Mode resource links.
-import { type Obj, safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
+import type { Geometry, DevResource as IrDevResource, AssetFormat, AssetKind } from "../../bridge/src/doc-types.ts";
+import { safe, toBase64, errMsg, round, normalizeSvgText } from "./util";
 import { type Asset, assets, stats, warn, warnKind, imageSizeCache, runOpts } from "./state";
 import { checkCancelled, progress } from "./progress";
 
@@ -80,7 +81,7 @@ function baseNameFor(a: { id: string; name: string; kind?: string }): string {
   return cleaned || safe(a.id);
 }
 
-function register(a: { id: string; name: string; format: string; base64?: string; text?: string; kind?: string }): string {
+function register(a: { id: string; name: string; format: AssetFormat; base64?: string; text?: string; kind?: AssetKind }): string {
   const fmt = safe(a.format);
   // A reference PNG is per-frame and keyed by id; deduping it against an identical-looking frame
   // would point two screens' `reference` at one file, which is exactly the confusion it exists to
@@ -130,7 +131,7 @@ function register(a: { id: string; name: string; format: string; base64?: string
 // The real container format of an uploaded image, from its magic bytes. Figma re-encodes nothing here
 // (these are the ORIGINAL bytes), so the extension has to come from the content — writing every source
 // image as "<hash>.img" left files no viewer or bundler could open by name.
-function imageFormat(b: Uint8Array): string {
+function imageFormat(b: Uint8Array): AssetFormat {
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "png";
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpg";
   if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "webp";
@@ -180,7 +181,7 @@ const ICON_CONTAINER_TYPES = new Set(["FRAME", "INSTANCE", "GROUP", "COMPONENT"]
 // were recovered), or `skipped` when --no-assets suppressed a render that WOULD have happened
 // (serialize.ts keeps the node a leaf — see the note on assetSkipped there). A caller that treats the
 // result as a path can't accidentally write the sentinel into the exported tree.
-export type AssetResult = { path: string } | { geometry: Obj } | { skipped: true } | undefined;
+export type AssetResult = { path: string } | { geometry: Geometry } | { skipped: true } | undefined;
 
 // Does this node paint ANYTHING? A live export reported 807 "failed" asset exports; the overwhelming
 // majority were vector nodes with every fill and stroke invisible (or emptied), which Figma refuses to
@@ -206,13 +207,13 @@ function hasArea(node: SceneNode): boolean {
 // `vectorPaths` is documented as "simple, but incomplete", so it is deliberately not used here. The
 // node's own w/h come along so a consumer can drop the `d` strings straight into an inline
 // <svg viewBox="0 0 w h"> — otherwise the paths have no coordinate space to be interpreted in.
-function geometryOf(node: SceneNode): Obj | undefined {
+function geometryOf(node: SceneNode): Geometry | undefined {
   const ds = (g: VectorPaths | undefined): string[] =>
     g ? g.map((p) => p && p.data).filter((d): d is string => typeof d === "string" && !!d) : [];
   const fills = ds("fillGeometry" in node ? node.fillGeometry : undefined);
   const strokes = ds("strokeGeometry" in node ? node.strokeGeometry : undefined);
   if (!fills.length && !strokes.length) return undefined;
-  const out: Obj = {};
+  const out: Geometry = {};
   if (fills.length) out.fills = fills;
   if (strokes.length) out.strokes = strokes;
   if ("width" in node && typeof node.width === "number") { out.w = round(node.width); out.h = round(node.height); }
@@ -359,7 +360,7 @@ export async function collectReference(node: SceneNode, opts?: { scale?: number 
 // getDevResourcesAsync is declared on DevResourcesMixin, which BaseNodeMixin extends (plugin-api.d.ts
 // ~6220/~6444) — every BaseNode has it for real, so the old `typeof === "function"` probe is
 // unreachable; kept as a try/catch instead. See developers.figma.com/docs/plugins/api/properties/nodes-getdevresourcesasync/.
-export async function devResources(node: BaseNode): Promise<Obj[] | undefined> {
+export async function devResources(node: BaseNode): Promise<IrDevResource[] | undefined> {
   if (!node) return undefined;
   try {
     const rs = await node.getDevResourcesAsync({ includeChildren: true });
@@ -367,7 +368,7 @@ export async function devResources(node: BaseNode): Promise<Obj[] | undefined> {
     // Keep the owning node (r.nodeId) distinct from inheritedNodeId (a link inherited from the main
     // component), so a link on a specific child can be attributed rather than collapsed.
     return rs.map((r) => {
-      const o: Obj = { name: r.name, url: r.url };
+      const o: IrDevResource = { name: r.name, url: r.url };
       if (r.nodeId) o.nodeId = r.nodeId;
       if (r.inheritedNodeId) o.inheritedNodeId = r.inheritedNodeId;
       return o;

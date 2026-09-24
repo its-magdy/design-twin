@@ -16,13 +16,13 @@ import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
 import { releaseAssets, serializeRun, type Asset } from "./state";
 import { requestCancel } from "./progress";
-import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren } from "./collect";
+import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren, type ScreenResult, type FullResult } from "./collect";
 import { serialize } from "./serialize";
 import { buildDesignSystem } from "./components";
 import { listLibraries, collectLibraryComponents } from "./libraries";
 import { handleBridge } from "./bridge";
 import { applyWrites } from "./writes";
-import { isUIToMain, type ScreenExportResult, type FullExportResult, type ExportFile, type ExportLayerFile } from "./messages";
+import { isUIToMain, type ExportFile, type ExportLayerFile } from "./messages";
 
 // Test surface: the bundle is an IIFE, so internals aren't global. Expose the read AND write APIs
 // under one namespaced global so the VM test harness (test/harness.ts) can drive them. Harmless in
@@ -69,15 +69,8 @@ async function runExport<T extends { assets: Asset[] }>(
   releaseAssets();
 }
 
-// collectSelection/collectFull are typed `Promise<Obj>` in collect.ts (out of scope for this pass —
-// see messages.ts's ScreenExportResult/FullExportResult doc comment). The single assertion here is the
-// one place that narrows to the fields this file actually reads; it does not touch collect.ts's own
-// return type or runtime behaviour.
-const collectSelectionTyped = (): Promise<ScreenExportResult> => collectSelection() as Promise<ScreenExportResult>;
-const collectFullTyped = (): Promise<FullExportResult> => collectFull() as Promise<FullExportResult>;
-
 const runSelection = (): Promise<void> =>
-  runExport<ScreenExportResult>("current selection", collectSelectionTyped, (r) => ({
+  runExport<ScreenResult>("current selection", () => collectSelection(), (r) => ({
     files: [
       { name: `${r.screenName}.json`, content: JSON.stringify(r.screen, null, 2), copyable: true },
       { name: "variables.json", content: JSON.stringify(r.variables, null, 2) },
@@ -92,7 +85,7 @@ const runSelection = (): Promise<void> =>
 // (rationale in pages-layout.js's header, where the layout lives).
 const SEP = "__";
 const runFull = (): Promise<void> =>
-  runExport<FullExportResult>("design system + page frames", collectFullTyped, (r) => {
+  runExport<FullResult>("design system + page frames", () => collectFull(), (r) => {
     const { meta, layerFiles, indexFiles, rootIndex } = buildPageLayout(r.layersDoc, SEP);
     // Per-page index.json files ride in `layerFiles` (the batch bucket), NOT `files` — `files` gets
     // one download BUTTON per entry, and 19+ pages would mean 19+ buttons, the exact non-scaling this
@@ -125,8 +118,8 @@ figma.ui.onmessage = async (raw: unknown) => {
   switch (raw.type) {
     case "get-token": {
       // The bridge token is persisted per-user via clientStorage (never leaves the file).
-      const token = await figma.clientStorage.getAsync("bridgeToken");
-      figma.ui.postMessage({ type: "token", token: token || "" });
+      const token: unknown = await figma.clientStorage.getAsync("bridgeToken");
+      figma.ui.postMessage({ type: "token", token: typeof token === "string" ? token : "" });
       break;
     }
     case "set-token": {
