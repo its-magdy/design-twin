@@ -8,36 +8,227 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 // design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
 function bag(o) {
   const u = o;
   return u;
 }
 
-// design-to-code/catalog-input.ts
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function manifestOf(doc) {
+  return isScreenExport(doc) || isLayerFile(doc) ? doc.manifest : void 0;
+}
+
+// design-to-code/read-json.ts
 import fs from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
-// design-to-code/catalog-input.ts
-function readJsonFile(file, what, hint) {
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
   let raw;
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-    process.exit(2);
+    return readFailure(e);
   }
+  let parsed;
   try {
-    return JSON.parse(raw);
+    const value = JSON.parse(raw);
+    parsed = value;
   } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
-    process.exit(2);
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  process.exit(2);
+}
+
+// bridge/src/json-util.ts
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+function isVerifyMeasured(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cli-args.ts
+import { parseArgs } from "node:util";
+var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+function errCode(e) {
+  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  try {
+    return parse();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args: argv, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
   }
 }
+
+// design-to-code/design-diff.ts
+import { parseArgs as parseArgs2 } from "node:util";
 
 // bridge/src/asset-compare.ts
 import crypto from "node:crypto";
@@ -138,19 +329,20 @@ var CATEGORY = {
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"]
 };
-var CATEGORY_OF = new Map(Object.entries(CATEGORY).flatMap(([cat, fields]) => fields.map((f) => [f, cat])));
+var isDiffCategory = (k) => Object.hasOwn(CATEGORY, k);
+var CATEGORY_OF = /* @__PURE__ */ new Map();
+for (const cat of Object.keys(CATEGORY)) if (isDiffCategory(cat)) for (const f of CATEGORY[cat] || []) CATEGORY_OF.set(f, cat);
 var IGNORED = /* @__PURE__ */ new Set(["children", "box", "renderBox", "id", "css", "measurements", "pluginData", "sharedData"]);
-var roots = (doc) => Array.isArray(doc.nodes) ? doc.nodes : doc.tree && typeof doc.tree === "object" ? [doc.tree] : [];
 var same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 var brief = (v) => {
   const s = typeof v === "string" ? v : JSON.stringify(v);
   return s === void 0 ? void 0 : s.length > 160 ? s.slice(0, 157) + "\u2026" : s;
 };
 var MAX_LEAVES = 12;
-var isObj = (v) => v !== null && typeof v === "object";
+var isObj2 = (v) => v !== null && typeof v === "object";
 function leaves(before, after, at, out = []) {
   if (same(before, after)) return out;
-  if (!isObj(before) || !isObj(after) || Array.isArray(before) !== Array.isArray(after)) {
+  if (!isObj2(before) || !isObj2(after) || Array.isArray(before) !== Array.isArray(after)) {
     out.push({ at, before, after });
     return out;
   }
@@ -173,7 +365,7 @@ function index(doc) {
     out.set(String(node.id), { node, parentId, path: here.join(" > "), childIds: kids.map((k) => String(k && k.id)) });
     for (const k of kids) walk(k, String(node.id), here);
   };
-  for (const r of roots(doc)) walk(r, null, []);
+  for (const r of screenRoots(doc)) walk(r, null, []);
   return out;
 }
 var ROOT_IGNORED = /* @__PURE__ */ new Set(["tree", "nodes", "exportedAt", "manifest", "snapshot", "assets", "screen", "file", "reference"]);
@@ -239,7 +431,7 @@ function diffScreens(oldDoc, newDoc, opts = {}) {
     if (!ROOT_IGNORED.has(key)) document.push(...fieldDiffs(key, bag(oldDoc)[key], bag(newDoc)[key], "document"));
   }
   const warnings = [];
-  const trunc = truncatedOf(newDoc.manifest);
+  const trunc = truncatedOf(manifestOf(newDoc));
   if (trunc) warnings.push(`the NEW export is truncated (${trunc === true ? "some" : trunc} subtree(s) past the depth limit) \u2014 anything under "Removed" may simply not have been exported. Re-pull a narrower scope before acting on removals.`);
   return { kind: "screen", summary: { added: added.length, removed: removed.length, changed: changed.length + (document.length ? 1 : 0), reordered: reordered.length, positionOnly }, warnings, added, removed, reordered, changed, document };
 }
@@ -344,19 +536,25 @@ function diffManifest(oldDoc, newDoc) {
   }
   return { kind: "manifest", summary: { added: 0, removed: 0, changed: fields.length ? 1 : 0 }, warnings: [], fields };
 }
-var isTokens = (doc) => !!doc && typeof doc === "object" && "variables" in doc && Array.isArray(doc.variables);
-var isCatalog = (doc) => !!doc && typeof doc === "object" && "components" in doc && Array.isArray(doc.components);
-var isManifest = (doc) => !!doc && typeof doc === "object" && "counts" in doc && typeof doc.counts === "object" && doc.counts !== null && !Array.isArray(doc.counts) && "files" in doc && typeof doc.files === "object" && doc.files !== null && !Array.isArray(doc.files);
-var isStyles = (doc) => !!doc && typeof doc === "object" && "styles" in doc && Array.isArray(doc.styles);
-var isHygiene = (doc) => !!doc && typeof doc === "object" && "hygiene" in doc && Array.isArray(doc.hygiene);
-var isScreen = (doc) => !!doc && typeof doc === "object" && ("nodes" in doc && Array.isArray(doc.nodes) || "tree" in doc && !!doc.tree && typeof doc.tree === "object");
+var hasArray = (doc, key) => isJsonObject(doc) && Array.isArray(doc[key]);
+var isManifest = (doc) => isJsonObject(doc) && isJsonObject(doc.counts) && isJsonObject(doc.files);
+var isStyles = (doc) => isJsonObject(doc) && Array.isArray(doc.styles) && doc.styles.every((st) => isJsonObject(st) && typeof st.name === "string");
+isStyles.expected = "a style sheet: an object with a `styles` array of {name, key?, \u2026}";
+var isHygiene = (doc) => isJsonObject(doc) && isStringArray(doc.hygiene);
+isHygiene.expected = "hygiene.json: an object with a `hygiene` array of strings";
+var isScreen = (doc) => isScreenExport(doc) || isLayerFile(doc);
+isScreen.expected = "a screen export: an object whose `nodes` is an array of nodes {id, type, \u2026}, or a layer file whose `tree` is one";
+function checked(doc, guard) {
+  if (guard(doc)) return doc;
+  throw new Error(`is not ${guard.expected || "a document of that kind"}`);
+}
 function diffDocs(oldDoc, newDoc, opts) {
-  if (isTokens(newDoc)) return diffTokens(oldDoc, newDoc);
-  if (isCatalog(newDoc)) return diffCatalog(oldDoc, newDoc);
-  if (isStyles(newDoc)) return diffStyles(oldDoc, newDoc);
-  if (isHygiene(newDoc)) return diffHygiene(oldDoc, newDoc);
-  if (isScreen(newDoc)) return diffScreens(oldDoc, newDoc, opts);
-  if (isManifest(newDoc)) return diffManifest(oldDoc, newDoc);
+  if (hasArray(newDoc, "variables")) return diffTokens(isTokensDoc(oldDoc) ? oldDoc : {}, checked(newDoc, isTokensDoc));
+  if (hasArray(newDoc, "components")) return diffCatalog(isComponentsCatalog(oldDoc) ? oldDoc : { components: [] }, checked(newDoc, isComponentsCatalog));
+  if (hasArray(newDoc, "styles")) return diffStyles(isStyles(oldDoc) ? oldDoc : { styles: [] }, checked(newDoc, isStyles));
+  if (hasArray(newDoc, "hygiene")) return diffHygiene(isHygiene(oldDoc) ? oldDoc : { hygiene: [] }, checked(newDoc, isHygiene));
+  if (hasArray(newDoc, "nodes") || isJsonObject(newDoc) && isJsonObject(newDoc.tree)) return diffScreens(isScreen(oldDoc) ? oldDoc : { nodes: [] }, checked(newDoc, isScreen), opts);
+  if (isManifest(newDoc)) return diffManifest(isManifest(oldDoc) ? oldDoc : null, newDoc);
   throw new Error("not a screen export, a token file, a component catalog, a style sheet, hygiene.json or the design-system manifest (no `tree`/`nodes`, `variables`, `components`, `styles`, `hygiene` or `counts`+`files` at the top level) \u2014 nothing here can be diffed");
 }
 function markdown(d, label) {
@@ -419,7 +617,7 @@ function assetPaths(doc) {
     if (typeof n.asset === "string") out.add(n.asset);
     for (const k of Array.isArray(n.children) ? n.children : []) walk(k);
   };
-  for (const r of roots(doc)) walk(r);
+  for (const r of screenRoots(doc)) walk(r);
   return [...out];
 }
 function assetRoot(file, assets) {
@@ -454,32 +652,27 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   return out;
 }
 function previous(file, against, cwd = process.cwd(), current = null) {
-  if (against) return { doc: JSON.parse(fs3.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
+  if (against) {
+    return { doc: readJsonFile(against, "baseline (--against)"), source: against, kind: "file", notes: [] };
+  }
   const found = [];
   const snap = snapshotPath(file, cwd);
   if (fs3.existsSync(snap)) {
-    let assets = null;
-    try {
-      assets = JSON.parse(fs3.readFileSync(snap + ".assets.json", "utf8"));
-    } catch {
-    }
-    found.push({ doc: JSON.parse(fs3.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
+    const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
+    const r = readJson(snap, anyJson);
+    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
+    found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
   if (fs3.existsSync(snap + ".prev")) {
-    let assets = null;
-    try {
-      assets = JSON.parse(fs3.readFileSync(snap + ".assets.json.prev", "utf8"));
-    } catch {
-    }
-    try {
-      found.push({ doc: JSON.parse(fs3.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
-    } catch {
-    }
+    const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
+    const r = readJson(snap + ".prev", anyJson);
+    if ("doc" in r) found.push({ doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
     const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
-    found.push({ doc: JSON.parse(text), source: "git HEAD", kind: "git" });
+    const doc = JSON.parse(text);
+    found.push({ doc, source: "git HEAD", kind: "git" });
   } catch {
   }
   if (!found.length) return null;
@@ -531,21 +724,17 @@ function siblingFilesOf(f) {
   return out;
 }
 function main(argv) {
-  const USAGE = "usage: node design-diff.js --snapshot <file.json>... [--force]\n       node design-diff.js <file.json> [--against <old.json>] [--json] [--out <file>]";
+  const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json>... [--force]
+       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
     process.exit(argv.length ? 0 : 2);
   }
-  const KNOWN = ["--snapshot", "--against", "--out", "--json", "--help", "--force"];
-  const unknown = argv.filter((a) => a.startsWith("-") && !KNOWN.includes(a));
-  if (unknown.length) {
-    console.error(`design-diff: unknown flag ${unknown.join(", ")} (known: ${KNOWN.join(" ")})
-${USAGE}`);
-    process.exit(2);
-  }
-  if (argv[0] === "--snapshot") {
-    const force = argv.includes("--force");
-    const requested = argv.slice(1).filter((a) => a !== "--force");
+  const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, () => parseArgs2({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.snapshot) {
+    const force = !!flags.force;
+    const requested = positionals;
     if (!requested.length) {
       console.error(USAGE);
       process.exit(2);
@@ -584,8 +773,8 @@ ${USAGE}`);
       if (!identical) fs3.copyFileSync(f, dest);
       let n = 0;
       try {
-        const parsed = JSON.parse(fs3.readFileSync(f, "utf8"));
-        if (isScreen(parsed)) {
+        const parsed = readJsonOrNull(f, isScreen);
+        if (parsed) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
           fs3.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
@@ -597,22 +786,25 @@ ${USAGE}`);
     if (refused) process.exitCode = 1;
     return;
   }
-  const take = (flag) => {
-    const i = argv.indexOf(flag);
-    if (i < 0) return void 0;
-    const v = argv[i + 1];
-    argv.splice(i, 2);
-    return v;
-  };
-  const against = take("--against"), out = take("--out");
-  const json = argv.includes("--json");
-  const file = argv.find((a) => !a.startsWith("--"));
+  const { against, out } = flags;
+  const json = !!flags.json;
+  const file = positionals[0];
   if (!file) {
     console.error(USAGE);
     process.exit(2);
   }
   const current = readJsonFile(file, "export");
-  const prev = previous(file, against, process.cwd(), current);
+  const failed = (e) => {
+    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
+    console.error(`design-diff: ${file}: ${String(message)}`);
+    process.exit(2);
+  };
+  let prev = null;
+  try {
+    prev = previous(file, against, process.cwd(), current);
+  } catch (e) {
+    failed(e);
+  }
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against \u2014 no snapshot in design/.sync/, and it is not committed in git.
 Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
@@ -622,9 +814,7 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   try {
     diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : /* @__PURE__ */ new Set() });
   } catch (e) {
-    const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
-    console.error(`design-diff: ${file}: ${String(message)}`);
-    process.exit(2);
+    return failed(e);
   }
   diff.warnings = [...prev.notes, ...diff.warnings || []];
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };

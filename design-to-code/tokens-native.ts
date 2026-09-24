@@ -22,6 +22,7 @@
 // the alias target's same-named mode when it has one, else its default mode. An alias that leaves the
 // file (a library variable that was not exported) is skipped with a warning, never guessed.
 import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableValue } from "./types.ts";
+import { normHex } from "./color.ts";
 
 /** The px-vs-unitless override every emitter honours (tokens.ts unitDecision): the names a caller declared unitless. */
 export interface UnitOpts {
@@ -38,11 +39,11 @@ export interface NativeOpts extends UnitOpts {
 // tokens.ts hands its helpers in (names, default modes, aliases, units must agree with the DTCG/CSS
 // output) rather than this file importing tokens.ts back: an import cycle makes the bundler wrap
 // tokens.ts as an inner module, and its `import.meta.main` CLI guard then never fires.
-/** The seven tokens.ts helpers this emitter is built from — typed from their definitions there. */
+// (Colour parsing is NOT one of them: color.ts imports nothing, so it is imported directly.)
+/** The six tokens.ts helpers this emitter is built from — typed from their definitions there. */
 export interface NativeHelpers {
   segs: (name: string | null | undefined) => string[];
   isAlias: (v: unknown) => v is VariableAlias;
-  normHex: (v: unknown) => string | null;
   defaultModeName: (variable: Variable, collections: VariableCollection[] | undefined) => string;
   baseValue: (variable: Variable, collections: VariableCollection[] | undefined, def?: string) => VariableValue | undefined;
   unitDecision: (variable: Variable, opts?: UnitOpts) => UnitDecision;
@@ -54,7 +55,9 @@ type NativeKind = "color" | "bool" | "string" | "fontSize" | "dimension" | "numb
 type Concrete = string | number | boolean | typeof FULL;
 interface NativeMode { name: string; id: string }
 interface NativeField { id: string; kind: NativeKind; source: string; values: Record<string, Concrete> }
-interface NativeCollection { name: string; type: string; modes: NativeMode[]; default: string; defaultId: string; fields: NativeField[] }
+/** The generated type's name: `<Collection>Tokens`, or `<Collection>Tokens<n>` when two collections fold onto one. */
+type NativeTypeName = `${string}Tokens` | `${string}Tokens${number}`;
+interface NativeCollection { name: string; type: NativeTypeName; modes: NativeMode[]; default: string; defaultId: string; fields: NativeField[] }
 interface Candidate { v: Variable; kind: NativeKind; values: Record<string, Concrete>; id: string; final?: string }
 type Emit = (cols: NativeCollection[], opts?: NativeOpts) => string;
 export interface NativeFile { file: string; text: string; warnings: string[] }
@@ -63,7 +66,7 @@ export interface NativeFile { file: string; text: string; warnings: string[] }
 // written as each platform's own idiom — never as the literal (livetest-3 #96).
 const FULL = Object.freeze({ fullyRounded: true });
 
-export default function nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel }: NativeHelpers) {
+export default function nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel }: NativeHelpers) {
 
 // A plain string-keyed object on purpose (as the JS was): `platformOf` looks a caller's word up in it
 // with a truthiness test, so an inherited name behaves exactly as it did.
@@ -98,7 +101,7 @@ const pascal = (parts: string[]): string => { const c = camel(parts); return c.c
 function isFontSize(v: Variable): boolean {
   const scopes = v.scopes || [];
   if (scopes.length && !scopes.every((s) => s === "ALL_SCOPES")) return scopes.includes("FONT_SIZE");
-  return /font.?size|text.?size|type.?size/i.test(v.collection + "/" + v.name);
+  return /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name);
 }
 
 function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
@@ -109,11 +112,12 @@ function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
   return null;
 }
 
+const isNativeScalar = (x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
 function resolve(byName: Map<string, Variable>, collections: VariableCollection[], v: Variable, mode: string, seen?: Set<string>): string | number | boolean | undefined {
   const values = v.values || {};
   let raw: VariableValue | undefined = values[mode];
   if (raw === undefined) raw = baseValue(v, collections, defaultModeName(v, collections));
-  if (!isAlias(raw)) return raw;
+  if (!isAlias(raw)) return isNativeScalar(raw) ? raw : undefined; // a motion OBJECT (EASING/TIMING) has no native literal
   const target = byName.get(raw.aliasOf);
   if (!target || (seen && seen.has(target.name))) return undefined;
   const next = new Set(seen || []).add(v.name);
@@ -132,15 +136,16 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
     const mine = vars.filter((v) => v.collection === c.name);
     const modeNames = (c.modes && c.modes.length ? c.modes : [...new Set(mine.flatMap((v) => Object.keys(v.values || {})))]).map(String);
     if (!mine.length || !modeNames.length) continue;
-    let type = pascal([c.name]) + "Tokens";
-    for (let n = 2; typeNames.has(type); n++) type = pascal([c.name]) + "Tokens" + n;
+    let type: NativeTypeName = `${pascal([c.name])}Tokens`;
+    for (let n = 2; typeNames.has(type); n++) type = `${pascal([c.name])}Tokens${n}`;
     typeNames.add(type);
     const ids = new Set<string>();
     const fields: NativeField[] = [];
     const cands: Candidate[] = [];
     for (const v of mine) {
       const kind = kindOf(v, opts);
-      if (!kind || !segs(v.name).length) continue;
+      if (!segs(v.name).length) continue;
+      if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
       const values: Record<string, Concrete> = {};
       let ok = true;
       for (const m of modeNames) {
@@ -212,8 +217,10 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
 const num = (raw: unknown): string => { const n = Number(raw); return Number.isFinite(n) ? String(Math.round(n * 10000) / 10000) : "0"; };
 const str = (raw: unknown): string => JSON.stringify(String(raw));
 const bool = (raw: unknown): string => String(raw === true || raw === "true"); // every target spells it true/false
-// Only ever called on a "color" field, whose every value model() has already passed through normHex.
-const argb = (raw: unknown): string => { const h = normHex(raw)!; return "0x" + (h.length === 8 ? h.slice(6) + h.slice(0, 6) : "ff" + h).toUpperCase(); };
+// Only ever called on a "color" field, whose every value model() has already passed through normHex
+// (a value that fails it drops the whole field) — so a null here is a bug in this file, said loudly.
+const hexOf = (raw: unknown): string => { const h = normHex(raw); if (h === null) throw new Error(`tokens-native: colour value ${JSON.stringify(raw)} was not validated`); return h; };
+const argb = (raw: unknown): string => { const h = hexOf(raw); return "0x" + (h.length === 9 ? h.slice(7) + h.slice(1, 7) : "ff" + h.slice(1)).toUpperCase(); };
 const HEADER = "GENERATED by Design Twin (tokens.js --native) from design-system/tokens.json — do not edit by hand; re-run after a token pull.";
 
 // ------------------------------------------------------------------------------------ compose
@@ -251,7 +258,7 @@ function swiftui(cols: NativeCollection[]): string {
   const chan = (h: string, i: number): string => num(parseInt(h.slice(i, i + 2), 16) / 255);
   const lit = (k: NativeKind, r: Concrete): string => {
     if (r === FULL) return ".infinity";
-    if (k === "color") { const h = normHex(r)!; return `Color(.sRGB, red: ${chan(h, 0)}, green: ${chan(h, 2)}, blue: ${chan(h, 4)}, opacity: ${h.length === 8 ? chan(h, 6) : "1"})`; }
+    if (k === "color") { const h = hexOf(r); return `Color(.sRGB, red: ${chan(h, 1)}, green: ${chan(h, 3)}, blue: ${chan(h, 5)}, opacity: ${h.length === 9 ? chan(h, 7) : "1"})`; }
     // Swift spells a unicode escape \u{1F}, not JSON's \u001f — the only escape the two disagree on.
     return k === "bool" ? bool(r) : k === "string" ? str(r).replace(/\\u([0-9a-fA-F]{4})/g, "\\u{$1}") : num(r);
   };
@@ -305,7 +312,7 @@ function flutter(cols: NativeCollection[]): string {
 // ------------------------------------------------------------------------------------ react-native
 function reactNative(cols: NativeCollection[]): string {
   const T: Record<NativeKind, string> = { color: "string", dimension: "number", fontSize: "number", number: "number", bool: "boolean", string: "string" };
-  const lit = (k: NativeKind, r: Concrete): string => r === FULL ? "9999" : k === "color" ? str("#" + normHex(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
+  const lit = (k: NativeKind, r: Concrete): string => r === FULL ? "9999" : k === "color" ? str(hexOf(r)) : k === "bool" ? bool(r) : k === "string" ? str(r) : num(r);
   const L = [`// ${HEADER}`, "// Numbers are density-independent units, as React Native styles expect. Pick a mode with useColorScheme()."];
   for (const c of cols) {
     const v = c.type.charAt(0).toLowerCase() + c.type.slice(1);

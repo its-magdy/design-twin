@@ -34,12 +34,17 @@ import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./componen
 // hidden.ts's one predicate: `hidden: true` on the node or an ancestor. Both walks below return at a
 // hidden node, so its whole subtree is skipped — ancestry is carried by not descending.
 import { hiddenSelf } from "./hidden.ts";
-import { readJsonFile } from "./catalog-input.ts";
+import { parseHex, contrastRatio } from "./color.ts";
+import type { Rgba } from "./color.ts";
+import { readDocFile, readOptionalDoc } from "./catalog-input.ts";
+import { isComponentsCatalog, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
-import { isJsonObject } from "./types.ts";
+import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
-  CatalogComponent, ComponentsCatalog, CoverageBucket, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
+  CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -68,7 +73,7 @@ export interface CrossCheckInput {
   stylesText?: TextStylesDoc | null;
 }
 
-type Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: Record<string, unknown>) => void;
+type Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: FindingExtras) => void;
 
 // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
 // a token the build has to resolve (livetest-3 P2a — the same rule as audit.ts and verify-screen.ts).
@@ -79,14 +84,6 @@ function walk(node: IrNode | null | undefined, fn: (n: IrNode) => void): void {
   for (const c of node.children || []) walk(c, fn);
 }
 
-function rootsOf(doc: ScreenDoc | null | undefined): IrNode[] {
-  if (!doc) return [];
-  if (Array.isArray(doc.nodes)) return doc.nodes;
-  if (doc.tree) return [doc.tree];
-  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
-  if (doc.id || doc.type) return [doc as IrNode];
-  return [];
-}
 
 // Names are compared case- and punctuation-insensitively ONLY to find near-misses worth reporting.
 // Nothing is ever auto-bound on a normalised name — `Medium/14 Medium` vs `Medium/14 medium`
@@ -121,8 +118,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const resolvedModes = new Map<string, Set<string>>(); // collection name -> Set(mode)
 
   for (const s of screens) {
-    const label = s.label || (s.doc && s.doc.screen) || "screen";
-    for (const root of rootsOf(s.doc)) {
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
+    for (const root of screenRoots(s.doc)) {
       if (root && root.resolvedModes) {
         for (const [coll, mode] of Object.entries(root.resolvedModes)) {
           if (!resolvedModes.has(coll)) resolvedModes.set(coll, new Set());
@@ -154,7 +151,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   // 51 / 41 (livetest-3), and skewed every percentage below.
   const visible: ReturnType<typeof visibleInstances> = [];
   screens.forEach((s) => {
-    const label = s.label || (s.doc && s.doc.screen) || "screen";
+    const label = s.label || screenExportOf(s.doc)?.screen || "screen";
     for (const i of visibleInstances(s.doc, label)) {
       visible.push(i);
       instances.push({ screen: label, nodeId: i.nodeId, name: i.layer, key: i.key, setKey: i.setKey, setName: i.name, propNames: Object.keys(i.props || {}) });
@@ -224,7 +221,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   // it (screens[].vars), else the union's variables whose recorded source includes this screen, else
   // — only when nothing better exists — the union itself, and then the message says so.
   const sliceSources = input.sliceSources || null; // Map(key -> [screen label]) for the union
-  const labels = screens.map((s) => s.label || (s.doc && s.doc.screen) || "screen");
+  const labels = screens.map((s) => s.label || screenExportOf(s.doc)?.screen || "screen");
   const own = screens.map((s) => (s && s.vars && Array.isArray(s.vars.variables) ? s.vars.variables : null));
   let varScope = "own";
   let screenVars: Variable[] = [];
@@ -538,7 +535,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       }
       for (const c of n.children || []) everyInstance(c);
     };
-    for (const s of screens) for (const root of rootsOf(s.doc)) everyInstance(root);
+    for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
     coverage.hiddenOnly = hiddenOnly.size;
     if (rekeyed) {
       const s = rekey!.summary, props = rekey!.proposals;
@@ -637,8 +634,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       { families: sorted.map(([family, count]) => ({ family, count })) }
     );
   }
-  if (stylesText && stylesText.styles && fonts.size) {
-    const dsFamilies = new Set((stylesText.styles || []).map((s) => s.font).filter(Boolean));
+  if (stylesText && fonts.size) {
+    const dsFamilies = new Set(stylesText.styles.map((s) => s.font).filter((f): f is string => !!f));
     const foreign = [...fonts.keys()].filter((f) => dsFamilies.size && !dsFamilies.has(f));
     if (foreign.length) {
       push(
@@ -686,7 +683,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   }
 
   // ---------------------------------------------------------------- absurd token values
-  const absurd: Array<{ name: string; collection: string; mode: string; value: number }> = [];
+  const absurd: Array<{ name: string; collection: string | undefined; mode: string; value: number }> = [];
   const seenAbsurd = new Set<string>(); // the same variable appears in both the design system and the screen slice
   const allVars: Variable[] = ((tokens && tokens.variables) || []).concat((variables && variables.variables) || []);
   for (const v of allVars) {
@@ -694,7 +691,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       // ts-port: legacy/producer-mismatch read kept as-is — a boxed `{value: n}` mode value (the producer writes the number itself).
       const n = typeof val === "number" ? val : val && typeof val === "object" && "value" in val && typeof val.value === "number" ? val.value : null;
       if (n == null || Math.abs(n) < ABSURD_NUMBER) continue;
-      const id = `${v.collection}/${v.name}/${mode}`;
+      // a variable whose collection the export could not name (collection absent) is its own bucket
+      const id = JSON.stringify([v.collection ?? null, v.name, mode]);
       if (seenAbsurd.has(id)) continue;
       seenAbsurd.add(id);
       absurd.push({ name: v.name, collection: v.collection, mode, value: n });
@@ -782,31 +780,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
 }
 
 
-// ---------------------------------------------------------------- contrast arithmetic (WCAG 2.2)
-// Deliberately a local copy of the two formulas rather than an import of audit.ts: this module is
-// bundled standalone into claude-plugin/scripts/, and audit.ts imports THIS file — importing back
-// would be a cycle. They are eight lines and the spec has not changed since 2008.
-interface Rgba { r: number; g: number; b: number; a: number }
-function hexToRgb(hex: unknown): Rgba | null {
-  const m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(String(hex || ""));
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: m[2] ? parseInt(m[2], 16) / 255 : 1 };
-}
-function relLuminance(c: Rgba): number {
-  const ch = (v: number): number => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-}
-function ratio(a: Rgba, b: Rgba): number {
-  const [hi, lo] = [relLuminance(a), relLuminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
+// ---------------------------------------------------------------- contrast (WCAG 2.2: color.ts)
 // WCAG AA for body text. Large text is 3:1, but the export does not reliably say which is which and
 // over-reporting a heading is far cheaper than missing an unreadable nav label.
 const MIN_CONTRAST = 4.5;
 
-interface ContrastFailure { mode: string; fg: string; bg: string; ratio: number; nodes: string[]; sample: string }
 
 function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | null, tokens: TokensDoc | null, push: Push, resolvedModes: Map<string, Set<string>>): void {
   const defs = new Map<string, Variable>(); // token name -> variable record (the screen's own library wins: it is what the screen binds)
@@ -826,7 +804,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
       if (keys.length !== 1) return null; // several modes and none of them is this one — do not guess
       val = v.values[keys[0]];
     }
-    if (typeof val === "string") return hexToRgb(val);
+    if (typeof val === "string") return parseHex(val);
     if (val && typeof val === "object" && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
     return null;
   }
@@ -850,7 +828,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
 
   const pairs = new Map<string, { fg: string; bg: string; nodes: string[]; sample: string }>(); // "fg|bg" -> { fg, bg, nodes:[], sample }
   for (const s of screens) {
-    for (const root of rootsOf(s.doc)) {
+    for (const root of screenRoots(s.doc)) {
       walkWithBg(root, null, (n, bgToken) => {
         if (n.type !== "TEXT" || !bgToken) return;
         const fg = (n.tokens && (n.tokens.fills || n.tokens.textRangeFills)) ||
@@ -870,7 +848,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
       const fg = resolve(p.fg, mode, 0);
       const bg = resolve(p.bg, mode, 0);
       if (!fg || !bg) continue; // this pair is not defined in this mode — say nothing rather than guess
-      const r = ratio(fg, bg);
+      const r = contrastRatio(fg, bg);
       if (r >= MIN_CONTRAST) continue;
       failures.push({ mode, fg: p.fg, bg: p.bg, ratio: Number(r.toFixed(2)), nodes: p.nodes, sample: p.sample });
     }
@@ -971,41 +949,35 @@ function toMarkdown(res: CrossCheckReport): string {
 
 export { crossCheck, toMarkdown, ABSURD_NUMBER, WRONG_CATALOG_PCT };
 
-// The screen exports named on the command line are this repo's own writer's output (readJsonFile ->
-// unknown): a JSON object is read as the ScreenDoc bag; anything else yields no roots, as before.
-function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
-
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
 //        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]
+// Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
+// document it should be is a one-line error and exit 2.
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
-  const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
-  const dsDir = take("--design-system");
-  const varsFile = take("--variables");
-  const out = take("--out");
-  const jsonOnly = strip("--json"), gate = strip("--gate");
   const USAGE =
-    "usage: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system] " +
+    `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/design-system] ` +
     "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
-  if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
-  const stray = argv.filter((a) => a.startsWith("-"));
-  if (stray.length || !argv.length) { console.error((stray.length ? `cross-check: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
+  const OPTIONS = {
+    "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
+  } as const;
+  const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (!files.length) { console.error(USAGE); process.exit(2); }
+  const { "design-system": dsDir, variables: varsFile, out } = flags;
+  const jsonOnly = !!flags.json, gate = !!flags.gate;
 
   // Optional inputs are read only when present: the whole point is that this runs on a project that
   // has a screen and nothing else, and SAYS which checks it could not do (notChecked) rather than
-  // dying on a missing design system.
-  // Each is a design-system split file this repo's own writer produced, parsed as the shape it was written in.
-  const maybe = <T,>(f: string | undefined): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) as T : null);
-  // Each screen's OWN variables: the raw slice every pull writes beside it as <Screen>.vars.json. The
-  // token-collision check is about the variables THIS screen carries, not the merged union's
-  // (livetest-3 #40), so it is read whenever it is there.
+  // dying on a missing design system. One that IS there but is not what it should be fails loud.
   // The screen's own slice (<Screen>.vars.json) and the merged union are discovered by the SAME code
   // audit.ts uses (slice-sources.ts variablesContext): the union is the export root's variables.json
   // (P4 #38/#39), never a stale design/variables.json above design/export/ (P4 #14/#201), and the
   // token-collision check reads each screen's own slice (livetest-3 #40/#311).
-  const ctx = variablesContext(argv, varsFile, fs, path);
-  const screens: CrossCheckScreen[] = argv.map((f, i) => { const d = readJsonFile(f, "screen export"); return { doc: isScreenDocLike(d) ? d : null, label: path.basename(f, ".json"), vars: ctx.own[i] }; });
+  const ctx = variablesContext(files, varsFile);
+  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
+  if (ctx.invalid.length) process.exit(2);
+  const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
@@ -1020,10 +992,10 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     sliceSources: ctx.sliceSources,
     variables: variablesDoc,
     variablesPath,
-    tokens: maybe<TokensDoc>(path.join(dsBase, "tokens.json")),
-    components: maybe<ComponentsCatalog>(path.join(dsBase, "components.local.json")),
-    componentsLibrary: maybe<ComponentsCatalog>(path.join(dsBase, "components.library.json")),
-    stylesText: maybe<TextStylesDoc>(path.join(dsBase, "styles.text.json")),
+    tokens: readOptionalDoc(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc),
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

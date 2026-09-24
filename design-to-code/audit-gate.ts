@@ -12,7 +12,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { blockerIds } from "./audit.ts";
-import type { AuditReport } from "./types.ts";
+import { isAuditReport } from "./doc-guards.ts";
+import { readJson } from "./read-json.ts";
 
 function slug(s: unknown): string { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
 
@@ -49,15 +50,18 @@ export interface AuditGateStatus {
   auditFile: string | null;
   blockers: string[];
   unreadable?: true;
+  /** why it is unreadable (read-json.ts wording: "is not valid JSON — …", "is not an audit report …") */
+  error?: string;
 }
 
 function auditGateStatus(cwd: string, screenFile: string | null | undefined, screenName: string | null | undefined): AuditGateStatus {
   const rel = locateAuditFile(cwd, screenFile, screenName);
   if (!rel) return { auditFile: null, blockers: [] };
-  // An audit report under design/audit/ is this repo's own writer's output (audit.ts --out).
-  let doc: AuditReport;
-  try { doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8")) as AuditReport; } catch { return { auditFile: rel, blockers: [], unreadable: true }; }
-  return { auditFile: rel, blockers: blockerIds(doc) };
+  // An audit report (audit.ts --out). A file there that cannot be read, or is not an audit report, is
+  // `unreadable` — never "no blockers".
+  const r = readJson(path.join(cwd, rel), isAuditReport);
+  if (!("doc" in r)) return { auditFile: rel, blockers: [], unreadable: true, error: r.error };
+  return { auditFile: rel, blockers: blockerIds(r.doc) };
 }
 
 export { locateAuditFile, auditGateStatus, blockerIds, slug };

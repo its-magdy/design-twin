@@ -67,13 +67,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { visibility, rootsOf } from "./plan-skeleton.ts";
+import { visibility } from "./plan-skeleton.ts";
+import { screenExportOf, screenRoots } from "./export-shape.ts";
 import * as contentHash from "./content-hash.ts";
 import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
+import { colorKey } from "./color.ts";
+import { scriptCmd } from "./cli-args.ts";
+import { isPageIndex, isPagesRootIndex, isVerifyReport, parsePlan } from "./doc-guards.ts";
+import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
+import { isCodeConnectMap } from "./map-validate.ts";
+import { isScreenDoc } from "./export-shape.ts";
 import type {
-  CodeConnectMap, CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, PagesRootIndex, PageIndex, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
-  PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyExpectation, VerifyReport,
+  CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
+  PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
@@ -98,7 +105,7 @@ function readHookInput(): Promise<HookRead> {
   let st: fs.Stats;
   try { st = fs.fstatSync(0); } catch { return Promise.resolve({ payload: {}, source: "closed" }); }
   // Whatever the pipe carried: only a JSON object is a payload (anything else reads as an empty one).
-  const parse = (raw: string): HookPayload => { try { const v: unknown = raw.trim() ? JSON.parse(raw) as unknown : {}; return isJsonObject(v) ? v : {}; } catch { return {}; } };
+  const parse = (raw: string): HookPayload => { if (!raw.trim()) return {}; try { const v: unknown = JSON.parse(raw); return isJsonObject(v) ? v : {}; } catch { return {}; } };
   if (st.isFile() || st.isCharacterDevice()) {
     try { return Promise.resolve({ payload: parse(fs.readFileSync(0, "utf8")), source: "file" }); } catch { return Promise.resolve({ payload: {}, source: "unreadable" }); }
   }
@@ -115,7 +122,7 @@ function readHookInput(): Promise<HookRead> {
     };
     const first = setTimeout(() => { if (!bytes) done({ payload: {}, source: "silent-pipe" }); }, STDIN_WAIT_MS());
     // a little inside the process watchdog, so this (more specific) message is the one printed
-    const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | node verify-build.js` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
+    const hard = setTimeout(() => done({ error: `timed out after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s waiting for the hook payload on stdin (${bytes} byte(s) received, no end-of-file) — pass the plan path as an argument instead, or pipe the payload: echo '{"cwd":"…"}' | ${scriptCmd("verify-build")}` }), Math.max(50, HOOK_TIMEOUT_MS() - 250));
     process.stdin.on("data", (c: Buffer) => { bytes += c.length; chunks.push(c); });
     process.stdin.on("end", () => done({ payload: parse(Buffer.concat(chunks).toString("utf8")), source: "pipe" }));
     process.stdin.on("error", () => done({ payload: {}, source: "error" }));
@@ -139,17 +146,26 @@ function isStale(file: string, now: number = Date.now()): boolean {
   try { return now - fs.statSync(file).mtimeMs > cutoff; } catch { return false; }
 }
 
-/** A plan file on disk, parsed. design/plan/*.json is this repo's own writer's output (plan-skeleton.ts). */
+/** A plan file on disk, parsed and checked (doc-guards.ts parsePlan): plan-skeleton.ts writes it, a model fills it. */
 export interface PlanFile { file: string; plan: Plan }
+/** A plan file that could not be used, and why (one line). */
+export interface BadPlan { file: string; error: string }
 
-function readPlan(file: string): PlanFile | null {
-  try { return { file, plan: JSON.parse(fs.readFileSync(file, "utf8")) as Plan }; } catch { return null; }
+function readPlan(file: string): PlanFile | BadPlan {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return { file, error: r.error };
+  const p = parsePlan(r.doc);
+  return "plan" in p ? { file, plan: p.plan } : { file, error: p.error };
 }
+const isPlanFile = (p: PlanFile | BadPlan): p is PlanFile => "plan" in p;
 
-function findPlans(cwd: string): PlanFile[] {
+// Every plan under design/plan/, and — separately — the ones that could not be read: those are reported,
+// never silently skipped (a hand-broken plan used to vanish from the hook's view, so it was never checked).
+function findPlans(cwd: string): { plans: PlanFile[]; bad: BadPlan[] } {
   const dir = path.join(cwd, "design", "plan");
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f))).filter((p): p is PlanFile => !!p);
+  if (!fs.existsSync(dir)) return { plans: [], bad: [] };
+  const read = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path.join(dir, f)));
+  return { plans: read.filter(isPlanFile), bad: read.filter((p): p is BadPlan => !isPlanFile(p)) };
 }
 
 // The project root a plan belongs to: <root>/design/plan/<x>.json → <root>.
@@ -181,9 +197,9 @@ function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, 
 
 // The plan's own content, minus what the hook writes and what is not the plan's substance.
 function planHash(plan: Plan | null | undefined): string {
-  const copy = JSON.parse(JSON.stringify(plan || {})) as Plan; // a deep copy of a Plan is a Plan
+  const copy: Plan = structuredClone(plan || {});
   delete copy.status;
-  if (copy.verification && typeof copy.verification === "object") {
+  if (copy.verification) {
     delete copy.verification.hook;
     if (!Object.keys(copy.verification).length) delete copy.verification;
   }
@@ -254,26 +270,9 @@ function scanText(rel: string, text: string): string {
   return out;
 }
 
-// "#abc" / "#aabbcc" / "#aabbccdd" -> "aabbcc" (alpha dropped).
-function hex6(value: unknown): string | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
-  return h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
-}
-
-// The comparison key for the literal check: always 8 hex digits, rrggbb + alpha (opaque -> "ff").
-// Alpha is part of the colour's identity (live run #25): `#ffffff` and `#ffffff1a` are different
-// colours bound to different tokens, and folding them together cross-contaminated both directions.
-function colorKey(value: unknown): string | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(value).trim());
-  if (!m) return null;
-  const h = m[1].toLowerCase();
-  const full = h.length <= 4 ? h.split("").map((c) => c + c).join("") : h;
-  return full.length === 6 ? full + "ff" : full;
-}
-
-// Every raw colour literal in the source, keyed by colorKey -> the spelling found.
+// Every raw colour literal in the source, keyed by colorKey ("#rrggbbaa", color.ts) -> the spelling found.
+// Alpha is part of the key (live run #25): `#ffffff` and `#ffffff1a` are different colours bound to
+// different tokens, and folding them together cross-contaminated both directions.
 function colorLiterals(source: string): Map<string, string> {
   const found = new Map<string, string>();
   const add = (h: string | null, lit: string): void => { if (h && !found.has(h)) found.set(h, lit); };
@@ -281,11 +280,11 @@ function colorLiterals(source: string): Map<string, string> {
   // Compose / Flutter `Color(0xFF5B5FC7)` — AARRGGBB (alpha FIRST), or bare 0xRRGGBB.
   for (const m of source.matchAll(/\b0x([0-9a-fA-F]{8}|[0-9a-fA-F]{6})\b/g)) {
     const h = m[1].toLowerCase();
-    add(h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff", m[0]);
+    add("#" + (h.length === 8 ? h.slice(2) + h.slice(0, 2) : h + "ff"), m[0]);
   }
   for (const m of source.matchAll(/rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([\d.]+%?))?[^)]*\)/g)) {
     const rgb = [m[1], m[2], m[3]].map((x) => Math.min(255, Number(x)).toString(16).padStart(2, "0")).join("");
-    add(rgb + alphaHex(m[4]), m[0]);
+    add("#" + rgb + alphaHex(m[4]), m[0]);
   }
   return found;
 }
@@ -406,9 +405,8 @@ function moduleImported(mapModule: string, byFile: FileText[], cwd: string): boo
 
 // ================================================================ the export behind a plan
 
-// Every JSON read here is one this repo's own writers produced (an export, its index, a plan, a
-// verify report/expectation, a component map), so it is parsed as the shape it was written in.
-function readJsonOr<T>(file: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch { return fallback; } }
+// Every JSON read below (an export, its index, a verify report/expectation, a component map) is checked
+// against its doc-guards.ts guard; a lookup that finds only a broken file behaves as if it found nothing.
 
 function exportDirOf(cwd: string): string {
   const e = path.join(cwd, "design", "export");
@@ -419,13 +417,13 @@ function exportDirOf(cwd: string): string {
 const idFromStem = (s: unknown): string | null => { const m = /__(I?\d+)_(\d+)$/.exec(String(s || "")); return m ? `${m[1]}:${m[2]}` : null; };
 
 function indexRows(exportDir: string): IndexRow[] {
-  const root = readJsonOr<PagesRootIndex | null>(path.join(exportDir, "pages", "index.json"), null);
+  const root = readJsonOrNull(path.join(exportDir, "pages", "index.json"), isPagesRootIndex);
   if (!root) return [];
-  if (Array.isArray(root.layers)) return root.layers;
+  if (root.layers) return root.layers;
   const rows: IndexRow[] = [];
-  for (const pd of root.pageDirs || []) {
-    const idx = readJsonOr<PageIndex | null>(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), null);
-    if (idx && Array.isArray(idx.layers)) rows.push(...idx.layers);
+  for (const pd of root.pageDirs) {
+    const idx = readJsonOrNull(path.join(exportDir, pd.index || path.join("pages", pd.dir || "", "index.json")), isPageIndex);
+    if (idx) rows.push(...idx.layers);
   }
   return rows;
 }
@@ -441,7 +439,7 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   const tryFile = (rel: string | null | undefined): { file: string; doc: ScreenDoc } | null => {
     if (!rel) return null;
     for (const f of [path.resolve(cwd, rel), path.resolve(exportDir, rel)]) {
-      const doc = fs.existsSync(f) ? readJsonOr<ScreenDoc | null>(f, null) : null;
+      const doc = readJsonOrNull(f, isScreenDoc);
       if (doc) return { file: f, doc };
     }
     return null;
@@ -453,9 +451,12 @@ function locateExport(plan: Plan, planFile: string | undefined, cwd: string): Ex
   for (const id of ids) { row = rows.find((r) => r.id === id) || null; if (row) break; }
   if (!hit && row) hit = tryFile(row.file);
   if (!hit) return null;
-  const root: Partial<IrNode> = rootsOf(hit.doc)[0] || {};
-  if (!row) row = rows.find((r) => r.id === (hit.doc.nodeId || root.id)) || null;
-  return Object.assign(hit, { row, nodeId: hit.doc.nodeId || root.id || null, layerName: String(hit.doc.screen || root.name || ""), sameNameRows: rows.filter((r) => String(r.name || "").trim() === String(hit.doc.screen || root.name || "").trim()).length });
+  const root: IrNode | undefined = screenRoots(hit.doc)[0];
+  const exp = screenExportOf(hit.doc);
+  const nodeId = (exp && exp.nodeId) || (root && root.id) || null;
+  const layerName = String((exp && exp.screen) || (root && root.name) || "");
+  if (!row) row = rows.find((r) => r.id === nodeId) || null;
+  return Object.assign(hit, { row, nodeId, layerName, sameNameRows: rows.filter((r) => String(r.name || "").trim() === layerName.trim()).length });
 }
 
 // ================================================================ anchors (block 2)
@@ -468,7 +469,7 @@ export interface AnchorCoverage { visible: number; unmapped: NodeRef[]; unmapped
 
 function anchorCoverage(plan: Plan, doc: ScreenDoc): AnchorCoverage {
   const { visible, hidden } = visibility(doc);
-  const anchors: Record<string, PlanAnchor> = plan.anchors && typeof plan.anchors === "object" ? plan.anchors : {};
+  const anchors: Record<string, PlanAnchor> = plan.anchors || {};
   const covered = new Map<string, boolean>();
   const isCovered = (id: string): boolean => {
     if (covered.has(id)) return covered.get(id)!;
@@ -510,11 +511,12 @@ const hasToken = (row: PlanTokenRow): row is PlanTokenRow & { codeToken: string 
 
 function loadMapKeys(cwd: string): Map<string, { name: string; module: string }> {
   for (const f of [path.join(cwd, "design", "codeconnect.local.json"), path.join(cwd, "codeconnect.local.json")]) {
-    const map = readJsonOr<CodeConnectMap | null>(f, null);
+    // An invalid map is treated as no map (these are warnings about reuse; map-validate.js names the fault).
+    const map = readJsonOrNull(f, isCodeConnectMap);
     if (!map) continue;
     const keys = new Map<string, { name: string; module: string }>();
-    for (const [name, e] of Object.entries(map.components || {})) {
-      if (e && e.figma && e.figma.key && e.code && e.code.module && e.status !== "deprecated") keys.set(e.figma.key, { name, module: e.code.module });
+    for (const [name, e] of Object.entries(map.components)) {
+      if (e.figma.key && e.status !== "deprecated") keys.set(e.figma.key, { name, module: e.code.module });
     }
     return keys;
   }
@@ -552,8 +554,10 @@ function verificationWarnings(plan: Plan): string[] {
 }
 
 /** A verify report as locateReports() summarises it for the status computation. */
+/** How locateReports() tied a report to the plan (first that matches, in this order). */
+export type ReportMatch = "name" | "nodeId" | "expectation frame" | "layer name";
 export interface ReportRef {
-  rel: string; matchedBy: string; schema: string | null; verdict: string | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
+  rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
   exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
   expectationChanged: boolean; expectationRel: string | null;
 }
@@ -587,8 +591,7 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
 // what was built, and why.
 const DEVIATION_FIELDS = ["nodeId", "field", "designed", "built", "reason"] as const;
 function deviationWarnings(plan: Plan): string[] {
-  if (plan.deviations === undefined) return [];
-  if (!Array.isArray(plan.deviations)) return ["`deviations` must be an array of {nodeId, field, designed, built, reason}"];
+  if (plan.deviations === undefined) return []; // (a non-array `deviations` is refused by parsePlan, doc-guards.ts)
   const bad: string[] = [];
   plan.deviations.forEach((d, i) => {
     const miss = DEVIATION_FIELDS.filter((k) => {
@@ -643,7 +646,7 @@ export interface CheckPlanResult { blocking: string[]; warnings: string[] }
 function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOptions): CheckPlanResult {
   const o = opts || {};
   const blocking: string[] = [], warnings: string[] = [];
-  const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
+  const listed = plan.files || [];
   const absent = listed.filter((f) => !fs.existsSync(path.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty — list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} — fix the path(s) (relative to the project root) or remove entries for files that were not written`);
@@ -671,7 +674,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     return seen;
   }
 
-  const tokens = Array.isArray(plan.tokens) ? plan.tokens : [];
+  const tokens = plan.tokens || [];
   const live = tokens.filter((r) => verdictOf(r) !== "hidden-only");
   // One message, however many rows: a fresh plan-skeleton plan has every row unfilled, and 33 lines
   // of the same sentence would bury the two things that actually block.
@@ -729,7 +732,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 
   const mapped = loadMapKeys(cwd);
   const seenModule = new Set<string>();
-  for (const row of Array.isArray(plan.components) ? plan.components : []) {
+  for (const row of plan.components || []) {
     const verdict = verdictOf(row);
     if (verdict === "reused" && row.mapModule && !seenModule.has(row.mapModule)) {
       seenModule.add(row.mapModule);
@@ -776,9 +779,11 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   const screenName = plan.screenName || (exp && exp.layerName) || null;
   let g: ReturnType<typeof auditGateStatus>;
   try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
-  if (!g || !g.auditFile || !g.blockers || !g.blockers.length) return [];
+  // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
+  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run audit.js for this screen`];
+  if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
-  if (!gate || typeof gate !== "object") {
+  if (!gate) {
     return [`${g.auditFile} is Blocked (${g.blockers.length} blocker(s): ${g.blockers.join(", ")}) and this plan has no \`auditGate\` — either resolve the blocker(s) or record {auditGate:{auditFile,verdict,overridden:[...],reason,decidedBy,decidedAt}} naming which one(s) were acknowledged and why`];
   }
   const overridden = new Set(Array.isArray(gate.overridden) ? gate.overridden : []);
@@ -812,12 +817,13 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
   const out: ReportRef[] = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path.join(dir, f);
-    const r = readJsonOr<VerifyReport | null>(abs, null);
+    const r = readJsonOrNull(abs, isVerifyReport);
     if (!r) continue;
     const stem = f.replace(/\.report\.json$/, "");
-    let by: string | null = null;
+    let by: ReportMatch | null = null;
     const expFile = path.join(dir, stem + ".expected.json");
-    const expFrame = (): string | null | undefined => { const x = readJsonOr<VerifyExpectation | null>(expFile, null); return x && x.frame && x.frame.nodeId; };
+    // Only the expectation's frame.nodeId is read here, so only that is required of the file.
+    const expFrame = (): string | null => { const x = readJsonOrNull(expFile, isJsonObject); return x && isJsonObject(x.frame) && typeof x.frame.nodeId === "string" ? x.frame.nodeId : null; };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
@@ -830,7 +836,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     let expectationChanged = false;
     if (want && fs.existsSync(expFile)) { try { expectationChanged = crypto.createHash("sha256").update(fs.readFileSync(expFile)).digest("hex") !== want; } catch { /* ignore */ } }
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
-      why: Array.isArray(r.why) ? r.why : [], deltas: Array.isArray(r.deltas) ? r.deltas : null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
+      why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
       exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
       expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null });
   }
@@ -943,9 +949,9 @@ function ownPlans(open: PlanFile[], input: HookPayload, all: PlanFile[] | null |
 // ================================================================ CLI
 
 const USAGE = [
-  "usage: node verify-build.js                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)",
-  "       node verify-build.js <plan.json>…        check these plans now (no stdin read)",
-  "       node verify-build.js --status [<plan.json>…] [--json]   print each plan's computed status (all of design/plan/ by default); never writes",
+  `usage: ${scriptCmd("verify-build")}                     (Stop hook: reads the hook JSON from stdin when stdin is not a terminal)`,
+  `       ${scriptCmd("verify-build")} <plan.json>…        check these plans now (no stdin read)`,
+  `       ${scriptCmd("verify-build")} --status [<plan.json>…] [--json]   print each plan's computed status (all of design/plan/ by default); never writes`,
   "",
   "Blocks (exit 2) on exactly two things: a raw colour the plan resolved to a token, in a source file of",
   "files[] (comments, prose strings and .svg/.json/non-source files are not scanned); and a visible",
@@ -974,7 +980,7 @@ function checkAndRecord(p: PlanFile, cwd: string): RecordResult {
   const plan = p.plan;
   const cleared = COMPUTED_STORED.has(String(plan.status || "").toLowerCase()) ? plan.status : null;
   if (cleared) delete plan.status;
-  if (!plan.verification || typeof plan.verification !== "object") plan.verification = {};
+  if (!plan.verification) plan.verification = {};
   setPhase(`hashing files[] of ${path.basename(p.file)}`);
   plan.verification.hook = {
     result: blocking.length ? "blocked" : "pass",
@@ -1005,7 +1011,9 @@ async function main(argv: string[]): Promise<number> {
 
   if (statusMode) {
     setPhase("computing plan status");
-    const plans = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))).filter((p): p is PlanFile => !!p) : findPlans(process.cwd());
+    const found = planArgs.length ? planArgs.map((f) => readPlan(path.resolve(f))) : null;
+    const { plans, bad } = found ? { plans: found.filter(isPlanFile), bad: found.filter((p): p is BadPlan => !isPlanFile(p)) } : findPlans(process.cwd());
+    for (const b of bad) console.error(`verify-build: cannot read plan ${b.file}: ${b.error}`);
     const show = (f: string): string => { const r = path.relative(process.cwd(), f); return r.startsWith("..") ? f : r; };
     const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" · ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
@@ -1018,9 +1026,9 @@ async function main(argv: string[]): Promise<number> {
   let targets: PlanFile[] | undefined;
   if (planArgs.length) {
     const read = planArgs.map((f) => readPlan(path.resolve(f)));
-    const bad = planArgs.filter((_f, i) => !read[i]);
-    if (bad.length) { console.error(`verify-build: cannot read plan(s): ${bad.join(", ")}`); return 1; }
-    targets = read.filter((p): p is PlanFile => !!p);
+    const bad = read.filter((p): p is BadPlan => !isPlanFile(p));
+    if (bad.length) { console.error(`verify-build: cannot read plan(s): ${bad.map((b) => `${path.relative(process.cwd(), b.file) || b.file} (${b.error})`).join(", ")}`); return 1; }
+    targets = read.filter(isPlanFile);
   } else {
     setPhase("reading the hook payload on stdin");
     const r = await readHookInput();
@@ -1041,7 +1049,9 @@ async function main(argv: string[]): Promise<number> {
     // (a hook payload's cwd is a string; anything else falls back to the process cwd)
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
     setPhase("finding open plans in design/plan/");
-    const plans = findPlans(cwd);
+    const { plans, bad } = findPlans(cwd);
+    // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
+    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (plan-skeleton.js rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0; // fast path
     for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
@@ -1069,12 +1079,12 @@ async function main(argv: string[]): Promise<number> {
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
   verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
-  colorLiterals, arbitraryPx, hex6, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
+  colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const watchdog = setTimeout(() => {
-    console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s while ${phase} — nothing was blocked; re-run \`node verify-build.js <plan.json>\` to check the plan directly`);
+    console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s while ${phase} — nothing was blocked; re-run \`${scriptCmd("verify-build")} <plan.json>\` to check the plan directly`);
     process.exit(1);
   }, HOOK_TIMEOUT_MS());
   watchdog.unref();

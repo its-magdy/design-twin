@@ -36,14 +36,13 @@
 // name matching fuzzy" means in code: fuzziness may narrow the list, it may never pick from it.
 import fs from "node:fs";
 import path from "node:path";
-import type { IndexRow, PageIndex, PagesRootIndex, Plan, ResolveScreenResult, ScreenCandidate } from "./types.ts";
+import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts";
+import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
+import { readJsonOrNull } from "./read-json.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
-// Every file read here is one this repo's own writers produced (pages/index.json, a page's index.json,
-// design/plan/*.json), so it is read as the shape it was written in; anything unreadable is `fallback`.
-function readJsonOr<T>(file: string, fallback: T): T {
-  try { return JSON.parse(fs.readFileSync(file, "utf8")) as T; } catch (e) { return fallback; }
-}
+// Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
+// doc-guards.ts guard; one that is absent, unreadable or not that kind of document contributes no rows.
 
 // A Figma node id looks like "1234:5678" (also seen with an "I" instance prefix and ";" chains, e.g.
 // "I20173:137670;72:3148" — but a USER never types one of those; they type either a plain id or a
@@ -55,13 +54,13 @@ const NODE_ID_RE = /^\d+:\d+$/;
 // page's own index.json for an export written before that field existed.
 function allRows(exportDir: string): IndexRow[] {
   const rootFile = path.join(exportDir, "pages", "index.json");
-  const root = readJsonOr<PagesRootIndex | null>(rootFile, null);
+  const root = readJsonOrNull(rootFile, isPagesRootIndex);
   if (!root) return [];
-  if (Array.isArray(root.layers)) return root.layers;
+  if (root.layers) return root.layers;
   const rows: IndexRow[] = [];
-  for (const pd of root.pageDirs || []) {
-    const idx = readJsonOr<PageIndex | null>(path.join(exportDir, pd.dir ? path.join("pages", pd.dir, "index.json") : ""), null);
-    if (idx && Array.isArray(idx.layers)) rows.push(...idx.layers);
+  for (const pd of root.pageDirs) {
+    const idx = pd.dir ? readJsonOrNull(path.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    if (idx) rows.push(...idx.layers);
   }
   return rows;
 }
@@ -78,7 +77,7 @@ function planRows(planDir: string | null | undefined): PlanRow[] {
   const out: PlanRow[] = [];
   for (const f of fs.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
-    const doc = readJsonOr<Plan | null>(path.join(planDir, f), null);
+    const doc = readJsonOrNull(path.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, screenName: doc.screenName, nodeId: doc.nodeId, route: doc.route });
   }
   return out;

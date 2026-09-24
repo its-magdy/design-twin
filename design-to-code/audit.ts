@@ -37,50 +37,42 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isHidden, hiddenSelf } from "./hidden.ts";
+import { parseHex, contrastRatio } from "./color.ts";
+import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
+import type { Rgba } from "./color.ts";
 import { crossCheck } from "./cross-check.ts";
-import { readJsonFile } from "./catalog-input.ts";
+import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
+import { isComponentsCatalog, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { readJsonOrNull } from "./read-json.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { variablesContext } from "./slice-sources.ts";
 import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  AuditCrossFile, ControlKind, ControlState, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
+  AuditCrossFile, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
   TokenMap, TokensDoc, VariableCollection,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
-const omit = (o: Record<string, unknown>, keys: string[]): Record<string, unknown> => { const out: Record<string, unknown> = {}; for (const k of Object.keys(o)) if (!keys.includes(k)) out[k] = o[k]; return out; };
 
 // Minimum hit-area per platform. web = WCAG 2.5.8 AA (24 CSS px); 44 is the recommended AAA target.
 const TOUCH_MIN: Record<AuditPlatform, number> = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
 const PLATFORMS = Object.keys(TOUCH_MIN);
+const AUDIT_CATEGORIES: readonly AuditCategory[] = ["color", "typography", "spacing", "radius", "effects"];
 const isPlatform = (p: unknown): p is AuditPlatform => typeof p === "string" && PLATFORMS.includes(p);
 
 // ---------------------------------------------------------------- color math (WCAG 2.2)
-interface Rgba { r: number; g: number; b: number; a: number }
 type Lab = [number, number, number];
-function parseHex(hex: unknown): Rgba | null {
-  const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(String(hex || ""));
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: m[2] ? parseInt(m[2], 16) / 255 : 1 };
-}
 const over = (fg: Rgba, bg: Rgba): Rgba => ({
   r: fg.r * fg.a + bg.r * (1 - fg.a),
   g: fg.g * fg.a + bg.g * (1 - fg.a),
   b: fg.b * fg.a + bg.b * (1 - fg.a),
   a: 1,
 });
-function luminance(c: Rgba): number {
-  const ch = (v: number): number => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-  return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b);
-}
-function contrastRatio(a: Rgba, b: Rgba): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-}
 // CIE76 ΔE in Lab — a coarse "these two raw colors are probably meant to be one token" signal.
 function toLab(c: Rgba): Lab {
   const lin = (v: number): number => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
@@ -144,16 +136,13 @@ function controlKind(name: unknown): ControlKind | null {
 /** One audited root and the label its findings cite. */
 interface Root { tree: IrNode; label: string; manifest?: Manifest }
 
-// Accept every document shape the export writes: a screen doc ({nodes}), a layer file (bare tree or
-// {tree}), or an array of trees. Each root keeps a label so findings say which screen they're in.
-function rootsOf(doc: ScreenDoc | ScreenDoc[] | null | undefined, label: string): Root[] {
-  if (!doc || typeof doc !== "object") return [];
-  if (Array.isArray(doc)) return doc.flatMap((d, i) => rootsOf(d, `${label}[${i}]`));
-  if (Array.isArray(doc.nodes)) return doc.nodes.map((n) => ({ tree: n, label: doc.screen || n.name || label, manifest: doc.manifest }));
-  if (doc.tree && typeof doc.tree === "object") return [{ tree: doc.tree, label: doc.tree.name || label, manifest: doc.manifest }];
-  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
-  if (doc.type && doc.id) return [{ tree: doc as IrNode, label: doc.name || label, manifest: doc.manifest }];
-  return [];
+// Every document shape the export writes (export-shape.ts screenRoots: a screen doc ({nodes}), a layer
+// file ({tree}) or a bare node tree). Each root keeps a label so findings say which screen they're in:
+// the export's `screen`, else the root's own name, else the caller's label.
+function labelledRoots(doc: unknown, label: string): Root[] {
+  const exp = isScreenExport(doc) ? doc : null;
+  const manifest = exp ? exp.manifest : isLayerFile(doc) ? doc.manifest : undefined;
+  return screenRoots(doc).map((tree) => ({ tree, label: (exp && exp.screen) || tree.name || label, manifest }));
 }
 
 const r1 = (v: number): number => Math.round(v * 100) / 100;
@@ -164,7 +153,12 @@ const hasTok = (node: IrNode, ...keys: string[]): boolean => !!(node.tokens && k
  * `label` names the screen in findings; `vars` is its own <Screen>.vars.json slice for the cross-file
  * pass). An unwrapped document is read as itself, exactly as the JS did (`d.doc !== undefined ? d.doc : d`).
  */
-export interface AuditInput extends ScreenDoc { doc?: ScreenDoc | null; label?: string; vars?: TokensDoc | null }
+export interface AuditInput { doc?: ScreenDoc | null; label?: string; vars?: TokensDoc | null }
+/** One argument of audit(): a wrapped input, or a screen document on its own. */
+export type AuditArg = AuditInput | ScreenDoc;
+// A bare document is its own `doc`; a wrapper is read field by field.
+const unwrap = (d: AuditArg | null | undefined, i: number): { doc: ScreenDoc | null; label: string; vars: TokensDoc | null } =>
+  !d || isScreenDoc(d) ? { doc: d || null, label: `input${i}`, vars: null } : { doc: d.doc || null, label: d.label || `input${i}`, vars: d.vars || null };
 /** The design-system split files audit() joins the screen against (all optional). */
 export interface AuditDesignSystem { tokens?: TokensDoc | null; components?: ComponentsCatalog | null; componentsLibrary?: ComponentsCatalog | null; stylesText?: TextStylesDoc | null }
 export interface AuditOptions {
@@ -189,7 +183,7 @@ interface RunLike { font?: FontSpec; tokens?: TokenMap; textStyle?: string; fill
 interface LegacyCollection extends VariableCollection { variables?: Array<{ valuesByMode?: Record<string, unknown>; values?: Record<string, unknown> }> }
 
 // ---------------------------------------------------------------- the audit
-function audit(input: AuditInput | Array<AuditInput | null | undefined> | null | undefined, opts: AuditOptions = {}): AuditReport {
+function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | undefined, opts: AuditOptions = {}): AuditReport {
   // Live run #10: with no --platform the audit quietly picked "web" and the assumption surfaced only
   // as one designer question buried in a list of thirteen. Every touch-target size, shadow-spread
   // note and blur warning below depends on this value, so a wrong guess silently mis-audits the
@@ -224,12 +218,12 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
       if (step > 0 && step !== grid) gridMismatch = step;
     }
   }
-  const docs = Array.isArray(input) ? input : [input];
-  const roots = docs.flatMap((d, i) => rootsOf(d && d.doc !== undefined ? d.doc : d, (d && d.label) || `input${i}`));
+  const docs = (Array.isArray(input) ? input : [input]).map(unwrap);
+  const roots = docs.flatMap((d) => labelledRoots(d.doc, d.label));
   const catalog: CatalogComponent[] = (opts.catalog && Array.isArray(opts.catalog.components)) ? opts.catalog.components : [];
 
   const findings: AuditFinding[] = [];
-  const add = (severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: Record<string, unknown>): number => findings.push(Object.assign(
+  const add = (severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number => findings.push(Object.assign(
     { severity, code, message },
     node ? { nodeId: node.id, nodeName: node.name } : {},
     ctx ? { screen: ctx.label, path: ctx.path } : {},
@@ -238,7 +232,7 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
 
   const binding: Record<AuditCategory, [number, number]> = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
   const tally = (cat: AuditCategory, bound: boolean): void => { binding[cat][1]++; if (bound) binding[cat][0]++; };
-  const rawColors = new Map<string, { count: number; nodeId: string; nodeName: string }>(); // hex -> { count, sample node }
+  const rawColors = new Map<string, { count: number; nodeId: string; nodeName: string; rgb: Rgba }>(); // hex -> { count, sample node, channels }
   const usedComponents = new Map<string, UsedComponent>(); // setKey|key|name -> { name, kind }
   const stateHits: Record<ScreenStateKey, StateHit[]> = { loading: [], empty: [], error: [] };
   const annotations: AuditAnnotation[] = [];
@@ -461,8 +455,9 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
 
   function noteRaw(hex: unknown, node: IrNode): void {
     const h = String(hex || "").toLowerCase();
-    if (!parseHex(h)) return;
-    const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name };
+    const rgb = parseHex(h);
+    if (!rgb) return;
+    const e = rawColors.get(h) || { count: 0, nodeId: node.id, nodeName: node.name, rgb };
     e.count++;
     rawColors.set(h, e);
   }
@@ -506,8 +501,7 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
   }
 
   // ---- near-duplicate raw colors (likely one token typed twice)
-  // (noteRaw only records a hex parseHex accepted, so `rgb` is never null here)
-  const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, rgb: parseHex(hex)!, ...e })).filter((x) => x.rgb.a >= 1);
+  const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
   const labs = raws.map((x) => toLab(x.rgb)); // once per color, not once per pair
   const seen = new Set<string>();
   for (let a = 0; a < raws.length; a++) {
@@ -561,7 +555,8 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
 
   const bindingOf = (k: AuditCategory): { bound: number; total: number; pct: number | null } => { const [b, t] = binding[k]; return { bound: b, total: t, pct: t ? Math.round((b / t) * 100) : null }; };
   const tokenBinding: AuditReport["tokenBinding"] = { color: bindingOf("color"), typography: bindingOf("typography"), spacing: bindingOf("spacing"), radius: bindingOf("radius"), effects: bindingOf("effects") };
-  for (const [k, v] of Object.entries(tokenBinding)) {
+  for (const k of AUDIT_CATEGORIES) {
+    const v = tokenBinding[k];
     if (v.total >= 5 && v.pct !== null && v.pct < 50) add("warning", "low-token-binding", `only ${v.pct}% of ${k} values are bound to tokens/styles (${v.bound}/${v.total}) — expect to carry raw values through EXACTLY and report each as unbound; do not snap them to the nearest token`, null, null, { category: k });
   }
 
@@ -589,7 +584,7 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
       // Each screen's OWN variables (d.vars — its <Screen>.vars.json) travel with it: the collision
       // check is about the variables THIS screen carries, not the merged union's (livetest-3 #311 —
       // without them this gate raised another screen's `Space 4` blocker against Job Roles).
-      screens: docs.map((d, i) => ({ doc: d && d.doc !== undefined ? d.doc : d, label: (d && d.label) || `input${i}`, vars: (d && d.vars) || null })),
+      screens: docs,
       variables: opts.variables || null,
       sliceSources: opts.sliceSources || null,
       tokens: (opts.designSystem && opts.designSystem.tokens) || null,
@@ -600,7 +595,8 @@ function audit(input: AuditInput | Array<AuditInput | null | undefined> | null |
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue; // the coverage table below carries the informational half
       if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk (finding 74)
-      findings.push(Object.assign({ severity: f.severity, code: f.code, message: f.message, crossFile: true as const }, omit(f, ["severity", "code", "message"])));
+      const { severity, code, message, ...rest } = f; // key order kept: severity, code, message, crossFile, the rest
+      findings.push({ severity, code, message, crossFile: true, ...rest });
     }
   } else {
     crossFile = {
@@ -758,37 +754,23 @@ function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget
     const full = path.join(dir, f);
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
     // design/audit/ also holds cross-check reports; only an object with a nodeIds[] counts.
-    let doc: unknown;
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")) as unknown; } catch (e) { continue; }
-    if (isJsonObject(doc) && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
+    const doc = readJsonOrNull(full, isJsonObject);
+    if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
   }
   return null;
 }
 
 export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor };
 
-// The CLI's inputs are files the user named (readJsonFile -> unknown). A screen export is any JSON
-// object (read as the ScreenDoc bag — anything else yields no roots, as before); a --catalog is any
-// JSON object (only an array `components` is read, as before).
-function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
-function isCatalogLike(x: unknown): x is ComponentsCatalog { return isJsonObject(x); }
-
 // CLI: node design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
 // --gate: exit 1 if any blocker was found (default is always exit 0 — findings are advice unless --gate is set).
+// Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
+// document its flag names is a one-line error and exit 2, never an audit of nothing.
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
-  const platform = take("--platform");
-  const catalogFile = take("--catalog");
-  const dsDir = take("--design-system");
-  const varsFile = take("--variables");
-  const gridArg = take("--grid");
-  const out = take("--out");
-  const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
-  const jsonOnly = strip("--json"), gate = strip("--gate"), force = strip("--force");
   const USAGE =
-    "usage: node design-to-code/audit.ts <screen.json>... [--platform web|ios|android|react-native|flutter]\n" +
+    `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]\n` +
     "       [--design-system design/design-system] [--variables design/variables.json]\n" +
     "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]\n" +
     "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
@@ -797,34 +779,42 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same\n" +
     "  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same\n" +
     "  directory already covers this node under a DIFFERENT name — pass --force to write a second one.";
-  if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); process.exit(0); }
-  const stray = argv.filter((a) => a.startsWith("-"));
-  if (stray.length || !argv.length) { console.error((stray.length ? `audit: unknown flag ${stray.join(", ")}\n` : "") + USAGE); process.exit(2); }
+  const OPTIONS = {
+    platform: { type: "string" }, catalog: { type: "string" }, "design-system": { type: "string" }, variables: { type: "string" },
+    grid: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" },
+  } as const;
+  const { values: flags, positionals: files } = cliParse("audit", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (!files.length) { console.error(USAGE); process.exit(2); }
+  const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
+  const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
   if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); process.exit(2); }
-  const read = (f: string, what: string): unknown => readJsonFile(f, what);
+  // `--grid abc` used to become NaN and fall back to the 4px default without a word.
+  const grid = gridArg === undefined ? undefined : Number(gridArg);
+  if (grid !== undefined && !(Number.isFinite(grid) && grid > 0)) { console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`); process.exit(2); }
   // Variables discovery is shared with cross-check.ts (slice-sources.ts variablesContext): the union
   // at the export root (or --variables), and each screen's own slice beside it.
-  const ctx = variablesContext(argv, varsFile, fs, path, { sliceFallback: true });
-  const inputs: AuditInput[] = argv.map((f, i) => { const d = read(f, "screen export"); return { doc: isScreenDocLike(d) ? d : null, label: path.basename(f, ".json"), vars: ctx.own[i] }; });
-  const catalogRaw = catalogFile ? read(catalogFile, "component catalog") : undefined;
-  const catalog = isCatalogLike(catalogRaw) ? catalogRaw : undefined;
+  const ctx = variablesContext(files, varsFile, { sliceFallback: true });
+  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
+  if (ctx.invalid.length) process.exit(2);
+  const inputs: AuditInput[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), vars: ctx.own[i] }));
+  const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : undefined;
   // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
   // the audit must still run there — it just says which checks it could not do (crossFile.notChecked).
-  // Each is a design-system split file this repo's own writer produced, parsed as the shape it was written in.
-  const maybe = <T,>(f: string): T | null => (f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) as T : null);
+  // A split file that IS there but is not what it should be fails loud (readOptionalDoc).
   const designSystem: AuditDesignSystem | undefined = dsDir
     ? {
-        tokens: maybe<TokensDoc>(path.join(dsDir, "tokens.json")),
-        components: maybe<ComponentsCatalog>(path.join(dsDir, "components.local.json")) || catalog,
-        componentsLibrary: maybe<ComponentsCatalog>(path.join(dsDir, "components.library.json")),
-        stylesText: maybe<TextStylesDoc>(path.join(dsDir, "styles.text.json")),
+        tokens: readOptionalDoc(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
+        components: readOptionalDoc(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog,
+        componentsLibrary: readOptionalDoc(path.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
+        stylesText: readOptionalDoc(path.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc),
       }
     : undefined;
   // `variables` is the merged union (what the screen's collections are checked against); each input
   // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid: gridArg ? Number(gridArg) : undefined });
+  const res = audit(inputs, { platform, catalog, designSystem, variables, sliceSources: ctx.sliceSources, grid });
   const md = jsonOnly ? "" : toMarkdown(res);
   // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
   // skill invented one each time (`positions`/`job-roles`/`global-policies`/`System_Configurations`
@@ -832,7 +822,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
   // so two runs on the same screen land on the same report pair without either caller having to
   // agree on a name out of band. Only the first input names it when several are given at once.
-  const outBase = out || (argv[0] ? path.join("design", "audit", path.basename(argv[0], ".json")) : undefined);
+  const outBase = out || path.join("design", "audit", path.basename(files[0], ".json"));
   // Finding 315's sibling / P3 c6: refuse an explicit --out under a different name than an existing
   // report already covering this node, unless --force.
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {

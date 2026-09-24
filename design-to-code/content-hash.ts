@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { isUnknownArray } from "../bridge/src/json-util.ts";
 
 const sha256 = (s: string | Uint8Array): string => crypto.createHash("sha256").update(s).digest("hex");
 
@@ -19,10 +20,10 @@ const sha256 = (s: string | Uint8Array): string => crypto.createHash("sha256").u
 // Takes and returns `unknown`: this walks whatever JSON document it is handed (a screen export, an
 // expectation's docs[], a merged variables.json) and only ever drops two keys from it.
 function stripPullTimes(v: unknown, parentKey?: string): unknown {
-  if (Array.isArray(v)) return (v as unknown[]).map((x) => stripPullTimes(x, parentKey));
+  if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
   const out: Record<string, unknown> = {};
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+  for (const [k, x] of Object.entries(v)) {
     if (k === "exportedAt") continue;
     if (k === "at" && parentKey === "_slices") continue;
     out[k] = stripPullTimes(x, k);
@@ -32,7 +33,7 @@ function stripPullTimes(v: unknown, parentKey?: string): unknown {
 
 // One export document or several (an expectation built from several frames) -> hex sha256.
 function exportContentSha256(docs: unknown): string {
-  const list = Array.isArray(docs) ? (docs as unknown[]) : [docs];
+  const list = isUnknownArray(docs) ? docs : [docs];
   return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
 }
 
@@ -40,7 +41,7 @@ function exportContentSha256(docs: unknown): string {
 // `files` is a plan's `files[]` as found on disk (any JSON value is tolerated; only an array counts).
 function fileHashes(files: unknown, cwd: string): Record<string, string | null> {
   const out: Record<string, string | null> = {};
-  for (const rel of Array.isArray(files) ? (files as unknown[]).map(String) : []) {
+  for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try { out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16); } catch { out[rel] = null; }
   }
   return out;

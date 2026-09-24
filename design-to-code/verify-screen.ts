@@ -34,8 +34,14 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
-import { readJsonFile } from "./catalog-input.ts";
+import { readDocFile, readJsonFile } from "./catalog-input.ts";
+import { isInteractionEvidenceList, isPlan, isVerifyExpectation, isVerifyMeasured } from "./doc-guards.ts";
+import { readJsonOrNull } from "./read-json.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
+import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
+import { colorKey } from "./color.ts";
 import type {
   Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredNode, MeasuredStyles,
   NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
@@ -72,11 +78,9 @@ const TOLERANCE = {
 function normColor(v: unknown): string | null {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
-  let m = /^#([0-9a-f]{3})$/.exec(s);
-  if (m) return "#" + m[1].split("").map((c) => c + c).join("") + "ff";
-  m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/.exec(s);
-  if (m) return "#" + m[1] + (m[2] || "ff");
-  m = /^rgba?\(([^)]+)\)$/.exec(s);
+  const key = colorKey(s); // color.ts: every hex spelling -> "#rrggbbaa"
+  if (key) return key;
+  const m = /^rgba?\(([^)]+)\)$/.exec(s);
   if (m) {
     const p = m[1].split(/[,\s/]+/).filter(Boolean).map(Number);
     if (p.length < 3 || p.some((n) => Number.isNaN(n))) return s;
@@ -150,14 +154,6 @@ function lineHeightPx(lh: LineHeightInput, fontSize: number | string | undefined
 const EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
 const REPORT_SCHEMA = "designtwin/verify-report@2";
 
-function rootsOf(doc: ScreenDoc | null | undefined): IrNode[] {
-  if (!doc) return [];
-  if (Array.isArray(doc.nodes)) return doc.nodes;
-  if (doc.tree) return [doc.tree];
-  // `[doc as IrNode]`: the duck-type check just before it says the document IS a bare node tree.
-  if (doc.id || doc.type) return [doc as IrNode];
-  return [];
-}
 
 const firstSolid = (fills: Paint[] | null | undefined): SolidPaint | undefined => (fills || []).find((f): f is SolidPaint => !!f && f.type === "solid" && f.visible !== false);
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -400,9 +396,10 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
   let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
 
   for (const { doc, label } of docs) {
-    if (!screen) screen = (doc && doc.screen) || label;
-    if (!exportedAt) exportedAt = doc && doc.exportedAt;
-    for (const root of rootsOf(doc)) {
+    const exp = screenExportOf(doc);
+    if (!screen) screen = (exp && exp.screen) || label;
+    if (!exportedAt) exportedAt = exp ? exp.exportedAt : undefined;
+    for (const root of screenRoots(doc)) {
       if (!reference && root.reference) reference = root.reference;
       const b: Partial<Box> = root.box || {};
       const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, w: b.w, h: b.h, x: b.x, y: b.y, clip: root.clip === true };
@@ -1114,54 +1111,40 @@ function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTar
     if (!f.endsWith(".expected.json")) continue;
     const full = path.join(dir, f);
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
-    // an expectation this repo wrote — but read as raw JSON, since only frame.nodeId is looked at
-    let doc: unknown;
-    try { doc = JSON.parse(fs.readFileSync(full, "utf8")) as unknown; } catch (e) { continue; }
-    if (isJsonObject(doc) && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
+    // an expectation this repo wrote — only frame.nodeId is looked at
+    const doc = readJsonOrNull(full, isJsonObject);
+    if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
 
 export { buildExpectation, compare, reportToMarkdown, expectNode, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
 
-// The CLI's inputs are files the user named (readJsonFile -> unknown): a screen export, an
-// expectation this tool wrote, a probe's measured.json, an interaction-evidence list. Each is read
-// as the shape it is by convention once it is a JSON object (or array, for the evidence list);
-// anything else is treated as an empty document, which is what the untyped code did with it.
-function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
-function isExpectationLike(x: unknown): x is Expectation { return isJsonObject(x); }
-function isMeasuredLike(x: unknown): x is VerifyMeasured { return isJsonObject(x); }
-function isEvidenceList(x: unknown): x is InteractionEvidence[] { return Array.isArray(x); }
 
 // ---------------------------------------------------------------- CLI
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
-  const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };
   const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
-    "  node design-to-code/verify-screen.ts --expect <screen.json>... --out design/verify/<Screen> [--force]\n" +
+    `  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]\n` +
     "      writes <Screen>.expected.json — the design's own numbers, as data, for VISIBLE layers only.\n" +
     "      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n" +
     "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
     "      directory — pass --force to write a second one anyway.\n" +
-    "  node design-to-code/verify-screen.ts --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n" +
+    `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n` +
     "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); process.exit(argv.length ? 0 : 2); }
 
-  const out = take("--out");
-  const interactionsFile = take("--interactions");
-  const force = strip("--force");
-  const doExpect = strip("--expect");
-  const doCompare = strip("--compare");
+  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { out, interactions: interactionsFile } = flags;
+  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
   if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); process.exit(2); }
   if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); process.exit(2); }
-  const stray = argv.filter((a) => a.startsWith("-"));
-  if (stray.length) { console.error(`verify-screen: unknown flag ${stray.join(", ")}\n` + USAGE); process.exit(2); }
 
   const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
@@ -1172,8 +1155,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   };
 
   if (doExpect) {
-    if (!argv.length) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
-    const docs: ExpectInput[] = argv.map((f) => { const d = readJsonFile(f, "screen export"); return { doc: isScreenDocLike(d) ? d : undefined, label: path.basename(f, ".json") }; });
+    if (!files.length) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
+    const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
     const exp = buildExpectation(docs);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
     // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
@@ -1181,7 +1164,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     // input file's own basename — already `<LayerName>__<node-id>` by construction (write-out.js) —
     // means two runs against the same export file always land on the same name, whatever string the
     // caller typed on the command line.
-    const outBase = out || path.join("design", "verify", path.basename(argv[0], ".json"));
+    const outBase = out || path.join("design", "verify", path.basename(files[0], ".json"));
     // Findings 153/181: re-running --expect replaced the file in place and left a measurement and a
     // report from the OLD expectation beside it, undated. The file itself stays byte-deterministic
     // (finding 154) — the notice goes to stderr, and every report records the sha it was computed on.
@@ -1221,23 +1204,21 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     process.exit(0);
   }
 
-  const [expFile, measuredFile] = argv;
+  const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) { console.error("--compare needs <expected.json> <measured.json>\n" + USAGE); process.exit(2); }
-  const expRaw = readJsonFile(expFile, "expectation");
-  const expectation: Expectation = isExpectationLike(expRaw) ? expRaw : {};
-  const measuredRaw = readJsonFile(measuredFile, "probe measurements",
+  const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
+  const measured = readDocFile(measuredFile, "probe measurements", isVerifyMeasured,
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}.");
-  const measured: VerifyMeasured = isMeasuredLike(measuredRaw) ? measuredRaw : {};
   let extra: InteractionEvidence[] | undefined;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    const list = isEvidenceList(raw) ? raw : isJsonObject(raw) && isEvidenceList(raw.interactions) ? raw.interactions : null;
+    const list = isInteractionEvidenceList(raw) ? raw : isJsonObject(raw) && isInteractionEvidenceList(raw.interactions) ? raw.interactions : null;
     if (!list) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…]}`); process.exit(2); }
     extra = list;
   }
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
   // can never cite a screenshot that does not exist (findings 166/190).
-  const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
+  const artifacts = measured.artifacts || [];
   const artifactCheck: ArtifactCheck[] = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
     const exists = !!p && fs.existsSync(p);
@@ -1250,16 +1231,17 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const planDir = path.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
-    const hits: Array<{ f: string; p: Plan }> = [];
+    const hits: Array<{ f: string; p: Plan; files: string[] }> = [];
     for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      // a plan under design/plan/ is this repo's own writer's output (plan-skeleton.ts)
-      let p: Plan; try { p = JSON.parse(fs.readFileSync(path.join(planDir, f), "utf8")) as Plan; } catch { continue; }
+      // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
+      const p = readJsonOrNull(path.join(planDir, f), isPlan);
+      if (!p) continue;
       const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
       const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
-      if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });
+      if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
     }
     if (hits.length === 1) {
-      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+      code = { plan: path.join(planDir, hits[0].f).split(path.sep).join("/"), files: fileHashes(hits[0].files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
         : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");

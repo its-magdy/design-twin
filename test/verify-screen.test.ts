@@ -14,16 +14,22 @@ import { spawnSync } from "node:child_process";
 import { buildExpectation, compare, reportToMarkdown, normColor, normWeight, normFamily, lineHeightPx, FIELDS, tokenFor } from "../design-to-code/verify-screen.ts";
 import { audit } from "../design-to-code/audit.ts";
 import type { ExpectInput } from "../design-to-code/verify-screen.ts";
-import type { ArtifactCheck, MeasuredNode, MeasuredStyles, ScreenDoc, VerifyMeasured, VerifyReportV2 } from "../design-to-code/types.ts";
-import { ok, report } from "./assert.ts";
+import type { FontSpec, MeasuredNode, MeasuredStyles, Paint, ScreenExport, VerifyMeasured } from "../design-to-code/types.ts";
+import { malformed, must, readFixture, screenExport } from "./fixtures.ts";
+import { isJsonObject } from "../design-to-code/types.ts";
+import type { NodeInput } from "./fixtures.ts";
+import { isScreenExport } from "../design-to-code/export-shape.ts";
+import { isVerifyMeasured, isVerifyReport } from "../design-to-code/doc-guards.ts";
+import type { DocGuard } from "../design-to-code/doc-guards.ts";
+import { check as ok, report } from "./assert.ts";
 const okOuter = ok;
 
-// The children are hand-built partial IR nodes (a TEXT with no name, fonts with string weights, …).
-const doc = (children: unknown[], extra?: object): ExpectInput => ({
-  doc: Object.assign({ exportedAt: "2026-09-22T00:00:00Z", screen: "Checkout", nodes: [{ type: "FRAME", id: "1:1", name: "Checkout", children }] }, extra) as unknown as ScreenDoc, // hand-built fixture
+// A one-frame screen export around the given children (typed IR nodes: fixtures.ts node()).
+const doc = (children: NodeInput[], extra?: Omit<ScreenExport, "nodes">): ExpectInput => ({
+  doc: screenExport([{ type: "FRAME", id: "1:1", name: "Checkout", children }], { exportedAt: "2026-09-22T00:00:00Z", screen: "Checkout", ...extra }),
   label: "Checkout",
 });
-const textNode = (id: string, name: string, text: string, font: object, fills?: unknown[]) => ({ type: "TEXT", id, name, text, font, fills });
+const textNode = (id: string, name: string, text: string, font: FontSpec, fills?: Paint[]): NodeInput => ({ type: "TEXT", id, name, text, font, ...(fills ? { fills } : {}) });
 const measured = (nodes: MeasuredNode[], extra?: Partial<VerifyMeasured>): VerifyMeasured => Object.assign({ measuredAt: "2026-09-22T01:00:00Z", renderer: "playwright-chromium", viewport: "1440x1236", nodes }, extra);
 
 // ---------------------------------------------------------------- normalisation
@@ -44,8 +50,9 @@ console.log("verify-screen — the spec as data:");
     doc([
       textNode("2:1", "Title", "Nothing here yet.", { family: "Poppins", size: 18, weight: "Medium", lineHeight: { value: 22, unit: "px" }, color: "#ffffff" }),
       // gap is only a gap between two laid-out children (finding 194 — see the slack rules below)
-      { type: "FRAME", id: "2:2", name: "Card", fills: [{ type: "solid", color: "#121319" }], radius: 20, layout: { gap: 16, paddingTop: 32, paddingRight: 32, paddingBottom: 32, paddingLeft: 32 }, box: { w: 400, h: 200 },
-        children: [{ type: "FRAME", id: "2:21", name: "a" }, { type: "FRAME", id: "2:22", name: "b" }] },
+      // the legacy per-side padding keys (paddingTop…) an older export wrote — read beside padding[]
+      malformed<NodeInput>({ type: "FRAME", id: "2:2", name: "Card", fills: [{ type: "solid", color: "#121319" }], radius: 20, layout: { gap: 16, paddingTop: 32, paddingRight: 32, paddingBottom: 32, paddingLeft: 32 }, box: { w: 400, h: 200 },
+        children: [{ type: "FRAME", id: "2:21", name: "a" }, { type: "FRAME", id: "2:22", name: "b" }] }),
       { type: "FRAME", id: "2:3", name: "Nothing checkable" },
     ]),
   ]);
@@ -57,7 +64,7 @@ console.log("verify-screen — the spec as data:");
   const card = exp.nodes.find((n) => n.nodeId === "2:2")!;
   ok("[expect] a frame's fill IS a background", card.backgroundColor === "#121319ff");
   ok("[expect] radius, gap, padding and size come through as numbers",
-    card.borderRadius === 20 && card.gap === 16 && card.padding!.join(",") === "32,32,32,32" && card.width === 400);
+    card.borderRadius === 20 && card.gap === 16 && card.padding?.join(",") === "32,32,32,32" && card.width === 400);
   ok("[expect] a field the export does not state is ABSENT, not defaulted", !("fontWeight" in card) && !("color" in card));
   ok("[expect] the file says out loud not to retype these numbers", /do NOT retype/i.test(exp.note!));
 }
@@ -139,17 +146,18 @@ console.log("verify-screen — text:");
   ok("[text] a designed non-breaking space is surfaced rather than silently normalised",
     rep.deltas.some((d) => d.nodeId === "2:3" && /non-breaking space/.test(d.note || "")));
   ok("[text] …and printed as an ESCAPE, so the row is not two identical-looking strings",
-    (() => { const d = rep.deltas.find((x) => x.nodeId === "2:3" && /invisible/.test(x.field)); return d && /\\u00a0/.test(d.expected as string) && !/\\u00a0/.test(d.actual as string); })());
+    (() => { const d = rep.deltas.find((x) => x.nodeId === "2:3" && /invisible/.test(x.field)); return d !== undefined && /\\u00a0/.test(String(d.expected)) && !/\\u00a0/.test(String(d.actual)); })());
 }
 
 // ---------------------------------------------------------------- coverage and interactions
 console.log("verify-screen — a screen can match every pixel and still be a dead mockup:");
 {
   const exp = buildExpectation([doc([
-    { type: "INSTANCE", id: "3:1", name: "Date", mainComponent: { setName: "Date range", setKey: "k1" } },
-    { type: "INSTANCE", id: "3:2", name: "View", mainComponent: { setName: "Segmented Control", setKey: "k2" } },
-    { type: "INSTANCE", id: "3:3", name: "Add", mainComponent: { setName: "Button", setKey: "k3" },
-      reactions: [{ trigger: { type: "on_click" }, action: { type: "navigate", navigation: "overlay", destinationId: "20170:132666" } }] },
+    { type: "INSTANCE", id: "3:1", name: "Date", mainComponent: { name: "Date range", setName: "Date range", setKey: "k1" } },
+    { type: "INSTANCE", id: "3:2", name: "View", mainComponent: { name: "Segmented Control", setName: "Segmented Control", setKey: "k2" } },
+    // a legacy reaction (object trigger, singular action) — still read
+    malformed<NodeInput>({ type: "INSTANCE", id: "3:3", name: "Add", mainComponent: { name: "Button", setName: "Button", setKey: "k3" },
+      reactions: [{ trigger: { type: "on_click" }, action: { type: "navigate", navigation: "overlay", destinationId: "20170:132666" } }] }),
   ])]);
   ok("[cover] the expectation carries every instance and every designed reaction",
     exp.counts.instances === 3 && exp.counts.interactions === 1);
@@ -215,7 +223,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     r.status === 0 && fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.expected.json")));
   const expFile = path.join(cwd, "design", "verify", "positions___7314_87192.expected.json");
   const measuredFile = path.join(cwd, "measured.json");
-  fs.writeFileSync(measuredFile, JSON.stringify({ measuredAt: "2026-09-22T00:00:01.000Z", renderer: "test", viewport: { w: 1, h: 1 }, artifacts: {}, nodes: [], components: [], interactions: [] }));
+  fs.writeFileSync(measuredFile, JSON.stringify({ measuredAt: "2026-09-22T00:00:01.000Z", renderer: "test", viewport: { w: 1, h: 1 }, artifacts: [], nodes: [], components: [], interactions: [] }));
   spawnSync(process.execPath, [scriptPath, "--compare", expFile, measuredFile], { encoding: "utf8", cwd });
   ok("[cli-out] --compare defaults to the .expected.json's own basename, not a new name",
     fs.existsSync(path.join(cwd, "design", "verify", "positions___7314_87192.report.json")));
@@ -240,19 +248,19 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 // pre-fix verify-screen.js printed on these exact files.
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
-  const load = <T,>(f: string) => JSON.parse(fs.readFileSync(path.join(FX, f), "utf8")) as T;
+  const load = <T,>(f: string, guard: DocGuard<T>): T => readFixture(path.join(FX, f), guard);
   const JR_FILE = "positions___7314_87192.json", GP_FILE = "System_Configurations__1359_21337.json";
-  const jrDoc = load<ScreenDoc>(JR_FILE), gpDoc = load<ScreenDoc>(GP_FILE);
+  const jrDoc = load(JR_FILE, isScreenExport), gpDoc = load(GP_FILE, isScreenExport);
   const jrExp = buildExpectation([{ doc: jrDoc, label: "positions___7314_87192" }]);
   const gpExp = buildExpectation([{ doc: gpDoc, label: "System_Configurations__1359_21337" }]);
-  const jrMeasured = load<VerifyMeasured>("JobRoles.measured.json"), gpMeasured = load<VerifyMeasured>("GlobalPolicies.measured.json");
-  const clone = <T,>(o: T) => JSON.parse(JSON.stringify(o)) as T;
+  const jrMeasured = load("JobRoles.measured.json", isVerifyMeasured), gpMeasured = load("GlobalPolicies.measured.json", isVerifyMeasured);
+  const clone = <T,>(o: T): T => structuredClone(o);
   // An assertion that THROWS on an older report shape is a failure of that assertion, not of the suite.
-  const ok = (name: string, cond: boolean | undefined | (() => unknown)) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, v); };
+  const ok = (name: string, cond: boolean | undefined | (() => unknown)) => { let v: unknown; try { v = typeof cond === "function" ? cond() : cond; } catch (e) { v = false; } return okOuter(name, !!v); };
 
   // An INDEPENDENT hidden walk — the snippet from the prompt, not hidden.js — so the test does not
   // grade the code with its own predicate.
-  const hiddenOf = (doc: ScreenDoc) => { const h = new Set<string | undefined>(); (function w(n: { id?: string; hidden?: boolean; children?: ScreenDoc["nodes"] }, p: boolean) { const x = p || !!n.hidden; if (x && n.id) h.add(n.id); for (const c of n.children || []) w(c, x); })({ children: doc.nodes }, false); return h; };
+  const hiddenOf = (doc: ScreenExport) => { const h = new Set<string | undefined>(); (function w(n: { id?: string; hidden?: boolean; children?: ScreenExport["nodes"] }, p: boolean) { const x = p || !!n.hidden; if (x && n.id) h.add(n.id); for (const c of n.children || []) w(c, x); })({ children: doc.nodes }, false); return h; };
   const jrHidden = hiddenOf(jrDoc), gpHidden = hiddenOf(gpDoc);
   const hiddenIn = (arr: Array<{ nodeId: string }>, H: Set<string | undefined>) => arr.filter((x) => H.has(x.nodeId)).length;
 
@@ -289,34 +297,38 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   ok("[lt3-radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
   ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present in 0/.test(w)));
   const renamed = clone(jrMeasured);
-  for (const n of renamed.nodes!) { if ("radius" in n) { n.borderRadius = n.radius as MeasuredStyles["borderRadius"]; delete n.radius; } }
+  const asRadius = (r: unknown): MeasuredStyles["borderRadius"] => (typeof r === "number" || typeof r === "string" ? r : Array.isArray(r) && r.every((x) => typeof x === "number") ? r.map(Number) : undefined);
+  for (const n of renamed.nodes || []) { if ("radius" in n) { n.borderRadius = asRadius(n.radius); delete n.radius; } }
   const jrRad = compare(jrExp, renamed);
   const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`)!; // ts-port: callers guard with rd(…) && first
   ok("[lt3-radius] with the canonical key, the four dropped Job Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
     () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c).expected === 12 && rd("20173:142077", c).actual === 0) &&
     ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c).expected === 12 && rd("20173:142137", c).actual === 0));
   ok("[lt3-radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
-    () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")!.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
+    () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")?.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
   ok("[lt3-radius] the Global Policies card that ships 16 where the design says 12 is caught (finding 183)",
     () => gpRep.deltas.some((d) => d.nodeId === "18580:60755" && d.field === "border-radius" && d.expected === 12 && d.actual === 16));
 
   console.log("verify-screen — livetest-3: positions are compared, frame-relative (164/192):");
-  const pos = load<Record<string, { y: number; height: number; textBoxX: number }>>("prefix-positions.json");
+  // Each row carries the numbers its own case needs (y/height for the pagination bar, textBoxX for the header).
+  type Positions = Record<string, { y?: number; height?: number; textBoxX?: number }>;
+  const optNum = (v: unknown): boolean => v === undefined || typeof v === "number";
+  const pos = load("prefix-positions.json", (x: unknown): x is Positions => isJsonObject(x) && Object.values(x).every((p) => isJsonObject(p) && optNum(p.y) && optNum(p.height) && optNum(p.textBoxX)));
   ok("[lt3-xy] FIELDS carries x and y", () => FIELDS.some((f) => f.key === "x") && FIELDS.some((f) => f.key === "y"));
   ok("[lt3-xy] the expectation states its coordinate convention", () => /FRAME-RELATIVE/.test(jrExp.coordinates!) && jrExp.frame.w === 1440 && jrExp.frame.h === 1236);
   {
     const m = clone(jrMeasured);
-    const pg = m.nodes!.find((n) => n.nodeId === "20173:142142");
+    const pg = m.nodes?.find((n) => n.nodeId === "20173:142142");
     Object.assign(pg!, { y: pos["20173:142142"].y, height: pos["20173:142142"].height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
     ok("[lt3-xy] Job Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
-      () => !!place && place.severity === "high" && /y=1366 in a 1236-high frame/.test(place.actual as string));
+      () => !!place && place.severity === "high" && /y=1366 in a 1236-high frame/.test(String(place.actual)));
     ok("[lt3-xy] …and its y is a delta against the design's own position (864)", () => r.deltas.some((d) => d.nodeId === "20173:142142" && d.field === "y (frame-relative)" && d.expected === 864 && d.actual === 1342));
   }
   {
     const m = clone(gpMeasured);
-    const st = m.nodes!.find((n) => n.nodeId === "18580:60861");
+    const st = m.nodes?.find((n) => n.nodeId === "18580:60861");
     st!.styles!.textBox = { x: pos["18580:60861"].textBoxX };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
@@ -326,7 +338,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
   console.log("verify-screen — livetest-3: the coverage line closes (165/184):");
   for (const [name, rep, m] of [["Job Roles", jrRep, jrMeasured], ["Global Policies", gpRep, gpMeasured]] as const) {
-    const ids = new Set(m.nodes!.map((n) => String(n.nodeId)));
+    const ids = new Set(m.nodes?.map((n) => String(n.nodeId)));
     ok(`[lt3-cover] ${name}: nodesExpected − nodesMeasured == notMeasured.length, one row per node`,
       () => rep.coverage.nodesExpected - rep.coverage.nodesMeasured === rep.notMeasured.length && new Set(rep.notMeasured.map((n) => n.nodeId)).size === rep.notMeasured.length);
     ok(`[lt3-cover] ${name}: no id is both 'never measured' and in measured.nodes (6 were on GP before)`, () => rep.notMeasured.every((n) => !ids.has(String(n.nodeId))));
@@ -372,32 +384,34 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // GlobalPolicies.dom.json — the independent Playwright pass's evidence (only the fields read here).
   interface DomBox { tag: string; width: number; height: number; x: number; y: number; backgroundColor: string; color: string; radius: number[]; padding: number[]; svgFill?: string }
   interface DomEvidence { checks: Array<{ designId: string; sel: string; measured: DomBox }>; hoverState: { row: DomBox; editButton: DomBox }; measuredRowGap: number }
-  const dom = load<DomEvidence>("GlobalPolicies.dom.json");
-  const chk = (id: string, selPart?: string) => dom.checks.find((c) => c.designId === id && (!selPart || c.sel.includes(selPart)))!.measured;
+  const dom = load("GlobalPolicies.dom.json", (x: unknown): x is DomEvidence => isJsonObject(x) && Array.isArray(x.checks) && isJsonObject(x.hoverState) && typeof x.measuredRowGap === "number");
+  const chk = (id: string, selPart?: string) => must(dom.checks.find((c) => c.designId === id && (!selPart || c.sel.includes(selPart))), `a DOM check for ${id}`).measured;
   const S = (m: DomBox) => ({ tag: m.tag, width: m.width, height: m.height, x: m.x, y: m.y, backgroundColor: m.backgroundColor, color: m.color, borderRadius: m.radius, padding: m.padding });
   const gpDom = clone(gpMeasured);
-  const node = (id: string) => { let n = gpDom.nodes!.find((x) => x.nodeId === id); if (!n) { n = { nodeId: id, styles: {} }; gpDom.nodes!.push(n); } return n; };
+  const domNodes = gpDom.nodes || (gpDom.nodes = []);
+  const node = (id: string) => { let n = domNodes.find((x) => x.nodeId === id); if (!n) { n = { nodeId: id, styles: {} }; domNodes.push(n); } return n; };
+  const stylesOf = (id: string) => { const n = node(id); return n.styles || (n.styles = {}); };
   // 1. the row drawn hovered — measured hovered
   node("18580:60874").states = { hover: S(dom.hoverState.row) };
   // 2. inline SVG paint — the glyph's computed fill
-  Object.assign(node("20024:144120").styles!, { fill: chk("20024:144120").svgFill });
+  Object.assign(stylesOf("20024:144120"), { fill: chk("20024:144120").svgFill });
   // 3. ::placeholder — el.placeholder and the pseudo-element's colour
-  Object.assign(node("I20024:134073;885:2724;880:3726").styles!, { tag: "input", placeholderText: "Search by policy description", placeholderColor: chk("I20024:134073;885:2724;880:3724").svgFill });
+  Object.assign(stylesOf("I20024:134073;885:2724;880:3726"), { tag: "input", placeholderText: "Search by policy description", placeholderColor: chk("I20024:134073;885:2724;880:3724").svgFill });
   // 4. hover-only control — measured on hover
   node("18580:60880").states = { hover: S(dom.hoverState.editButton) };
   // 6. <table> row gap — the rendered row-to-row distance
-  Object.assign(node("18580:60858").styles!, { gapVisual: dom.measuredRowGap });
+  Object.assign(stylesOf("18580:60858"), { gapVisual: dom.measuredRowGap });
   // 8. TEXT id on a <th> — the tag is reported
-  Object.assign(node("18580:60861").styles!, { tag: chk("18580:60861", "th[").tag });
+  Object.assign(stylesOf("18580:60861"), { tag: chk("18580:60861", "th[").tag });
   const domRep = compare(gpExp, gpDom);
   const on = (id: string, re: RegExp) => domRep.deltas.filter((d) => d.nodeId === id && re.test(d.field));
   ok("[lt3-fp] 1 drawn-hovered row: no delta when measured hovered (#46464f)", () => on("18580:60874", /background/).length === 0 && gpRep.fieldsNotMeasured.some((f) => f.nodeId === "18580:60874" && /hover/.test(f.why)));
-  ok("[lt3-fp] 2 inline SVG: compared as `fill`, never against background-color", on("20024:144120", /background|fill/).length === 0 && gpExp.nodes.find((n) => n.nodeId === "20024:144120")!.fill === "#d4d4d4ff");
+  ok("[lt3-fp] 2 inline SVG: compared as `fill`, never against background-color", on("20024:144120", /background|fill/).length === 0 && gpExp.nodes.find((n) => n.nodeId === "20024:144120")?.fill === "#d4d4d4ff");
   ok("[lt3-fp] 3 ::placeholder: text and colour compared as placeholder, not as textContent/color",
     () => on("I20024:134073;885:2724;880:3726", /text|colou?r/).length === 0 &&
     !domRep.fieldsNotMeasured.some((f) => f.nodeId === "I20024:134073;885:2724;880:3726" && /placeholder/.test(f.field)) &&
     !domRep.unverifiable.some((f) => f.nodeId === "I20024:134073;885:2724;880:3726") &&
-    !gpExp.nodes.find((n) => n.nodeId === "I20024:134073;885:2724;880:3726")!.color);
+    !gpExp.nodes.find((n) => n.nodeId === "I20024:134073;885:2724;880:3726")?.color);
   ok("[lt3-fp] 4 hover-only control at rest: 0×0 is 'measure it hovered', not a size delta; hovered it matches",
     () => gpRep.deltas.filter((d) => d.nodeId === "18580:60880").length === 0 && on("18580:60880", /./).length === 0);
   ok("[lt3-fp] 5 auto-layout slack (gap 200 / 146 / 160) is excluded by method, with the reason",
@@ -435,8 +449,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   {
     // A shared AppShell tagged with the OTHER frame's instance ids (finding 185): the real Job Roles
     // measurement of the sidebar item, fed to Global Policies.
-    const jrItem = jrMeasured.nodes!.find((n) => n.nodeId === "I10970:111588;1910:23337");
-    const m = clone(gpMeasured); m.nodes!.push(clone(jrItem!));
+    const jrItem = jrMeasured.nodes?.find((n) => n.nodeId === "I10970:111588;1910:23337");
+    const m = clone(gpMeasured); m.nodes?.push(clone(jrItem!));
     const r = compare(gpExp, m);
     ok("[lt3-comp] one implementation, two frames: I10970:111588;1910:23337 counts for I10970:109860;1910:23337 via the component path",
       () => r.coverage.nodesMatchedByComponentPath >= 1 && r.coverage.instanceSetsWithEvidence > gpRep.coverage.instanceSetsWithEvidence);
@@ -446,8 +460,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     // finding 170: the search field's id spread onto the inner <input> (330x20) instead of the <label>
     // that draws the 380x36 field. The real input measurement, attached to the Text Input frame's id.
     const m = clone(jrMeasured);
-    const input = m.nodes!.find((n) => n.nodeId === "I20173:142047;885:2724");
-    m.nodes!.push(Object.assign(clone(input!), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
+    const input = m.nodes?.find((n) => n.nodeId === "I20173:142047;885:2724");
+    m.nodes?.push(Object.assign(clone(input!), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
     const r = compare(jrExp, m);
     ok("[lt3-leaf] 170: a FRAME's id on a leaf <input> is not graded as the frame (no size/fill/radius/padding deltas), and says why", () =>
       r.deltas.filter((d) => d.nodeId === "I20173:142047;885:2724;880:3724").length === 0 &&
@@ -457,7 +471,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   console.log("verify-screen — livetest-3: text and pseudo-elements (163/177):");
   {
     const m = clone(jrMeasured);
-    const th = m.nodes!.find((n) => n.nodeId === "20173:142078")!;
+    const th = m.nodes?.find((n) => n.nodeId === "20173:142078")!;
     th.text = "Job Role▲";
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142078" && x.field === "text");
     ok("[lt3-text] 'Job Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(d.note!));
@@ -481,12 +495,13 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   fs.writeFileSync(path.join(cwd, "design/verify/GlobalPolicies.measured.json"), JSON.stringify(Object.assign(clone(gpMeasured), { expectationSha256: "0".repeat(64) })));
   const c1 = run("--compare", expFile, "design/verify/GlobalPolicies.measured.json");
   // The CLI always runs the on-disk artifact check, so its report's artifacts are ArtifactCheck rows.
-  const rep1 = JSON.parse(fs.readFileSync(path.join(cwd, "design/verify/GlobalPolicies.report.json"), "utf8")) as Omit<VerifyReportV2, "artifacts"> & { artifacts: ArtifactCheck[] };
-  ok("[lt3-cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs!.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
-  ok("[lt3-cli] a measurement taken against a different expectation is called stale", () => rep1.why.some((w) => /DIFFERENT expectation/.test(w)));
-  ok("[lt3-cli] artifacts that do not exist on disk are flagged: no screenshot, no pass (166/190)", () => rep1.why.some((w) => /no screenshot/.test(w)) && rep1.artifacts.every((a) => a.exists === false));
+  const rep1 = readFixture(path.join(cwd, "design/verify/GlobalPolicies.report.json"), isVerifyReport);
+  ok("[lt3-cli] the report records the sha256 of the expectation it was computed on", () => rep1.inputs?.expectationSha256 === crypto.createHash("sha256").update(bytes1).digest("hex"));
+  ok("[lt3-cli] a measurement taken against a different expectation is called stale", () => (rep1.why || []).some((w) => /DIFFERENT expectation/.test(w)));
+  // The CLI always runs the on-disk artifact check, so every artifact row is an ArtifactCheck.
+  ok("[lt3-cli] artifacts that do not exist on disk are flagged: no screenshot, no pass (166/190)", () => (rep1.why || []).some((w) => /no screenshot/.test(w)) && (rep1.artifacts || []).every((a) => typeof a === "object" && a.exists === false));
   ok("[lt3-cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
-  const edited = clone(gpDoc); edited.nodes![0].children = edited.nodes![0].children!.slice(0, 2);
+  const edited = clone(gpDoc); edited.nodes[0].children = (edited.nodes[0].children || []).slice(0, 2);
   fs.writeFileSync(path.join(cwd, "edited.json"), JSON.stringify(edited));
   const r3 = run("--expect", "edited.json", "--out", "design/verify/GlobalPolicies");
   ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
@@ -495,8 +510,32 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   run("--expect", src, "--out", "design/verify/GlobalPolicies");
   run("--compare", expFile, "design/verify/GlobalPolicies.measured.json", "--interactions", "ints.json");
   ok("[lt3-cli] --interactions <file> is the input channel for interaction evidence (127)",
-    () => (JSON.parse(fs.readFileSync(path.join(cwd, "design/verify/GlobalPolicies.report.json"), "utf8")) as VerifyReportV2).coverage.interactionsPassed === 1);
+    () => readFixture(path.join(cwd, "design/verify/GlobalPolicies.report.json"), isVerifyReport).coverage?.interactionsPassed === 1);
   ok("[lt3-cli] --help says there is no browser in --compare", () => /NO browser/.test(run("--help").stdout));
+})();
+
+
+// ---------- wrong-kind inputs are one line + exit 2 (doc-guards.ts) — never compared as `{}` ----------
+// A non-object expectation or measurement used to be read as an EMPTY document, so --compare graded
+// nothing and printed a verdict about it.
+(() => {
+  const CLI = path.join(import.meta.dirname, "..", "design-to-code", "verify-screen.ts");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "verify-shape-"));
+  const put = (name: string, doc: unknown): string => { fs.writeFileSync(path.join(cwd, name), JSON.stringify(doc)); return name; };
+  const run = (...a: string[]) => spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8", cwd });
+  const oneLine = (r: { status: number | null; stderr: string }, re: RegExp): boolean => r.status === 2 && re.test(r.stderr) && !/\n {4}at /.test(r.stderr);
+  const exp = put("x.expected.json", buildExpectation([doc([textNode("2:1", "T", "Hi", { family: "Poppins", size: 14 })])]));
+  const meas = put("m.json", measured([{ nodeId: "2:1", styles: { fontSize: 14 } }]));
+  okOuter("[shape] --compare: an expectation that is a list, not {frame, nodes} -> exit 2, one line",
+    oneLine(run("--compare", put("bad.expected.json", [1]), meas), /expectation: 'bad\.expected\.json' is not a verify expectation/));
+  okOuter("[shape] --compare: measurements whose artifacts is an object (not a list) -> exit 2, one line",
+    oneLine(run("--compare", exp, put("bad-m.json", { nodes: [], artifacts: {} })), /probe measurements: 'bad-m\.json' is not probe measurements/));
+  okOuter("[shape] --interactions rows without a nodeId are refused like any other wrong list",
+    run("--compare", exp, meas, "--interactions", put("ints.json", [{ trigger: "on_click", ok: true }])).status === 2);
+  okOuter("[shape] --expect: a screen argument that is not a screen export -> exit 2, one line",
+    oneLine(run("--expect", put("notscreen.json", { nodes: "none" })), /screen export: 'notscreen\.json' is not a screen export/));
+  okOuter("[args] `--out --force` is '--out needs a value' (was: an artefact set named --force)",
+    (() => { const r = run("--expect", put("s.json", { nodes: [{ id: "1:1", type: "FRAME", name: "S" }] }), "--out", "--force"); return r.status === 2 && /verify-screen: --out needs a value/.test(r.stderr); })());
 })();
 
 report();

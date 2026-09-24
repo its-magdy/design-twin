@@ -12,17 +12,20 @@
 // The `existing` argument is never mutated (entries are deep-cloned).
 import fs from "node:fs";
 import type {
-  BooleanPropMap, CatalogComponent, CodeConnectMap, ComponentPropDef, ComponentProposal, ComponentsCatalog, EnumPropMap, MapEntry, PropMap, ScreenDoc,
+  BooleanPropMap, CatalogComponent, CodeConnectMap, ComponentPropDef, ComponentProposal, ComponentsCatalog, EnumPropMap, MapEntry, PropMap,
 } from "./types.ts";
 import { isJsonObject } from "./types.ts";
 import { TYPE_TO_KIND as KIND } from "./kinds.ts"; // shared vocab — kept in sync with drift-lint
-import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { readDocFile, readJsonFile, readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { isComponentsCatalog, isProposalList } from "./doc-guards.ts";
+import { isScreenDoc } from "./export-shape.ts";
+import { scriptCmd } from "./cli-args.ts";
 import { visibleInstances } from "./component-match.ts";
-import { validateMap } from "./map-validate.ts";
+import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
 
-const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
+const clone = <T>(o: T): T => structuredClone(o);
 
 // Split an arbitrary name into alphanumeric words (drops "/", punctuation, whitespace).
 const words = (name: string | null | undefined): string[] => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
@@ -159,10 +162,8 @@ function bootstrapFromProposals(proposals: readonly ComponentProposal[] | null |
   return { map: out, report };
 }
 
-// A cross-check report, an audit report (its crossFile), or a bare array. The rows are read as what
-// cross-check.ts wrote (a person only adds `confirmed: true` to them); bootstrapFromProposals still
-// checks each row before acting on it.
-const isProposalList = (x: unknown): x is ComponentProposal[] => Array.isArray(x);
+// A cross-check report, an audit report (its crossFile), or a bare array — of rows cross-check.ts wrote
+// (a person only adds `confirmed: true` to them; doc-guards.ts isProposalList checks each is a row).
 function proposalsIn(doc: unknown): ComponentProposal[] | null {
   if (isProposalList(doc)) return doc;
   if (isJsonObject(doc) && isProposalList(doc.componentProposals)) return doc.componentProposals;
@@ -179,7 +180,7 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const usage = "usage: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
+  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
   const argv = process.argv.slice(2);
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   const pi = argv.indexOf("--from-proposals");
@@ -204,24 +205,23 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
   const [catalogFile, existingArg] = argv;
   if (!catalogFile) { console.error(usage); process.exit(1); }
-  const catalogDoc = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalogDoc, catalogFile, "components", "design-system/components.local.json");
-  // Past the manifest guard, the file is the split catalog this repo's own writer produced.
-  const catalog = catalogDoc as ComponentsCatalog;
+  const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   const existingFile = existingArg || outFile;
   // A person's map (hand-edited): bootstrap merges into it and REWRITES it, so it is validated first
   // and an invalid one is refused, untouched. Merging trusted the shape: an array `components` was
   // walked by index and written back as `{"0": …}`, silently destroying the person's work.
   const existingRaw = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  let existing: CodeConnectMap | null = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
-    if (!valid.ok) {
+    if (!valid.ok || !isCodeConnectMap(existingRaw)) {
       valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
       console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
       process.exit(1);
     }
+    existing = existingRaw;
   }
-  const existing = existingRaw as CodeConnectMap | null; // validated above
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
@@ -246,14 +246,13 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // skill's own ordering), then pass its screen json here.
   let scopedCatalog: ComponentsCatalog = catalog;
   if (screenFile) {
-    // A screen export this repo's own pull wrote; visibleInstances() duck-types its three shapes.
-    const screenDoc = readJsonFile(screenFile, "screen export") as ScreenDoc;
+    const screenDoc = readDocFile(screenFile, "screen export", isScreenDoc);
     const used = new Set<string>();
     for (const i of visibleInstances(screenDoc, "screen")) {
       if (i.key) used.add(i.key);
       if (i.setKey) used.add(i.setKey);
     }
-    const all = (catalog && catalog.components) || [];
+    const all = catalog.components;
     const scoped = all.filter((c) => (c.key && used.has(c.key)) || (c.id && used.has(c.id)));
     scopedCatalog = Object.assign({}, catalog, { components: scoped });
     console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);

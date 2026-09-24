@@ -26,14 +26,14 @@
 import type {
   CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
+import { screenRoots } from "./export-shape.ts";
+import { isJsonObject } from "./types.ts";
 
 // Hidden layers are not built, so they are not mapped either (and a hidden subtree's instances are
 // skipped with it).
 function visibleInstances(doc: ScreenDoc | null | undefined, label: string): VisibleInstance[] {
   const out: VisibleInstance[] = [];
-  // `[doc as IrNode]`: the duck-type check just before it (`doc.id || doc.type`) is what says the
-  // document IS a bare node tree — the third shape the export writes (see types.ts ScreenDoc).
-  const roots: IrNode[] = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc as IrNode] : [];
+  const roots = screenRoots(doc); // the three shapes the export writes (export-shape.ts)
   const walk = (n: IrNode): void => {
     // `hidden` is the export's ONLY visibility flag (serialize.ts writes it; there is no `visible`).
     if (!n || typeof n !== "object" || n.hidden === true) return;
@@ -60,7 +60,8 @@ function visibleInstances(doc: ScreenDoc | null | undefined, label: string): Vis
 // The export spells the variant either as a string ("Type=Primary, Status=Default") or, when the
 // instance carries per-prop overrides, as an object ({ Dashboard: "default" }).
 function parseVariant(s: unknown): Record<string, string> | null {
-  if (s && typeof s === "object" && !Array.isArray(s)) return Object.keys(s).length ? Object.assign({}, s as Record<string, string>) : null;
+  // (only string values are kept: a variant axis's value is its option name)
+  if (isJsonObject(s)) { const out = Object.fromEntries(Object.entries(s).filter((e): e is [string, string] => typeof e[1] === "string")); return Object.keys(out).length ? out : null; }
   if (!s || typeof s !== "string" || !s.includes("=")) return null;
   const out: Record<string, string> = {};
   for (const part of s.split(/,\s*(?=[^,=]+=)/)) {

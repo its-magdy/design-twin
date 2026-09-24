@@ -25,9 +25,19 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+
+// bridge/src/json-util.ts
+function isUnknownArray(x) {
+  return Array.isArray(x);
+}
+function isStringArray(x) {
+  return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+
+// design-to-code/content-hash.ts
 var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
 function stripPullTimes(v, parentKey) {
-  if (Array.isArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
+  if (isUnknownArray(v)) return v.map((x) => stripPullTimes(x, parentKey));
   if (!v || typeof v !== "object") return v;
   const out = {};
   for (const [k, x] of Object.entries(v)) {
@@ -38,12 +48,12 @@ function stripPullTimes(v, parentKey) {
   return out;
 }
 function exportContentSha256(docs) {
-  const list = Array.isArray(docs) ? docs : [docs];
+  const list = isUnknownArray(docs) ? docs : [docs];
   return sha256(JSON.stringify(list.map((d) => stripPullTimes(d))));
 }
 function fileHashes(files, cwd) {
   const out = {};
-  for (const rel of Array.isArray(files) ? files.map(String) : []) {
+  for (const rel of isUnknownArray(files) ? files.map(String) : []) {
     try {
       out[rel] = sha256(fs.readFileSync(path.join(cwd, rel))).slice(0, 16);
     } catch {
@@ -62,35 +72,232 @@ function gitHead(cwd) {
   }
 }
 
-// design-to-code/catalog-input.ts
+// design-to-code/types.ts
+function isJsonObject(x) {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// design-to-code/read-json.ts
 import fs2 from "node:fs";
 
 // bridge/src/errmsg.ts
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
-// design-to-code/catalog-input.ts
-function readJsonFile(file, what, hint) {
+// design-to-code/read-json.ts
+var anyJson = (_x) => true;
+function readFailure(e) {
+  const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
+  if (code === "ENOENT") return { error: "does not exist", missing: true };
+  return {
+    error: code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`
+  };
+}
+function readJson(file, guard) {
   let raw;
   try {
     raw = fs2.readFileSync(file, "utf8");
   } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
-    const why = code === "ENOENT" ? "does not exist" : code === "EISDIR" ? "is a directory, not a file" : code === "EACCES" ? "is not readable (permission denied)" : `could not be read (${String(code || e)})`;
-    console.error(`error  ${what}: '${file}' ${why}.` + (hint ? `
-       ${hint}` : ""));
-    process.exit(2);
+    return readFailure(e);
   }
+  let parsed;
   try {
-    return JSON.parse(raw);
+    const value = JSON.parse(raw);
+    parsed = value;
   } catch (e) {
-    console.error(`error  ${what}: '${file}' is not valid JSON \u2014 ${errMsg(e)}`);
-    process.exit(2);
+    return { error: `is not valid JSON \u2014 ${errMsg(e)}` };
+  }
+  if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
+  return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
+}
+
+// design-to-code/catalog-input.ts
+function readJsonFile(file, what, hint) {
+  return readDocFile(file, what, anyJson, hint);
+}
+function readDocFile(file, what, guard, hint) {
+  const r = readJson(file, guard);
+  if ("doc" in r) return r.doc;
+  const ioFailure = r.missing || /^(is a directory|is not readable|could not be read)/.test(r.error);
+  console.error(`error  ${what}: '${file}' ${r.error}${ioFailure ? "." : ""}` + (ioFailure && hint ? `
+       ${hint}` : ""));
+  process.exit(2);
+}
+
+// design-to-code/doc-guards.ts
+function optArrayOf(x, each) {
+  return x === void 0 || Array.isArray(x) && x.every(each);
+}
+var isObj = isJsonObject;
+var optObj = (x) => x === void 0 || isObj(x);
+var optStr = (x) => x === void 0 || typeof x === "string";
+var anyObject = (x) => isObj(x);
+function isVariable(x) {
+  return isObj(x) && typeof x.name === "string" && typeof x.type === "string" && isObj(x.values) && optStr(x.collection);
+}
+function isVariableCollection(x) {
+  return isObj(x) && typeof x.name === "string" && isStringArray(x.modes);
+}
+function isTokensDoc(x) {
+  return isObj(x) && optArrayOf(x.variables, isVariable) && optArrayOf(x.collections, isVariableCollection) && optArrayOf(x._slices, anyObject) && optArrayOf(x._conflicts, anyObject) && (x.hygiene === void 0 || isStringArray(x.hygiene));
+}
+isTokensDoc.expected = "a token catalog: an object whose `variables` (each {name, type, values}) and `collections` (each {name, modes[]}), when present, are arrays";
+function isCatalogComponent(x) {
+  return isObj(x) && typeof x.name === "string" && optStr(x.key) && optStr(x.id) && optObj(x.props) && optArrayOf(x.variants, anyObject);
+}
+function isComponentsCatalog(x) {
+  return isObj(x) && Array.isArray(x.components) && x.components.every(isCatalogComponent);
+}
+isComponentsCatalog.expected = "a component catalog: an object with a `components` array of {name, type, key?, id?, props?}";
+function isComponentDetailFile(x) {
+  return isObj(x) && typeof x.name === "string" && optArrayOf(x.variants, anyObject) && optObj(x.node);
+}
+isComponentDetailFile.expected = "a component detail file: an object with a `name` and `variants[]` or `node`";
+function isTextStylesDoc(x) {
+  return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
+}
+isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isAuditReport(x) {
+  return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
+}
+isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+function isProposal(x) {
+  return isObj(x) && typeof x.name === "string";
+}
+function isProposalList(x) {
+  return Array.isArray(x) && x.every(isProposal);
+}
+isProposalList.expected = "a list of component proposals: an array of {name, catalog, confirmed, \u2026}";
+function isIndexRowLike(x) {
+  return isObj(x) && typeof x.id === "string" && typeof x.name === "string";
+}
+function isPagesRootIndex(x) {
+  return isObj(x) && Array.isArray(x.pageDirs) && x.pageDirs.every((d) => isObj(d) && optStr(d.dir) && optStr(d.index)) && (x.layers === void 0 || Array.isArray(x.layers) && x.layers.every(isIndexRowLike));
+}
+isPagesRootIndex.expected = "the export's pages/index.json: an object with a `pageDirs` array (and `layers`, when present, an array of {id, name, file})";
+function isPageIndex(x) {
+  return isObj(x) && Array.isArray(x.layers) && x.layers.every(isIndexRowLike);
+}
+isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a `layers` array of {id, name, file}";
+function isVerifyExpectation(x) {
+  return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
+}
+isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+function isVerifyMeasured(x) {
+  return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
+function isEvidence(x) {
+  return isObj(x) && typeof x.nodeId === "string";
+}
+function isInteractionEvidenceList(x) {
+  return Array.isArray(x) && x.every(isEvidence);
+}
+isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isVerifyReport(x) {
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+}
+isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+var PLAN_OBJECTS = ["anchors", "verification", "counts"];
+var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
+function planProblem(x) {
+  if (!isObj(x)) return "is not a plan (the file holds " + (Array.isArray(x) ? "an array" : x === null ? "null" : typeof x) + ", not an object)";
+  for (const k of PLAN_ARRAYS) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
+  for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
+  for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
+  if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+    const list = x[k];
+    if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
+  }
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && (t.figmaName === null || optStr(t.figmaName)))) return "is not a valid plan: a `tokens` row's `figmaName` must be a string";
+  if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
+  if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
+  if (x.auditGate !== void 0 && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  return null;
+}
+function isPlan(x) {
+  return planProblem(x) === null;
+}
+isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+function isStringRecord(x) {
+  return isObj(x) && Object.values(x).every((v) => typeof v === "string");
+}
+isStringRecord.expected = "an object of strings";
+
+// design-to-code/cli-args.ts
+import { parseArgs } from "node:util";
+var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+function errCode(e) {
+  return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+}
+function cliParse(tool, argv, options, usage, exitCode, parse) {
+  try {
+    return parse();
+  } catch (e) {
+    const code = errCode(e);
+    if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") {
+      const { tokens } = parseArgs({ args: argv, options, strict: false, allowPositionals: true, tokens: true });
+      const unknown = [...new Set(tokens.flatMap((t) => t.kind === "option" && !(t.name in options) ? [t.rawName] : []))];
+      console.error(`${tool}: unknown flag ${unknown.join(", ")}
+${usage}`);
+    } else if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+      const msg = e instanceof Error ? e.message : "";
+      const m = /Option '(-[\w-]+|--[\w-]+)/.exec(msg);
+      console.error(`${tool}: ${m ? m[1] : "an option"} ${/does not take an argument/.test(msg) ? "takes no value" : "needs a value"}
+${usage}`);
+    } else {
+      console.error(`${tool}: ${e instanceof Error ? e.message : String(e)}
+${usage}`);
+    }
+    process.exit(exitCode);
   }
 }
 
-// design-to-code/types.ts
-function isJsonObject(x) {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
+// design-to-code/verify-screen.ts
+import { parseArgs as parseArgs2 } from "node:util";
+
+// design-to-code/export-shape.ts
+function isIrNode(x) {
+  return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
+}
+function isScreenExport(x) {
+  return isJsonObject(x) && Array.isArray(x.nodes) && x.nodes.every(isIrNode);
+}
+function isLayerFile(x) {
+  return isJsonObject(x) && !Array.isArray(x.nodes) && isIrNode(x.tree);
+}
+function isScreenDoc(x) {
+  return isScreenExport(x) || isLayerFile(x) || isIrNode(x);
+}
+isScreenDoc.expected = "a screen export: {nodes:[\u2026]} whose every node has a string id and type, a layer file {tree: node}, or a bare node {id, type, \u2026}";
+function screenRoots(doc) {
+  if (isScreenExport(doc)) return doc.nodes;
+  if (isLayerFile(doc)) return [doc.tree];
+  if (isIrNode(doc)) return [doc];
+  return [];
+}
+function screenExportOf(doc) {
+  return isScreenExport(doc) ? doc : null;
+}
+
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const m = HEX.exec(v.trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
 }
 
 // bridge/src/is-main.ts
@@ -129,11 +336,9 @@ var TOLERANCE = {
 function normColor(v) {
   if (v == null) return null;
   const s = String(v).trim().toLowerCase();
-  let m = /^#([0-9a-f]{3})$/.exec(s);
-  if (m) return "#" + m[1].split("").map((c) => c + c).join("") + "ff";
-  m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/.exec(s);
-  if (m) return "#" + m[1] + (m[2] || "ff");
-  m = /^rgba?\(([^)]+)\)$/.exec(s);
+  const key = colorKey(s);
+  if (key) return key;
+  const m = /^rgba?\(([^)]+)\)$/.exec(s);
   if (m) {
     const p = m[1].split(/[,\s/]+/).filter(Boolean).map(Number);
     if (p.length < 3 || p.some((n) => Number.isNaN(n))) return s;
@@ -195,13 +400,6 @@ function lineHeightPx(lh, fontSize) {
 }
 var EXPECTATION_SCHEMA = "designtwin/verify-expectation@2";
 var REPORT_SCHEMA = "designtwin/verify-report@2";
-function rootsOf(doc) {
-  if (!doc) return [];
-  if (Array.isArray(doc.nodes)) return doc.nodes;
-  if (doc.tree) return [doc.tree];
-  if (doc.id || doc.type) return [doc];
-  return [];
-}
 var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var num = (v) => typeof v === "number" && Number.isFinite(v);
 var r2 = (v) => Math.round(v * 100) / 100;
@@ -360,9 +558,10 @@ function buildExpectation(docs) {
   const seen = /* @__PURE__ */ new Set();
   let screen = void 0, exportedAt = void 0, reference = null;
   for (const { doc, label } of docs) {
-    if (!screen) screen = doc && doc.screen || label;
-    if (!exportedAt) exportedAt = doc && doc.exportedAt;
-    for (const root of rootsOf(doc)) {
+    const exp = screenExportOf(doc);
+    if (!screen) screen = exp && exp.screen || label;
+    if (!exportedAt) exportedAt = exp ? exp.exportedAt : void 0;
+    for (const root of screenRoots(doc)) {
       if (!reference && root.reference) reference = root.reference;
       const b = root.box || {};
       const frame = { nodeId: root.id, name: root.name, w: b.w, h: b.h, x: b.x, y: b.y, clip: root.clip === true };
@@ -1073,66 +1272,39 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
     if (!f.endsWith(".expected.json")) continue;
     const full = path2.join(dir, f);
     if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
-    let doc;
-    try {
-      doc = JSON.parse(fs4.readFileSync(full, "utf8"));
-    } catch (e) {
-      continue;
-    }
-    if (isJsonObject(doc) && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
+    const doc = readJsonOrNull(full, isJsonObject);
+    if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
-function isScreenDocLike(x) {
-  return isJsonObject(x);
-}
-function isExpectationLike(x) {
-  return isJsonObject(x);
-}
-function isMeasuredLike(x) {
-  return isJsonObject(x);
-}
-function isEvidenceList(x) {
-  return Array.isArray(x);
-}
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const take = (flag) => {
-    const i = argv.indexOf(flag);
-    if (i === -1) return void 0;
-    const v = argv[i + 1];
-    argv.splice(i, 2);
-    return v;
-  };
-  const strip = (flag) => {
-    const i = argv.indexOf(flag);
-    if (i === -1) return false;
-    argv.splice(i, 1);
-    return true;
-  };
   const sha = (file) => crypto2.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
-  const USAGE = "usage:\n  node design-to-code/verify-screen.ts --expect <screen.json>... --out design/verify/<Screen> [--force]\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.\n      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n      directory \u2014 pass --force to write a second one anyway.\n  node design-to-code/verify-screen.ts --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
+  const USAGE = `usage:
+  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]
+      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
+      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.
+      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this
+      directory \u2014 pass --force to write a second one anyway.
+  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>
+      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares
+      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
+      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).
+      --out defaults to design/verify/<the .expected.json file's own basename>.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     process.exit(argv.length ? 0 : 2);
   }
-  const out = take("--out");
-  const interactionsFile = take("--interactions");
-  const force = strip("--force");
-  const doExpect = strip("--expect");
-  const doCompare = strip("--compare");
+  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, () => parseArgs2({ args: argv, options: OPTIONS, allowPositionals: true }));
+  const { out, interactions: interactionsFile } = flags;
+  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
   if (doExpect === doCompare) {
     console.error("pass exactly one of --expect / --compare\n" + USAGE);
     process.exit(2);
   }
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
-    process.exit(2);
-  }
-  const stray = argv.filter((a) => a.startsWith("-"));
-  if (stray.length) {
-    console.error(`verify-screen: unknown flag ${stray.join(", ")}
-` + USAGE);
     process.exit(2);
   }
   const write = (base, obj, md2) => {
@@ -1146,16 +1318,13 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
-    if (!argv.length) {
+    if (!files.length) {
       console.error("--expect needs at least one screen export\n" + USAGE);
       process.exit(2);
     }
-    const docs = argv.map((f) => {
-      const d = readJsonFile(f, "screen export");
-      return { doc: isScreenDocLike(d) ? d : void 0, label: path2.basename(f, ".json") };
-    });
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    const outBase = out || path2.join("design", "verify", path2.basename(argv[0], ".json"));
+    const outBase = out || path2.join("design", "verify", path2.basename(files[0], ".json"));
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path2.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
@@ -1189,30 +1358,29 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
     process.exit(0);
   }
-  const [expFile, measuredFile] = argv;
+  const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) {
     console.error("--compare needs <expected.json> <measured.json>\n" + USAGE);
     process.exit(2);
   }
-  const expRaw = readJsonFile(expFile, "expectation");
-  const expectation = isExpectationLike(expRaw) ? expRaw : {};
-  const measuredRaw = readJsonFile(
+  const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
+  const measured = readDocFile(
     measuredFile,
     "probe measurements",
+    isVerifyMeasured,
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}."
   );
-  const measured = isMeasuredLike(measuredRaw) ? measuredRaw : {};
   let extra;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    const list = isEvidenceList(raw) ? raw : isJsonObject(raw) && isEvidenceList(raw.interactions) ? raw.interactions : null;
+    const list = isInteractionEvidenceList(raw) ? raw : isJsonObject(raw) && isInteractionEvidenceList(raw.interactions) ? raw.interactions : null;
     if (!list) {
       console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[\u2026]}`);
       process.exit(2);
     }
     extra = list;
   }
-  const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
+  const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
     const exists = !!p && fs4.existsSync(p);
@@ -1225,18 +1393,14 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const stem = path2.basename(expFile, ".json").replace(/\.expected$/, "");
     const hits = [];
     for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      let p;
-      try {
-        p = JSON.parse(fs4.readFileSync(path2.join(planDir, f), "utf8"));
-      } catch {
-        continue;
-      }
+      const p = readJsonOrNull(path2.join(planDir, f), isPlan);
+      if (!p) continue;
       const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path2.basename(f, ".json")));
       const byName = path2.basename(f, ".json") === stem || p.file && path2.basename(String(p.file), ".json") === stem;
-      if ((byId || byName) && Array.isArray(p.files)) hits.push({ f, p });
+      if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
     }
     if (hits.length === 1) {
-      code = { plan: path2.join(planDir, hits[0].f).split(path2.sep).join("/"), files: fileHashes(hits[0].p.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+      code = { plan: path2.join(planDir, hits[0].f).split(path2.sep).join("/"), files: fileHashes(hits[0].files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }

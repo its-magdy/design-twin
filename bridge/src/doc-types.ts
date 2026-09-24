@@ -642,7 +642,8 @@ export interface VariableCollection {
 export interface Variable {
   name: string;
   type: VariableType;
-  collection: string;
+  /** Absent when the plugin could not resolve the variable's collection (variables.ts writes `collOf(id)?.name`). */
+  collection?: string;
   tier: "primitive" | "semantic";
   /** keyed by MODE NAME */
   values: Record<string, VariableValue>;

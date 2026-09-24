@@ -26,28 +26,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { ok, report } from "./assert.ts";
+import { check as ok, report } from "./assert.ts";
 import { deriveTitle, collectTexts } from "../bridge/src/pages-layout.ts";
 import { resolveScreen } from "../design-to-code/resolve-screen.ts";
 import type { ResolveScreenResult, PagesRootIndex } from "../design-to-code/types.ts";
 import type { TextWalkNode } from "../bridge/src/pages-layout.ts";
+import { must, readFixture } from "./fixtures.ts";
+import { isPagesRootIndex } from "../design-to-code/doc-guards.ts";
+import { isScreenExport } from "../design-to-code/export-shape.ts";
 
-// ts-port: the union arms a few assertions read without a status check (they throw if the arm is wrong,
-// which is itself the failure signal — keep that, only tell the checker which arm is expected).
-type Resolved = Extract<ResolveScreenResult, { status: "resolved" }>;
 type Unresolved = Exclude<ResolveScreenResult, { status: "resolved" }>;
+// The arm a check expects; any other arm is a named failure (not a TypeError on a missing field).
+const unresolved = (r: ResolveScreenResult): Unresolved => must(r.status === "resolved" ? null : r, "an unresolved result");
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "livetest3");
 
 console.log("resolve-screen — title/texts derivation over the REAL export:");
 
-// The fixture files as this suite reads them: a screen doc (only its node tree) and the root index.
-interface ScreenFile { nodes: TextWalkNode[] }
-const readRoot = (dir: string): PagesRootIndex => JSON.parse(fs.readFileSync(path.join(dir, "pages", "index.json"), "utf8")) as PagesRootIndex;
+// The fixture files as this suite reads them: a screen export and the root index, each checked by its guard.
+const readRoot = (dir: string): PagesRootIndex => readFixture(path.join(dir, "pages", "index.json"), isPagesRootIndex);
 
 function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {
-  const d = JSON.parse(fs.readFileSync(path.join(FIXTURE, base || "pages", pageDir, file), "utf8")) as ScreenFile;
-  return d.nodes[0];
+  return readFixture(path.join(FIXTURE, base || "pages", pageDir, file), isScreenExport).nodes[0];
 }
 
 ok("[title] `positions ` (trailing space, layer name) visibly reads 'Job Roles' — deriveTitle finds it, not the sidebar nav item",
@@ -78,7 +78,7 @@ ok("[resolve] #90 'Job Roles' (visible title; the layer is named `positions ` wi
   (() => { const r = resolveScreen(FIXTURE, "Job Roles"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
 
 ok("[resolve] #70 'Job Roles' never resolves to 'Job Role Details' (20174:143363) — no fuzzy fallback",
-  (resolveScreen(FIXTURE, "Job Roles") as Resolved).row.id !== "20174:143363");
+  (() => { const r = resolveScreen(FIXTURE, "Job Roles"); return r.status === "resolved" && r.row.id !== "20174:143363"; })());
 
 ok("[resolve] #120 'Global Policies' resolves to the ONE screen actually titled that (1359:21337), not the sidebar match on all three",
   (() => { const r = resolveScreen(FIXTURE, "Global Policies"); return r.status === "resolved" && r.row.id === "1359:21337"; })());
@@ -128,13 +128,13 @@ console.log("\nresolve-screen — root index shape (P3 #16 acceptance criterion 
 ok("[index] the fixture's root pages/index.json carries a row with name 'positions ' AND title 'Job Roles'",
   (() => {
     const root = readRoot(FIXTURE);
-    return root.layers!.some((l) => l.name === "positions " && l.title === "Job Roles");
+    return (root.layers || []).some((l) => l.name === "positions " && l.title === "Job Roles");
   })());
 
 ok("[index] and a row with name 'System Configurations' AND title 'Global Policies'",
   (() => {
     const root = readRoot(FIXTURE);
-    return root.layers!.some((l) => l.name === "System Configurations" && l.title === "Global Policies");
+    return (root.layers || []).some((l) => l.name === "System Configurations" && l.title === "Global Policies");
   })());
 
 // The prompt's literal `grep -i "job roles" pages/index.json` also matches a nav-label mention of
@@ -145,7 +145,7 @@ ok("[index] and a row with name 'System Configurations' AND title 'Global Polici
 ok("[index] acceptance criterion 2: exactly one row's `title` is 'Job Roles', and it is 7314:87192",
   (() => {
     const root = readRoot(FIXTURE);
-    const hits = root.layers!.filter((l) => l.title === "Job Roles");
+    const hits = (root.layers || []).filter((l) => l.title === "Job Roles");
     return hits.length === 1 && hits[0].id === "7314:87192";
   })());
 
@@ -176,7 +176,7 @@ ok("[round2] 'Job Role' on the LEGACY (title-less) export does NOT resolve — n
   (() => { const r = resolveScreen(LEGACY, "Job Role"); return r.status === "needs-confirmation" && r.stage === "text search"; })());
 
 ok("[round2] and the message says the export predates title indexing",
-  (() => { const r = resolveScreen(LEGACY, "Job Role") as Unresolved; return "noTitles" in r && r.noTitles === true; })());
+  (() => { const r = unresolved(resolveScreen(LEGACY, "Job Role")); return "noTitles" in r && r.noTitles === true; })());
 
 ok("[round2] a query matching NOTHING on the legacy export also flags noTitles",
   (() => { const r = resolveScreen(LEGACY, "Totally Unknown"); return r.status === "not-found" && r.noTitles === true; })());
@@ -215,11 +215,10 @@ function fixtureWithEmptyStateSibling() {
   const pagesDir = path.join(tmp, "pages", "__Organization_management_");
   fs.mkdirSync(pagesDir, { recursive: true });
   const root = readRoot(FIXTURE);
-  const sibling = JSON.parse(fs.readFileSync(
-    path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), "utf8")) as ScreenFile;
+  const sibling = readFixture(path.join(FIXTURE, "pages-titled", "__Organization_management_", "Job_roles__7314_83742.json"), isScreenExport);
   // deriveTitle/collectTexts are the same top-level import as line 29 — no need to re-require them.
   const siblingRoot = sibling.nodes[0];
-  root.layers = root.layers!.concat([{
+  root.layers = root.layers?.concat([{
     name: "Job roles",
     id: "7314:83742",
     type: "FRAME",
@@ -241,8 +240,8 @@ const SIBLING_FIXTURE = fixtureWithEmptyStateSibling();
 ok("[round3] the sibling really is titled 'Job Roles' too (sanity check on the real pulled data)",
   (() => {
     const root = readRoot(SIBLING_FIXTURE);
-    const sib = root.layers!.find((l) => l.id === "7314:83742");
-    return sib && sib.name === "Job roles" && sib.title === "Job Roles";
+    const sib = root.layers?.find((l) => l.id === "7314:83742");
+    return sib !== undefined && sib.name === "Job roles" && sib.title === "Job Roles";
   })());
 
 ok("[round3] finding 310: 'Job Roles' with BOTH a layer-name hit (Job roles, case-insensitive) AND a title hit (positions ) STOPS as ambiguous, never resolves to either",
@@ -254,10 +253,10 @@ ok("[round3] finding 310: 'Job Roles' with BOTH a layer-name hit (Job roles, cas
 
 ok("[round3] the candidate list says WHICH field each row matched on",
   (() => {
-    const r = resolveScreen(SIBLING_FIXTURE, "Job Roles") as Unresolved;
+    const r = unresolved(resolveScreen(SIBLING_FIXTURE, "Job Roles"));
     const empty = r.candidates.find((c) => c.id === "7314:83742");
     const real = r.candidates.find((c) => c.id === "7314:87192");
-    return empty!.matchedVia!.includes("exact layer name") && real!.matchedVia!.includes("indexed title");
+    return (empty?.matchedVia || []).includes("exact layer name") && (real?.matchedVia || []).includes("indexed title");
   })());
 
 ok("[round3] lower/upper case of the layer name ('job roles') still joins the SAME union, still stops",
@@ -268,5 +267,15 @@ ok("[round3] a node id still wins alone even with the sibling present",
 
 ok("[round3] 'positions' (exact layer name only, no title collision on THIS query string) still resolves cleanly",
   (() => { const r = resolveScreen(SIBLING_FIXTURE, "positions"); return r.status === "resolved" && r.row.id === "7314:87192"; })());
+
+
+// ---------- an index that is not an index is treated as no index (doc-guards.ts) — not iterated as one ----------
+ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (was: each CHARACTER walked as a page dir)", (() => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "resolve-shape-"));
+  fs.mkdirSync(path.join(tmp, "pages"), { recursive: true });
+  fs.writeFileSync(path.join(tmp, "pages", "index.json"), JSON.stringify({ pageDirs: "__Organization_management_" }));
+  const r = resolveScreen(tmp, "Job Roles");
+  return r.status === "not-found" && r.candidates.length === 0;
+})());
 
 report();

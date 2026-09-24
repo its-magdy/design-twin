@@ -16,12 +16,16 @@ import { TYPE_TO_KIND } from "./kinds.ts"; // shared vocab — kept in sync with
 import { snapshotAge } from "../bridge/src/snapshot-meta.ts"; // ONE definition of the freshness stamp
 import { errMsg } from "../bridge/src/errmsg.ts"; // ONE thrown-value -> message coercion
 import { walkWithHidden } from "./hidden.ts";
-import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { readDocFile, readJsonFile, readSplitFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
+import { isComponentsCatalog } from "./doc-guards.ts";
+import { cliParse, scriptCmd } from "./cli-args.ts";
+import { parseArgs } from "node:util";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
 import { isJsonObject } from "./types.ts";
-import { validateMap } from "./map-validate.ts";
+import { isScreenDoc, screenRoots } from "./export-shape.ts";
+import { isCodeConnectMap, validateMap } from "./map-validate.ts";
 import type {
-  CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, IrNode, MapEntry, PropMap,
+  CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
@@ -182,6 +186,9 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
 /** A catalog row as this linter reads it (components.local.json / design-system.json `components[]`). */
 type CatalogEntry = ComponentsCatalog["components"][number];
 
+/** How long the opt-in live meta check may take before it is abandoned (a warning, never a hang). */
+const LIVE_META_TIMEOUT_MS = 10_000;
+
 /** checkLiveFreshness() result: Figma's own `last_modified` for the file, if the meta endpoint answered. */
 export interface LiveFreshness { lastModified: string | undefined; aheadOfSnapshot: boolean | undefined }
 
@@ -192,7 +199,9 @@ export interface LiveFreshness { lastModified: string | undefined; aheadOfSnapsh
 // answer when the caller happens to have credentials lying around.
 async function checkLiveFreshness(fileKey: string | undefined, token: string | undefined, exportedAt: string | null | undefined): Promise<LiveFreshness | null> {
   if (!fileKey || !token) return null; // opt-in: nothing configured, nothing attempted
-  const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token } });
+  // A hung connection must not hold the CLI open: the whole request gets LIVE_META_TIMEOUT_MS, then the
+  // caller's catch turns the TimeoutError into the usual "could not verify" warning.
+  const res = await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(fileKey)}/meta`, { headers: { "X-Figma-Token": token }, signal: AbortSignal.timeout(LIVE_META_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`GET /v1/files/${fileKey}/meta -> ${res.status} ${res.statusText}`);
   // The REST response is arbitrary JSON: only `file.last_modified` (an ISO string) is read.
   const body: unknown = await res.json();
@@ -231,9 +240,7 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
   // Policies' 87 instances are hidden).
   const used = new Map<string, UsedSet>(); // set key -> { setName, instances, hiddenInstances }
   for (const doc of screenDocs || []) {
-    // `[doc as IrNode]`: the third shape the export writes is a bare node tree (see types.ts ScreenDoc).
-    const roots: IrNode[] = doc && Array.isArray(doc.nodes) ? doc.nodes : doc && doc.tree ? [doc.tree] : doc ? [doc as IrNode] : [];
-    for (const r of roots) walkWithHidden(r, (n, c) => {
+    for (const r of screenRoots(doc)) walkWithHidden(r, (n, c) => {
       if (n.type !== "INSTANCE" || !n.mainComponent) return;
       const mc = n.mainComponent;
       const id = mc.setKey || mc.key;
@@ -271,13 +278,10 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
 // DriftLintModule) can apply the same map gate as the CLI below from this one module.
 export { driftLint, validateMap, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
-// The CLI's inputs are files the user named (readJsonFile -> unknown). The MAP goes through
-// map-validate.ts's full validator (below, in the CLI): the old "is it an object" guard let
-// {"components":{"X":null}} through to driftLint, which died on it with a TypeError and a stack. A
-// catalog is any JSON object whose `components`, when present, is an array; anything else behaves as
-// the JS did with a non-object: no components.
-function isCatalogLike(x: unknown): x is ComponentsCatalog { return isJsonObject(x) && (x.components === undefined || Array.isArray(x.components)); }
-function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
+// The CLI's inputs are files the user named. The MAP goes through map-validate.ts's full validator
+// (below): the old "is it an object" guard let {"components":{"X":null}} through to driftLint, which
+// died on it with a TypeError and a stack. The catalog and the screens are checked by their
+// doc-guards.ts / export-shape.ts guards as they are read — a wrong file is a one-line error, exit 2.
 
 // CLI: node design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
 //        [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]
@@ -285,35 +289,27 @@ function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
 // since the split and has no `components` array (see bridge/design-system-layout.js).
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
-  const maxAgeIdx = argv.indexOf("--max-age");
+  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
+  // --screen is repeatable: a build usually spans a screen plus its modals, and the question
+  // "how much of this can I reuse" is about all of them together.
+  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
+  const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, () => parseArgs({ args: argv, options: OPTIONS, allowPositionals: true }));
+  if (flags.help) { console.log(USAGE); process.exit(0); }
   let maxAgeHours: number | undefined;
-  if (maxAgeIdx !== -1) {
-    maxAgeHours = Number(argv[maxAgeIdx + 1]);
+  if (flags["max-age"] !== undefined) {
+    maxAgeHours = Number(flags["max-age"]);
     if (!(maxAgeHours > 0)) { console.error("--max-age expects a positive number of hours"); process.exit(2); }
-    argv.splice(maxAgeIdx, 2);
   } else if (process.env.DRIFT_MAX_AGE_HOURS) {
     maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
     if (!(maxAgeHours > 0)) { console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours"); process.exit(2); }
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
+  const screenFiles: string[] = flags.screen || [];
 
-  // --screen is repeatable: a build usually spans a screen plus its modals, and the question
-  // "how much of this can I reuse" is about all of them together.
-  const screenFiles: string[] = [];
-  for (;;) {
-    const i = argv.indexOf("--screen");
-    if (i === -1) break;
-    const v = argv[i + 1];
-    if (!v) { console.error("--screen expects a path to a screen export"); process.exit(2); }
-    screenFiles.push(v);
-    argv.splice(i, 2);
-  }
-
-  const [mapFile, catalogFile] = argv;
-  if (!mapFile || !catalogFile) { console.error("usage: node design-to-code/drift-lint.ts <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]"); process.exit(2); }
-  const catalogRaw = readJsonFile(catalogFile, "component catalog", NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  assertNotManifest(catalogRaw, catalogFile, "components", "design-system/components.local.json");
-  const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
+  const [mapFile, catalogFile] = positionals;
+  if (!mapFile || !catalogFile) { console.error(USAGE); process.exit(2); }
+  const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
+    NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
   // Validate BEFORE linting: driftLint trusts the map's shape. Printed like the lint's own errors,
   // one per line, and exit 1 — the same code a lint error gets (2 is kept for usage mistakes).
@@ -323,7 +319,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     console.error(`\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`map-validate.js ${mapFile}\`.`);
     process.exit(1);
   }
-  const map = mapRaw as CodeConnectMap; // validateMap passed: it IS a CodeConnectMap (see isCodeConnectMap)
+  if (!isCodeConnectMap(mapRaw)) process.exit(1); // unreachable: validateMap just passed (isCodeConnectMap IS that check)
+  const map = mapRaw;
   const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
@@ -334,7 +331,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // The number a builder is actually asking for. Printed last, because it is the headline.
   let screenFail = false;
   if (screenFiles.length) {
-    const docs = screenFiles.map((f) => { const d = readJsonFile(f, "screen export"); return isScreenDocLike(d) ? d : null; });
+    const docs = screenFiles.map((f) => readDocFile(f, "screen export", isScreenDoc));
     const cov = screenCoverage(map, catalog, docs);
     if (!cov.distinct) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
@@ -387,8 +384,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const run = async () => {
     if (fileKey && token) {
       try {
-        const live = await checkLiveFreshness(fileKey, token, catalog && catalog.exportedAt);
-        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog && catalog.exportedAt}) — it is confirmed stale, not just old.`);
+        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
+        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) — it is confirmed stale, not just old.`);
       } catch (e) {
         console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
       }
