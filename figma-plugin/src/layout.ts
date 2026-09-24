@@ -40,7 +40,15 @@ const ALIGN: Record<AlignKey, FlexAlign> = {
 };
 function flexIntent(src: FlexLike): LayoutSpec {
   const l: LayoutSpec = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
-  if (src.itemSpacing) l.gap = src.itemSpacing;
+  // Figma Help Center, "Guide to auto layout" (article 31289464393751): gap can be a number, or
+  // "Auto — choose from Between, Around, and Evenly auto spacing options", which "match CSS property
+  // values space-between, space-evenly and space-around respectively." Under those three modes the
+  // stored itemSpacing is unused slack Figma keeps around, not a real gap, so we drop it here.
+  const isAutoSpacing =
+    src.primaryAxisAlignItems === "SPACE_BETWEEN" ||
+    src.primaryAxisAlignItems === "SPACE_EVENLY" ||
+    src.primaryAxisAlignItems === "SPACE_AROUND";
+  if (src.itemSpacing && !isAutoSpacing) l.gap = src.itemSpacing;
   const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
   if (pad.some((p) => p)) l.padding = pad;
   if (src.primaryAxisAlignItems && src.primaryAxisAlignItems !== "MIN") l.justifyContent = ALIGN[src.primaryAxisAlignItems];

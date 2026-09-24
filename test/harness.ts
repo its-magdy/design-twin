@@ -382,6 +382,32 @@ const sandbox = context as unknown as Sandbox;
   const counterOut = await sandbox.serialize(counterFrame, 0, false);
   ok("[counterAxisAlignItems] CENTER -> alignItems: center (unchanged)", counterOut.layout!.alignItems === "center");
 
+  // ---- itemSpacing under an "auto gap" distribution mode is Figma's unused slack, not a real gap:
+  // https://help.figma.com/hc/en-us/articles/31289464393751 (article 31289464393751), "Guide to auto
+  // layout" — Between/Evenly/Around "match CSS property values space-between, space-evenly and
+  // space-around respectively", and Figma spaces children by dividing free space, not the stored
+  // itemSpacing. So all three must NOT emit `gap`, while a plain CENTER frame still emits it.
+  const betweenSlack = { type: "FRAME", name: "BetweenSlack", visible: true, id: "al:4", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "SPACE_BETWEEN", counterAxisAlignItems: "MIN", children: [] };
+  const betweenSlackOut = await sandbox.serialize(betweenSlack, 0, false);
+  ok("[SPACE_BETWEEN] itemSpacing is slack -> no gap", betweenSlackOut.layout!.gap === undefined);
+  const evenlySlack = { type: "FRAME", name: "EvenlySlack", visible: true, id: "al:5", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "SPACE_EVENLY", counterAxisAlignItems: "MIN", children: [] };
+  const evenlySlackOut = await sandbox.serialize(evenlySlack, 0, false);
+  ok("[SPACE_EVENLY] itemSpacing is slack -> no gap", evenlySlackOut.layout!.gap === undefined);
+  const aroundSlack = { type: "FRAME", name: "AroundSlack", visible: true, id: "al:6", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
+  const aroundSlackOut = await sandbox.serialize(aroundSlack, 0, false);
+  ok("[SPACE_AROUND] itemSpacing is slack -> no gap", aroundSlackOut.layout!.gap === undefined);
+  const centerGap = { type: "FRAME", name: "CenterGap", visible: true, id: "al:7", width: 100, height: 20,
+    layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "MIN", children: [] };
+  const centerGapOut = await sandbox.serialize(centerGap, 0, false);
+  ok("[CENTER] itemSpacing is a real gap -> gap: 12", centerGapOut.layout!.gap === 12);
+
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
   ok("text run numeric weight from segment fontWeight", txt.runs![1].font.weightValue === 700);

@@ -13,7 +13,8 @@ Output
 - `flexDirection:"row"` → `Row`; `"column"` → `Column`; `flexWrap:"wrap"` → `Wrap(spacing:, runSpacing:)`.
 - `gap:N` → `spacing: N` (Flutter 3.27+) or `SizedBox(width/height: N)` between children.
 - `padding:[t,r,b,l]` (PHYSICAL) → `Padding(padding: EdgeInsetsDirectional.fromSTEB(l, t, r, b))`.
-- `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween`); `alignItems` → `crossAxisAlignment`
+- `justifyContent` → `mainAxisAlignment` (`start/center/end/spaceBetween/spaceEvenly/spaceAround`);
+  `alignItems` → `crossAxisAlignment`
   (`"baseline"` → `CrossAxisAlignment.baseline` **plus** the required `textBaseline:
   TextBaseline.alphabetic` — a `Row` asserts without it).
 - `widthMode:"fill"` → `Expanded`/`Flexible` in the main axis, `double.infinity` width in the cross axis;

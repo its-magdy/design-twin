@@ -72,7 +72,8 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
   A container of several children with no auto layout → you must infer the flow; ask how it should
   resize if not obvious. `layout.inferred` → Figma guessed flex; sanity-check against the screenshot.
 - **Spacing values.** `gap`, `padding [t,r,b,l]`, `rowGap`/`columnGap`, `justifyContent`
-  (`space-between` = "auto" gap), `alignItems` incl. `baseline`. Negative gaps = overlap.
+  (`space-between`/`space-evenly`/`space-around` = "auto" gap), `alignItems` incl. `baseline`.
+  Negative gaps = overlap.
 - **Out-of-flow children.** `absolute:true` inside auto layout (badges, FABs, overlays) — what are
   they pinned to, and do they move with RTL?
 - **Grid.** `layout.display:"grid"` tracks and spans vs `layoutGrids` (column guides) — the latter

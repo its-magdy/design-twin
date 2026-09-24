@@ -16,7 +16,8 @@ Output
   directional, so this is what mirrors the layout under RTL. Only use `.padding(.leading, …)` — never
   reach for a physical-left equivalent.
 - `justifyContent:"center"` → center in stack (add `Spacer()`s or set frame alignment);
-  `"space-between"` → `Spacer()` between children.
+  `"space-between"` → `Spacer()` between children; `"space-evenly"`/`"space-around"` → the same, plus a
+  `Spacer()` before the first and after the last child (edge space too).
 - `alignItems` → the stack's `alignment:` argument (`.leading/.center/.trailing`);
   `"baseline"` → `HStack(alignment: .firstTextBaseline)`.
 - `widthMode:"fill"` → `.frame(maxWidth: .infinity)`; `"hug"` → natural size; `"fixed"` → `.frame(width: N)`.

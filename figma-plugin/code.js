@@ -793,7 +793,8 @@
   };
   function flexIntent(src) {
     const l = { display: "flex", flexDirection: src.layoutMode === "VERTICAL" ? "column" : "row" };
-    if (src.itemSpacing) l.gap = src.itemSpacing;
+    const isAutoSpacing = src.primaryAxisAlignItems === "SPACE_BETWEEN" || src.primaryAxisAlignItems === "SPACE_EVENLY" || src.primaryAxisAlignItems === "SPACE_AROUND";
+    if (src.itemSpacing && !isAutoSpacing) l.gap = src.itemSpacing;
     const pad = [src.paddingTop, src.paddingRight, src.paddingBottom, src.paddingLeft];
     if (pad.some((p) => p)) l.padding = pad;
     if (src.primaryAxisAlignItems && src.primaryAxisAlignItems !== "MIN") l.justifyContent = ALIGN[src.primaryAxisAlignItems];
