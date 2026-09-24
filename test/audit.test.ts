@@ -291,15 +291,12 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
       { valuesByMode: { Mode1: 8 } }, { valuesByMode: { Mode1: 16 } }, { valuesByMode: { Mode1: 24 } },
     ] }],
   } as unknown as TokensDoc; // ts-port: hand-built fixture
-  // The test has always passed the bare components ARRAY here (not the {components} catalog); audit() reads
-  // `opts.catalog.components`, so this runs with no component catalog. Kept byte-for-byte at runtime.
-  const componentsArray = catalog.components as unknown as ComponentsCatalog; // de-any: degenerate input the test always passed
-  const withDefault = audit([{ doc: screen, label: "s" }], { catalog: componentsArray, designSystem: { tokens: dsTokens } });
+  const withDefault = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens } });
   check("[grid] the default (no --grid given) is recorded as assumed", withDefault.gridAssumed === true && withDefault.grid === 4);
   check("[grid] an 8px design-system spacing scale is detected and reported as a mismatch", withDefault.gridMismatch === 8);
   check("[grid] the markdown headline names the real step and suggests --grid 8", /grid 4px .*8px.*--grid 8/.test(toMarkdown(withDefault).split("\n")[2]));
 
-  const withExplicit = audit([{ doc: screen, label: "s" }], { catalog: componentsArray, designSystem: { tokens: dsTokens }, grid: 8 });
+  const withExplicit = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens }, grid: 8 });
   check("[grid] passing --grid explicitly turns gridAssumed off and reports no mismatch", withExplicit.gridAssumed === false && withExplicit.gridMismatch === null);
   check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(toMarkdown(withExplicit).split("\n")[2]));
 }

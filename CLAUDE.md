@@ -18,5 +18,5 @@ CLI/MCP surface, read these directly rather than guessing:
 - `ARCHITECTURE.md` — the two front-ends over one bridge (CLI = batch reads to disk; MCP = the same
   reads as live tools + the only write path, `figma_write`), plugin two-context model, security.
 
-In this repo, `dtwin` is `node bridge/figma-pull.js` (not on PATH unless the package is installed
-elsewhere) — e.g. `node bridge/figma-pull.js --list`.
+In this repo, `dtwin` is `node bridge/src/figma-pull.ts` (not on PATH unless the package is installed
+elsewhere) — e.g. `node bridge/src/figma-pull.ts --list`.

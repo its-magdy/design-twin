@@ -707,21 +707,18 @@ const bootDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-boot-"));
 const catalogFile = path.join(bootDir, "components.local.json");
 const mapFile = path.join(bootDir, "codeconnect.local.json");
 fs.writeFileSync(catalogFile, JSON.stringify({ components: [{ type: "COMPONENT", key: "k-btn", id: "1:2", name: "Button", props: {} }] }));
-// de-any: the merge check below hand-sets status "confirmed", which is not a MapStatus (active|deprecated|needs-review) —
-// the map is read with status widened to string so that write (and its read-back) type-checks unchanged.
-type MapView = Omit<CodeConnectMap, "components"> & { components: Record<string, Omit<MapEntry, "status"> & { status?: string }> };
 check("--out writes the map file and keeps stdout clean", (() => {
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
   return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && (JSON.parse(fs.readFileSync(mapFile, "utf8")) as CodeConnectMap).components["k-btn"].status === "needs-review";
 })());
 check("re-running --out MERGES into the existing map — hand edits survive", (() => {
-  const map = JSON.parse(fs.readFileSync(mapFile, "utf8")) as MapView;
+  const map = JSON.parse(fs.readFileSync(mapFile, "utf8")) as CodeConnectMap;
   map.components["k-btn"].code.module = "@/ui/Button";
-  map.components["k-btn"].status = "confirmed";
+  map.components["k-btn"].status = "active"; // a hand edit: a real MapStatus, not the bootstrap default
   fs.writeFileSync(mapFile, JSON.stringify(map));
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
-  const after = (JSON.parse(fs.readFileSync(mapFile, "utf8")) as MapView).components["k-btn"];
-  return r.status === 0 && after.code.module === "@/ui/Button" && after.status === "confirmed" && /merged/.test(r.stderr);
+  const after = (JSON.parse(fs.readFileSync(mapFile, "utf8")) as CodeConnectMap).components["k-btn"];
+  return r.status === 0 && after.code.module === "@/ui/Button" && after.status === "active" && /merged/.test(r.stderr);
 })());
 check("without --out it still prints to stdout (back-compat)", (() => {
   const r = spawnSync(process.execPath, [BOOT, catalogFile], { encoding: "utf8" });

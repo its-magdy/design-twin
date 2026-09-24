@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { ok, report } from "./assert.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc,
-  Paint, Effect, VariableValue, RadiusCorners, JsonValue,
+  Paint, Effect, VariableValue, RadiusCorners,
 } from "../bridge/src/doc-types.ts";
 import type { ExportResult, ExportAsset } from "../bridge/src/write-out.ts";
 import type { LibrariesReply } from "../bridge/src/figma-pull.ts";
@@ -160,16 +160,6 @@ const flatEffect = (e: Effect): AnyOf<Effect> => e;
 /** A variable's per-mode value's alias target — `undefined` for a raw value, like `.aliasOf` on it was. */
 const aliasOf = (v: VariableValue): string | undefined => (typeof v === "object" ? v.aliasOf : undefined);
 
-/** util.ts easingCurve()'s cubic-bezier params — `unknown` in the contract (Transition.cubicBezier). */
-interface CubicBezier { x1: number; y1: number; x2: number; y2: number }
-/** motion.ts collectMotion's shape — the contract types IrNode.motion as an opaque JsonObject. */
-interface MotionTrack { base?: JsonValue; op?: string; keyframes?: Array<{ t: number; value: JsonValue; easing?: { type: string; cubicBezier?: CubicBezier } }> }
-interface MotionView {
-  timelines?: Array<{ id: string; duration: number }>;
-  manualTracks?: Record<string, MotionTrack>;
-  animations?: Record<string, MotionTrack>;
-  styles?: Array<{ name: string; styleId: string; duration?: number; timelineOffset?: number }>;
-}
 
 const MIXED = Symbol("figma.mixed");
 
@@ -485,7 +475,7 @@ const sandbox = context as unknown as Sandbox;
   ok("text run bound variable -> token name", txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary");
   ok("effect bound variable -> token name", rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad");
   ok("transition matchLayers carried", btn.reactions![0].actions![0].transition!.matchLayers === true);
-  ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && (btn.reactions![0].actions![0].transition!.cubicBezier as CubicBezier).x1 === 0.4);
+  ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && btn.reactions![0].actions![0].transition!.cubicBezier!.x1 === 0.4);
   const btnComp = ds.components.find((c) => c.name === "Button");
   ok("component description captured", btnComp && btnComp.description === "Primary action button");
   ok("INSTANCE_SWAP preferredValues captured", btnComp && btnComp.props!.Icon && btnComp.props!.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props!.Icon.preferredValues) && btnComp.props!.Icon.preferredValues.length === 2);
@@ -581,7 +571,7 @@ const sandbox = context as unknown as Sandbox;
   ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start!.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
   const sel3 = await sandbox.collectSelection({ motion: true });
-  const m3 = sel3.screen.nodes[0].motion as MotionView | undefined;
+  const m3 = sel3.screen.nodes[0].motion;
   ok("motion timelines captured (opt-in)", m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5);
   ok("motion keyframe track: base + keyframes + values", m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100);
   ok("motion keyframe custom cubic-bezier easing carried", m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing!.cubicBezier!.x1 === 0.4);
