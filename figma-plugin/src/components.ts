@@ -5,6 +5,7 @@ import type {
   DesignSystemDoc, StyleMeta, RadiusCorners, LayoutGridSpec, PaintStyle as IrPaintStyle, TextStyle as IrTextStyle,
   EffectStyle as IrEffectStyle, GridStyle as IrGridStyle,
 } from "../../bridge/src/doc-types.ts";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 import { propName, propType, errMsg, nonEmpty, putNonEmpty, round, exportedAt, isList } from "./util";
 import { warn, loadAllPages, runOpts } from "./state";
 import { checkCancelled, enterPage } from "./progress";
@@ -225,7 +226,7 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
               const d = defs[k];
               // Keep the REAL #uid key + type + default (needed to address TEXT/BOOL/SWAP/SLOT props).
               const p: ComponentPropDef = { key: k, type: propType(d.type) };
-              if (d.type === "VARIANT") { p.options = d.variantOptions; variantCombos *= (d.variantOptions ? d.variantOptions.length : 1); }
+              if (d.type === "VARIANT") { if (d.variantOptions !== undefined) p.options = d.variantOptions; variantCombos *= (d.variantOptions ? d.variantOptions.length : 1); }
               if (d.defaultValue !== undefined) p.default = d.defaultValue;
               // INSTANCE_SWAP and SLOT: the curated set of components allowed -> a typed enum.
               // plugin-api.d.ts 1.139.0 L9594 (editComponentProperty): "`preferredValues` is only supported
@@ -439,32 +440,32 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
     // Paint styles carry their ACTUAL colors, not just a name.
     // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
     // variable silently lost that link — the binding is what makes it a token rather than a hex.
-    Promise.all(paint.map(async (s): Promise<IrPaintStyle> => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap(s.boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
+    Promise.all(paint.map(async (s): Promise<IrPaintStyle> => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) }))),
     Promise.all(
       text.map(async (s): Promise<IrTextStyle> => ({
           name: s.name,
           size: s.fontSize,
           font: s.fontName && s.fontName.family,
           weight: s.fontName && s.fontName.style,
-          lineHeight: lineH(s.lineHeight),
-          letterSpacing: letterS(s.letterSpacing),
-          case: s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : undefined,
-          decoration: s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : undefined,
-          paragraphSpacing: s.paragraphSpacing || undefined,
-          paragraphIndent: s.paragraphIndent || undefined,
-          leadingTrim: s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : undefined,
-          listSpacing: s.listSpacing || undefined,
+          ...ifDefined("lineHeight", lineH(s.lineHeight)),
+          ...ifDefined("letterSpacing", letterS(s.letterSpacing)),
+          ...ifDefined("case", s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : undefined),
+          ...ifDefined("decoration", s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : undefined),
+          ...ifDefined("paragraphSpacing", s.paragraphSpacing || undefined),
+          ...ifDefined("paragraphIndent", s.paragraphIndent || undefined),
+          ...ifDefined("leadingTrim", s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : undefined),
+          ...ifDefined("listSpacing", s.listSpacing || undefined),
           // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
           // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
           // one, minus the mixed guard: a TextStyle is uniform by definition.
-          textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO"
-            ? String(s.textWrapStyle).toLowerCase() : undefined,
-        tokens: await resolveBoundMap(s.boundVariables),
-        description: s.description || undefined,
+          ...ifDefined("textWrap", s.textWrapStyle && s.textWrapStyle !== "AUTO"
+            ? String(s.textWrapStyle).toLowerCase() : undefined),
+        ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+        ...ifDefined("description", s.description || undefined),
         ...(await styleMeta(s)),
       }))
     ),
-    Promise.all(effect.map(async (s): Promise<IrEffectStyle> => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap(s.boundVariables), description: s.description || undefined, ...(await styleMeta(s)) }))),
+    Promise.all(effect.map(async (s): Promise<IrEffectStyle> => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || undefined), ...(await styleMeta(s)) }))),
   ]);
   const styles = {
     paint: paintStyles,
@@ -475,9 +476,9 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
     grid: await Promise.all(
       grid.map(async (s): Promise<IrGridStyle> => ({
         name: s.name,
-        grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g): g is LayoutGridSpec => !!g) : undefined,
-        tokens: await resolveBoundMap(s.boundVariables),
-        description: s.description || undefined,
+        ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g): g is LayoutGridSpec => !!g) : undefined),
+        ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+        ...ifDefined("description", s.description || undefined),
         ...(await styleMeta(s)),
       }))
     ),
@@ -499,17 +500,17 @@ export async function buildDesignSystem(opts?: { asLibrary?: string }, serialize
     if (!fileKey) hygiene.push("figma.fileKey unavailable — the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
     source = {
       role: "library",
-      libraryName: (opts && opts.asLibrary) || (figma.root && figma.root.name) || undefined,
-      fileKey,
+      ...ifDefined("libraryName", (opts && opts.asLibrary) || (figma.root && figma.root.name) || undefined),
+      ...ifDefined("fileKey", fileKey),
       collectionKeys: vars.collections.map((c) => c.key).filter((k): k is string => !!k),
     };
   }
 
   return {
     exportedAt: exportedAt(),
-    file: (figma.root && figma.root.name) || undefined,
-    source,
-    colorProfile, // legacy | srgb | display_p3 — whether emitted colors should be sRGB or wide-gamut
+    ...ifDefined("file", (figma.root && figma.root.name) || undefined),
+    ...ifDefined("source", source),
+    ...ifDefined("colorProfile", colorProfile), // legacy | srgb | display_p3 — whether emitted colors should be sRGB or wide-gamut
     collections: vars.collections,
     variables: vars.variables,
     styles,

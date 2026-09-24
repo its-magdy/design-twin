@@ -1,6 +1,7 @@
 // Auto Layout / Grid -> flex/grid intent. Reads either a real frame OR node.inferredAutoLayout.
 import type { LayoutSpec, LayoutGridSpec, GridTrack, FlexAlign } from "../../bridge/src/doc-types.ts";
 import { round, lower } from "./util";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // Build flex intent from any auto-layout-shaped source (a real frame OR node.inferredAutoLayout —
 // both carry the same fields via AutoLayoutMixin, so a small structural interface covers either).
@@ -69,7 +70,7 @@ function flexIntent(src: FlexLike): LayoutSpec {
 // A Figma LayoutGrid (column/row grid or uniform grid) -> a compact descriptor.
 export function simplifyGrid(g: LayoutGrid): LayoutGridSpec | undefined {
   if (!g) return undefined;
-  const o: LayoutGridSpec = { pattern: g.pattern ? lower(g.pattern) : undefined };
+  const o: LayoutGridSpec = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : undefined) };
   // sectionSize is the cell size of a uniform GRID and the column/row width of ROWS/COLUMNS (there it is
   // ignored by Figma only when alignment is STRETCH — RowsColsLayoutGrid in the typings) — read it for all.
   if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
@@ -85,7 +86,7 @@ export function simplifyGrid(g: LayoutGrid): LayoutGridSpec | undefined {
 
 // A GridTrackSize ({ type:'FLEX'|'FIXED'|'HUG', value?:number }) -> compact track descriptor.
 function simplifyTrack(t: GridTrackSize): GridTrack {
-  const o: GridTrack = { type: t.type ? lower(t.type) : undefined };
+  const o: GridTrack = { ...ifDefined("type", t.type ? lower(t.type) : undefined) };
   if (typeof t.value === "number") o.value = round(t.value);
   return o;
 }

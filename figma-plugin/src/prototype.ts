@@ -4,11 +4,12 @@
 // each branch below narrows on `.type` (or `.mediaAction`) before reading its fields.
 import type { Action as IrAction, Reaction as IrReaction, Transition as IrTransition } from "../../bridge/src/doc-types.ts";
 import { easingCurve, xy, isList } from "./util";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 import { varName, nodeNameLookup, getCollection } from "./state";
 
 // A prototype Transition -> compact descriptor (type/direction/duration + the exact easing curve).
 function simplifyTransition(tr: Transition): IrTransition {
-  const t: IrTransition = { type: tr.type ? tr.type.toLowerCase() : undefined };
+  const t: IrTransition = { ...ifDefined("type", tr.type ? tr.type.toLowerCase() : undefined) };
   if ("direction" in tr) {
     // DirectionalTransition — the only variant carrying direction/matchLayers.
     t.direction = tr.direction.toLowerCase();

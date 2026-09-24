@@ -7,6 +7,7 @@ import type {
 } from "../../bridge/src/doc-types.ts";
 import { round, rgbaToHex, easingCurve, xy, nonEmpty, putNonEmpty, asJson, isList } from "./util";
 import { varName } from "./state";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // A KeyframeValue (discriminated on `type`) -> a compact readable value. The switch is exhaustive over
 // the typings' union (lint: switch-exhaustiveness-check) so a new member is a compile-time prompt; the
@@ -70,7 +71,7 @@ async function motionEasing(ez: MotionEasing | VariableAlias | undefined): Promi
 async function keyframes(list: ReadonlyArray<ManualKeyframe> | undefined): Promise<MotionKeyframe[] | undefined> {
   if (!isList(list) || !list.length) return undefined;
   return Promise.all(list.map(async (k) => {
-    const o: MotionKeyframe = { t: round(k.timelinePosition), value: keyframeValue(k.value) }; // t = timeline position (s)
+    const o: MotionKeyframe = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) }; // t = timeline position (s)
     const ez = await motionEasing(k.easing);
     if (ez) o.easing = ez;
     return o;
@@ -81,7 +82,8 @@ async function keyframes(list: ReadonlyArray<ManualKeyframe> | undefined): Promi
 async function manualTrack(binding: ManualKeyframeBinding | undefined): Promise<MotionTrack | undefined> {
   if (!binding || typeof binding !== "object") return undefined;
   const o: MotionTrack = {};
-  if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
+  const base = keyframeValue(binding.baseValue); // undefined in, undefined out
+  if (base !== undefined) o.base = base;
   const kf = await keyframes(binding.keyframes);
   if (kf) o.keyframes = kf;
   return o;
@@ -91,7 +93,8 @@ async function manualTrack(binding: ManualKeyframeBinding | undefined): Promise<
 async function animationTrack(binding: KeyframeBinding | undefined): Promise<MotionAnimation | undefined> {
   if (!binding || typeof binding !== "object") return undefined;
   const o: MotionAnimation = {};
-  if (binding.baseValue !== undefined) o.base = keyframeValue(binding.baseValue);
+  const base = keyframeValue(binding.baseValue); // undefined in, undefined out
+  if (base !== undefined) o.base = base;
   if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
   if (isList(binding.tracks) && binding.tracks.length) {
     o.tracks = await Promise.all(binding.tracks.map(async (t) => {

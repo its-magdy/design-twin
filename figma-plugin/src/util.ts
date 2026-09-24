@@ -1,5 +1,6 @@
 // Pure helpers shared across the extractor. No Figma API calls here.
 import type { JsonObject, JsonValue, XY, CubicBezier, ComponentPropType } from "../../bridge/src/doc-types.ts";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // The filesystem-boundary sanitiser lives in pages-layout.js, which names the page dirs and layer
 // files this plugin's own download path writes — esbuild inlines that module into the bundle (main.ts
@@ -115,8 +116,9 @@ export function rgbaToHex(c: { r: number; g: number; b: number; a?: number }): s
   return c.a !== undefined && c.a < 1 ? `${hex}${to(c.a)}` : hex;
 }
 
-// A visible SOLID paint -> hex (folding its opacity into the alpha channel).
-export const solidHex = (p: { color: RGB; opacity?: number }): string => rgbaToHex({ ...p.color, a: p.opacity });
+// A visible SOLID paint -> hex (folding its opacity into the alpha channel). r/g/b are listed rather than
+// spread so the `a` key comes only from opacity, as when it was `a: p.opacity`.
+export const solidHex = (p: { color: RGB; opacity?: number }): string => rgbaToHex({ r: p.color.r, g: p.color.g, b: p.color.b, ...ifDefined("a", p.opacity) });
 
 // First visible SOLID paint of an array -> hex (used for text run colors).
 export function solidFromFills(fills: ReadonlyArray<Paint> | PluginAPI["mixed"] | null | undefined): string | undefined {

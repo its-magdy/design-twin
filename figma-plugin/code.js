@@ -192,7 +192,7 @@
     const hex = `#${to(c.r)}${to(c.g)}${to(c.b)}`;
     return c.a !== void 0 && c.a < 1 ? `${hex}${to(c.a)}` : hex;
   }
-  var solidHex = (p) => rgbaToHex({ ...p.color, a: p.opacity });
+  var solidHex = (p) => rgbaToHex({ r: p.color.r, g: p.color.g, b: p.color.b, ...ifDefined("a", p.opacity) });
   function solidFromFills(fills) {
     if (!fills || fills === figma.mixed || !Array.isArray(fills)) return void 0;
     const s = fills.find((f) => f.visible !== false && f.type === "SOLID");
@@ -372,10 +372,10 @@
     const now = Date.now();
     if (!force && now - lastPost < MIN_INTERVAL_MS) return;
     lastPost = now;
-    post({ type: "progress", phase, source: running.source, label: running.label, page, ...extra });
+    post({ type: "progress", phase, source: running.source, label: running.label, ...ifDefined("page", page), ...extra });
   }
   function enterPage(phase, index, of, name, pageId, extra) {
-    page = { index, of, name, pageId };
+    page = { index, of, name, ...ifDefined("pageId", pageId) };
     progress(phase, extra, true);
   }
 
@@ -943,7 +943,7 @@
   }
   function simplifyGrid(g) {
     if (!g) return void 0;
-    const o = { pattern: g.pattern ? lower(g.pattern) : void 0 };
+    const o = { ...ifDefined("pattern", g.pattern ? lower(g.pattern) : void 0) };
     if (typeof g.sectionSize === "number") o.size = round(g.sectionSize);
     if (g.pattern !== "GRID") {
       if (typeof g.gutterSize === "number") o.gutter = round(g.gutterSize);
@@ -955,7 +955,7 @@
     return o;
   }
   function simplifyTrack(t) {
-    const o = { type: t.type ? lower(t.type) : void 0 };
+    const o = { ...ifDefined("type", t.type ? lower(t.type) : void 0) };
     if (typeof t.value === "number") o.value = round(t.value);
     return o;
   }
@@ -1210,7 +1210,10 @@
     }
     if (pendingPublish.length) {
       const st = await Promise.all(pendingPublish.map((p) => publishOf2(p.obj)));
-      for (let i = 0; i < pendingPublish.length; i++) if (st[i]) pendingPublish[i].rec.publish = st[i];
+      for (let i = 0; i < pendingPublish.length; i++) {
+        const s = st[i];
+        if (s) pendingPublish[i].rec.publish = s;
+      }
     }
     const collPublish = {};
     if (asLibrary) {
@@ -1227,16 +1230,16 @@
         name: c.name,
         modes: c.modes.map((m) => m.name),
         // Which mode is the base/`:root` default (vs. the override theme) — codegen otherwise guesses.
-        default: modeName[c.defaultModeId] || void 0,
+        ...ifDefined("default", modeName[c.defaultModeId] || void 0),
         theming: c.modes.length > 1,
         // Extended collection (its modes inherit from a root collection via parentModeId) — codegen
         // should treat it as an override layer, not a standalone theme. Flag it; deep parent-mode
         // resolution (mode.parentModeId -> root mode) is deferred.
-        extended: c.isExtension === true ? true : void 0,
-        hiddenFromPublishing: c.hiddenFromPublishing === true ? true : void 0,
-        key: c.key || void 0,
+        ...ifDefined("extended", c.isExtension === true ? true : void 0),
+        ...ifDefined("hiddenFromPublishing", c.hiddenFromPublishing === true ? true : void 0),
+        ...ifDefined("key", c.key || void 0),
         // durable cross-file collection identity
-        publish: collPublish[c.id] || void 0
+        ...ifDefined("publish", collPublish[c.id] || void 0)
         // library mode only
       })),
       variables,
@@ -1262,7 +1265,7 @@
     return o;
   }
   function mediaPaint(f, type, hash, transform) {
-    const o = paintExtras(f, { type, scaleMode: f.scaleMode ? lower(f.scaleMode) : void 0 });
+    const o = paintExtras(f, { type, ...ifDefined("scaleMode", f.scaleMode ? lower(f.scaleMode) : void 0) });
     if (hash) o.hash = hash;
     if (f.scaleMode === "TILE" && typeof f.scalingFactor === "number") o.scale = f.scalingFactor;
     if (typeof f.rotation === "number" && f.rotation) o.rotation = f.rotation;
@@ -1660,7 +1663,7 @@
 
   // src/prototype.ts
   function simplifyTransition(tr) {
-    const t = { type: tr.type ? tr.type.toLowerCase() : void 0 };
+    const t = { ...ifDefined("type", tr.type ? tr.type.toLowerCase() : void 0) };
     if ("direction" in tr) {
       t.direction = tr.direction.toLowerCase();
       t.matchLayers = tr.matchLayers;
@@ -1940,7 +1943,8 @@
       const c = collections[i];
       const lib = c.libraryName || UNKNOWN_LIBRARY;
       const entry = { key: c.key, name: c.name };
-      if (counts[i] !== void 0) entry.variableCount = counts[i];
+      const count = counts[i];
+      if (count !== void 0) entry.variableCount = count;
       const list = byLibrary.get(lib);
       if (list) list.push(entry);
       else byLibrary.set(lib, [entry]);
@@ -1980,8 +1984,7 @@
       name: figma.root && figma.root.name || "(this file)",
       kind: "local",
       variableCollections: localCollections,
-      componentCount: void 0,
-      // local components are enumerated properly by the design-system catalog
+      // no componentCount: local components are enumerated properly by the design-system catalog
       note: "this file \u2014 its local components are listed in full by the design-system export, not counted here"
     });
     const seenSources = /* @__PURE__ */ new Set();
@@ -1994,7 +1997,7 @@
         name: libName,
         kind: "library",
         variableCollections: collections,
-        componentCount,
+        ...ifDefined("componentCount", componentCount),
         note: componentCount === void 0 ? "variable collections are complete; component attribution is impossible via the API \u2014 any components from this library are counted under '" + UNKNOWN_LIBRARY + "'" : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers \u2014 library components cannot be enumerated"
       });
     }
@@ -2009,7 +2012,7 @@
         note: source === UNKNOWN_LIBRARY ? "components consumed from published libraries that the API cannot attribute to a source (only VARIABLES carry a libraryName). componentCount counts DISTINCT components USED IN THIS FILE, not what any library offers." : "componentCount counts components USED IN THIS FILE (attributed by the local registry), not everything the library offers"
       });
     }
-    return { exportedAt: exportedAt(), file: figma.root && figma.root.name || void 0, libraries, warnings: warnings2 };
+    return { exportedAt: exportedAt(), ...ifDefined("file", figma.root && figma.root.name || void 0), libraries, warnings: warnings2 };
   }
 
   // src/components.ts
@@ -2168,7 +2171,7 @@
                 const d = defs[k];
                 const p = { key: k, type: propType(d.type) };
                 if (d.type === "VARIANT") {
-                  p.options = d.variantOptions;
+                  if (d.variantOptions !== void 0) p.options = d.variantOptions;
                   variantCombos *= d.variantOptions ? d.variantOptions.length : 1;
                 }
                 if (d.defaultValue !== void 0) p.default = d.defaultValue;
@@ -2325,31 +2328,31 @@
       // Paint styles carry their ACTUAL colors, not just a name.
       // `tokens` (boundVariables) was read for TEXT styles only, so a paint style bound to a color
       // variable silently lost that link — the binding is what makes it a token rather than a hex.
-      Promise.all(paint.map(async (s) => ({ name: s.name, paints: await simplifyFills(s.paints), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) }))),
+      Promise.all(paint.map(async (s) => ({ name: s.name, ...ifDefined("paints", await simplifyFills(s.paints)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) }))),
       Promise.all(
         text.map(async (s) => ({
           name: s.name,
           size: s.fontSize,
           font: s.fontName && s.fontName.family,
           weight: s.fontName && s.fontName.style,
-          lineHeight: lineH(s.lineHeight),
-          letterSpacing: letterS(s.letterSpacing),
-          case: s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0,
-          decoration: s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0,
-          paragraphSpacing: s.paragraphSpacing || void 0,
-          paragraphIndent: s.paragraphIndent || void 0,
-          leadingTrim: s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0,
-          listSpacing: s.listSpacing || void 0,
+          ...ifDefined("lineHeight", lineH(s.lineHeight)),
+          ...ifDefined("letterSpacing", letterS(s.letterSpacing)),
+          ...ifDefined("case", s.textCase && s.textCase !== "ORIGINAL" ? s.textCase.toLowerCase() : void 0),
+          ...ifDefined("decoration", s.textDecoration && s.textDecoration !== "NONE" ? s.textDecoration.toLowerCase() : void 0),
+          ...ifDefined("paragraphSpacing", s.paragraphSpacing || void 0),
+          ...ifDefined("paragraphIndent", s.paragraphIndent || void 0),
+          ...ifDefined("leadingTrim", s.leadingTrim && s.leadingTrim !== "NONE" ? String(s.leadingTrim).toLowerCase() : void 0),
+          ...ifDefined("listSpacing", s.listSpacing || void 0),
           // TextStyle.textWrapStyle (Plugin API 2026-08-14) — AUTO | BALANCE | PRETTY; AUTO is the
           // default and is skipped. Maps 1:1 onto CSS `text-wrap`. Same read as text.ts's per-node
           // one, minus the mixed guard: a TextStyle is uniform by definition.
-          textWrap: s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0,
-          tokens: await resolveBoundMap(s.boundVariables),
-          description: s.description || void 0,
+          ...ifDefined("textWrap", s.textWrapStyle && s.textWrapStyle !== "AUTO" ? String(s.textWrapStyle).toLowerCase() : void 0),
+          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+          ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)
         }))
       ),
-      Promise.all(effect.map(async (s) => ({ name: s.name, effects: await simplifyEffects(s.effects), tokens: await resolveBoundMap(s.boundVariables), description: s.description || void 0, ...await styleMeta(s) })))
+      Promise.all(effect.map(async (s) => ({ name: s.name, ...ifDefined("effects", await simplifyEffects(s.effects)), ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)), ...ifDefined("description", s.description || void 0), ...await styleMeta(s) })))
     ]);
     const styles = {
       paint: paintStyles,
@@ -2360,9 +2363,9 @@
       grid: await Promise.all(
         grid.map(async (s) => ({
           name: s.name,
-          grids: Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g) => !!g) : void 0,
-          tokens: await resolveBoundMap(s.boundVariables),
-          description: s.description || void 0,
+          ...ifDefined("grids", Array.isArray(s.layoutGrids) ? s.layoutGrids.map(simplifyGrid).filter((g) => !!g) : void 0),
+          ...ifDefined("tokens", await resolveBoundMap(s.boundVariables)),
+          ...ifDefined("description", s.description || void 0),
           ...await styleMeta(s)
         }))
       )
@@ -2378,16 +2381,16 @@
       if (!fileKey) hygiene.push("figma.fileKey unavailable \u2014 the library output directory falls back to a name slug, so a RENAMED library will land in a new directory");
       source = {
         role: "library",
-        libraryName: opts && opts.asLibrary || figma.root && figma.root.name || void 0,
-        fileKey,
+        ...ifDefined("libraryName", opts && opts.asLibrary || figma.root && figma.root.name || void 0),
+        ...ifDefined("fileKey", fileKey),
         collectionKeys: vars.collections.map((c) => c.key).filter((k) => !!k)
       };
     }
     return {
       exportedAt: exportedAt(),
-      file: figma.root && figma.root.name || void 0,
-      source,
-      colorProfile,
+      ...ifDefined("file", figma.root && figma.root.name || void 0),
+      ...ifDefined("source", source),
+      ...ifDefined("colorProfile", colorProfile),
       // legacy | srgb | display_p3 — whether emitted colors should be sRGB or wide-gamut
       collections: vars.collections,
       variables: vars.variables,
@@ -2440,7 +2443,7 @@
   async function keyframes(list) {
     if (!isList(list) || !list.length) return void 0;
     return Promise.all(list.map(async (k) => {
-      const o = { t: round(k.timelinePosition), value: keyframeValue(k.value) };
+      const o = { t: round(k.timelinePosition), ...ifDefined("value", keyframeValue(k.value)) };
       const ez = await motionEasing(k.easing);
       if (ez) o.easing = ez;
       return o;
@@ -2449,7 +2452,8 @@
   async function manualTrack(binding) {
     if (!binding || typeof binding !== "object") return void 0;
     const o = {};
-    if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
     const kf = await keyframes(binding.keyframes);
     if (kf) o.keyframes = kf;
     return o;
@@ -2457,7 +2461,8 @@
   async function animationTrack(binding) {
     if (!binding || typeof binding !== "object") return void 0;
     const o = {};
-    if (binding.baseValue !== void 0) o.base = keyframeValue(binding.baseValue);
+    const base = keyframeValue(binding.baseValue);
+    if (base !== void 0) o.base = base;
     if (typeof binding.timelineDuration === "number") o.duration = round(binding.timelineDuration);
     if (isList(binding.tracks) && binding.tracks.length) {
       o.tracks = await Promise.all(binding.tracks.map(async (t) => {
@@ -2885,7 +2890,7 @@
     if (!tree) return { tree: null };
     const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
     if (modes) tree.resolvedModes = modes;
-    return { tree, ref: ref || void 0, dev: dev || void 0 };
+    return { tree, ...ifDefined("ref", ref || void 0), ...ifDefined("dev", dev || void 0) };
   }
   async function rootTree(node) {
     const { tree, ref, dev } = await serializeWithRefs(node);
@@ -3008,9 +3013,9 @@
   async function pageBackground(page2) {
     const out = {};
     const bg = await simplifyFills(page2.backgrounds);
-    if (!isDefaultBg(bg)) out.background = bg;
+    if (bg && !isDefaultBg(bg)) out.background = bg;
     const proto = await simplifyFills(page2.prototypeBackgrounds);
-    if (!isDefaultBg(proto)) out.prototypeBackground = proto;
+    if (proto && !isDefaultBg(proto)) out.prototypeBackground = proto;
     return nonEmpty(out);
   }
   function countNodes(tree) {
@@ -3030,7 +3035,7 @@
         if (!Array.isArray(ms) || !ms.length) continue;
         const side = (e) => e ? { nodeId: e.node && e.node.id, side: e.side } : void 0;
         for (const m of ms) {
-          const o = { page: page2.name, pageId: page2.id, start: side(m.start), end: side(m.end) };
+          const o = { page: page2.name, pageId: page2.id, ...ifDefined("start", side(m.start)), ...ifDefined("end", side(m.end)) };
           if (m.freeText) o.text = m.freeText;
           if (m.offset != null) o.offset = m.offset;
           out.push(o);
@@ -3135,7 +3140,7 @@
       file: figma.root.name,
       depth,
       pages,
-      manifest: { pages: pages.length, frames: depth >= 2 ? frameCount : void 0, warnings: localWarnings }
+      manifest: { pages: pages.length, ...ifDefined("frames", depth >= 2 ? frameCount : void 0), warnings: localWarnings }
     };
   }
   async function listChildren(rawId) {
@@ -3243,7 +3248,7 @@
         checkCancelled();
         const { tree, ref, dev } = await serializeWithRefs(f);
         if (tree) {
-          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, reference: ref, devResources: dev });
+          layers.push({ name: f.name, id: f.id, page: page2.name, pageId: page2.id, tree, ...ifDefined("reference", ref), ...ifDefined("devResources", dev) });
           index.push({
             name: f.name,
             id: f.id,
@@ -3268,11 +3273,11 @@
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
       scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-      page: allPages || pages.length !== 1 ? void 0 : pages[0].name,
-      pages: allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0,
-      flows: flows.length ? flows : void 0,
-      pageSettings: pageSettings.length ? pageSettings : void 0,
-      measurements: measurements || void 0,
+      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : pages[0].name),
+      ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
+      ...ifDefined("flows", flows.length ? flows : void 0),
+      ...ifDefined("pageSettings", pageSettings.length ? pageSettings : void 0),
+      ...ifDefined("measurements", measurements || void 0),
       index,
       layers,
       manifest: manifest()
@@ -3290,7 +3295,7 @@
     };
     return {
       color: { r: chan(h.slice(0, 2)), g: chan(h.slice(2, 4)), b: chan(h.slice(4, 6)) },
-      opacity: h.length >= 8 ? chan(h.slice(6, 8)) : void 0
+      ...ifDefined("opacity", h.length >= 8 ? chan(h.slice(6, 8)) : void 0)
     };
   }
   function solidPaint(hex) {
@@ -3350,7 +3355,7 @@
         if (!nd) throw new Error("setFill: no node with id '" + op.nodeId + "' (invalid or removed)");
         if (!("fills" in nd)) throw new Error("setFill: node '" + nd.name + "' (" + nd.type + ") has no fills");
         nd.fills = [solidPaint(op.color || "")];
-        return { id: op.nodeId };
+        return ifDefined("id", op.nodeId);
       }
       case "setText": {
         const nd = op.nodeId ? await figma.getNodeByIdAsync(op.nodeId) : null;
@@ -3358,7 +3363,7 @@
         if (nd.type !== "TEXT") throw new Error("setText: node '" + nd.name + "' is a " + nd.type + ", not TEXT");
         await loadNodeFonts(nd);
         nd.characters = op.text || "";
-        return { id: op.nodeId };
+        return ifDefined("id", op.nodeId);
       }
       default:
         throw new Error("unknown write op: " + op.op);
@@ -3481,7 +3486,7 @@
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
       case "screenshot": {
         const a = req.args;
-        return serializeRun(() => collectScreenshot(a.nodeId, { scale: a.scale }), bridgeRun(req.cmd));
+        return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd));
       }
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -3564,7 +3569,7 @@
       ],
       layerFiles: batch,
       summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,
-      warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings
+      ...ifDefined("warnings", r.layersDoc.manifest && r.layersDoc.manifest.warnings)
     };
   });
   function notifySelection() {

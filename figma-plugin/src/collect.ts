@@ -13,6 +13,7 @@ import { safe, errMsg, exportedAt, nonEmpty, isList } from "./util";
 // doesn't recognise passes through and keeps working as before rather than becoming a new hard failure
 // — the caller's own "node not found" error is the better message either way.
 import { toNodeId } from "../../bridge/src/node-id.ts";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 import { NO_NODE_ID, type ListPagesArgs } from "../../bridge/src/commands.ts";
 import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
@@ -79,7 +80,7 @@ async function serializeWithRefs(node: SceneNode): Promise<{ tree: IrNode | null
   if (!tree) return { tree: null };
   const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
   if (modes) tree.resolvedModes = modes;
-  return { tree, ref: ref || undefined, dev: dev || undefined };
+  return { tree, ...ifDefined("ref", ref || undefined), ...ifDefined("dev", dev || undefined) };
 }
 
 // Serialize a root and attach the enrichment inline (the shape both single-scope collectors want).
@@ -262,9 +263,9 @@ function isDefaultBg(f: IrPaint[] | undefined): boolean {
 async function pageBackground(page: PageNode): Promise<Pick<PageSettings, "background" | "prototypeBackground"> | undefined> {
   const out: Pick<PageSettings, "background" | "prototypeBackground"> = {};
   const bg = await simplifyFills(page.backgrounds);
-  if (!isDefaultBg(bg)) out.background = bg;
+  if (bg && !isDefaultBg(bg)) out.background = bg;
   const proto = await simplifyFills(page.prototypeBackgrounds);
-  if (!isDefaultBg(proto)) out.prototypeBackground = proto;
+  if (proto && !isDefaultBg(proto)) out.prototypeBackground = proto;
   return nonEmpty(out);
 }
 
@@ -298,7 +299,7 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): IrMeasurement[] |
         // Always tagged, even for a single-page run. Emitting `page` only when targets.length > 1 gave
         // consumers two shapes for one field and made the single-page case the one where you cannot
         // tell WHICH page a redline came from without cross-referencing the doc's own scope.
-        const o: IrMeasurement = { page: page.name, pageId: page.id, start: side(m.start), end: side(m.end) };
+        const o: IrMeasurement = { page: page.name, pageId: page.id, ...ifDefined("start", side(m.start)), ...ifDefined("end", side(m.end)) };
         if (m.freeText) o.text = m.freeText;
         if (m.offset != null) o.offset = m.offset;
         out.push(o);
@@ -442,7 +443,7 @@ export async function listPages(opts?: ListPagesArgs): Promise<ListPagesResult> 
     file: figma.root.name,
     depth,
     pages,
-    manifest: { pages: pages.length, frames: depth >= 2 ? frameCount : undefined, warnings: localWarnings },
+    manifest: { pages: pages.length, ...ifDefined("frames", depth >= 2 ? frameCount : undefined), warnings: localWarnings },
   };
 }
 
@@ -647,7 +648,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
         // uniqueness constraint on it — Figma really does allow two pages named "Screens" (resolveOne
         // above refuses an ambiguous name for exactly that reason). Anything keyed on the NAME merges
         // those two distinct pages into one; the id is the stable identity. Name stays for display.
-        layers.push({ name: f.name, id: f.id, page: page.name, pageId: page.id, tree, reference: ref, devResources: dev });
+        layers.push({ name: f.name, id: f.id, page: page.name, pageId: page.id, tree, ...ifDefined("reference", ref), ...ifDefined("devResources", dev) });
         index.push({ name: f.name, id: f.id, type: f.type, page: page.name, pageId: page.id,
           nodes: countNodes(tree), bytes: JSON.stringify(tree).length });
       }
@@ -675,11 +676,11 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
     // whatever the user happens to be looking at).
     scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-    page: allPages || pages.length !== 1 ? undefined : pages[0].name,
-    pages: allPages || pages.length > 1 ? pages.map((p) => p.name) : undefined,
-    flows: flows.length ? flows : undefined,
-    pageSettings: pageSettings.length ? pageSettings : undefined,
-    measurements: measurements || undefined,
+    ...ifDefined("page", allPages || pages.length !== 1 ? undefined : pages[0].name),
+    ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : undefined),
+    ...ifDefined("flows", flows.length ? flows : undefined),
+    ...ifDefined("pageSettings", pageSettings.length ? pageSettings : undefined),
+    ...ifDefined("measurements", measurements || undefined),
     index,
     layers,
     manifest: manifest(),

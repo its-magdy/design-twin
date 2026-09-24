@@ -10,6 +10,7 @@
 // Extraction surface is grounded in the verified Figma Plugin API (dynamic-page async reads,
 // figma.mixed guards, defensive `in` checks). See ARCHITECTURE.md "Verified extraction API surface".
 import { errMsg } from "./util";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 // The pages/ layout is defined ONCE, in a dependency-free CJS module the Node CLI requires and
 // esbuild inlines here — see bridge/pages-layout.js.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
@@ -104,7 +105,7 @@ const runFull = (): Promise<void> =>
       ],
       layerFiles: batch,
       summary: `${layerFiles.length} layer(s) across ${meta.pageDirs.length} page(s), ${(r.designSystem.variables || []).length} vars, ${(r.designSystem.components || []).length} components, ${r.assets.length} asset(s)`,
-      warnings: r.layersDoc.manifest && r.layersDoc.manifest.warnings,
+      ...ifDefined("warnings", r.layersDoc.manifest && r.layersDoc.manifest.warnings),
     };
   });
 

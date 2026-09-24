@@ -22,6 +22,7 @@
 import type { CatalogComponent, ComponentPropDef } from "../../bridge/src/doc-types.ts";
 import { propName, propType, errMsg, nonEmpty, exportedAt } from "./util";
 import { warn, loadAllPages } from "./state";
+import { ifDefined } from "../../bridge/src/json-util.ts";
 
 // ---- listLibraries' reply (commands.ts ListLibrariesReply, rendered by bridge/src/figma-pull.ts)
 /** One variable collection of a library (or of this file). */
@@ -273,7 +274,8 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
     const c = collections[i];
     const lib = c.libraryName || UNKNOWN_LIBRARY;
     const entry: LibraryCollectionRow = { key: c.key, name: c.name };
-    if (counts[i] !== undefined) entry.variableCount = counts[i];
+    const count = counts[i];
+    if (count !== undefined) entry.variableCount = count;
     const list = byLibrary.get(lib);
     if (list) list.push(entry);
     else byLibrary.set(lib, [entry]);
@@ -327,7 +329,7 @@ export async function listLibraries(): Promise<LibrariesListing> {
     name: (figma.root && figma.root.name) || "(this file)",
     kind: "local",
     variableCollections: localCollections,
-    componentCount: undefined, // local components are enumerated properly by the design-system catalog
+    // no componentCount: local components are enumerated properly by the design-system catalog
     note: "this file — its local components are listed in full by the design-system export, not counted here",
   });
 
@@ -340,7 +342,7 @@ export async function listLibraries(): Promise<LibrariesListing> {
       name: libName,
       kind: "library",
       variableCollections: collections,
-      componentCount,
+      ...ifDefined("componentCount", componentCount),
       note:
         componentCount === undefined
           ? "variable collections are complete; component attribution is impossible via the API — any components from this library are counted under '" + UNKNOWN_LIBRARY + "'"
@@ -363,7 +365,7 @@ export async function listLibraries(): Promise<LibrariesListing> {
     });
   }
 
-  return { exportedAt: exportedAt(), file: (figma.root && figma.root.name) || undefined, libraries, warnings };
+  return { exportedAt: exportedAt(), ...ifDefined("file", (figma.root && figma.root.name) || undefined), libraries, warnings };
 }
 
 // No test-surface global here: main.ts imports listLibraries/collectLibraryComponents and exposes
