@@ -301,7 +301,7 @@ check("[A5] existing arg not mutated; output refreshes metadata + keeps code", a
 
 // ================= SECOND-ROUND: regressions from the fix pass + closed test gaps =================
 console.log("tokens — 2nd round:");
-check("[R1] OPACITY-scoped FLOAT emits unitless CSS (no px)", toCSS(tokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0.5 } }] })).includes("--opacity-disabled: 0.5;"));
+check("[R1] OPACITY-scoped FLOAT emits a percentage (Figma's 0–100 scale), never px", toCSS(tokens({ variables: [{ name: "opacity/disabled", type: "FLOAT", scopes: ["OPACITY"], values: { v: 50 } }] })).includes("--opacity-disabled: 50%;"));
 check("[R1] dimension FLOAT still gets px", toCSS(tokens({ variables: [{ name: "gap/lg", type: "FLOAT", values: { v: 24 } }] })).includes("--gap-lg: 24px;"));
 check("[R1b] zero FLOAT stays unitless 0", toCSS(tokens({ variables: [{ name: "gap/none", type: "FLOAT", values: { v: 0 } }] })).includes("--gap-none: 0;"));
 check("[R2] undefined-default value -> dedup vs emitted base (no duplicate override)", (toCSS(malformed<TokensDoc>({ collections: [{ name: "C", modes: ["Light", "Dark"], default: "Light", theming: true }], variables: [{ name: "bg", type: "COLOR", collection: "C", tier: "primitive", values: { Light: undefined, Dark: "#000000" } }] })).match(/#000000/g) || []).length === 1);
@@ -661,7 +661,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
       { name: "space/md", type: "FLOAT", collection: "Theme", values: { Light: 16, Dark: 16 } },
       { name: "radius/card", type: "FLOAT", collection: "Theme", scopes: ["CORNER_RADIUS"], values: { Light: 12, Dark: 12 } },
       { name: "text/body", type: "FLOAT", collection: "Theme", scopes: ["FONT_SIZE"], values: { Light: 14, Dark: 14 } },
-      { name: "opacity/disabled", type: "FLOAT", collection: "Theme", scopes: ["OPACITY"], values: { Light: 0.5, Dark: 0.5 } },
+      { name: "opacity/disabled", type: "FLOAT", collection: "Theme", scopes: ["OPACITY"], values: { Light: 50, Dark: 50 } },
     ],
   });
   const tw = toTailwind(twDs);
@@ -671,7 +671,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     /--color-figma-color-primary: #dec9ff;/.test(tw.text) && /--spacing-figma-space-md: 16px;/.test(tw.text)
     && /--radius-figma-radius-card: 12px;/.test(tw.text) && /--text-figma-text-body: 14px;/.test(tw.text));
   check("[tw] a unitless FLOAT matches no namespace — emitted as a plain --figma-* property rather than filed wrongly or dropped",
-    /\n {2}--figma-opacity-disabled: 0\.5;/.test(tw.text) && !/--spacing-figma-opacity-disabled/.test(tw.text));
+    /\n {2}--figma-opacity-disabled: 50%;/.test(tw.text) && !/--spacing-figma-opacity-disabled/.test(tw.text));
   check("[tw] an alias points at its TARGET's namespaced name, not the referrer's and not tokens.css's",
     /--color-figma-bg-side-menu: var\(--color-figma-gray-900\);/.test(tw.text));
   check("[tw] the file imports tailwind and opens a @theme block", /^@import "tailwindcss";/.test(tw.text) && /@theme \{/.test(tw.text));
@@ -861,6 +861,38 @@ console.log("tokens — non-scalar variable types:");
   check("[easing] toNative skips it with a warning instead of emitting a broken literal", !n.text.includes("[object Object]") && !/easeOut/.test(n.text) && n.warnings.some((m) => /ease\/out.*EASING/.test(m)));
 }
 
+// ---------- tokens: Figma's 0–100 opacity scale (REST API variables types: "An opacity percentage from 0 to 100") ----------
+console.log("tokens — opacity FLOATs are percentages:");
+{
+  const opDs = tokens({ variables: [
+    { name: "op/a", type: "FLOAT", scopes: ["OPACITY"], values: { v: 40 } },
+    { name: "op/hi", type: "FLOAT", scopes: ["COLOR_OPACITY"], values: { v: 120 } },
+    { name: "op/lo", type: "FLOAT", scopes: ["OPACITY"], values: { v: -5 } },
+    { name: "op/zero", type: "FLOAT", scopes: ["OPACITY"], values: { v: 0 } },
+    { name: "weight", type: "FLOAT", scopes: ["FONT_WEIGHT"], values: { v: 700 } },
+    { name: "gap", type: "FLOAT", scopes: ["GAP"], values: { v: 8 } }] });
+  const css = toCSS(opDs);
+  check("[pct] OPACITY-scoped 40 -> `40%` (a valid `opacity` and <alpha-value>)", css.includes("--op-a: 40%;"));
+  check("[pct] COLOR_OPACITY-scoped 120 -> clamped `100%`; OPACITY -5 -> clamped `0%`", css.includes("--op-hi: 100%;") && css.includes("--op-lo: 0%;"));
+  check("[pct] a 0 opacity keeps its `%` (`0%`, not the bare length-style 0)", css.includes("--op-zero: 0%;"));
+  check("[pct] FONT_WEIGHT 700 stays a bare number; a GAP FLOAT stays px", css.includes("--weight: 700;") && css.includes("--gap: 8px;"));
+  const lint = lintTokens(opDs);
+  check("[pct] each clamp is a lint warning (120 and -5), an in-range value is not",
+    lint.some((m) => /'op\/hi'.*120.*clamped to 100%/.test(m)) && lint.some((m) => /'op\/lo'.*-5.*clamped to 0%/.test(m)) && !lint.some((m) => /'op\/a'.*clamped/.test(m)));
+  const d = toDTCG(opDs);
+  check("[pct] DTCG keeps $type number + the VERBATIM number, and records unit: \"percent\"",
+    leafAt(d, "op.a").$type === "number" && leafAt(d, "op.a").$value === 40 && figmaExt(leafAt(d, "op.a")).unit === "percent"
+    && leafAt(d, "op.hi").$value === 120 && figmaExt(leafAt(d, "op.hi")).unit === "percent" && leafAt(d, "op.lo").$value === -5);
+  check("[pct] DTCG: the opacity leaf is exactly what it was plus unit: \"percent\"",
+    JSON.stringify(leafAt(d, "op.a")) === JSON.stringify({ $type: "number", $value: 40, $extensions: { "figma.com": { scopes: ["OPACITY"], unit: "percent" } } }));
+  check("[pct] DTCG: FONT_WEIGHT and dimension tokens get no unit extension",
+    figmaExt(leafAt(d, "weight")).unit === undefined && figmaExt(leafAt(d, "gap")).unit === undefined && leafAt(d, "weight").$value === 700);
+  check("[pct] a FONT_WEIGHT+OPACITY mix and a name-only opacity stay bare numbers (no scale evidence)",
+    toCSS(tokens({ variables: [{ name: "w/x", type: "FLOAT", scopes: ["FONT_WEIGHT", "OPACITY"], values: { v: 50 } }, { name: "Opacity/y", type: "FLOAT", scopes: ["ALL_SCOPES"], values: { v: 50 } }] }))
+      .includes("--w-x: 50;\n  --Opacity-y: 50;"));
+  check("[pct] opts.unitless overrides the scope (a bare number)", toCSS(opDs, { unitless: new Set(["op/a"]) }).includes("--op-a: 40;"));
+}
+
 // ---------- tokens: COMPOSED colour variables (Figma Update 139: colour + separate opacity, one or both aliases) ----------
 console.log("tokens — composed colours:");
 {
@@ -895,11 +927,37 @@ console.log("tokens — composed colours:");
     leafAt(base, "text.muted").$value === "{ink}" && figmaExt(leafAt(base, "text.muted")).opacity === 50
     && leafAt(dark, "text.muted").$value === "{ink}" && figmaExt(leafAt(dark, "text.muted")).opacity === "{opacity.60}");
   const css = toCSS(composed);
-  check("[composed] tokens.css writes the colour half (a var() or the hex), never [object Object]",
-    !css.includes("[object Object]") && css.includes("--text-muted: var(--ink);") && css.includes("--overlay-scrim: #000000;"));
+  const darkBlock = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  // color-mix(in srgb, <colour> <N%>, transparent): MDN color-mix, "adding transparency".
+  check("[composed] tokens.css: colour alias + number opacity -> color-mix(in srgb, var(--ink) 50%, transparent)",
+    !css.includes("[object Object]") && css.includes("--text-muted: color-mix(in srgb, var(--ink) 50%, transparent);"));
+  check("[composed] tokens.css: hex + opacity alias -> color-mix(in srgb, #000000 var(--opacity-60), transparent)",
+    css.includes("--overlay-scrim: color-mix(in srgb, #000000 var(--opacity-60), transparent);")
+    && darkBlock.includes("--overlay-scrim: color-mix(in srgb, #ffffff var(--opacity-60), transparent);"));
+  check("[composed] tokens.css: colour alias + opacity alias -> color-mix(in srgb, var(--ink) var(--opacity-60), transparent), and the opacity var is a percentage",
+    darkBlock.includes("--text-muted: color-mix(in srgb, var(--ink) var(--opacity-60), transparent);") && css.includes("--opacity-60: 60%;"));
+  const twc = toTailwind(composed).text;
+  check("[composed] theme.css: the same forms against the Tailwind names",
+    twc.includes("--color-figma-text-muted: color-mix(in srgb, var(--color-figma-ink) 50%, transparent);")
+    && twc.includes("--color-figma-overlay-scrim: color-mix(in srgb, #000000 var(--figma-opacity-60), transparent);")
+    && twc.includes("--figma-opacity-60: 60%;"));
   const lint = lintTokens(composed);
-  check("[composed] lint says tokens.css dropped the opacity (never silent), and calls no nested alias dangling",
-    lint.some((m) => /text\/muted.*composed colour/.test(m)) && !lint.some((m) => /undefined token/.test(m)));
+  check("[composed] lint no longer says the CSS dropped the opacity (it carries it), and calls no nested alias dangling",
+    !lint.some((m) => /composed colour/.test(m)) && !lint.some((m) => /undefined token/.test(m)));
+  // An opacity alias whose target's CSS is NOT a percentage (an unscoped FLOAT -> `40px`) would make
+  // color-mix() invalid, so that value alone falls back to the colour half — and says so.
+  const pxOp = tokens({ variables: [
+    { name: "ink", type: "COLOR", values: { v: "#111111" } },
+    { name: "fade", type: "FLOAT", values: { v: 40 } },
+    { name: "a", type: "COLOR", values: { v: { composed: { color: { aliasOf: "ink" }, opacity: { aliasOf: "fade" } } } } }] });
+  check("[composed] opacity alias to a non-percentage FLOAT: tokens.css keeps the colour half only, lint says so",
+    toCSS(pxOp).includes("--a: var(--ink);") && lintTokens(pxOp).some((m) => /'a'.*composed colour.*'fade'.*colour only/.test(m)));
+  const hot = tokens({ variables: [
+    { name: "ink", type: "COLOR", values: { v: "#111111" } },
+    { name: "a", type: "COLOR", values: { v: { composed: { color: { aliasOf: "ink" }, opacity: 150 } } } }] });
+  check("[composed] a number opacity above 100 is clamped to 100% in CSS (as Figma does), with a lint warning; DTCG keeps 150",
+    toCSS(hot).includes("--a: color-mix(in srgb, var(--ink) 100%, transparent);") && lintTokens(hot).some((m) => /'a'.*150.*clamped to 100%/.test(m))
+    && figmaExt(leafAt(toDTCG(hot), "a")).opacity === 150);
   check("[composed] a DANGLING nested alias is reported like a top-level one", lintTokens(tokens({ variables: [
     { name: "a", type: "COLOR", values: { v: { composed: { color: "#000000", opacity: { aliasOf: "gone/op" } } } } }] })).some((m) => /'a'.*undefined token 'gone\/op'/.test(m)));
   const n = toNative(composed, "swiftui");

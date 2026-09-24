@@ -670,8 +670,11 @@ export interface VariableAlias { aliasOf: string }
  * Figma's VariableComposedColor (plugin-typings 1.139, Update 139): a COLOR value authored as a colour
  * plus a SEPARATE opacity, where the colour, the opacity, or both are variable aliases. Each alias half
  * is emitted exactly like a top-level alias (`{aliasOf: <target name, or id when unresolvable>}`); a raw
- * colour is a hex string like any COLOR value; a raw opacity is Figma's number VERBATIM — not rescaled
- * (the typings call it "a separate opacity percentage" without stating the range, so no unit is assumed).
+ * colour is a hex string like any COLOR value; a raw opacity is Figma's number VERBATIM — not rescaled —
+ * on Figma's 0–100 scale: "An opacity percentage from 0 to 100, or an alias to a FLOAT variable" (REST API
+ * variables types, VariableComposedColor.opacity: https://developers.figma.com/docs/rest-api/variables-types/).
+ * An aliased opacity names a FLOAT on the same scale. How it combines with a colour whose own alpha is
+ * < 1 is not documented; design-to-code multiplies (alpha × opacity/100) — an inference.
  * The two members are Figma's two, so "neither half is an alias" is unrepresentable here too.
  */
 export type ComposedColor =

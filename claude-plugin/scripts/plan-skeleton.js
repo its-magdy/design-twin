@@ -208,6 +208,26 @@ function walkWithHidden(root, fn, opts) {
 import fs3 from "node:fs";
 import path from "node:path";
 
+// design-to-code/color.ts
+var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+function normHex(v) {
+  if (typeof v !== "string") return null;
+  const m = HEX.exec(v.trim());
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return "#" + (h.length <= 4 ? h.split("").map((c) => c + c).join("") : h);
+}
+function colorKey(v) {
+  const h = normHex(v);
+  return h === null ? null : h.length === 7 ? h + "ff" : h;
+}
+function parseHex(v) {
+  const k = colorKey(v);
+  if (k === null) return null;
+  const n = (i) => parseInt(k.slice(i, i + 2), 16);
+  return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
+}
+
 // design-to-code/read-json.ts
 import fs from "node:fs";
 
@@ -890,10 +910,22 @@ function resolver(sources, resolvedModes) {
       const r = resolve(target, depth + 1);
       return { value: r.value, mode, via: raw.aliasOf };
     }
-    if (raw && typeof raw === "object" && "composed" in raw) return { value: null, mode };
+    if (raw && typeof raw === "object" && "composed" in raw) {
+      const { color, opacity } = raw.composed;
+      const c = typeof color === "string" ? color : resolve(byName.get(color.aliasOf), depth + 1).value;
+      const o = typeof opacity === "number" ? opacity : resolve(byName.get(opacity.aliasOf), depth + 1).value;
+      return { value: composedHex(c, o), mode };
+    }
     return { value: normValue(v.type, raw), mode };
   }
   return (v) => resolve(v, 0);
+}
+function composedHex(color, opacity) {
+  const c = parseHex(color);
+  if (!c || typeof opacity !== "number" || !Number.isFinite(opacity)) return null;
+  const a = Math.round(c.a * (Math.min(100, Math.max(0, opacity)) / 100) * 255);
+  const to = (x) => x.toString(16).padStart(2, "0");
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
 }
 var isLegacyRgba = (v) => "r" in v;
 function normValue(type, raw) {

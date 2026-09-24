@@ -990,6 +990,7 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     if (typeof v.key === "string" && v.key) ext.key = v.key;
     if (isSentinel(v, bv)) ext.sentinel = { figmaValue: bv, meaning: "fully rounded \u2014 emitted as the platform idiom" };
     if (v.scopes && v.scopes.length) ext.scopes = v.scopes;
+    if (percentOpacity(v, opts)) ext.unit = "percent";
     if (v.codeSyntax && Object.keys(v.codeSyntax).length) ext.codeSyntax = v.codeSyntax;
     if (v.type === "BOOLEAN") ext.originalType = "boolean";
     if (Object.keys(ext).length) leaf.$extensions = { "figma.com": ext };
@@ -1024,17 +1025,36 @@ function unitDecision(variable, opts) {
   if (!narrowed && unitlessName(variable.name)) return "name";
   return "px";
 }
+var PERCENT_SCOPES = /* @__PURE__ */ new Set(["OPACITY", "COLOR_OPACITY"]);
+function percentOpacity(variable, opts) {
+  return variable.type === "FLOAT" && unitDecision(variable, opts) === "scopes" && (variable.scopes || []).every((s) => PERCENT_SCOPES.has(s));
+}
 function numberUnit(variable, opts) {
+  if (percentOpacity(variable, opts)) return "%";
   return unitDecision(variable, opts) === "px" ? "px" : "";
 }
-function cssValue(raw, unit, ref) {
+var pctOutOfRange = (n) => n < 0 || n > 100;
+var clampPct = (n) => Math.min(100, Math.max(0, n));
+var cssPercent = (s) => (pctOutOfRange(Number(s)) ? String(clampPct(Number(s))) : s) + "%";
+var NUMERIC_TEXT = /^-?\d+(?:\.\d+)?$/;
+function cssPercentVar(plan, v, opts, depth = 0) {
+  if (!v || depth > 8 || !percentOpacity(v, opts)) return false;
+  const vals = Object.values(v.values || {}).filter((x) => x !== void 0);
+  return vals.length > 0 && vals.every((x) => isAlias(x) ? cssPercentVar(plan, aliasTarget(plan, x.aliasOf, v), opts, depth + 1) : typeof x === "number" || typeof x === "string" && NUMERIC_TEXT.test(x));
+}
+function cssValue(raw, unit, ref, pctRef) {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
-  if (isComposed(raw)) return cssValue(raw.composed.color, unit, ref);
+  if (isComposed(raw)) {
+    const { color, opacity } = raw.composed;
+    const c = cssValue(color, "", ref);
+    const pct = isAlias(opacity) ? pctRef && pctRef(opacity.aliasOf) ? cssValue(opacity, "", ref) : null : cssPercent(String(opacity));
+    return pct === null ? c : `color-mix(in srgb, ${c} ${pct}, transparent)`;
+  }
   const e = isHexish(raw) ? normHex(raw) : null;
   if (e) return e;
-  const fmtNum = (s) => s === "0" ? "0" : unit ? s + unit : s;
+  const fmtNum = (s) => unit === "%" ? cssPercent(s) : s === "0" ? "0" : unit ? s + unit : s;
   if (typeof raw === "number") return fmtNum(String(raw));
-  if (typeof raw === "string" && /^-?\d+(?:\.\d+)?$/.test(raw)) return fmtNum(raw);
+  if (typeof raw === "string" && NUMERIC_TEXT.test(raw)) return fmtNum(raw);
   if (typeof raw === "boolean") return String(raw);
   if (typeof raw === "string") return cssEscapeText(raw);
   return String(raw);
@@ -1060,6 +1080,7 @@ function toCSS(designSystem, opts, notes) {
     const t = aliasTarget(plan, name, referrer);
     return t ? plan.id(t) : cssVarName(name);
   };
+  const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
   const perMode = nullProto();
   for (const v of vars) {
@@ -1073,12 +1094,12 @@ function toCSS(designSystem, opts, notes) {
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
     const varName = plan.id(v);
-    const r = ref(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r)};`);
+    const r = ref(v), p = pctRef(v);
+    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r)};`);
+      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r, p)};`);
     }
   }
   let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
@@ -1142,7 +1163,8 @@ function toTailwind(designSystem, opts, notes) {
       const t = aliasTarget(plan, n, v);
       return t ? plan.id(t) : "--" + TW_PREFIX + twSlug(n);
     };
-    const val = (raw) => cssValue(webNumber(v, raw), unit, ref);
+    const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
+    const val = (raw) => cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
@@ -1289,10 +1311,31 @@ function lintNames(designSystem, opts, warnings) {
       if (!names.has(segs(target).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${target}'`);
     }
   }
+  let plan = null;
   for (const v of vars) {
     if (v.type !== "COLOR") continue;
-    const m = Object.keys(v.values || {}).find((k) => isComposed(v.values[k]));
-    if (m !== void 0) warnings.push(`token '${v.name}' (mode ${m}) is a composed colour (colour + separate opacity); tokens.css/theme.css carry the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      if (!isComposed(raw)) continue;
+      const { opacity } = raw.composed;
+      if (isAlias(opacity)) {
+        plan = plan || cssPlan(designSystem);
+        if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); tokens.css/theme.css carry the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          break;
+        }
+      } else if (pctOutOfRange(opacity)) {
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+      }
+    }
+  }
+  for (const v of vars) {
+    if (!percentOpacity(v, opts)) continue;
+    for (const m of Object.keys(v.values || {})) {
+      const raw = v.values[m];
+      const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+    }
   }
   for (const v of vars) {
     if (v.type !== "STRING") continue;

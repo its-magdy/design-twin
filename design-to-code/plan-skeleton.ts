@@ -52,6 +52,7 @@ import type {
   PlanAnchor, PlanAuditGate, PlanComponentMatch, PlanComponentRow, PlanHiddenRoot, PlanTokenRow, PlanTokenVerdict, ScreenDoc, TokenKind, TokensDoc, Variable, VariableAlias,
   MatchInstance, VariableType,
 } from "./types.ts";
+import { parseHex } from "./color.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
@@ -192,11 +193,33 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
       const r = resolve(target, depth + 1);
       return { value: r.value, mode, via: raw.aliasOf };
     }
-    // A composed colour (colour + separate opacity, either an alias) has no single resolved value here.
-    if (raw && typeof raw === "object" && "composed" in raw) return { value: null, mode };
+    // A composed colour (doc-types ComposedColor): the colour half (alias -> resolved, hex as is) and
+    // the opacity half (a number, or an alias -> that FLOAT's resolved number) folded into ONE hex.
+    // Either half unresolvable -> null, as before.
+    if (raw && typeof raw === "object" && "composed" in raw) {
+      const { color, opacity } = raw.composed;
+      const c = typeof color === "string" ? color : resolve(byName.get(color.aliasOf), depth + 1).value;
+      const o = typeof opacity === "number" ? opacity : resolve(byName.get(opacity.aliasOf), depth + 1).value;
+      return { value: composedHex(c, o), mode };
+    }
     return { value: normValue(v.type, raw), mode };
   }
   return (v) => resolve(v, 0);
+}
+
+// A composed colour's one colour, as the "#rrggbb[aa]" normValue writes (opaque -> 6 digits); null when
+// either half did not resolve to a colour / a finite number. The opacity is a 0–100 percentage — "An
+// opacity percentage from 0 to 100, or an alias to a FLOAT variable" (REST API variables types,
+// VariableComposedColor.opacity: https://developers.figma.com/docs/rest-api/variables-types/) —
+// clamped as Figma clamps it (https://help.figma.com/hc/en-us/articles/14506821864087: negative -> 0%,
+// > 100 -> 100%). alpha = colour alpha × opacity/100 is an INFERENCE: Figma does not document how the
+// opacity combines with a colour whose own alpha is < 1 (same rule as cross-check.ts composedRgba).
+function composedHex(color: JsonValue | null, opacity: JsonValue | null): string | null {
+  const c = parseHex(color);
+  if (!c || typeof opacity !== "number" || !Number.isFinite(opacity)) return null;
+  const a = Math.round(c.a * (Math.min(100, Math.max(0, opacity)) / 100) * 255);
+  const to = (x: number): string => x.toString(16).padStart(2, "0");
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
 }
 
 // ts-port: legacy/producer-mismatch read kept as-is — a COLOR value spelled as {r,g,b,a} (the producer
