@@ -131,6 +131,10 @@ export interface ServeOptions {
   log?: (m: string) => void;
   idleMin?: number;
   signals?: boolean;
+  /** Install installCrashHandlers for this process. Defaults to `signals`: a serve() that owns the
+   *  process's signals owns its lifetime too (`dtwin serve`); a host with its own lifetime (the MCP
+   *  server passes signals:false) installs its own, and an in-process test passes false. */
+  crashHandlers?: boolean;
 }
 
 /** connect()'s answer when a daemon is live: its socket, and request functions bound to it. */
@@ -194,12 +198,36 @@ function unlinkOnExit(sock: string): () => void {
   return () => { exitUnlink.delete(sock); };
 }
 
+// Last-resort handlers for the LONG-LIVED processes only (the `dtwin serve` daemon, the MCP server) —
+// never a one-shot CLI run, where Node's default (print the stack, exit non-zero) is already right.
+// Both log ONE line through errMsg, so the cause reaches stderr the process's own log format.
+//  - uncaughtException: log, run `cleanup` (synchronous only), then exit 1. The Node docs are explicit
+//    that carrying on is unsafe: "The correct use of 'uncaughtException' is to perform synchronous
+//    cleanup of allocated resources (e.g. file descriptors, handles, etc) before shutting down the
+//    process. It is not safe to resume normal operation after 'uncaughtException'."
+//  - unhandledRejection: log only. A stray rejected promise (a tool whose caller went away, a late
+//    socket write) must not take down the user's whole stdio MCP session or a daemon mid-export with it.
+// Installed at most once per process: figma-mcp re-serves after every `dtwin stop`.
+let crashHandlersInstalled = false;
+export function installCrashHandlers(log: (m: string) => void, cleanup?: () => void): void {
+  if (crashHandlersInstalled) return;
+  crashHandlersInstalled = true;
+  process.on("unhandledRejection", (reason) => {
+    log("unhandled promise rejection (continuing): " + errMsg(reason));
+  });
+  process.on("uncaughtException", (e) => {
+    log("uncaught exception — exiting: " + errMsg(e));
+    if (cleanup) { try { cleanup(); } catch { /* exiting anyway */ } }
+    process.exit(1);
+  });
+}
+
 // Requests are SERIALIZED, not multiplexed. server-core's `pending` map is id-keyed and would happily
 // interleave them, but the plugin is single-threaded and its heavy commands mutate shared per-run
 // state (serializeRun in bridge.ts) — two concurrent exports interleave badly. One queue here means
 // the daemon behaves exactly like a sequence of one-shot CLI runs, which is the behaviour every
 // existing caller was written against.
-export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true }: ServeOptions = {}): Promise<{ sock: string; shutdown: () => void }> {
+export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true, crashHandlers = signals }: ServeOptions = {}): Promise<{ sock: string; shutdown: () => void }> {
   return assertNoDaemon(port).then((sock) => {
     try { fs.unlinkSync(sock); } catch { /* nothing to clean up */ }
 
@@ -319,6 +347,9 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     // leave the socket file behind for the next probe to trip over. One process-level hook, and this
     // socket is forgotten again on shutdown (the MCP server re-serves after every `dtwin stop`).
     else forgetExit = unlinkOnExit(sock);
+    // shutdown() is synchronous (closes the servers, unlinks the socket file), so it is exactly the
+    // "synchronous cleanup" the Node docs allow an uncaughtException handler before it exits.
+    if (crashHandlers) installCrashHandlers(log ?? ((m) => console.error("[dtwin] " + m)), shutdown);
 
     return new Promise<{ sock: string; shutdown: () => void }>((resolve, reject) => {
       const onListening = () => {

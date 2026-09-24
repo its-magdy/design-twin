@@ -26,7 +26,7 @@ import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
 import type { Stamped } from "../bridge/src/write-out.ts";
-import type { ClientRow } from "../bridge/src/server-core.ts";
+import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
 import type { Cmd, DesignSystemReply, FullExportReply, ScreenReply, ScreenshotReply } from "../bridge/src/commands.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
 import type { DaemonStatus } from "../bridge/src/daemon.ts";
@@ -324,6 +324,88 @@ void (async () => {
     ok("[bad-token] the right token still connects normally afterwards", bridge.listClients().length === 1);
     good.close();
     bridge.close();
+  }
+
+  // ------------------------------------------------- server-core: our own HTTP server (ws noServer mode)
+  // The handshake check moved from ws's verifyClient hook into the HTTP server's 'upgrade' listener
+  // (ws docs: "Use of verifyClient is discouraged"). A plain HTTP request must still get the 426 ws's
+  // internal server answered — `dtwin doctor` identifies a bridge on a port by exactly that — and a
+  // bad Host is still a 403 at the HTTP layer.
+  {
+    const port = nextPort++;
+    const bridge = core.createBridge(port);
+    await bridge.listening;
+    const plain = await new Promise<number | undefined>((res) => {
+      http.get({ host: "127.0.0.1", port, path: "/" }, (r) => { r.resume(); res(r.statusCode); }).on("error", () => res(undefined));
+    });
+    console.log("\nserver-core — HTTP server + upgrade admission:");
+    ok("[upgrade] a plain HTTP request is answered 426 Upgrade Required, as ws's own server did", plain === 426);
+    const hostRefused = await new Promise<number | undefined>((res) => {
+      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", headers: { host: "evil.example" } });
+      c.on("unexpected-response", (_req, r) => res(r.statusCode));
+      c.on("open", () => { c.close(); res(undefined); });
+      c.on("error", () => {});
+    });
+    ok("[upgrade] a non-loopback Host is refused 403 in the upgrade listener, even with the right token", hostRefused === 403);
+    bridge.close();
+  }
+
+  // ------------------------------------------------- server-core: heartbeat (ws README ping/pong)
+  // A peer that silently stopped answering (lid closed, cable pulled) used to sit in the registry as a
+  // live client forever, so every command routed to it waited out its whole timeout. The bridge now
+  // pings on an interval and terminates a client that missed the previous pong. A short heartbeatMs
+  // stands in for the 30 s default; `autoPong: false` is a client whose network stack never answers.
+  {
+    const port = nextPort++;
+    const HB = 150;
+    const bridge = core.createBridge(port, { heartbeatMs: HB });
+    const open = (autoPong: boolean) => new Promise<WebSocket>((res, rej) => {
+      const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${TOKEN}`, { origin: "null", autoPong });
+      c.on("open", () => res(c));
+      c.on("error", rej);
+    });
+    const alive = await open(true);
+    const dead = await open(false);
+    let deadClosedAt = 0;
+    const openedAt = Date.now();
+    dead.on("close", () => { deadClosedAt = Date.now(); });
+    ok("[heartbeat] both clients are registered at first", bridge.listClients().length === 2);
+    // An in-flight request on the dead client must fail on termination, not wait out its budget.
+    let hbErr: Error | undefined;
+    const inflight = bridge.request("exportFull", {}, 20000, "c2").catch((e: unknown) => { hbErr = asErr(e); });
+    await new Promise((r) => setTimeout(r, HB * 5));
+    await inflight;
+    console.log("\nserver-core — heartbeat:");
+    ok("[heartbeat] a client that never answers pings is terminated within two intervals (+ slack)",
+      deadClosedAt > 0 && deadClosedAt - openedAt <= HB * 3 + 200);
+    ok("[heartbeat] and is removed from the client registry", bridge.listClients().map((c) => c.connId).join() === "c1");
+    ok("[heartbeat] its in-flight request fails fast with the disconnect diagnosis", !!hbErr && /disconnected before replying/.test(hbErr.message));
+    ok("[heartbeat] a client that answers pings survives many intervals", alive.readyState === WebSocket.OPEN && bridge.isConnected());
+    alive.close();
+    bridge.close();
+  }
+
+  // ------------------------------------------------- server-core: progress ticks reach the request's listener
+  // The plugin relays `{type:"progress", phase, page, nodes, assets}` during a bridge-triggered export;
+  // request()'s optional onProgress hears every tick from THAT connection (figma-mcp forwards them as
+  // MCP notifications/progress). A malformed counter is dropped to null, never passed through.
+  {
+    const { bridge: b, client: c } = await connectedBridge();
+    c.on("message", (raw: RawData) => {
+      const m = JSON.parse(raw.toString()) as CommandFrame;
+      c.send(JSON.stringify({ type: "progress", phase: "pages", page: { index: 1, of: 2, name: "Home" }, nodes: 40, assets: "x" }));
+      c.send(JSON.stringify({ type: "progress", phase: "assets" }));
+      setTimeout(() => c.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true } })), 30);
+    });
+    const ticks: ProgressTick[] = [];
+    await b.request("ping", {}, 2000, null, undefined, (t) => ticks.push(t));
+    console.log("\nserver-core — progress listener:");
+    ok("[progress] every tick sent while the request was in flight reaches onProgress", ticks.length === 2);
+    ok("[progress] the tick carries the plugin's phase/page/counters",
+      ticks[0].phase === "pages" && ticks[0].page?.index === 1 && ticks[0].page.of === 2 && ticks[0].page.name === "Home" && ticks[0].nodes === 40);
+    ok("[progress] a non-numeric counter and an absent page read as null", ticks[0].assets === null && ticks[1].page === null && ticks[1].nodes === null);
+    c.close();
+    b.close();
   }
 
   // ------------------------------------------------- server-core: MULTI-CLIENT routing (two files)
@@ -1819,7 +1901,9 @@ void (async () => {
   ok("[daemon] a stale socket file reads as NO daemon, not as a hang",
     (await daemon.connect(D_PORT)) === null);
 
-  await daemon.serve(fakeBridge, { port: D_PORT });
+  // crashHandlers:false — the process-wide unhandledRejection handler only LOGS, which inside this
+  // suite would turn a crashed test into a silent pass. It is tested in a subprocess below.
+  await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false });
   ok("[daemon] --serve starts over a stale socket file", !!(await daemon.connect(D_PORT)));
   const dstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the pid, port and whether the PLUGIN is connected",
@@ -1827,7 +1911,7 @@ void (async () => {
 
   // Starting a second daemon must REFUSE, not silently steal the socket out from under the first.
   let dblErr: Error | undefined;
-  try { await daemon.serve(fakeBridge, { port: D_PORT }); } catch (e) { dblErr = asErr(e); }
+  try { await daemon.serve(fakeBridge, { port: D_PORT, crashHandlers: false }); } catch (e) { dblErr = asErr(e); }
   ok("[daemon] a second --serve is refused rather than stealing the live socket",
     !!dblErr && /already running/.test(dblErr.message));
   ok("[daemon] and the refusal names the way out", !!dblErr && /--stop/.test(dblErr.message));
@@ -1935,6 +2019,51 @@ void (async () => {
     ok("[is-main] a module asking about a DIFFERENT file's URL answers false", run([mismatch]).stdout.trim() === "false");
     const noArgv = run(["--input-type=module", "-e", `import { isMainFallback } from ${JSON.stringify(isMainUrl)}; console.log(String(isMainFallback(import.meta.url)));`]);
     ok("[is-main] with no argv[1] (node -e) it answers false rather than throwing", noArgv.status === 0 && noArgv.stdout.trim() === "false");
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // ---------------------------------------------------------------- daemon.ts: installCrashHandlers
+  // The long-lived processes (`dtwin serve`, the MCP server) log a stray rejection and carry on, and
+  // log an uncaught exception, run their synchronous cleanup and exit 1 (Node docs: resuming after
+  // 'uncaughtException' is unsafe). Process-wide handlers, so driven in subprocesses.
+  {
+    console.log("\ndaemon.ts — installCrashHandlers:");
+    const daemonUrl = pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/daemon.ts")).href;
+    const run = (body: string) => spawnSync(process.execPath, ["--input-type=module", "-e",
+      `import { installCrashHandlers } from ${JSON.stringify(daemonUrl)};\n` +
+      `installCrashHandlers((m) => console.error("[t] " + m), () => console.log("cleanup ran"));\n` +
+      `installCrashHandlers((m) => console.error("[second] " + m));\n` + body], { encoding: "utf8" });
+    const rej = run(`Promise.reject(new Error("boom"));\nsetTimeout(() => console.log("still alive"), 50);`);
+    const rejLines = rej.stderr.split("\n").filter((l) => l.trim() && !/ExperimentalWarning|--trace-warnings/.test(l));
+    ok("[crash] an unhandled rejection is logged as ONE line through errMsg", rejLines.length === 1 && rejLines[0] === "[t] unhandled promise rejection (continuing): boom");
+    ok("[crash] and the process does NOT exit — it keeps running and ends normally", rej.status === 0 && rej.stdout.includes("still alive") && !rej.stdout.includes("cleanup ran"));
+    const exc = run(`setTimeout(() => { throw new Error("kaboom"); }, 10);\nsetTimeout(() => console.log("still alive"), 200);`);
+    ok("[crash] an uncaught exception is logged as one line, then the process exits 1",
+      exc.status === 1 && exc.stderr.includes("[t] uncaught exception — exiting: kaboom") && !exc.stdout.includes("still alive"));
+    ok("[crash] its synchronous cleanup runs before the exit", exc.stdout.includes("cleanup ran"));
+    ok("[crash] installed once per process — a second install adds no second handler", !rej.stderr.includes("[second]") && !exc.stderr.includes("[second]"));
+  }
+
+  // ---------------------------------------------------------------- write-out.ts: atomic writeJson
+  // tmp-then-rename, so a run killed mid-write leaves the previous file whole. The bytes on disk are
+  // exactly what the plain writeFileSync wrote, and no temp file is left behind.
+  {
+    console.log("\nwrite-out.ts — atomic writeJson:");
+    const wo = await import("../bridge/src/write-out.ts");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-atomic-"));
+    fs.mkdirSync(path.join(dir, "pages", "home"), { recursive: true });
+    const doc = { a: 1, nested: { list: [1, "two", null], text: "ünïcødé" } };
+    const logged: string[] = [];
+    wo.writeJson(dir, "pages/home/doc.json", { old: true }, true);
+    wo.writeJson(dir, "pages/home/doc.json", doc, false, (m) => logged.push(m));
+    const target = path.join(dir, "pages", "home", "doc.json");
+    ok("[atomic] the written bytes are byte-identical to JSON.stringify(obj, null, 2), replacing the old file",
+      fs.readFileSync(target).equals(Buffer.from(JSON.stringify(doc, null, 2))));
+    ok("[atomic] no .tmp-* file is left behind", fs.readdirSync(path.dirname(target)).join() === "doc.json");
+    ok("[atomic] the log line is unchanged (the final path, not the temp one)", logged.join() === "wrote " + target);
+    let threw = false;
+    try { wo.writeJson(dir, "missing-dir/doc.json", doc, true); } catch { threw = true; }
+    ok("[atomic] a failed write still throws, and leaves no temp file", threw && !fs.existsSync(path.join(dir, "missing-dir")));
     fs.rmSync(dir, { recursive: true, force: true });
   }
 

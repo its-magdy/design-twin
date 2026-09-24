@@ -7,12 +7,14 @@
 
 import { WebSocketServer, WebSocket } from "ws";
 import type { RawData, VerifyClientCallbackAsync } from "ws";
+import http from "node:http";
 import type { IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
 import crypto from "node:crypto";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import { errMsg } from "./errmsg.ts";
-import { TIMEOUTS, exportTimeout } from "./timeouts.ts";
+import { TIMEOUTS, exportTimeout, HEARTBEAT_MS } from "./timeouts.ts";
 // The ONLY ports the plugin can reach (its manifest's allowedDomains) — shared with doctor.ts.
 import { ALLOWED_PORTS } from "./ports.ts";
 // The command/reply contract shared with the plugin: `request()` is typed per command from it, and
@@ -25,8 +27,9 @@ import type { Cmd, Commands } from "./commands.ts";
 // this module's surface is unchanged.
 import { BRIDGE_VERSION, pluginStalenessNote, daemonRowStalenessNote } from "./staleness.ts";
 
-// The async (two-argument) verifyClient form is the only one this file uses; name its two halves.
-type VerifyClientInfo = Parameters<VerifyClientCallbackAsync>[0];
+// The handshake check keeps ws's async (two-argument) verifyClient CALLBACK shape — done(ok, code,
+// message) — even though ws no longer calls it (the check runs in the HTTP server's 'upgrade'
+// listener; see createBridge). Its unit tests drive it through exactly that shape.
 type VerifyClientCallback = Parameters<VerifyClientCallbackAsync>[1];
 
 // FIGMA_BRIDGE_PORT is a choice of three (ports.ts), not a free number.
@@ -198,23 +201,46 @@ const badTokenRequests = new WeakSet<IncomingMessage>();
 
 // ---- the plugin <-> bridge protocol, as this module sees it.
 
+/** A plugin progress tick as ui.html relays it: `{type:"progress", phase, page, nodes, assets}` — the
+ *  counters figma-plugin/src/progress.ts emits, each absent when the phase has none. Read defensively:
+ *  it is foreign JSON, and only a human-readable progress message is ever built from it. */
+export interface ProgressTick {
+  phase: string | null;
+  page: { index: number; of: number; name: string | null } | null;
+  nodes: number | null;
+  assets: number | null;
+}
+
 /** One frame from the plugin (figma-plugin/ui.html), after parsePluginFrame: a `hello` identity
  *  announcement, an unsolicited `progress` tick, or the reply to one command (`{id, ok, result, error}`).
  *  Anything else — a non-object, a reply whose id is not a string — is dropped (null). */
 type PluginFrame =
-  | { type: "progress" }
+  | { type: "progress"; tick: ProgressTick }
   | { type: "hello"; instanceId: string | null; file: string | null; fileKey: string | null; page: string | null; pluginVersion: string | null }
   | { type: "reply"; id: string; ok: boolean; result: unknown; error: unknown };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+function parseTick(m: Record<string, unknown>): ProgressTick {
+  const p = isRecord(m.page) ? m.page : null;
+  const index = p ? num(p.index) : null;
+  const of = p ? num(p.of) : null;
+  return {
+    phase: str(m.phase),
+    page: p && index !== null && of !== null ? { index, of, name: str(p.name) } : null,
+    nodes: num(m.nodes),
+    assets: num(m.assets),
+  };
+}
 
 function parsePluginFrame(parsed: unknown): PluginFrame | null {
   // JSON.parse can return a non-object (null, number, string) — guard before reading .id so a
   // malformed frame (e.g. the literal `null`) can't throw an uncaught TypeError and kill the process.
   if (!isRecord(parsed)) return null;
   const m = parsed;
-  if (m.type === "progress") return { type: "progress" };
+  if (m.type === "progress") return { type: "progress", tick: parseTick(m) };
   if (m.type === "hello") {
     return { type: "hello", instanceId: str(m.instanceId), file: str(m.file), fileKey: str(m.fileKey), page: str(m.page), pluginVersion: str(m.pluginVersion) };
   }
@@ -234,6 +260,9 @@ interface ClientEntry {
   page: string | null;
   pluginVersion: string | null;
   lastActivity: number;
+  /** heartbeat: cleared before each ping, set again by the pong (ws README, "How to detect and close
+   *  broken connections?"). Still false at the next tick = the peer is gone, and it is terminated. */
+  isAlive: boolean;
 }
 
 /** One connection as `describe()` presents it — the rows of listClients(), figma_list_clients and `dtwin list clients`. */
@@ -269,6 +298,8 @@ interface PendingRequest {
   cmd: Cmd;
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
+  /** the caller's progress listener, fed every progress tick this request's connection sends */
+  onProgress?: (tick: ProgressTick) => void;
 }
 
 /** What a request resolved with, plus WHICH connected file answered it (the client resolveClient picked). */
@@ -280,7 +311,10 @@ export interface RequestOutcome<C extends Cmd> {
 // ws's per-socket connId, kept off the socket object itself.
 const connIds = new WeakMap<WebSocket, string>();
 
-function admitWith(token: string): (info: VerifyClientInfo, done: VerifyClientCallback) => void {
+/** What the upgrade listener hands the admission check: the handshake fields plus the real request. */
+type AdmitInfo = HandshakeInfo & { req: IncomingMessage };
+
+function admitWith(token: string): (info: AdmitInfo, done: VerifyClientCallback) => void {
   const verify = verifyClientWith(token);
   return (info, done) => {
     verify(info, (ok, code, msg) => {
@@ -293,11 +327,26 @@ function admitWith(token: string): (info: VerifyClientInfo, done: VerifyClientCa
   };
 }
 
+// A refused upgrade, answered the way ws's own abortHandshake answers a verifyClient refusal (same
+// status line, headers and body), so a client sees exactly the 401/403 it saw when ws ran the check.
+function refuseUpgrade(socket: Duplex, code: number, message?: string): void {
+  const status = http.STATUS_CODES[code] ?? "";
+  const body = message || status;
+  socket.on("error", () => socket.destroy()); // a peer that resets mid-refusal must not be an unhandled 'error'
+  socket.once("finish", () => socket.destroy());
+  socket.end(
+    `HTTP/1.1 ${code} ${status}\r\nConnection: close\r\nContent-Type: text/html\r\n` +
+      `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+  );
+}
+
 /** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
  * server: a held port is a tool error there, not a reason to kill the stdio session). Without it, a
- * held port prints the fix and exits 1 — the CLI behaviour, unchanged. */
+ * held port prints the fix and exits 1 — the CLI behaviour, unchanged. `heartbeatMs` overrides the
+ * ping interval (timeouts.ts HEARTBEAT_MS); the test suite shortens it. */
 interface BridgeOptions {
   onListenError?: (e: Error) => void;
+  heartbeatMs?: number;
 }
 
 function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
@@ -314,12 +363,36 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   if (TOKEN === null) throw new Error("no bridge token could be resolved");
   const token: string = TOKEN;
 
-  // host: "127.0.0.1" keeps it strictly loopback. verifyClient authenticates every handshake
-  // (Origin + Host + shared token). maxPayload bounds a single frame so a malformed/huge payload
-  // can't OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large
-  // file can raise it via FIGMA_BRIDGE_MAX_PAYLOAD_MB.
+  // maxPayload bounds a single frame so a malformed/huge payload can't OOM the process; 128 MB is ~2x
+  // a realistic asset-heavy full export, and an unusually large file can raise it via
+  // FIGMA_BRIDGE_MAX_PAYLOAD_MB.
+  //
+  // The HTTP server is ours and ws runs in noServer mode, because ws's own docs discourage the
+  // verifyClient hook this used to authenticate with: "Use of verifyClient is discouraged. Rather
+  // handle client authentication in the 'upgrade' event of the HTTP server" (ws/doc/ws.md). So the
+  // 'upgrade' listener below runs the SAME admission (Origin + Host + shared token, fail-closed, and
+  // the plugin's null-origin bad-token admit-then-4401) and either hands the socket to ws or refuses it
+  // with the 401/403 ws used to write. A plain (non-upgrade) request is answered 426, as ws's internal
+  // server did — `dtwin doctor` reads that 426 as "a websocket server holds this port".
+  // Bound to 127.0.0.1: strictly loopback.
   const maxPayloadMb = Number(process.env.FIGMA_BRIDGE_MAX_PAYLOAD_MB) || 128;
-  const wss = new WebSocketServer({ host: "127.0.0.1", port, maxPayload: maxPayloadMb * 1024 * 1024, verifyClient: admitWith(token) });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: maxPayloadMb * 1024 * 1024 });
+  const admit = admitWith(token);
+  const server = http.createServer((_req, res) => {
+    const body = http.STATUS_CODES[426] ?? "Upgrade Required";
+    res.writeHead(426, { "Content-Length": body.length, "Content-Type": "text/plain" });
+    res.end(body);
+  });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // The Origin ws's verifyClient reported: Sec-WebSocket-Origin for a protocol-8 client.
+    const raw = req.headers[Number(req.headers["sec-websocket-version"]) === 8 ? "sec-websocket-origin" : "origin"];
+    const origin = Array.isArray(raw) ? raw[0] : raw;
+    admit({ origin, req }, (ok, code, message) => {
+      if (!ok) return refuseUpgrade(socket, code || 401, message);
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    });
+  });
+  server.listen(port, "127.0.0.1");
 
   // Commit a freshly-minted token to disk now that one is actually being used. Resolution happened at
   // require time (deliberately without persisting); this is where it becomes permanent.
@@ -387,7 +460,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
     const connId = "c" + ++connSeq;
-    const entry: ClientEntry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, lastActivity: Date.now() };
+    const entry: ClientEntry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, lastActivity: Date.now(), isAlive: true };
+    ws.on("pong", () => { entry.isAlive = true; });
     connIds.set(ws, connId);
     clients.set(connId, entry);
     console.error(`[bridge] plugin connected: ${connId} (${clients.size} connected).`);
@@ -418,8 +492,15 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
       // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
       // socket too). Carries no request id — same rule as `hello` — and needs no reply; it exists
-      // purely to keep `lastActivity` current during a long walk.
-      if (msg.type === "progress") return;
+      // to keep `lastActivity` current during a long walk — and to feed the progress listener of any
+      // request in flight on THIS connection (the MCP server forwards them as notifications/progress).
+      if (msg.type === "progress") {
+        for (const p of pending.values()) {
+          if (p.connId !== connId || !p.onProgress) continue;
+          try { p.onProgress(msg.tick); } catch { /* a listener's failure is its own; the request goes on */ }
+        }
+        return;
+      }
       // Unsolicited identity announcement, sent by the plugin UI on connect AND on every reconnect.
       // Re-announcing is the whole point: identity is DERIVED from the environment each time rather
       // than issued by us and replayed, so a plugin that Figma tore down and re-ran comes back
@@ -491,12 +572,33 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     });
   });
 
+  // Heartbeat, as in the ws README's "How to detect and close broken connections?": "Sometimes, the
+  // link between the server and the client can be interrupted in a way that keeps both the server and
+  // the client unaware of the broken state of the connection ... In these cases, ping messages can be
+  // used as a means to verify that the remote endpoint is still responsive." A client still not alive
+  // at the next tick missed the last pong: it leaves the registry at once (so no command is routed to
+  // it) and is terminated, whose close event fails its in-flight requests like every other disconnect.
+  // unref'd: the heartbeat must never be what keeps a one-shot CLI process alive.
+  const heartbeat = setInterval(() => {
+    for (const [id, e] of clients) {
+      if (!e.isAlive) {
+        clients.delete(id);
+        console.error(`[bridge] ${id} did not answer a heartbeat ping — terminating it.`);
+        try { e.ws.terminate(); } catch { /* already gone */ }
+        continue;
+      }
+      e.isAlive = false;
+      try { e.ws.ping(); } catch { /* not open any more; its close handler removes it */ }
+    }
+  }, opts.heartbeatMs ?? HEARTBEAT_MS);
+  heartbeat.unref();
+
   // Resolves once the port is bound. Never rejects: a bind failure goes to onListenError (or exits),
   // so a caller that only wants "is it up yet" cannot leak an unhandled rejection.
   let bound = false;
-  const listening = new Promise<void>((resolve) => wss.once("listening", () => { bound = true; resolve(); }));
+  const listening = new Promise<void>((resolve) => server.once("listening", () => { bound = true; resolve(); }));
 
-  wss.on("error", (e) => {
+  server.on("error", (e) => {
     if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
       const msg =
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
@@ -616,14 +718,16 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // Typed per command from commands.ts: `args` is what the plugin reads for `cmd`, and the reply is
   // what it sends back — checked structurally on arrival (the message handler above), so the type
   // here is a promise the runtime keeps rather than a cast.
-  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number): Promise<Commands[C]["reply"]> {
-    return requestWithClient(cmd, args, timeoutMs, target, stallMs).then((o) => o.reply);
+  // `onProgress` (optional, last) receives every progress tick the chosen connection sends while this
+  // request is in flight — the plugin relays them during a bridge-triggered export.
+  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<Commands[C]["reply"]> {
+    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress).then((o) => o.reply);
   }
 
   // The same, also answering WHICH connected file the command went to — the client resolveClient
   // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
   // screen export as `sourceFile` (P4 #33); it used to re-implement the matching rules to find out.
-  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number): Promise<RequestOutcome<C>> {
+  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<RequestOutcome<C>> {
     return new Promise<RequestOutcome<C>>((resolve, reject) => {
       let client: ClientEntry;
       try {
@@ -677,6 +781,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       pending.set(id, {
         connId: client.connId,
         cmd,
+        onProgress,
         resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); settle(v); },
         reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); reject(e); },
       });
@@ -721,6 +826,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // 369,799 bytes written, 65,536 delivered). Letting the event loop drain instead is the only fix
   // that keeps the whole payload; the WS server is what was holding the loop open, so it has to go.
   function close(): void {
+    clearInterval(heartbeat);
     for (const p of pending.values()) p.reject(new Error("bridge closed"));
     pending.clear();
     // Close EVERY client, not just the one that used to be `socket` — otherwise a second connected
@@ -734,7 +840,9 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       setTimeout(() => { try { e.ws.terminate(); } catch { /* already gone */ } }, 2000).unref();
     }
     clients.clear();
+    // noServer mode: wss.close() no longer closes an HTTP server of its own, so the listener goes too.
     try { wss.close(); } catch { /* already closing */ }
+    try { server.close(); } catch { /* not listening */ }
   }
 
   return { request, requestWithClient, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port, listening };

@@ -26,7 +26,9 @@ import path from "node:path";
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
 import { createBridge, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
-import type { Bridge, ClientRow, ConnectionInfo } from "./server-core.ts";
+import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 // The command/reply contract shared with the plugin (commands.ts): every `bridge.request` below is
 // typed per command from it, so a tool cannot read a reply field the plugin never sends.
 import type { Cmd, Commands, ExportReply, WriteOp } from "./commands.ts";
@@ -88,9 +90,11 @@ async function resolveHolder(): Promise<Holder> {
 const bridge = {
   // Typed per command (commands.ts): the reply is what the plugin sends for `cmd`, checked on arrival
   // by server-core — whether this process holds the bridge or a daemon does.
-  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string): Promise<Commands[C]["reply"]> {
+  // `onProgress` is honoured only when this process holds the bridge: the daemon socket's protocol is
+  // one request frame -> one reply frame, so a daemon-routed export sends no progress.
+  async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void): Promise<Commands[C]["reply"]> {
     const h = await holder();
-    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target);
+    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
     return h.via.request({ cmd, args, timeoutMs, client: target }, timeoutMs + 30000);
   },
   async listClients(): Promise<ClientRow[]> {
@@ -155,6 +159,27 @@ import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from ".
 // stderr, never stdout: stdout IS the MCP stdio transport, and a stray line there corrupts the
 // protocol stream.
 const wlog = (m: string) => console.error("[figma-mcp] " + m);
+
+// MCP progress (spec 2025-06-18, basic/utilities/progress): "When a party wants to receive progress
+// updates for a request, it includes a progressToken in the request metadata", and the receiver MAY
+// then send notifications/progress carrying that token, where "The progress value MUST increase with
+// each notification". The plugin's relayed progress ticks become those notifications — progress is a
+// running tick count (the plugin's own counters can reset per page), the message says where the walk
+// is. No token, no listener: nothing is sent to a client that did not ask.
+type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+function progressFor(extra: ToolExtra | undefined): ((t: ProgressTick) => void) | undefined {
+  const progressToken = extra?._meta?.progressToken;
+  if (!extra || progressToken === undefined) return undefined;
+  let progress = 0;
+  return (t) => {
+    const parts = [t.phase ?? "export"];
+    if (t.page) parts.push(`page ${t.page.index} of ${t.page.of}${t.page.name ? ` (${t.page.name})` : ""}`);
+    if (t.nodes !== null) parts.push(`${t.nodes} nodes`);
+    if (t.assets !== null) parts.push(`${t.assets} assets`);
+    extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress: ++progress, message: parts.join(", ") } })
+      .catch(() => { /* the client went away; the export itself carries on */ });
+  };
+}
 
 /** The two writeShape arguments every export tool reads. */
 interface WriteArgs { writeToDisk?: boolean; outDir?: string }
@@ -440,7 +465,7 @@ server.registerTool(
   // and quietly undid the point of having tiers in the shared TIMEOUTS table at all.
   // `page` is forwarded only when non-empty — an empty array must not read as a selector (collect.ts
   // would warn and fall back to the current page).
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     const page = Array.isArray(a.page) && a.page.length ? a.page : undefined;
     const allPages = !!a.allPages;
     // The allPages+page conflict is refused by collectFull itself (one guard, every caller) — no copy
@@ -450,7 +475,8 @@ server.registerTool(
       "exportFull",
       { allPages, page, ...readOpts(a) },
       exportTimeout({ allPages }),
-      a && a.client
+      a && a.client,
+      progressFor(extra)
     ));
   })
 );
@@ -477,7 +503,7 @@ server.registerTool(
   },
   // buildDesignSystem() walks every page's component catalog (loadAllPages + findAllWithCriteria), so
   // this is EXPORT-tier work despite taking no scope arguments — TIMEOUTS.list would undersell it.
-  guarded(async (a) => exportResult(a, await bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client)))
+  guarded(async (a, extra) => exportResult(a, await bridge.request("exportDesignSystem", { variantVisuals: a && a.variantVisuals }, TIMEOUTS.export, a && a.client, progressFor(extra))))
 );
 
 server.registerTool(
@@ -487,7 +513,7 @@ server.registerTool(
     inputSchema: { ...clientShape, ...readOptsShape, ...writeShape },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client)))
+  guarded(async (a, extra) => exportResult(a, await bridge.request("exportSelection", readOpts(a), exportTimeout({ selection: true }), a && a.client, progressFor(extra))))
 );
 
 server.registerTool(
@@ -506,10 +532,10 @@ server.registerTool(
     },
     annotations: READ_ONLY,
   },
-  guarded(async (a) => {
+  guarded(async (a, extra) => {
     const nodeId = parseNodeId(a.url);
     if (!nodeId) return errorResult("Couldn't find a node id in: " + a.url + " — paste a link that contains ?node-id=..., or the node id directly (e.g. 123:456).");
-    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client));
+    return exportResult(a, await bridge.request("exportNode", { nodeId, ...readOpts(a) }, TIMEOUTS.export, a && a.client, progressFor(extra)));
   })
 );
 
@@ -792,6 +818,10 @@ server.registerTool(
 );
 
 async function main() {
+  // This process IS the user's MCP session: a stray rejection is logged and the session stays up; an
+  // uncaught exception is logged and exits 1 (daemon.ts installCrashHandlers says why). The daemon
+  // socket this process may serve is unlinked by daemon.ts's own exit hook.
+  daemon.installCrashHandlers(wlog);
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
   await server.connect(transport);

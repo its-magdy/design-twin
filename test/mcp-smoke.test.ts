@@ -10,6 +10,7 @@ import path from "node:path";
 import { ok, report } from "./assert.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 // "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
 import WebSocket from "ws";
 import type { RawData } from "ws";
@@ -98,14 +99,19 @@ void (async () => {
     const plugin = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });
     let kids = 3;
+    let ticks = 0; // progress frames to send before the reply, as ui.html relays a bridge-triggered run's
     plugin.on("message", (raw: RawData) => {
       const m = JSON.parse(String(raw)) as CommandFrame;
       if (m.cmd !== "exportSelection") return;
+      for (let i = 1; i <= ticks; i++) plugin.send(JSON.stringify({ type: "progress", phase: "pages", page: { index: i, of: ticks, name: "P" + i }, nodes: i * 10 }));
       const children = Array.from({ length: kids }, (_, i) => ({ id: "9:" + i, name: "Row " + i, type: "FRAME", box: { x: 0, y: i * 40, w: 390, h: 40 }, fills: [{ type: "solid", color: "#ffffff" }] }));
       // The REAL exportSelection shape (figma-plugin/src/collect.ts screenResult) — the bridge now
       // checks every reply against commands.ts before a tool sees it.
       const screen = { exportedAt: "2026-09-21T00:00:00Z", screen: "Big", manifest: { nodes: kids + 1 }, nodes: [{ id: "9:999", name: "Big", type: "FRAME", box: { x: 0, y: 0, w: 390, h: 844 }, children }] };
-      plugin.send(JSON.stringify({ id: m.id, ok: true, result: { screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] } }));
+      const answer = () => plugin.send(JSON.stringify({ id: m.id, ok: true, result: { screenName: "Big", screen, variables: { collections: [], variables: [], hygiene: [] }, assets: [] } }));
+      // A real run's ticks are >=250 ms apart and long before its reply; sent in the SAME tick as the
+      // reply, the last notification can lose the race to the result and be dropped by the client.
+      if (ticks) setTimeout(answer, 50); else answer();
     });
     const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
     ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0].children?.length === 3);
@@ -115,6 +121,20 @@ void (async () => {
     ok("an export past the client's output cap is written to disk on its own, and the result says why", !big.isError && firstText(big).length < 8000 && /WITHOUT being asked/.test(idx.note) && /k tokens/.test(idx.note) && fs.existsSync(path.join(CWD, "design")));
     const refused = await client.callTool({ name: "figma_export_selection", arguments: { writeToDisk: false } });
     ok("…and an explicit writeToDisk:false is an error with the size, never a truncated result", refused.isError === true && /writeToDisk:false was passed/.test(firstText(refused)));
+
+    // MCP progress: a call that carries a progressToken (the SDK client adds one for `onprogress`) gets
+    // the plugin's relayed ticks as notifications/progress, with a strictly increasing `progress`.
+    kids = 3;
+    ticks = 2;
+    const seen: Array<{ progress: number; message?: string }> = [];
+    const withProgress = await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen.push(p) });
+    ok("export tools forward the plugin's progress as notifications/progress (increasing, with a message)",
+      !withProgress.isError && seen.length === 2 && seen[0].progress < seen[1].progress && seen[1].message === "pages, page 2 of 2 (P2), 20 nodes");
+    const quiet: unknown[] = [];
+    client.setNotificationHandler(ProgressNotificationSchema, (n) => { quiet.push(n); });
+    await client.callTool({ name: "figma_export_selection", arguments: {} });
+    ok("…and a call WITHOUT a progressToken is sent none", quiet.length === 0);
+    ticks = 0;
     plugin.close();
   } catch (e) {
     ok("MCP smoke run completed without throwing — " + (e instanceof Error ? e.message : e), false);
