@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-build.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import path3 from "node:path";
 import crypto2 from "node:crypto";
 
@@ -21,12 +21,25 @@ function walkWithHidden(root, fn, opts) {
 }
 
 // design-to-code/audit-gate.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 import path from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// bridge/src/is-main.ts
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/cross-check.ts
@@ -200,20 +213,21 @@ function slug(s) {
 }
 function locateAuditFile(cwd, screenFile, screenName) {
   const dir = path.join(cwd, "design", "audit");
-  if (!fs.existsSync(dir)) return null;
+  if (!fs2.existsSync(dir)) return null;
   const base = screenFile ? path.basename(screenFile, ".json") : null;
   const candidates = [];
   if (base) candidates.push(path.join(dir, base + ".json"));
   let entries = [];
   try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    entries = fs2.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
+  for (const c of candidates) if (fs2.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
-    const hit = entries.find((f) => slug(f.replace(/\.json$/, "")) === wantSlug || slug(f.replace(/\.json$/, "")).startsWith(wantSlug) || wantSlug.startsWith(slug(f.replace(/\.json$/, ""))));
+    const stem = (f) => f.replace(/\.json$/, "");
+    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => stem(f).includes("__") && slug(stem(f).slice(0, stem(f).indexOf("__"))) === wantSlug);
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;
@@ -223,11 +237,11 @@ function auditGateStatus(cwd, screenFile, screenName) {
   if (!rel) return { auditFile: null, blockers: [] };
   let doc;
   try {
-    doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8"));
+    doc = JSON.parse(fs2.readFileSync(path.join(cwd, rel), "utf8"));
   } catch {
     return { auditFile: rel, blockers: [], unreadable: true };
   }
-  return { auditFile: rel, blockers: blockerIds(doc), doc };
+  return { auditFile: rel, blockers: blockerIds(doc) };
 }
 
 // design-to-code/plan-skeleton.ts
@@ -295,7 +309,7 @@ function visibility(doc) {
 if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/content-hash.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path2 from "node:path";
 import crypto from "node:crypto";
 var sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
@@ -318,7 +332,7 @@ function fileHashes(files, cwd) {
   const out = {};
   for (const rel of Array.isArray(files) ? files.map(String) : []) {
     try {
-      out[rel] = sha256(fs2.readFileSync(path2.join(cwd, rel))).slice(0, 16);
+      out[rel] = sha256(fs3.readFileSync(path2.join(cwd, rel))).slice(0, 16);
     } catch {
       out[rel] = null;
     }
@@ -340,7 +354,7 @@ function readHookInput() {
   if (process.stdin.isTTY) return Promise.resolve({ payload: {}, source: "tty" });
   let st;
   try {
-    st = fs3.fstatSync(0);
+    st = fs4.fstatSync(0);
   } catch {
     return Promise.resolve({ payload: {}, source: "closed" });
   }
@@ -354,7 +368,7 @@ function readHookInput() {
   };
   if (st.isFile() || st.isCharacterDevice()) {
     try {
-      return Promise.resolve({ payload: parse(fs3.readFileSync(0, "utf8")), source: "file" });
+      return Promise.resolve({ payload: parse(fs4.readFileSync(0, "utf8")), source: "file" });
     } catch {
       return Promise.resolve({ payload: {}, source: "unreadable" });
     }
@@ -399,22 +413,22 @@ function isStale(file, now = Date.now()) {
   const cutoff = staleCutoffMs();
   if (!cutoff) return false;
   try {
-    return now - fs3.statSync(file).mtimeMs > cutoff;
+    return now - fs4.statSync(file).mtimeMs > cutoff;
   } catch {
     return false;
   }
 }
 function readPlan(file) {
   try {
-    return { file, plan: JSON.parse(fs3.readFileSync(file, "utf8")) };
+    return { file, plan: JSON.parse(fs4.readFileSync(file, "utf8")) };
   } catch {
     return null;
   }
 }
 function findPlans(cwd) {
   const dir = path3.join(cwd, "design", "plan");
-  if (!fs3.existsSync(dir)) return [];
-  return fs3.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path3.join(dir, f))).filter((p) => !!p);
+  if (!fs4.existsSync(dir)) return [];
+  return fs4.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().map((f) => readPlan(path3.join(dir, f))).filter((p) => !!p);
 }
 function rootOfPlan(file, fallback) {
   const abs = path3.resolve(file);
@@ -659,14 +673,14 @@ function moduleImported(mapModule, byFile, cwd) {
 }
 function readJsonOr(file, fallback) {
   try {
-    return JSON.parse(fs3.readFileSync(file, "utf8"));
+    return JSON.parse(fs4.readFileSync(file, "utf8"));
   } catch {
     return fallback;
   }
 }
 function exportDirOf(cwd) {
   const e = path3.join(cwd, "design", "export");
-  return fs3.existsSync(path3.join(e, "pages")) ? e : path3.join(cwd, "design");
+  return fs4.existsSync(path3.join(e, "pages")) ? e : path3.join(cwd, "design");
 }
 var idFromStem = (s) => {
   const m = /__(I?\d+)_(\d+)$/.exec(String(s || ""));
@@ -688,7 +702,7 @@ function locateExport(plan, planFile, cwd) {
   const tryFile = (rel) => {
     if (!rel) return null;
     for (const f of [path3.resolve(cwd, rel), path3.resolve(exportDir, rel)]) {
-      const doc = fs3.existsSync(f) ? readJsonOr(f, null) : null;
+      const doc = fs4.existsSync(f) ? readJsonOr(f, null) : null;
       if (doc) return { file: f, doc };
     }
     return null;
@@ -774,7 +788,7 @@ function checkVerification(plan, cwd) {
   if (v.mode === "rendered") {
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ['verification.mode is "rendered" but `artifacts` is empty \u2014 list the screenshot(s)/report the render produced'];
-    const missing = artifacts.filter((a) => !fs3.existsSync(path3.join(cwd, String(a))));
+    const missing = artifacts.filter((a) => !fs4.existsSync(path3.join(cwd, String(a))));
     if (missing.length) return [`verification artifact(s) not found on disk: ${missing.join(", ")} \u2014 render the screen, or record mode "static-only" with the reason`];
     if (!Array.isArray(v.deltas)) return ["verification.deltas is missing \u2014 list the residual differences against the reference ([] if none were found)"];
     return [];
@@ -859,10 +873,10 @@ function checkPlan({ plan, file }, cwd, opts) {
   const o = opts || {};
   const blocking = [], warnings = [];
   const listed = Array.isArray(plan.files) ? plan.files.map(String) : [];
-  const absent = listed.filter((f) => !fs3.existsSync(path3.join(cwd, f)));
+  const absent = listed.filter((f) => !fs4.existsSync(path3.join(cwd, f)));
   if (!listed.length) warnings.push("`files` is empty \u2014 list every file this build created or changed; the literal and import checks only read the files named there, so nothing was checked");
   if (absent.length) warnings.push(`file(s) listed in \`files\` not found on disk: ${absent.join(", ")} \u2014 fix the path(s) (relative to the project root) or remove entries for files that were not written`);
-  const byFile = listed.filter((rel) => fs3.existsSync(path3.join(cwd, rel)) && fs3.statSync(path3.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs3.readFileSync(path3.join(cwd, rel), "utf8") }));
+  const byFile = listed.filter((rel) => fs4.existsSync(path3.join(cwd, rel)) && fs4.statSync(path3.join(cwd, rel)).isFile()).map((rel) => ({ rel, text: fs4.readFileSync(path3.join(cwd, rel), "utf8") }));
   const code = byFile.filter((f) => isSourceFile(f.rel)).map((f) => ({ rel: f.rel, text: scanText(f.rel, f.text) }));
   const source = code.map((f) => f.text).join("\n");
   const allowed = new Set((plan.allowedLiterals || []).filter((a) => a && a.reason && a.value !== void 0).map((a) => String(a.value).toLowerCase()));
@@ -985,7 +999,7 @@ function auditGateWarnings(plan, cwd, exp) {
 }
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path3.join(cwd, "design", "verify");
-  if (!fs3.existsSync(dir)) return [];
+  if (!fs4.existsSync(dir)) return [];
   const e = exp === void 0 ? locateExport(plan, planFile, cwd) : exp;
   const stems = new Set([
     plan.file ? path3.basename(String(plan.file)).replace(/\.json$/i, "") : null,
@@ -996,7 +1010,7 @@ function locateReports(plan, planFile, cwd, exp) {
   const nodeId = plan.nodeId || e && e.nodeId || idFromStem(plan.screen) || (planFile ? idFromStem(path3.basename(planFile, ".json")) : null);
   const layer = e ? e.layerName.trim() : null;
   const out = [];
-  for (const f of fs3.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
+  for (const f of fs4.readdirSync(dir).filter((x) => x.endsWith(".report.json")).sort()) {
     const abs = path3.join(dir, f);
     const r = readJsonOr(abs, null);
     if (!r) continue;
@@ -1009,19 +1023,19 @@ function locateReports(plan, planFile, cwd, exp) {
     };
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
-    else if (nodeId && fs3.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
+    else if (nodeId && fs4.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
     else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
-      mtimeMs = fs3.statSync(abs).mtimeMs;
+      mtimeMs = fs4.statSync(abs).mtimeMs;
     } catch {
     }
     const want = r.inputs && r.inputs.expectationSha256;
     let expectationChanged = false;
-    if (want && fs3.existsSync(expFile)) {
+    if (want && fs4.existsSync(expFile)) {
       try {
-        expectationChanged = crypto2.createHash("sha256").update(fs3.readFileSync(expFile)).digest("hex") !== want;
+        expectationChanged = crypto2.createHash("sha256").update(fs4.readFileSync(expFile)).digest("hex") !== want;
       } catch {
       }
     }
@@ -1113,7 +1127,7 @@ function ownPlans(open, input, all) {
   if (!file || typeof file !== "string") return open;
   let text;
   try {
-    text = fs3.readFileSync(file, "utf8");
+    text = fs4.readFileSync(file, "utf8");
   } catch {
     return open;
   }
@@ -1166,13 +1180,13 @@ function checkAndRecord(p, cwd, input) {
   };
   let times = null;
   try {
-    const s = fs3.statSync(p.file);
+    const s = fs4.statSync(p.file);
     times = [s.atime, s.mtime];
   } catch {
   }
-  fs3.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
+  fs4.writeFileSync(p.file, JSON.stringify(plan, null, 2) + "\n");
   if (times) try {
-    fs3.utimesSync(p.file, times[0], times[1]);
+    fs4.utimesSync(p.file, times[0], times[1]);
   } catch {
   }
   const st = computeStatus(plan, { cwd, planFile: p.file, export: exp, reports });
@@ -1263,7 +1277,7 @@ ${USAGE2}`);
   }
   return 0;
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const watchdog = setTimeout(() => {
     console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1e3)} s while ${phase} \u2014 nothing was blocked; re-run \`node verify-build.js <plan.json>\` to check the plan directly`);
     process.exit(1);

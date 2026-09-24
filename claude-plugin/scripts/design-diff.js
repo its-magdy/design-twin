@@ -3,7 +3,7 @@
 
 
 // design-to-code/design-diff.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -85,6 +85,19 @@ var DESIGN_SYSTEM_FILES = {
   HYGIENE,
   MANIFEST
 };
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 // design-to-code/design-diff.ts
 var CATEGORY = {
@@ -407,14 +420,14 @@ function assetPaths(doc) {
 }
 function assetRoot(file, assets) {
   let dir = path.dirname(path.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs2.existsSync(path.join(dir, a)))) return dir;
+  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs3.existsSync(path.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs2.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs3.readFileSync(path.join(root, a)));
     } catch {
     }
   }
@@ -437,25 +450,25 @@ function redrawnAssets(file, newDoc, prev, cwd) {
   return out;
 }
 function previous(file, against, cwd = process.cwd(), current = null) {
-  if (against) return { doc: JSON.parse(fs2.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
+  if (against) return { doc: JSON.parse(fs3.readFileSync(against, "utf8")), source: against, kind: "file", notes: [] };
   const found = [];
   const snap = snapshotPath(file, cwd);
-  if (fs2.existsSync(snap)) {
+  if (fs3.existsSync(snap)) {
     let assets = null;
     try {
-      assets = JSON.parse(fs2.readFileSync(snap + ".assets.json", "utf8"));
+      assets = JSON.parse(fs3.readFileSync(snap + ".assets.json", "utf8"));
     } catch {
     }
-    found.push({ doc: JSON.parse(fs2.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
+    found.push({ doc: JSON.parse(fs3.readFileSync(snap, "utf8")), source: path.relative(cwd, snap), kind: "snapshot", assets });
   }
-  if (fs2.existsSync(snap + ".prev")) {
+  if (fs3.existsSync(snap + ".prev")) {
     let assets = null;
     try {
-      assets = JSON.parse(fs2.readFileSync(snap + ".assets.json.prev", "utf8"));
+      assets = JSON.parse(fs3.readFileSync(snap + ".assets.json.prev", "utf8"));
     } catch {
     }
     try {
-      found.push({ doc: JSON.parse(fs2.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+      found.push({ doc: JSON.parse(fs3.readFileSync(snap + ".prev", "utf8")), source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
     } catch {
     }
   }
@@ -502,14 +515,14 @@ function siblingFilesOf(f) {
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
       const p = path.join(dir, m + suf);
-      if (fs2.existsSync(p)) out.push(path.relative(process.cwd(), p));
+      if (fs3.existsSync(p)) out.push(path.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
   const pagesDir = path.dirname(pageDir);
   if (path.basename(pagesDir) === "pages") {
     const idx = path.join(pagesDir, "index.json");
-    if (fs2.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+    if (fs3.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -536,42 +549,42 @@ ${USAGE}`);
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
     for (const f of files) {
-      if (!fs2.existsSync(f)) {
+      if (!fs3.existsSync(f)) {
         console.error(`design-diff: ${f} not found \u2014 nothing to snapshot (first pull?)`);
         continue;
       }
       const dest = snapshotPath(f);
-      fs2.mkdirSync(path.dirname(dest), { recursive: true });
+      fs3.mkdirSync(path.dirname(dest), { recursive: true });
       let identical = false;
-      if (fs2.existsSync(dest)) {
+      if (fs3.existsSync(dest)) {
         try {
-          identical = Buffer.compare(fs2.readFileSync(dest), fs2.readFileSync(f)) === 0;
+          identical = Buffer.compare(fs3.readFileSync(dest), fs3.readFileSync(f)) === 0;
         } catch {
         }
       }
-      if (fs2.existsSync(dest) && !identical && !force) {
+      if (fs3.existsSync(dest) && !identical && !force) {
         console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
-      if (fs2.existsSync(dest) && !identical && force) {
+      if (fs3.existsSync(dest) && !identical && force) {
         try {
-          fs2.copyFileSync(dest, dest + ".prev");
+          fs3.copyFileSync(dest, dest + ".prev");
         } catch {
         }
         try {
-          if (fs2.existsSync(dest + ".assets.json")) fs2.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
+          if (fs3.existsSync(dest + ".assets.json")) fs3.copyFileSync(dest + ".assets.json", dest + ".assets.json.prev");
         } catch {
         }
       }
-      if (!identical) fs2.copyFileSync(f, dest);
+      if (!identical) fs3.copyFileSync(f, dest);
       let n = 0;
       try {
-        const parsed = JSON.parse(fs2.readFileSync(f, "utf8"));
+        const parsed = JSON.parse(fs3.readFileSync(f, "utf8"));
         if (isScreen(parsed)) {
           const h = assetHashes(f, parsed).hashes;
           n = Object.keys(h).length;
-          fs2.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
+          fs3.writeFileSync(dest + ".assets.json", JSON.stringify(h, null, 2) + "\n");
         }
       } catch {
       }
@@ -613,12 +626,12 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs2.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-    fs2.writeFileSync(out, text);
+    fs3.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs3.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
 }
-if (import.meta.main) main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
 export {
   assetHashes,
   diffCatalog,

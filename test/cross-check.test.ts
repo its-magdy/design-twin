@@ -299,7 +299,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[drift-lint wording] instances are still counted in full (87), with the 45 on hidden layers named", cov.instances === 87 && cov.hiddenInstances === 45);
   ok("[drift-lint wording] sets that appear ONLY on hidden layers are counted (never built)", cov.hiddenOnly > 0 && cov.hiddenOnly < cov.distinct);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2a-drift-"));
-  fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ components: {} }));
+  fs.writeFileSync(path.join(tmp, "map.json"), JSON.stringify({ version: 1, components: {} })); // a VALID empty map (drift-lint validates it)
   const r = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "drift-lint.ts"), path.join(tmp, "map.json"),
     path.join(import.meta.dirname, "fixtures", "livetest3", "design-system", "components.local.json"),
     "--screen", path.join(import.meta.dirname, "fixtures", "livetest3", "verify", "System_Configurations__1359_21337.json")], { encoding: "utf8" });
@@ -380,7 +380,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     const doc = JSON.parse(fs.readFileSync(path.join(FX, rel), "utf8")) as ScreenDoc;
     const vis = new Set<string | undefined>(), all = new Set<string | undefined>();
     const w = (n: IrNode, hid: boolean) => {
-      const h = hid || n.hidden === true || n.visible === false;
+      const h = hid || n.hidden === true;
       if (n.type === "INSTANCE" && n.mainComponent) { const k = n.mainComponent.setKey || n.mainComponent.key; all.add(k); if (!h) vis.add(k); }
       for (const c of n.children || []) w(c, h);
     };

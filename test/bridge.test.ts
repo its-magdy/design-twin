@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import crypto from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 // "ws" ships no types of its own; @types/ws (a bridge devDependency) provides them.
@@ -74,6 +74,18 @@ ok("[auth] localhost origin allowed", verify({ token: TOKEN, origin: "http://loc
 // DNS-rebinding: Origin looks fine but Host points at an attacker-controlled name.
 ok("[auth] non-loopback Host rejected 403 (DNS rebinding)", (() => { const r = verify({ token: TOKEN, origin: "null", host: "evil.example:8787" }); return r.accepted === false && r.code === 403; })());
 ok("[auth] ::1 Host allowed", verify({ token: TOKEN, origin: "null", host: "[::1]:8787" }).accepted === true);
+// The old split-on-":" parse turned ANY bracketed IPv6 Host into "" and skipped the check, so "::1"
+// passed by accident — a non-loopback IPv6 literal is what tells a real parse from that.
+ok("[auth] non-loopback IPv6 Host rejected 403", (() => { const r = verify({ token: TOKEN, origin: "null", host: "[2001:db8::1]:8787" }); return r.accepted === false && r.code === 403; })());
+ok("[auth] bare localhost Host (no port) allowed", verify({ token: TOKEN, origin: "null", host: "localhost" }).accepted === true);
+// Fail-closed: no Host (or an unparseable one) is refused, not waved through as "nothing to check".
+ok("[auth] empty Host rejected 403", (() => { const r = verify({ token: TOKEN, origin: "null", host: "" }); return r.accepted === false && r.code === 403; })());
+ok("[auth] missing Host header rejected 403", (() => {
+  const r: { accepted?: boolean; code?: number } = {};
+  core.verifyClient({ origin: "null", req: { url: "/?token=" + TOKEN, headers: {} } }, (accepted, code) => { r.accepted = accepted; r.code = code; });
+  return r.accepted === false && r.code === 403;
+})());
+ok("[auth] userinfo trick (127.0.0.1@evil.example) rejected 403", verify({ token: TOKEN, origin: "null", host: "127.0.0.1@evil.example" }).code === 403);
 // A token that differs only in LENGTH must not throw (timingSafeEqual requires equal lengths).
 ok("[auth] length-mismatched token rejected, no throw", verify({ token: "short", origin: "null" }).accepted === false);
 ok("[auth] safeEqual is length-safe", core.safeEqual("abc", "abcdef") === false && core.safeEqual("abc", "abc") === true);
@@ -2143,8 +2155,9 @@ async function disconnectErr(code: number, reason: string) {
     && tr("list", "clients") === "--list-clients" && tr("list", "--timeout", "600") === "--list --timeout 600");
   ok("[verbs] list children <id> → --children <id>", tr("list", "children", "12:34", "--timeout", "9") === "--children 12:34 --timeout 9");
   ok("[verbs] screenshot <id> [outDir] [flags] → --screenshot <id> …", tr("screenshot", "12:34", "design", "--scale", "2") === "--screenshot 12:34 design --scale 2");
-  ok("[verbs] whoami / serve / stop / status / help",
-    tr("whoami") === "--whoami" && tr("serve") === "--serve" && tr("stop") === "--stop" && tr("status") === "--daemon-status" && tr("help") === "--help");
+  ok("[verbs] whoami / serve / stop / status / help / version",
+    tr("whoami") === "--whoami" && tr("serve") === "--serve" && tr("stop") === "--stop" && tr("status") === "--daemon-status" && tr("help") === "--help"
+    && tr("version") === "--version");
   ok("[verbs] token [status|show|rotate|forget]",
     tr("token") === "--token-status" && tr("token", "status") === "--token-status" && tr("token", "show") === "--show-token"
     && tr("token", "rotate") === "--rotate-token" && tr("token", "forget") === "--forget-token");
@@ -2172,6 +2185,12 @@ async function disconnectErr(code: number, reason: string) {
     helpVerb.stdout.indexOf("Quick start") > 0 && helpVerb.stdout.indexOf("Quick start") < helpVerb.stdout.indexOf("dtwin doctor")
     && helpVerb.stdout.indexOf("dtwin doctor") < helpVerb.stdout.indexOf("Full reference"));
   ok("[verbs-cli] help still has no side effects (no token minted)", !fs.existsSync(path.join(cliDir, "bridge-token")));
+  // `version` used to sit in the did-you-mean ALIASES table, so `dtwin version` was refused with
+  // "did you mean `dtwin --version`?" before figma-pull ever saw it.
+  const versionVerb = runCli(["version"]);
+  ok("[verbs-cli] `dtwin version` = `dtwin --version`, exit 0, prints the package version",
+    versionVerb.status === 0 && /^\d+\.\d+\.\d+/.test(versionVerb.stdout) && versionVerb.stdout === runCli(["--version"]).stdout);
+  ok("[verbs] a near-miss of `version` still gets a suggestion", /dtwin version/.test(verbErr("verson")?.message ?? ""));
   const badVerb = runCli(["list", "bogus"]);
   ok("[verbs-cli] a VerbError is a one-line `[dtwin] error:` + exit 1, before any bridge starts",
     badVerb.status === 1 && /^\[dtwin\] error: unknown `dtwin list bogus`/.test(badVerb.stderr.trim()) && !badVerb.stderr.includes("[bridge]"));
@@ -2185,6 +2204,60 @@ async function disconnectErr(code: number, reason: string) {
     const noPlugin = runCli(["list", "--timeout", "2"], { FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: "t".repeat(32) });
     ok("[verbs-cli] --timeout bounds the WAIT FOR THE PLUGIN too: no plugin → exit 1 in seconds with the next step, not a 10-minute hang",
       noPlugin.status === 1 && Date.now() - t0 < 15000 && /no Figma plugin connected within 2s/.test(noPlugin.stderr) && /dtwin doctor/.test(noPlugin.stderr));
+  }
+
+  // `dtwin list` against a fake plugin that answers listPages with the REAL reply shape
+  // (figma-plugin/src/collect.ts listPages): top-level layers live under pages[].frames — there is no
+  // top-level `frames`. The CLI used to read `r.frames`, which the plugin never sends, so the per-type
+  // breakdown and the SECTION hint never printed on any real file. Driven end to end because both
+  // lines are stderr of main(), with no pure seam. 8789, not 8787: never contend with a real bridge.
+  {
+    const listReply = {
+      exportedAt: "2026-09-24T00:00:00.000Z", file: "Sectioned App", depth: 2,
+      pages: [
+        { id: "0:1", name: "Screens", current: true, frames: [
+          { id: "1:1", name: "Onboarding", type: "SECTION", w: 8898, h: 2000 },
+          { id: "1:2", name: "Login", type: "FRAME", w: 390, h: 844 },
+          { id: "1:3", name: "Home", type: "FRAME", w: 390, h: 844 },
+        ] },
+        { id: "0:2", name: "Notes", frames: [{ id: "2:1", name: "todo", type: "TEXT", w: 200, h: 40 }] },
+      ],
+      manifest: { pages: 2, frames: 4, warnings: [] },
+    };
+    const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cliDir, FIGMA_BRIDGE_PORT: "8789", FIGMA_BRIDGE_TOKEN: TOKEN };
+    delete env.FIGMA_BRIDGE_TOKEN_FILE;
+    const child = spawn(process.execPath, [cli, "list", "--timeout", "10"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (b: Buffer) => { stdout += b.toString(); });
+    child.stderr.on("data", (b: Buffer) => { stderr += b.toString(); });
+    const exited = new Promise<number | null>((res) => child.on("exit", (code) => res(code)));
+    // Dial until the CLI's bridge is up (it binds after module load), then answer every command.
+    let plugin: WebSocket | null = null;
+    for (let i = 0; i < 50 && !plugin; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      plugin = await new Promise<WebSocket | null>((res) => {
+        const c = new WebSocket("ws://127.0.0.1:8789/?token=" + TOKEN, { origin: "null" });
+        c.on("open", () => res(c));
+        c.on("error", () => res(null));
+      });
+    }
+    if (plugin) {
+      const p = plugin;
+      p.send(JSON.stringify({ type: "hello", instanceId: "fig-list", file: "Sectioned App" }));
+      p.on("message", (b: RawData) => {
+        const m = JSON.parse(b.toString()) as CommandFrame;
+        if (m && m.id) p.send(JSON.stringify({ id: m.id, ok: true, result: m.cmd === "listPages" ? listReply : {} }));
+      });
+    }
+    const timer = setTimeout(() => child.kill(), 20000);
+    const code = await exited;
+    clearTimeout(timer);
+    plugin?.close();
+    ok("[list-cli] `dtwin list` against a fake plugin exits 0 and prints the reply", code === 0 && /"Sectioned App"/.test(stdout));
+    ok("[list-cli] the per-type breakdown counts layers from pages[].frames (was always empty)",
+      /2 page\(s\), 4 top-level layer\(s\) in "Sectioned App" — 2 FRAME, 1 SECTION, 1 TEXT\./.test(stderr));
+    ok("[list-cli] a page holding a SECTION prints the 'containers, not screens' hint",
+      /some top-level layers are SECTIONs/.test(stderr) && /dtwin list children <section id>/.test(stderr));
   }
 
   // ---------------------------------------------------------------- doctor

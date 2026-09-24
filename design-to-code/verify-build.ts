@@ -75,6 +75,7 @@ import type {
   CodeConnectMap, CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, PagesRootIndex, PageIndex, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyExpectation, VerifyReport,
 } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ================================================================ input / timeouts
 
@@ -1071,7 +1072,7 @@ export {
   colorLiterals, arbitraryPx, hex6, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const watchdog = setTimeout(() => {
     console.error(`verify-build: gave up after ${Math.round(HOOK_TIMEOUT_MS() / 1000)} s while ${phase} — nothing was blocked; re-run \`node verify-build.js <plan.json>\` to check the plan directly`);
     process.exit(1);

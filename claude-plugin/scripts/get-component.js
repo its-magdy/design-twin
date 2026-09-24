@@ -2,7 +2,7 @@
 
 
 // design-to-code/get-component.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 import path from "node:path";
 
 // design-to-code/catalog-input.ts
@@ -23,6 +23,19 @@ function assertNotManifest(doc, givenPath, payloadKey, wantFile) {
 // bridge/src/design-system-layout.ts
 var DIR = "design-system";
 var DESIGN_SYSTEM_DIR = DIR;
+
+// bridge/src/is-main.ts
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 // design-to-code/get-component.ts
 function findComponent(catalog, handle) {
@@ -46,17 +59,17 @@ function resolveVariantsFile(catalogFile, variantsFile) {
   return path.join(root, variantsFile);
 }
 function getComponent(catalogFile, handle) {
-  const catalog = JSON.parse(fs.readFileSync(catalogFile, "utf8"));
+  const catalog = JSON.parse(fs2.readFileSync(catalogFile, "utf8"));
   assertNotManifest(catalog, catalogFile, "components", "design-system/components.local.json");
   const comp = findComponent(catalog, handle);
   if (!comp) return { found: false };
   const pointer = comp.variantsFile || comp.nodeFile;
   if (!pointer) return { found: true, component: comp, detail: null };
   const detailPath = resolveVariantsFile(catalogFile, pointer);
-  const detail = JSON.parse(fs.readFileSync(detailPath, "utf8"));
+  const detail = JSON.parse(fs2.readFileSync(detailPath, "utf8"));
   return { found: true, component: comp, detail, detailPath };
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
     console.error("usage: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>");

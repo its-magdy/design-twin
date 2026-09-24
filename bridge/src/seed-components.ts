@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
+import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const codeRoot = process.argv[2] || ".";
 const outDir = process.argv[3] || "design";
@@ -188,4 +189,4 @@ function main(): void {
 
 // Only when RUN (it is a CLI, driven by the tests as a subprocess). Nothing imports this module, so
 // the guard changes nothing for the subprocess; it only keeps an import from scanning the tree.
-if (import.meta.main) main();
+if (import.meta.main ?? isMainFallback(import.meta.url)) main();

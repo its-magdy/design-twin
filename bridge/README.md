@@ -24,7 +24,7 @@ validated against them and exits rather than binding a port nothing could ever r
 
 **Languages:** the whole bridge is **TypeScript** (ESM) under `src/` — `figma-pull.ts` (read CLI),
 `server-core.ts` (WS core), `figma-mcp.ts` (MCP server), and the modules they share. From a checkout,
-Node ≥ 24 runs it directly with **zero build** (`node bridge/src/figma-pull.ts …`,
+Node ≥ 24.2 runs it directly with **zero build** (`node bridge/src/figma-pull.ts …`,
 `node bridge/src/figma-mcp.ts`). The npm package ships compiled JavaScript instead: `npm run build`
 emits `dist/` (gitignored; also run on `prepack`), and the package's `dtwin` bin is `dist/figma-pull.js`.
 ```

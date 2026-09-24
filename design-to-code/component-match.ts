@@ -35,7 +35,8 @@ function visibleInstances(doc: ScreenDoc | null | undefined, label: string): Vis
   // document IS a bare node tree — the third shape the export writes (see types.ts ScreenDoc).
   const roots: IrNode[] = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc as IrNode] : [];
   const walk = (n: IrNode): void => {
-    if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
+    // `hidden` is the export's ONLY visibility flag (serialize.ts writes it; there is no `visible`).
+    if (!n || typeof n !== "object" || n.hidden === true) return;
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
       out.push({

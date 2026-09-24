@@ -47,6 +47,7 @@ import type {
   AuditCrossFile, ControlKind, ControlState, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenDoc, ScreenStateKey, Severity, TextStylesDoc,
   TokenMap, TokensDoc, VariableCollection,
 } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -775,7 +776,7 @@ function isCatalogLike(x: unknown): x is ComponentsCatalog { return isJsonObject
 // CLI: node design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
 // --gate: exit 1 if any blocker was found (default is always exit 0 — findings are advice unless --gate is set).
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
   const platform = take("--platform");

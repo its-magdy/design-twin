@@ -148,9 +148,16 @@ function verifyClient(info: HandshakeInfo, done: VerifyClientCallback): void {
   const origin = info.origin;
   const originOk = !origin || origin === "null" || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
   if (!originOk) return done(false, 403, "forbidden origin");
-  // Host header must be loopback (mitigates DNS-rebinding, where Origin looks fine).
-  const host = String(req.headers.host || "").split(":")[0].replace(/^\[|\]$/g, "");
-  if (host && !LOOPBACK_HOSTS.has(host)) return done(false, 403, "forbidden host");
+  // Host header must be loopback (mitigates DNS-rebinding, where Origin looks fine). Parsed by URL, not
+  // split on ":" — splitting "[::1]:8787" yielded "[", stripped to "", and an empty host SKIPPED the
+  // check, so any bracketed IPv6 Host passed. URL strips the port and lowercases; its hostname keeps
+  // IPv6 brackets ("[::1]"), dropped here to match LOOPBACK_HOSTS. FAIL-CLOSED: a missing or
+  // unparseable Host is refused — HTTP/1.1 requires one (RFC 7230 §5.4) and every WS client sends it.
+  let host = "";
+  try {
+    host = new URL("http://" + (req.headers.host || "")).hostname.replace(/^\[|\]$/g, "");
+  } catch { /* unparseable: stays "", refused below */ }
+  if (!host || !LOOPBACK_HOSTS.has(host)) return done(false, 403, "forbidden host");
   // Token — the actual authentication.
   let token = "";
   try {
@@ -260,7 +267,14 @@ function admit(info: VerifyClientInfo, done: VerifyClientCallback): void {
   });
 }
 
-function createBridge(port: number = PORT) {
+/** createBridge options. `onListenError` is for a caller that must SURVIVE a failed bind (the MCP
+ * server: a held port is a tool error there, not a reason to kill the stdio session). Without it, a
+ * held port prints the fix and exits 1 — the CLI behaviour, unchanged. */
+interface BridgeOptions {
+  onListenError?: (e: Error) => void;
+}
+
+function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // host: "127.0.0.1" keeps it strictly loopback. verifyClient authenticates every handshake
   // (Origin + Host + shared token). maxPayload bounds a single frame so a malformed/huge payload
   // can't OOM the process; 128 MB is ~2x a realistic asset-heavy full export, and an unusually large
@@ -438,15 +452,24 @@ function createBridge(port: number = PORT) {
     });
   });
 
+  // Resolves once the port is bound. Never rejects: a bind failure goes to onListenError (or exits),
+  // so a caller that only wants "is it up yet" cannot leak an unhandled rejection.
+  let bound = false;
+  const listening = new Promise<void>((resolve) => wss.once("listening", () => { bound = true; resolve(); }));
+
   wss.on("error", (e) => {
     if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
-      console.error(
+      const msg =
         `[bridge] port ${port} is already in use — another dtwin bridge or MCP server is running. ` +
-          `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +
-          `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`
-      );
+        `Stop it first, or set FIGMA_BRIDGE_PORT to one of the other allowed ports ` +
+        `(${ALLOWED_PORTS.filter((p) => p !== port).join(", ")}) — the plugin walks all three.`;
+      if (opts.onListenError) return opts.onListenError(new Error(msg));
+      console.error(msg);
       process.exit(1);
     }
+    // Any other failure to BIND (EACCES, …) is the same "no bridge" for such a caller; after the bind,
+    // a server error is only logged, as before.
+    if (opts.onListenError && !bound) return opts.onListenError(e);
     console.error("[bridge] server error:", e.message);
   });
 
@@ -654,11 +677,12 @@ function createBridge(port: number = PORT) {
     try { wss.close(); } catch { /* already closing */ }
   }
 
-  return { request, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port };
+  return { request, isConnected, waitForConnection, waitForIdentified, connectionInfo, listClients, resolveClient, close, port, listening };
 }
 
 // The object createBridge() returns — what both front-ends (and the daemon) drive.
 export type Bridge = ReturnType<typeof createBridge>;
+export type { BridgeOptions };
 
 // verifyClient/safeEqual are exported for the test suite (test/bridge.test.ts). They are the bridge's
 // ONLY real access control, so they get direct unit coverage rather than being reachable only through

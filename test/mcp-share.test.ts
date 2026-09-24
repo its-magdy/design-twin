@@ -2,7 +2,10 @@
 // `designtwin`. The second used to die on EADDRINUSE; it must share the first one's bridge, and take
 // the bridge over when that session ends.
 //   node test/mcp-share.test.ts
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import net from "node:net";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { check, report } from "./assert.ts";
@@ -54,6 +57,50 @@ function start(): McpProc {
   b.send({ id: 3, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
   check("when the first session ends, the second takes the bridge over", await until(() => b.reply(3)) && !/"isError":true/.test(b.reply(3) ?? "") && /Bridge|daemon listening/.test(b.err.split("Sharing")[1] || ""));
   b.proc.kill();
-  await wait(200);
+  await until(() => b.code !== undefined);
+  await wait(300);
+
+  // Concurrent first calls. holder() used to resolve per call: main()'s startup resolution and two
+  // tool calls sent in the same stdin write each saw no daemon and each called createBridge(), and the
+  // second bind hit EADDRINUSE. To hold that window open deterministically, a MUTE listener sits on
+  // the daemon socket path: it accepts and never answers, so every daemon probe waits out its 1.5s
+  // timeout — long enough for all three resolutions to be in flight at once. createBridge prints its
+  // "auth: using FIGMA_BRIDGE_TOKEN" line once per call — that line is the count of bridges opened.
+  const sock = path.join(os.tmpdir(), "designtwin-8789.sock"); // daemon.ts sockPath(8789)
+  try { fs.unlinkSync(sock); } catch { /* none left over */ }
+  const mute = net.createServer(() => { /* accept, never reply */ });
+  await new Promise<void>((r) => mute.listen(sock, () => r()));
+  const c = start();
+  const init = { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } };
+  c.proc.stdin.write([init, { method: "notifications/initialized" },
+    { id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } },
+    { id: 3, method: "tools/call", params: { name: "figma_status", arguments: {} } }]
+    .map((o) => JSON.stringify({ jsonrpc: "2.0", ...o }) + "\n").join(""));
+  const both = await until(() => c.reply(2) && c.reply(3));
+  check("two concurrent tool calls both answer, neither as an error", both && !/"isError":true/.test((c.reply(2) ?? "") + (c.reply(3) ?? "")));
+  check("…from ONE bridge (createBridge ran once) and the process is still up",
+    (c.err.match(/auth: using FIGMA_BRIDGE_TOKEN/g) || []).length === 1 && c.code === undefined);
+  c.proc.kill();
+  await until(() => c.code !== undefined);
+  mute.close();
+  try { fs.unlinkSync(sock); } catch { /* the MCP server's own daemon may have replaced/removed it */ }
+  await wait(300);
+
+  // A port held by something that is NOT a dtwin daemon (no socket to share through): the MCP server
+  // used to process.exit(1) inside createBridge. It must stay up and report the held port per call.
+  const squatter = net.createServer();
+  await new Promise<void>((r) => squatter.listen(8789, "127.0.0.1", () => r()));
+  const d = start();
+  d.send(init);
+  await until(() => d.reply(1));
+  d.send({ method: "notifications/initialized" });
+  d.send({ id: 2, method: "tools/call", params: { name: "figma_list_clients", arguments: {} } });
+  check("a held port is a TOOL error naming the port, not a dead MCP server",
+    await until(() => d.reply(2)) && /"isError":true/.test(d.reply(2) ?? "") && /already in use/.test(d.reply(2) ?? "") && d.code === undefined);
+  d.proc.kill();
+  await until(() => d.code !== undefined);
+  // Not awaited: close() waits for every connection to end, and a regression must fail, not hang.
+  // report() exits the process.
+  squatter.close();
   report();
 })();

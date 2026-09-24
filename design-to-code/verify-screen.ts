@@ -41,6 +41,7 @@ import type {
   NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ---------------------------------------------------------------- tolerances
 //
@@ -255,8 +256,8 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
   const notComparable: NotComparable[] = [];
   const skip = (field: string, value: JsonValue, why: string): number => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
 
+  // `text` is where the producer writes a TEXT node's content (text.ts); the export never carries `characters`.
   if (n.text != null) spec.text = n.text;
-  else if (n.characters != null) spec.text = n.characters;
 
   if (n.font) {
     spec.fontFamily = n.font.family;
@@ -1133,7 +1134,7 @@ function isMeasuredLike(x: unknown): x is VerifyMeasured { return isJsonObject(x
 function isEvidenceList(x: unknown): x is InteractionEvidence[] { return Array.isArray(x); }
 
 // ---------------------------------------------------------------- CLI
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
   const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };

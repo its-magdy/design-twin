@@ -211,6 +211,7 @@ import type { ReadOptName } from "./read-opts.ts";
 // when no daemon is running, and no command needs to know which mode it is in.
 import * as daemon from "./daemon.ts";
 import { translate, VerbError, verbHelp, distance } from "./verbs.ts";
+import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // --help / -h: print the usage header above and exit 0. Handled in cli() BEFORE server-core is loaded,
 // so help has no side effects at all — no token minted, no port bound. The text is the header comment
@@ -751,15 +752,44 @@ interface WhoamiReply {
   fileKey?: string;
 }
 
-/** The plugin's `listPages` (depth 1/2) and `listChildren` replies, read through one bag. */
+/** One layer as the plugin's `summarize()` reports it (figma-plugin/src/collect.ts). */
+interface LayerSummary {
+  id: string;
+  name: string;
+  type: string;
+  w?: number;
+  h?: number;
+  hidden?: true;
+}
+
+/** One page of the plugin's `listPages` reply. `frames` is present only at depth 2, and absent on a
+ * page that could not be loaded (`unreadable`) — its top-level layers live HERE, per page. */
+interface PageSummary {
+  id: string;
+  name: string;
+  current?: true;
+  unreadable?: true;
+  frames?: LayerSummary[];
+}
+
+/** The plugin's `listPages` (depth 1/2) and `listChildren` replies, read through one bag.
+ * There is NO top-level `frames`: an earlier version of this type declared one, the plugin never
+ * sent it, so the per-type breakdown and the SECTION hint below silently never printed. */
 interface IndexReply {
-  manifest?: { pages?: number; frames?: number; warnings?: string[] };
-  frames?: Array<{ type?: string }>;
+  exportedAt?: string;
   file?: string;
+  depth?: number;
+  pages?: PageSummary[];
+  manifest?: { pages?: number; frames?: number; children?: number; warnings?: string[] };
+  // listChildren only
+  id?: string;
   children?: unknown[];
   name?: string;
   type?: string;
 }
+
+// Every top-level layer of a listPages reply, across pages (empty at depth 1).
+const topLevelLayers = (r: IndexReply): LayerSummary[] => (r.pages ?? []).flatMap((p) => p.frames ?? []);
 
 export type ParsedArgs = ReturnType<typeof parseArgs>;
 type Bridge = import("./server-core.ts").Bridge;
@@ -1008,7 +1038,7 @@ async function main(parsed: ParsedArgs, core: typeof import("./server-core.ts"))
           summary: (r: IndexReply) => {
             const fr = r.manifest && r.manifest.frames;
             const byType: Record<string, number> = {};
-            for (const f of r.frames || []) byType[f.type || "?"] = (byType[f.type || "?"] || 0) + 1;
+            for (const f of topLevelLayers(r)) byType[f.type] = (byType[f.type] || 0) + 1;
             const kinds = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(", ");
             return `${r.manifest!.pages} page(s)${fr === undefined ? "" : `, ${fr} top-level layer(s)`} in "${r.file}"${kinds ? ` — ${kinds}` : ""}.`;
           },
@@ -1020,7 +1050,7 @@ async function main(parsed: ParsedArgs, core: typeof import("./server-core.ts"))
     console.error("[dtwin] " + q.summary(r));
     // A SECTION is a container, not a screen — pulling one deep-serializes every screen inside it.
     // On the file this was found on, the sections were 8898-35975px wide.
-    if ((r.frames || []).some((f) => f.type === "SECTION")) {
+    if (topLevelLayers(r).some((f) => f.type === "SECTION")) {
       console.error("[dtwin] note: some top-level layers are SECTIONs — containers, not screens. The screens are INSIDE them:");
       console.error("[dtwin]       dtwin list children <section id>   then pull the frame you want.");
     }
@@ -1249,7 +1279,7 @@ async function cli(argv: string[]): Promise<void> {
 
 // Only actually pull when RUN. Importing this file (test/bridge.test.ts drives parseArgs and
 // writePages directly) must not open a WebSocket server and sit there waiting for Figma.
-if (import.meta.main) await cli(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) await cli(process.argv.slice(2));
 
 // writeJson is exported for the test suite: it's the ONE place a design-system.json / screen.json
 // actually lands on disk, and the freshness stamp (`exportedAt`/`file`, stamped by the plugin itself —

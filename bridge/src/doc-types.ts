@@ -348,9 +348,6 @@ export interface IrNode extends Partial<TextFields> {
   id: string;
   /** The ONE visibility flag (hidden.js): the designer switched this layer off. Descendants inherit it. */
   hidden?: true;
-  // TODO(ts-port): unverified field — serialize.ts never writes `visible` (it writes `hidden`); kept
-  // because component-match.js still tests `n.visible === false`. Also a component PROPERTY name.
-  visible?: boolean;
   children?: IrNode[];
 
   // instance / component identity
@@ -360,9 +357,6 @@ export interface IrNode extends Partial<TextFields> {
   /** main component's bare name (INSTANCE) or the node's own name (COMPONENT / COMPONENT_SET) */
   component?: string;
   mainComponent?: MainComponentRef;
-  // TODO(ts-port): unverified field — not emitted by serialize.ts (it emits `props`); listed in the
-  // port brief only.
-  componentProperties?: unknown;
   /** which component prop drives this sublayer's visibility / text / swapped instance */
   propRefs?: { visible?: string; characters?: string; mainComponent?: string };
   overrides?: InstanceOverride[];
@@ -417,10 +411,6 @@ export interface IrNode extends Partial<TextFields> {
   booleanOp?: "union" | "intersect" | "subtract" | "exclude";
   exportSettings?: ExportSetting[];
   overlay?: Overlay;
-
-  // TODO(ts-port): unverified field — the producer writes the text under `text` (text.ts); verify-screen.js
-  // reads `characters` as a fallback for an older export shape. No fixture carries it.
-  characters?: string;
 
   // tokens / styles / prototype / handoff
   tokens?: TokenMap;
