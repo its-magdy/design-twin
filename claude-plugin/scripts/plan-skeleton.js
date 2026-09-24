@@ -227,6 +227,17 @@ function parseHex(v) {
   const n = (i) => parseInt(k.slice(i, i + 2), 16);
   return { r: n(1), g: n(3), b: n(5), a: n(7) / 255 };
 }
+function formatHex(c) {
+  const to = (x) => Math.round(Math.min(255, Math.max(0, x))).toString(16).padStart(2, "0");
+  const a = Math.round(c.a * 255);
+  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+}
+function clampOpacityPct(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function composeAlpha(alpha, opacityPct) {
+  return alpha * (clampOpacityPct(opacityPct) / 100);
+}
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
@@ -923,9 +934,7 @@ function resolver(sources, resolvedModes) {
 function composedHex(color, opacity) {
   const c = parseHex(color);
   if (!c || typeof opacity !== "number" || !Number.isFinite(opacity)) return null;
-  const a = Math.round(c.a * (Math.min(100, Math.max(0, opacity)) / 100) * 255);
-  const to = (x) => x.toString(16).padStart(2, "0");
-  return "#" + to(c.r) + to(c.g) + to(c.b) + (a < 255 ? to(a) : "");
+  return formatHex({ ...c, a: composeAlpha(c.a, opacity) });
 }
 var isLegacyRgba = (v) => "r" in v;
 function normValue(type, raw) {
