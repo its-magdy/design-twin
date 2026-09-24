@@ -756,10 +756,10 @@ void (async () => {
   ok("[args] --children + --all-pages is an ERROR", /structural index/.test(usage(["--children", "1:2", "--all-pages"]) || ""));
   ok("[args] --list + --children is an ERROR (two different queries)", /only one/.test(usage(["--list", "--children", "1:2"]) || ""));
   // Read options are ADDITIVE, not scopes — they must keep composing with any one scope flag.
-  ok("[args] read options still compose with a scope flag", (() => {
+  ok("[args] read options still compose with a scope flag", !!((() => {
     const r = parse(["--page", "1:2", "--no-assets", "--css", "--timeout", "60"]);
     return r.pageSel.length === 1 && r.readOpts.skipAssets && r.readOpts.css && r.exportTimeoutMs === 60000;
-  })());
+  })()));
   // …but only with a SCOPE flag. The list ops emit structural fields only — they never serialize a
   // node, so every read option is inert there and used to be discarded without a word. Refused as a
   // group, --no-assets included: it is equally inert (nothing renders on that path), and exempting it
@@ -1175,11 +1175,11 @@ void (async () => {
   ok("[stamp] and the file name too", stamped.file === "My Design File");
 
   const info = readSnapshotInfo(stampDir);
-  ok("[status] readSnapshotInfo finds the export and reports its exportedAt", info && info.exportedAt === stampedAt);
-  ok("[status] and the source file name, under sourceFile (distinct from its OWN `file` = the json path)",
-    info && info.sourceFile === "My Design File" && info.file === path.join(stampDir, "design-system.json"));
-  ok("[status] and computes a plausible age (~5h, generously bounded)",
-    info && (info.ageMs ?? NaN) > 4.9 * 3600000 && (info.ageMs ?? NaN) < 5.1 * 3600000);
+  ok("[status] readSnapshotInfo finds the export and reports its exportedAt", !!(info && info.exportedAt === stampedAt));
+  ok("[status] and the source file name, under sourceFile (distinct from its OWN `file` = the json path)",!!(
+    info && info.sourceFile === "My Design File" && info.file === path.join(stampDir, "design-system.json")));
+  ok("[status] and computes a plausible age (~5h, generously bounded)",!!(
+    info && (info.ageMs ?? NaN) > 4.9 * 3600000 && (info.ageMs ?? NaN) < 5.1 * 3600000));
 
   ok("[status] missing export dir -> null, not a throw (not-yet-exported is not an error)",
     readSnapshotInfo(path.join(stampDir, "does-not-exist")) === null);
@@ -1187,14 +1187,14 @@ void (async () => {
   const noStampDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-nostamp-"));
   pull.writeJson(noStampDir, "design-system.json", { components: [] }, true); // no exportedAt at all
   const noStampInfo = readSnapshotInfo(noStampDir);
-  ok("[status] a snapshot with no exportedAt reports a warning instead of pretending it's fresh",
-    noStampInfo && noStampInfo.exportedAt === undefined && typeof noStampInfo.warning === "string");
+  ok("[status] a snapshot with no exportedAt reports a warning instead of pretending it's fresh",!!(
+    noStampInfo && noStampInfo.exportedAt === undefined && typeof noStampInfo.warning === "string"));
 
   const badJsonDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-badjson-"));
   fs.mkdirSync(badJsonDir, { recursive: true });
   fs.writeFileSync(path.join(badJsonDir, "design-system.json"), "{ not valid json");
   const badInfo = readSnapshotInfo(badJsonDir);
-  ok("[status] unparseable design-system.json reports an error, not a crash", badInfo && typeof badInfo.error === "string");
+  ok("[status] unparseable design-system.json reports an error, not a crash", !!(badInfo && typeof badInfo.error === "string"));
 
   // Live run #5: a single-screen pull writes design/<Screen>.json and NOTHING else that is stamped —
   // no design-system.json, no pages/index.json. Reading only the first meant doctor told someone who
@@ -1204,16 +1204,16 @@ void (async () => {
     const at = new Date(Date.now() - 2 * 3600000).toISOString();
     fs.writeFileSync(path.join(scrDir, "Skills_list.json"), JSON.stringify({ exportedAt: at, screen: "Skills list", nodes: [{ id: "1:2" }], manifest: {} }));
     const i = readSnapshotInfo(scrDir);
-    ok("[status] a single-screen export IS an export — its stamp is found with no design-system.json",
-      i && i.exportedAt === at && (i.ageMs ?? NaN) > 1.9 * 3600000);
-    ok("[status] and a screen doc's `screen` stands in for the source-file name",
-      i && i.sourceFile === "Skills list");
+    ok("[status] a single-screen export IS an export — its stamp is found with no design-system.json",!!(
+      i && i.exportedAt === at && (i.ageMs ?? NaN) > 1.9 * 3600000));
+    ok("[status] and a screen doc's `screen` stands in for the source-file name",!!(
+      i && i.sourceFile === "Skills list"));
     // design/ also holds files this tool GENERATES. None of them may be mistaken for the export.
     fs.writeFileSync(path.join(scrDir, "target.json"), JSON.stringify({ profile: "web-tailwind" }));
     fs.writeFileSync(path.join(scrDir, "tokens.dtcg.json"), JSON.stringify({ color: { bg: { $value: "#fff" } } }));
     fs.writeFileSync(path.join(scrDir, "tokens.resolver.json"), JSON.stringify({ name: "r", sets: [] }));
-    ok("[status] generated files (target/tokens.*) are not mistaken for the export",
-      readSnapshotInfo(scrDir)?.file?.endsWith("Skills_list.json"));
+    ok("[status] generated files (target/tokens.*) are not mistaken for the export",!!(
+      readSnapshotInfo(scrDir)?.file?.endsWith("Skills_list.json")));
     // variables.json IS export-shaped (variables[]) but carries no stamp of its own; a stamped doc
     // sitting next to it must win, or the report reads "freshness unknown" for a fresh export.
     fs.writeFileSync(path.join(scrDir, "variables.json"), JSON.stringify({ variables: [{ name: "x" }] }));
@@ -1225,8 +1225,8 @@ void (async () => {
     const onlyVars = fs.mkdtempSync(path.join(os.tmpdir(), "figma-onlyvars-"));
     fs.writeFileSync(path.join(onlyVars, "variables.json"), JSON.stringify({ variables: [] }));
     const ov = readSnapshotInfo(onlyVars);
-    ok("[status] an unstamped export is reported WITH its warning, not as 'nothing exported'",
-      ov && ov.exportedAt === undefined && /variables\.json/.test(ov.warning ?? ""));
+    ok("[status] an unstamped export is reported WITH its warning, not as 'nothing exported'",!!(
+      ov && ov.exportedAt === undefined && /variables\.json/.test(ov.warning ?? "")));
     // A page walk's index is the third shape.
     const pagesDir = fs.mkdtempSync(path.join(os.tmpdir(), "figma-pages-"));
     fs.mkdirSync(path.join(pagesDir, "pages"));
@@ -1387,7 +1387,7 @@ void (async () => {
     ok("[lib-layout] and the drop is reported, not silent", hyg.hygiene.some((h) => /ANOTHER library were dropped/.test(h)));
 
     const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8")) as LibraryManifest;
-    ok("[lib-layout] the directory self-describes via index.json", idx.files && idx.files.tokens && idx.counts.variables === 1);
+    ok("[lib-layout] the directory self-describes via index.json", !!(idx.files && idx.files.tokens && idx.counts.variables === 1));
     ok("[lib-layout] index summarises publish status", idx.publish && idx.publish.current >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
 
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
@@ -1473,9 +1473,9 @@ void (async () => {
       const s = JSON.stringify(full);
       return !s.includes("\"children\"");
     })());
-  ok("[write-out] but it DOES carry the layer's own name/type, so a screen resolves from the index alone",
+  ok("[write-out] but it DOES carry the layer's own name/type, so a screen resolves from the index alone",!!(
     full.index && Array.isArray(full.index.layers) &&
-    full.index.layers.some((l) => l.name === "Hero" && l.type === "FRAME"));
+    full.index.layers.some((l) => l.name === "Hero" && l.type === "FRAME")));
   ok("[write-out] the freshness stamp survives the write byte-for-byte",
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).exportedAt ===
       "2026-08-12T00:00:00.000Z");
@@ -1557,8 +1557,8 @@ void (async () => {
     !fs.existsSync(path.join(dsOnlyDir, "pages")) && !fs.existsSync(path.join(dsOnlyDir, "assets")));
   ok("[ds-only] wrote.layerFiles/pageDirs/assets all report zero, not a crash",
     dsOnlyResult.wrote.layerFiles === 0 && dsOnlyResult.wrote.pageDirs === 0 && dsOnlyResult.wrote.assets === 0);
-  ok("[ds-split] and the write result reports the same counts back to the MCP caller",
-    full.wrote.designSystemCounts && full.wrote.designSystemCounts.libraryComponents === 1);
+  ok("[ds-split] and the write result reports the same counts back to the MCP caller",!!(
+    full.wrote.designSystemCounts && full.wrote.designSystemCounts.libraryComponents === 1));
 
   // A manifest-only asset (no bytes — e.g. one the plugin skipped) must not be counted as written.
   const skipped: WriteView = OUT.writeAny(path.join(wdir, "skip"), {
@@ -2571,9 +2571,9 @@ void (async () => {
   const pluginLike = (port: number, tok: string) => setTimeout(() => { const c = new WebSocket(`ws://127.0.0.1:${port}/?token=${tok}`, { origin: "null" }); c.on("error", () => {}); }, 150);
   pluginLike(nextPort, "not-the-token");
   const refusedProbe = await doctor.probePlugin(nextPort++, 3000);
-  ok("[doctor] probePlugin: a wrong-token plugin is reported by fingerprint, not as 'nothing running'",
+  ok("[doctor] probePlugin: a wrong-token plugin is reported by fingerprint, not as 'nothing running'",!!(
     refusedProbe.clients?.length === 0 && refusedProbe.badToken && refusedProbe.badToken.fingerprint === store.fingerprint("not-the-token")
-    && refusedProbe.expected === store.fingerprint(TOKEN));
+    && refusedProbe.expected === store.fingerprint(TOKEN)));
   pluginLike(nextPort, TOKEN);
   const goodProbe = await doctor.probePlugin(nextPort++, 3000);
   ok("[doctor] probePlugin: a right-token plugin is reported connected", goodProbe.clients?.length === 1 && !goodProbe.badToken);

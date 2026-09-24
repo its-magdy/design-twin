@@ -31,12 +31,11 @@ export function check(name: string, cond: boolean): boolean {
   return cond;
 }
 
-// `ok` still takes any truthy value: test/harness.ts, test/bridge.test.ts and test/identity.test.ts pass
-// 91 non-boolean conditions to it (`x && x.y`, `boolean | undefined`, …). Every design-to-code suite
-// imports the strict `check` (as `ok` where it reads better). Once those 91 call sites say what they
-// check, `ok` becomes `check` and this shim goes.
-export function ok(name: string, cond: unknown): boolean {
-  return check(name, !!cond);
+// `ok` is now just an alias of `check`, kept so the ~91 existing call sites in test/harness.ts,
+// test/bridge.test.ts and test/identity.test.ts (and the name itself, which reads better in some
+// places) didn't all need renaming once every call site was made to pass a real boolean.
+export function ok(name: string, cond: boolean): boolean {
+  return check(name, cond);
 }
 
 // Exit non-zero if anything failed. Returns the counts so a caller can use them instead of exiting.
