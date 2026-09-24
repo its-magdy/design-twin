@@ -1317,6 +1317,7 @@
   var TEXT_SEG_FIELDS = [
     "fontName",
     "fontSize",
+    "fontWeight",
     "lineHeight",
     "letterSpacing",
     "textCase",
@@ -1438,6 +1439,7 @@
     const ao = { type: (a.type || "").toLowerCase() };
     if (a.type === "URL") {
       ao.url = a.url;
+      if (a.openInNewTab === true) ao.openInNewTab = true;
     } else if (a.type === "UPDATE_MEDIA_RUNTIME") {
       if (a.destinationId) {
         ao.destinationId = a.destinationId;
@@ -2859,8 +2861,10 @@
     const nodeId = toNodeId(rawId);
     if (!nodeId) throw new Error("No node id provided.");
     const localWarnings = [];
-    const node = await findNodeById(nodeId, (m) => localWarnings.push(m));
+    const sink = (m) => localWarnings.push(m);
+    const node = await findNodeById(nodeId, sink);
     if (!("children" in node)) throw new Error("Node " + nodeId + " (" + node.type + ") is a leaf \u2014 it has no children to list.");
+    if (node.type === "PAGE" && node.id !== figma.currentPage.id) await loadPageSafely(node, sink, "before listing its children");
     let kids;
     try {
       kids = node.children;
@@ -2868,9 +2872,17 @@
       throw new Error("Node " + nodeId + "'s children could not be read: " + errMsg(e));
     }
     const children = [];
+    if (node.type === "DOCUMENT") {
+      await Promise.all(kids.map((p) => loadPageSafely(p, sink, "\u2014 hasChildren omitted")));
+    }
     for (const nd of kids) {
       const c = summarize(nd);
-      if ("children" in nd) c.hasChildren = nd.children.length > 0;
+      if ("children" in nd) {
+        try {
+          c.hasChildren = nd.children.length > 0;
+        } catch (e) {
+        }
+      }
       children.push(c);
     }
     return {

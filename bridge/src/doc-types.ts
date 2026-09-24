@@ -256,6 +256,7 @@ export interface Action {
   type: ActionType;
   navigation?: ActionNavigation;
   url?: string;
+  openInNewTab?: true;
   destinationId?: string;
   /** the destination node's NAME, resolved */
   destination?: string;

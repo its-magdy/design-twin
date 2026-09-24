@@ -192,7 +192,7 @@ const textNode = {
   componentPropertyReferences: { characters: "Label#1:0" }, // prop-driven text
   getStyledTextSegments: () => ([
     { characters: "Hello ", fontName: { family: "Inter", style: "Regular" }, fontSize: 24, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "NONE", fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], hyperlink: null, listOptions: { type: "NONE" }, boundVariables: {} },
-    { characters: "World", fontName: { family: "Inter", style: "Bold" }, fontSize: 24, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
+    { characters: "World", fontName: { family: "Inter", style: "Bold" }, fontSize: 24, fontWeight: 700, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
   ]),
 };
 const gradientRect = {
@@ -218,6 +218,8 @@ const button = {
     { type: "SET_VARIABLE_MODE", variableCollectionId: "c_sem", variableModeId: "m_dark" },
     { type: "CONDITIONAL", conditionalBlocks: [{ condition: { value: true }, actions: [{ type: "NODE", navigation: "NAVIGATE", destinationId: "frame_2" }] }] },
     { type: "UPDATE_MEDIA_RUNTIME", destinationId: "frame_2", mediaAction: "PLAY" },
+    { type: "URL", url: "https://newtab.example.com", openInNewTab: true },
+    { type: "URL", url: "https://sametab.example.com" },
   ] }],
   getMainComponentAsync: async () => ({
     name: "Button", id: "comp:btn1", key: "compkey_btn", remote: false,
@@ -380,6 +382,7 @@ const sandbox = context as unknown as Sandbox;
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
+  ok("text run numeric weight from segment fontWeight", txt.runs![1].font.weightValue === 700);
   ok("text run underline decoration", txt.runs![1].font.decoration === "underline");
   ok("text run href", txt.runs![1].href === "https://x.com");
   ok("lineHeight unit carried (percent)", !!(txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent"));
@@ -572,6 +575,10 @@ const sandbox = context as unknown as Sandbox;
   ok("UPDATE_MEDIA_RUNTIME keeps destinationId + resolved destination name",
     acts!.some((a) => a.type === "update_media_runtime" && a.mediaAction === "play" && a.destinationId === "frame_2" && a.destination === "Details"));
   ok("CONDITIONAL nests actions", acts!.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions![0].destination === "Details"));
+  const urlNewTab = acts!.find((a) => a.type === "url" && a.url === "https://newtab.example.com");
+  const urlSameTab = acts!.find((a) => a.type === "url" && a.url === "https://sametab.example.com");
+  ok("URL action emits openInNewTab when true", !!urlNewTab && urlNewTab.openInNewTab === true);
+  ok("URL action omits openInNewTab when unset", !!urlSameTab && !("openInNewTab" in urlSameTab));
 
   ok("collection defaultModeId -> mode name", ds.collections.find((c) => c.name === "Semantic")!.default === "Light");
   ok("variable description captured", ds.variables.find((v) => v.name === "color/primary")!.description === "Primary brand color");
@@ -1101,6 +1108,42 @@ const sandbox = context as unknown as Sandbox;
   ok("[CHILDREN] and stops as soon as the node resolves (later pages untouched)", incrementalLoads < sandbox.figma.root.children.length);
   sandbox.figma.root.children = prevRoot3;
   sandbox.figma.loadAllPagesAsync = prevLoadAll3;
+
+  // listChildren(pageId) on a page that ISN'T current: under dynamic-page access PageNode.children
+  // throws until loadAsync() has run — https://developers.figma.com/docs/plugins/migrating-to-dynamic-loading/.
+  // The fake page's `children` getter enforces exactly that.
+  let otherPageLoaded = false;
+  const otherPageFrame = { id: "opf:1", name: "Hero", type: "FRAME", width: 300, height: 100 };
+  const otherPage = {
+    type: "PAGE", id: "page:other", name: "Other Page",
+    loadAsync: async () => { otherPageLoaded = true; },
+    get children() {
+      if (!otherPageLoaded) throw new Error("children could not be read (page not loaded)");
+      return [otherPageFrame];
+    },
+  };
+  sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:other" ? otherPage : null);
+  const pageKids = await sandbox.listChildren("page:other");
+  ok("[CHILDREN] a non-current page is loaded before its children are read", pageKids.children.length === 1 && pageKids.children[0].id === "opf:1");
+
+  // listChildren("0:0") — the DOCUMENT node: its children are PageNodes, and reading `hasChildren` on
+  // each of THEM has the identical dynamic-page rule, so every page must be loaded first too.
+  let docPageALoaded = false, docPageBLoaded = false;
+  const docPageA = {
+    type: "PAGE", id: "page:a", name: "A",
+    loadAsync: async () => { docPageALoaded = true; },
+    get children() { if (!docPageALoaded) throw new Error("not loaded"); return [{ id: "a:frame", name: "F", type: "FRAME" }]; },
+  };
+  const docPageB = {
+    type: "PAGE", id: "page:b", name: "B",
+    loadAsync: async () => { docPageBLoaded = true; },
+    get children() { if (!docPageBLoaded) throw new Error("not loaded"); return []; },
+  };
+  const documentNode = { type: "DOCUMENT", id: "0:0", name: "My File", children: [docPageA, docPageB] };
+  sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "0:0" ? documentNode : null);
+  const docKids = await sandbox.listChildren("0:0");
+  ok("[CHILDREN] listChildren(\"0:0\") succeeds and lists pages", docKids.children.length === 2 && docKids.children.some((c) => c.id === "page:a"));
+  ok("[CHILDREN] each page was loaded before its hasChildren was read", docKids.children.find((c) => c.id === "page:a")!.hasChildren === true && docKids.children.find((c) => c.id === "page:b")!.hasChildren === false);
 
   sandbox.figma.getNodeByIdAsync = prevGetNodeC;
 
