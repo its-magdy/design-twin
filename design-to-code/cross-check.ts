@@ -255,7 +255,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   function flatten(v: Variable | null | undefined): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [mode, val] of Object.entries((v && v.values) || {})) {
-      out[mode] = val && typeof val === "object" ? (val.aliasOf != null ? "-> " + val.aliasOf : JSON.stringify(val)) : String(val);
+      // A composed colour ({composed: {color, opacity}}) is shown as its JSON — it has no single alias to follow.
+      out[mode] = val && typeof val === "object" ? ("aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val)) : String(val);
     }
     return out;
   }
@@ -805,7 +806,9 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
       val = v.values[keys[0]];
     }
     if (typeof val === "string") return parseHex(val);
-    if (val && typeof val === "object" && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
+    if (val && typeof val === "object" && "aliasOf" in val && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
+    // A composed colour needs its opacity applied to the colour half; until the opacity unit is settled
+    // (tokens.ts keeps it under $extensions) it does not resolve to one RGBA here.
     return null;
   }
 

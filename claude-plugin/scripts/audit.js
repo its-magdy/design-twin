@@ -694,7 +694,7 @@ function crossCheck(input) {
   function flatten(v) {
     const out = {};
     for (const [mode, val] of Object.entries(v && v.values || {})) {
-      out[mode] = val && typeof val === "object" ? val.aliasOf != null ? "-> " + val.aliasOf : JSON.stringify(val) : String(val);
+      out[mode] = val && typeof val === "object" ? "aliasOf" in val ? "-> " + val.aliasOf : JSON.stringify(val) : String(val);
     }
     return out;
   }
@@ -1083,7 +1083,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
       val = v.values[keys[0]];
     }
     if (typeof val === "string") return parseHex(val);
-    if (val && typeof val === "object" && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
+    if (val && typeof val === "object" && "aliasOf" in val && val.aliasOf) return resolve(val.aliasOf, mode, depth + 1);
     return null;
   }
   const modes = /* @__PURE__ */ new Set();

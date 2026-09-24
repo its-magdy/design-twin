@@ -3,7 +3,8 @@
 // Consumes the `designSystem` shape from figma-plugin/code.js buildDesignSystem()/dumpVariables():
 //   { colorProfile?, collections:[{name,modes:[modeName],default,theming}],
 //     variables:[{ name:"color/primary", type:"COLOR"|"FLOAT"|"STRING"|"BOOLEAN",
-//                  collection, values:{ modeName: "#2563eb" | 123 | {aliasOf:"blue/600"} }, ... }] }
+//                  collection, values:{ modeName: "#2563eb" | 123 | {aliasOf:"blue/600"}
+//                                               | {composed:{color, opacity}} }, ... }] }
 //
 // Emits:
 //   toDTCG(ds[, warnings, opts]) -> W3C DTCG JSON in the STABLE 2025.10 format (references PRESERVED
@@ -12,6 +13,19 @@
 //                             unitless ones as "number"; every leaf carries a valid $type).
 //                             Not emitted: composite types (typography/shadow/…). Modes ride in
 //                             $extensions["figma.com"].modes here AND in the resolver below.
+//                             A COMPOSED colour (Figma Update 139: a colour plus a separate opacity,
+//                             one or both of them variable aliases) is a $type "color" token whose
+//                             $value is the colour half (a "{ref}" or a structured colour). DTCG
+//                             2025.10 has no way to put a reference and an opacity in one colour
+//                             value, so the opacity half (a number or a "{ref}") rides in
+//                             $extensions["figma.com"].opacity (per-mode: .modeOpacity), in
+//                             tokens.dtcg.json AND in the resolver set files. The number is Figma's,
+//                             verbatim: the typings call it an "opacity percentage" and Figma's guide
+//                             (working-with-variables, "Authoring a composed color variable") sets the
+//                             opacity variable to 60, i.e. a 0–100 scale — but no page states the range
+//                             outright, so it is not rescaled or folded into `alpha` yet.
+//                             tokens.css/theme.css write the colour half only, and
+//                             lintTokens says so.
 //   toResolver(ds[, warnings, opts]) -> { resolver, files }: a DTCG **Resolver Module** 2025.10
 //                             document (the spec-blessed portable theming mechanism) plus the token
 //                             files it $refs. Each multi-mode collection becomes a modifier whose
@@ -36,6 +50,7 @@ import { normHex } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { nullProto } from "../bridge/src/json-util.ts";
+import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
 export interface EmitOpts extends UnitOpts {
@@ -56,8 +71,14 @@ export interface DtcgColor { colorSpace: DtcgColorSpace; components: number[]; a
 /** The DTCG 2025.10 $types this emitter writes (BOOLEAN is coerced to "string"; a length FLOAT is "dimension"). */
 export type DtcgType = "color" | "number" | "string" | "dimension";
 export type DtcgLeafValue = string | number | boolean | DtcgDimension | DtcgColor;
+/** A composed colour's opacity half: Figma's number verbatim, or a "{ref}" to the opacity token. */
+export type DtcgOpacity = number | string;
 export interface DtcgFigmaExtension {
   modes?: Record<string, DtcgLeafValue>;
+  /** composed colour: the opacity half of $value (see the header comment) */
+  opacity?: DtcgOpacity;
+  /** composed colour, 2+ modes: the opacity half per mode (only modes whose value is composed) */
+  modeOpacity?: Record<string, DtcgOpacity>;
   key?: string;
   sentinel?: { figmaValue: VariableValue; meaning: string };
   scopes?: string[];
@@ -305,6 +326,26 @@ const webNumber = (v: Variable, raw: VariableValue): VariableValue => (isSentine
 const isHexish = (v: unknown): v is string => typeof v === "string" && /^#/.test(v);
 const isScalar = (v: unknown): v is string | number | boolean => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 const isAlias = (v: unknown): v is VariableAlias => !!v && typeof v === "object" && "aliasOf" in v && typeof v.aliasOf === "string";
+// A composed colour {composed:{color, opacity}} (doc-types ComposedColor). Each half is checked, so a
+// hand-written token file with a malformed `composed` object is a non-scalar value (skipped + reported),
+// never a half-read one.
+const isComposed = (v: unknown): v is VariableComposedColor => {
+  if (!v || typeof v !== "object" || !("composed" in v)) return false;
+  const c = v.composed;
+  if (!c || typeof c !== "object" || !("color" in c) || !("opacity" in c)) return false;
+  const colorOk = typeof c.color === "string" || isAlias(c.color);
+  const opacityOk = typeof c.opacity === "number" || isAlias(c.opacity);
+  return colorOk && opacityOk && (isAlias(c.color) || isAlias(c.opacity));
+};
+// The alias names a value references: a top-level alias, or a composed colour's nested alias(es).
+function aliasNames(v: unknown): string[] {
+  if (isAlias(v)) return [v.aliasOf];
+  if (!isComposed(v)) return [];
+  const out: string[] = [];
+  if (isAlias(v.composed.color)) out.push(v.composed.color.aliasOf);
+  if (isAlias(v.composed.opacity)) out.push(v.composed.opacity.aliasOf);
+  return out;
+}
 
 // --- CSS string safety. A custom-property value is a token stream, so a STRING token can break out of
 // its declaration three different ways; all three are neutralized with CSS hex escapes (`\3b ` etc.):
@@ -405,8 +446,14 @@ function baseValue(variable: Variable, collections: VariableCollection[] | undef
 // `dimension`: the FLOAT is a length (see unitDecision) — DTCG 2025.10 requires the object form
 // {value, unit:"px"|"rem"} for $type "dimension"; a bare number there is non-conformant.
 // Only a scalar or an alias has a DTCG value here: an object (a motion value) is null — never "[object Object]".
+// A composed colour's $value is its COLOUR half — a reference, or the structured colour of its hex (a
+// malformed hex is null: skipped + reported); the opacity half is dtcgOpacity's, under $extensions.
 function dtcgValue(raw: VariableValue, colorProfile: string | undefined, dimension: boolean, ref?: (name: string) => string): DtcgLeafValue | null {
   if (isAlias(raw)) return ref ? ref(raw.aliasOf) : dtcgRef(raw.aliasOf);
+  if (isComposed(raw)) {
+    const { color } = raw.composed;
+    return isAlias(color) ? (ref ? ref(color.aliasOf) : dtcgRef(color.aliasOf)) : hexToColorValue(color, colorProfile);
+  }
   if (!isScalar(raw)) return null;
   if (dimension) {
     const n = typeof raw === "number" ? raw : Number(raw);
@@ -414,6 +461,13 @@ function dtcgValue(raw: VariableValue, colorProfile: string | undefined, dimensi
   }
   const c = isHexish(raw) ? hexToColorValue(raw, colorProfile) : null;
   return c || raw;
+}
+// The opacity half of a composed colour, for $extensions["figma.com"]: the number verbatim, or a
+// "{ref}" built exactly like a $value reference. Undefined for every other value.
+function dtcgOpacity(raw: VariableValue | undefined, ref?: (name: string) => string): DtcgOpacity | undefined {
+  if (!isComposed(raw)) return undefined;
+  const { opacity } = raw.composed;
+  return isAlias(opacity) ? (ref ? ref(opacity.aliasOf) : dtcgRef(opacity.aliasOf)) : opacity;
 }
 
 // Build nested DTCG groups from "a/b/c". ONE builder behind BOTH emitters that produce DTCG trees:
@@ -491,6 +545,8 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     // font-weight) stays a `number`.
     const dimension = v.type === "FLOAT" && unitDecision(v, opts) === "px";
     if (dimension) type = "dimension";
+    // Figma composes COLOR values only; one on any other type would put a colour under a non-colour $type.
+    if (isComposed(bv) && v.type !== "COLOR") { warn(`token '${v.name}' is a ${v.type} variable holding a composed colour value — skipped`); continue; }
     const aliasRef = ref(v);
     const dv = dtcgValue(webNumber(v, bv), colorProfile, dimension, aliasRef);
     if (dv === null) { warn(`token '${v.name}' has a non-scalar value ${JSON.stringify(bv)} — skipped`); continue; }
@@ -506,17 +562,31 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
     const leaf: DtcgLeaf = { $type: type, $value: value };
     if (v.description) leaf.$description = v.description;
 
-    if (!withExtensions) { node[leafKey] = leaf; continue; } // resolver set files: modes live in the resolver
+    // A composed colour's opacity half travels with its $value in EVERY tree — a resolver set file
+    // picks one mode's value, so without it that file would carry the colour and silently drop the opacity.
+    const opacity = dtcgOpacity(bv, aliasRef);
+
+    if (!withExtensions) { // resolver set files: modes live in the resolver
+      if (opacity !== undefined) leaf.$extensions = { "figma.com": { opacity } };
+      node[leafKey] = leaf; continue;
+    }
 
     const values = v.values || {};
     const modeKeys = Object.keys(values);
     const ext: DtcgFigmaExtension = {};
+    if (opacity !== undefined) ext.opacity = opacity;
     // Null-prototype: keyed by MODE NAMES, which are free-form designer strings (the Plugin API
     // documents no character/reserved-word restriction on addMode/renameMode) arriving via JSON.parse
     // — which, unlike an object literal, creates a REAL own "__proto__" key. On a plain object
     // `modes["__proto__"] = {...}` sets the prototype instead of an own key, so the mode vanished from
     // the emitted JSON with no warning. Same hardening as toDTCG's reserved-key guard on token NAMES.
     if (modeKeys.length > 1) { const modes: Record<string, DtcgLeafValue> = nullProto(); for (const m of modeKeys) { const mv = values[m] === undefined ? null : dtcgValue(webNumber(v, values[m]), colorProfile, dimension, aliasRef); if (mv !== null) modes[m] = mv; } ext.modes = modes; }
+    // …and each composed mode's opacity half beside it (null-prototype for the same reason as `modes`).
+    if (modeKeys.length > 1 && modeKeys.some((m) => isComposed(values[m]))) {
+      const byMode: Record<string, DtcgOpacity> = nullProto();
+      for (const m of modeKeys) { const o = dtcgOpacity(values[m], aliasRef); if (o !== undefined) byMode[m] = o; }
+      ext.modeOpacity = byMode;
+    }
     // The key is the variable's identity (the name is not unique — see planIds), so it travels with
     // the token: a consumer can always get back from an emitted name to the one Figma variable.
     if (typeof v.key === "string" && v.key) ext.key = v.key;
@@ -554,7 +624,8 @@ function toDTCG(designSystem: TokensDoc | null | undefined, warnings?: string[],
 // `px` is the safe default. Emitting them unitless would be wrong (`line-height: 24` = 24x font size)
 // and for letter-spacing outright invalid CSS (a bare number is not a valid <length>). Use opts.unitless
 // to override per-token when a source genuinely encodes a multiplier.
-const UNITLESS_SCOPES = new Set(["OPACITY", "FONT_WEIGHT"]);
+// COLOR_OPACITY (typings 1.139): a FLOAT offered as the opacity half of a composed colour — an opacity too.
+const UNITLESS_SCOPES = new Set(["OPACITY", "COLOR_OPACITY", "FONT_WEIGHT"]);
 // Scopes are only a signal when the designer NARROWED them. Figma's default is ALL_SCOPES, and real
 // files overwhelmingly leave it there (it's the very smell `hygiene[]` reports) — so a scopes-only
 // rule emits `font-weight: 500px` / `opacity: 0.5px` on the common case. Both are invalid CSS the
@@ -605,6 +676,9 @@ function numberUnit(variable: Variable, opts?: UnitOpts): string {
 // A value -> CSS text. Reference -> var(); color -> hex; number -> `${n}${unit}` (0 stays unitless).
 function cssValue(raw: VariableValue, unit: string, ref?: (name: string) => string): string {
   if (isAlias(raw)) return "var(" + (ref ? ref(raw.aliasOf) : cssVarName(raw.aliasOf)) + ")";
+  // Composed colour: the colour half only. Applying the opacity needs its range, which Figma does not
+  // document — lintNames reports every token this drops an opacity from (never silent).
+  if (isComposed(raw)) return cssValue(raw.composed.color, unit, ref);
   const e = isHexish(raw) ? normHex(raw) : null;
   if (e) return e;
   const fmtNum = (s: string): string => (s === "0" ? "0" : unit ? s + unit : s); // 0 stays unitless; String(0) === "0"
@@ -974,8 +1048,16 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
   // Dangling aliases: an aliasOf whose target isn't a defined token.
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
-    const val = v.values[m];
-    if (isAlias(val) && !names.has(segs(val.aliasOf).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${val.aliasOf}'`);
+    // A composed colour's nested alias(es) dangle exactly like a top-level one.
+    for (const target of aliasNames(v.values[m])) {
+      if (!names.has(segs(target).join("."))) warnings.push(`token '${v.name}' (mode ${m}) references undefined token '${target}'`);
+    }
+  }
+  // Composed colours: tokens.css / theme.css write the colour half only (see cssValue).
+  for (const v of vars) {
+    if (v.type !== "COLOR") continue;
+    const m = Object.keys(v.values || {}).find((k) => isComposed(v.values[k]));
+    if (m !== undefined) warnings.push(`token '${v.name}' (mode ${m}) is a composed colour (colour + separate opacity); tokens.css/theme.css carry the colour only — the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
   }
   // STRING tokens carrying CSS-structural characters are emitted escaped (see cssEscapeText) — report
   // so the author knows the value was rewritten rather than passed through verbatim. cssNeedsEscape

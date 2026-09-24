@@ -890,6 +890,7 @@ function resolver(sources, resolvedModes) {
       const r = resolve(target, depth + 1);
       return { value: r.value, mode, via: raw.aliasOf };
     }
+    if (raw && typeof raw === "object" && "composed" in raw) return { value: null, mode };
     return { value: normValue(v.type, raw), mode };
   }
   return (v) => resolve(v, 0);

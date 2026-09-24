@@ -192,6 +192,8 @@ function resolver(sources: ReadonlyArray<TokensDoc | null | undefined>, resolved
       const r = resolve(target, depth + 1);
       return { value: r.value, mode, via: raw.aliasOf };
     }
+    // A composed colour (colour + separate opacity, either an alias) has no single resolved value here.
+    if (raw && typeof raw === "object" && "composed" in raw) return { value: null, mode };
     return { value: normValue(v.type, raw), mode };
   }
   return (v) => resolve(v, 0);

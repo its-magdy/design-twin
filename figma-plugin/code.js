@@ -929,9 +929,34 @@
   function resolvedModes(node) {
     return resolveModeMap(node.resolvedVariableModes, true);
   }
+  function isComposedColor(v) {
+    return typeof v === "object" && "opacity" in v && "color" in v;
+  }
+  function colorIsAlias(v) {
+    return isVariableAlias(v.color);
+  }
+  function aliasIds(v) {
+    if (isVariableAlias(v)) return v.id ? [v.id] : [];
+    if (!isComposedColor(v)) return [];
+    const out = [];
+    if (isVariableAlias(v.color) && v.color.id) out.push(v.color.id);
+    if (isVariableAlias(v.opacity) && v.opacity.id) out.push(v.opacity.id);
+    return out;
+  }
+  async function aliasValue(a) {
+    return { aliasOf: await varName(a.id) || a.id };
+  }
+  async function composedValue(v) {
+    if (colorIsAlias(v)) {
+      const [color, opacity] = await Promise.all([aliasValue(v.color), isVariableAlias(v.opacity) ? aliasValue(v.opacity) : v.opacity]);
+      return { composed: { color, opacity } };
+    }
+    return { composed: { color: rgbaToHex(v.color), opacity: await aliasValue(v.opacity) } };
+  }
   async function resolveModeValue(v, resolvedType) {
-    if (isVariableAlias(v)) return { aliasOf: await varName(v.id) || v.id };
+    if (isVariableAlias(v)) return aliasValue(v);
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+    if (isComposedColor(v)) return composedValue(v);
     if (resolvedType === "COLOR" && "r" in v && typeof v.r === "number") return rgbaToHex(v);
     return verbatimValue(v);
   }
@@ -962,10 +987,7 @@
     const hygiene = [];
     const aliasTargets = (v) => {
       const out = [];
-      for (const modeId of Object.keys(v.valuesByMode || {})) {
-        const raw = v.valuesByMode[modeId];
-        if (isVariableAlias(raw) && raw.id) out.push(raw.id);
-      }
+      for (const modeId of Object.keys(v.valuesByMode || {})) out.push(...aliasIds(v.valuesByMode[modeId]));
       return out;
     };
     const remoteVars = [];
@@ -999,9 +1021,9 @@
       for (let i = 0; i < modeIds.length; i++) {
         const modeId = modeIds[i];
         const raw = v.valuesByMode[modeId];
-        if (isVariableAlias(raw)) {
-          hasAlias = true;
-          if (!resolvedIds.has(raw.id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + raw.id + " could not be resolved");
+        if (isVariableAlias(raw) || isComposedColor(raw)) hasAlias = true;
+        for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
+          if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
         }
         values[modeName[modeId] || modeId] = resolved[i];
       }

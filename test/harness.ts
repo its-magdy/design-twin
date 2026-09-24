@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { ok, report } from "./assert.ts";
 import type {
   IrNode, ScreenExport, Manifest, VariablesDoc, DesignSystemDoc, DesignSystemStyles, CatalogComponent, LayersDoc,
-  Paint, Effect, VariableValue, RadiusCorners, Asset,
+  Paint, Effect, VariableValue, ComposedColor, RadiusCorners, Asset,
 } from "../bridge/src/doc-types.ts";
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
@@ -158,7 +158,9 @@ type AnyOf<U> = { [K in U extends unknown ? keyof U : never]?: U extends unknown
 const flatPaint = (p: Paint): AnyOf<Paint> => p;
 const flatEffect = (e: Effect): AnyOf<Effect> => e;
 /** A variable's per-mode value's alias target — `undefined` for a raw value, like `.aliasOf` on it was. */
-const aliasOf = (v: VariableValue): string | undefined => (typeof v === "object" ? v.aliasOf : undefined);
+const aliasOf = (v: VariableValue): string | undefined => (typeof v === "object" && "aliasOf" in v ? v.aliasOf : undefined);
+/** A variable's per-mode value's composed-colour halves — `undefined` for anything else. */
+const composedOf = (v: VariableValue | undefined): ComposedColor | undefined => (typeof v === "object" && "composed" in v ? v.composed : undefined);
 
 
 const MIXED = Symbol("figma.mixed");
@@ -931,7 +933,7 @@ const sandbox = context as unknown as Sandbox;
     const names = new Set(chainSel.variables.variables.map((v) => v.name));
     for (const v of chainSel.variables.variables) {
       for (const val of Object.values(v.values || {})) {
-        if (val && typeof val === "object" && val.aliasOf && !names.has(val.aliasOf)) return false;
+        if (val && typeof val === "object" && "aliasOf" in val && val.aliasOf && !names.has(val.aliasOf)) return false;
       }
     }
     return true;
@@ -959,6 +961,60 @@ const sandbox = context as unknown as Sandbox;
   ok("dangling-alias warning names the unresolved id", aliasHyg.some((h) => /v_deleted/.test(h)));
   delete VARS.v_aliases_lib;
   delete VARS.v_dangling;
+
+  // ---- COMPOSED colour variables (plugin-typings 1.139, Figma Update 139) ----
+  // VariableComposedColor = {color: RGB|RGBA, opacity: VariableAlias} | {color: VariableAlias, opacity: number|VariableAlias}.
+  // Its nested alias(es) must be treated like a top-level alias: resolved to a name in the IR, pulled
+  // in from the library when only the composed value references them, counted for the tier and the
+  // "raw value in a multi-mode collection" hygiene check, and reported when they dangle.
+  EXTRA.v_libop = { id: "v_libop", name: "brand/opacity-60", resolvedType: "FLOAT", variableCollectionId: "c_lib",
+    scopes: ["COLOR_OPACITY"], codeSyntax: {}, remote: true, valuesByMode: { m_l: 60, m_d: 40 } };
+  EXTRA.v_libink = { id: "v_libink", name: "brand/ink", resolvedType: "COLOR", variableCollectionId: "c_lib",
+    scopes: [], codeSyntax: {}, remote: true, valuesByMode: { m_l: { r: 0, g: 0, b: 0, a: 1 }, m_d: { r: 1, g: 1, b: 1, a: 1 } } };
+  // form 1: raw colour + opacity alias, in BOTH modes of a two-mode collection
+  VARS.v_comp_raw = { id: "v_comp_raw", name: "overlay/scrim", resolvedType: "COLOR", variableCollectionId: "c_sem",
+    scopes: ["FRAME_FILL"], codeSyntax: {}, remote: false, valuesByMode: {
+      m_light: { color: { r: 0, g: 0, b: 0, a: 1 }, opacity: { type: "VARIABLE_ALIAS", id: "v_libop" } },
+      m_dark: { color: { r: 1, g: 1, b: 1 }, opacity: { type: "VARIABLE_ALIAS", id: "v_libop" } } } };
+  // form 2: colour alias + raw opacity (Light) / colour alias + opacity alias (Dark)
+  VARS.v_comp_alias = { id: "v_comp_alias", name: "text/muted", resolvedType: "COLOR", variableCollectionId: "c_sem",
+    scopes: [], codeSyntax: {}, remote: false, valuesByMode: {
+      m_light: { color: { type: "VARIABLE_ALIAS", id: "v_libink" }, opacity: 50 },
+      m_dark: { color: { type: "VARIABLE_ALIAS", id: "v_libink" }, opacity: { type: "VARIABLE_ALIAS", id: "v_libop" } } } };
+  // a composed colour whose opacity alias dangles
+  VARS.v_comp_ghost = { id: "v_comp_ghost", name: "text/ghost", resolvedType: "COLOR", variableCollectionId: "c_sem",
+    scopes: ["TEXT_FILL"], codeSyntax: {}, remote: false, valuesByMode: {
+      m_light: { color: { type: "VARIABLE_ALIAS", id: "v_libink" }, opacity: { type: "VARIABLE_ALIAS", id: "v_gone" } } } };
+  sandbox.figma.currentPage.selection = [libNode];
+  const compSel = await sandbox.collectSelection({ css: false });
+  const compVar = (n: string) => compSel.variables.variables.find((v) => v.name === n);
+  const scrim = compVar("overlay/scrim"), muted = compVar("text/muted");
+  const scrimL = composedOf(scrim && scrim.values.Light), scrimD = composedOf(scrim && scrim.values.Dark);
+  const mutedL = composedOf(muted && muted.values.Light), mutedD = composedOf(muted && muted.values.Dark);
+  ok("[composed] raw colour + opacity alias -> {composed:{color:hex, opacity:{aliasOf}}}",
+    JSON.stringify(scrim && scrim.values.Light) === JSON.stringify({ composed: { color: "#000000", opacity: { aliasOf: "brand/opacity-60" } } }));
+  ok("[composed] a raw RGB (no alpha) colour half folds to 6-digit hex like any COLOR value", !!scrimD && scrimD.color === "#ffffff");
+  ok("[composed] colour alias + raw opacity -> {composed:{color:{aliasOf}, opacity:<number verbatim>}}",
+    JSON.stringify(muted && muted.values.Light) === JSON.stringify({ composed: { color: { aliasOf: "brand/ink" }, opacity: 50 } }));
+  ok("[composed] both halves aliases -> both resolved to names",
+    !!mutedD && typeof mutedD.color === "object" && mutedD.color.aliasOf === "brand/ink" && typeof mutedD.opacity === "object" && mutedD.opacity.aliasOf === "brand/opacity-60");
+  ok("[composed] every mode of both composed variables is emitted composed", !!scrimL && !!scrimD && !!mutedL && !!mutedD);
+  const libOp = compVar("brand/opacity-60"), libInk = compVar("brand/ink");
+  ok("[composed] library var reached ONLY via a nested OPACITY alias is pulled in (aliasTargets)",
+    !!libOp && libOp.remote === true && libOp.values.Light === 60);
+  ok("[composed] library var reached ONLY via a nested COLOR alias is pulled in (aliasTargets)",
+    !!libInk && libInk.values.Light === "#000000");
+  ok("[composed] COLOR_OPACITY scope carried through verbatim", !!libOp && (libOp.scopes || []).includes("COLOR_OPACITY"));
+  ok("[composed] a composed value counts as an alias for the tier (semantic even when unscoped)", !!muted && muted.tier === "semantic");
+  ok("[composed] no 'raw value in a multi-mode collection' hygiene line for a composed colour",
+    !compSel.variables.hygiene.some((h) => /semantic color '(overlay\/scrim|text\/muted)'/.test(h)));
+  ok("[composed] resolved nested aliases are not called broken", !compSel.variables.hygiene.some((h) => /broken alias in '(overlay\/scrim|text\/muted)'/.test(h)));
+  ok("[composed] a dangling NESTED alias is reported with its id", compSel.variables.hygiene.some((h) => /broken alias in 'text\/ghost'.*v_gone/.test(h)));
+  delete VARS.v_comp_raw;
+  delete VARS.v_comp_alias;
+  delete VARS.v_comp_ghost;
+  delete EXTRA.v_libop;
+  delete EXTRA.v_libink;
   sandbox.figma.variables.getVariableByIdAsync = prevGetVar;
   sandbox.figma.variables.getVariableCollectionByIdAsync = prevGetColl;
   sandbox.figma.currentPage.selection = [scrollFrame];

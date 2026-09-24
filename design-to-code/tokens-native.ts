@@ -112,7 +112,8 @@ function kindOf(v: Variable, opts?: NativeOpts): NativeKind | null {
   return null;
 }
 
-const isNativeScalar = (x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
+const isComposed = (x: unknown): boolean => !!x && typeof x === "object" && "composed" in x;
+const isNativeScalar =(x: unknown): x is string | number | boolean => typeof x === "string" || typeof x === "number" || typeof x === "boolean";
 function resolve(byName: Map<string, Variable>, collections: VariableCollection[], v: Variable, mode: string, seen?: Set<string>): string | number | boolean | undefined {
   const values = v.values || {};
   let raw: VariableValue | undefined = values[mode];
@@ -146,6 +147,12 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       const kind = kindOf(v, opts);
       if (!segs(v.name).length) continue;
       if (!kind) { warnings.push(`${v.name}: skipped — a ${v.type} variable has no native token form (only COLOR, FLOAT, STRING and BOOLEAN are emitted)`); continue; }
+      // A composed colour (colour + separate opacity, doc-types ComposedColor) has no single native
+      // literal: folding the opacity into the colour needs its range, which Figma does not document.
+      if (Object.values(v.values || {}).some(isComposed)) {
+        warnings.push(`${v.name}: skipped — a composed colour (colour + separate opacity) has no native literal; tokens.dtcg.json carries it (colour reference in $value, opacity in $extensions["figma.com"].opacity)`);
+        continue;
+      }
       const values: Record<string, Concrete> = {};
       let ok = true;
       for (const m of modeNames) {
