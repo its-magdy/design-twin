@@ -2,7 +2,7 @@
 
 
 // design-to-code/tokens.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path from "node:path";
 
 // design-to-code/catalog-input.ts
@@ -42,7 +42,7 @@ function readJsonFile(file, what, hint) {
 var NO_DESIGN_SYSTEM_HINT = "A single-screen pull (`dtwin pull --node <id>`) exports only that screen \u2014 it does not\n       write design/design-system/. Run `dtwin pull --design-system` to create it.";
 
 // design-to-code/slice-sources.ts
-function sourcesOf(doc, docPath, fs3, path2) {
+function sourcesOf(doc, docPath, fs4, path2) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
     if (typeof key !== "string" || !key || !screen) return;
@@ -53,9 +53,9 @@ function sourcesOf(doc, docPath, fs3, path2) {
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
-    if (typeof sl.file === "string" && fs3 && path2) {
+    if (typeof sl.file === "string" && fs4 && path2) {
       try {
-        const slice = JSON.parse(fs3.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
+        const slice = JSON.parse(fs4.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
         for (const v of slice.variables || []) add(v && v.key, sl.screen);
         read = true;
       } catch (_) {
@@ -386,6 +386,19 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, normHex: normHex2, defa
     return { file: PLATFORMS2[p].file, text: EMIT[p](cols, opts), warnings };
   }
   return { toNative: toNative2, platformOf: platformOf2, PLATFORMS: PLATFORMS2 };
+}
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/tokens.ts
@@ -1025,7 +1038,7 @@ function emitTokens(designSystem, opts) {
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, normHex, defaultModeName, baseValue, unitDecision, isSentinel });
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const args = process.argv.slice(2);
   const flag = (name) => {
     const i = args.indexOf(name);
@@ -1069,33 +1082,33 @@ ${USAGE}`);
   const doc = readJsonFile(input, "token catalog", NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead.");
   assertNotManifest(doc, input, "variables", "design-system/tokens.json");
   const ds = doc;
-  fs2.mkdirSync(outDir, { recursive: true });
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input, fs2, path) });
+  fs3.mkdirSync(outDir, { recursive: true });
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input, fs3, path) });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs2.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs2.writeFileSync(path.join(outDir, "tokens.css"), css);
-    fs2.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path.join(outDir, "tokens.css"), css);
+    fs3.writeFileSync(path.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
       const dest = path.join(outDir, ...rel.split("/"));
-      fs2.mkdirSync(path.dirname(dest), { recursive: true });
-      fs2.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
+      fs3.mkdirSync(path.dirname(dest), { recursive: true });
+      fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
   let canonicalFile = null;
   if (web !== void 0) {
     const tw = tailwind;
     const file = WEB_TARGETS[web];
-    fs2.writeFileSync(path.join(outDir, file), tw.text);
+    fs3.writeFileSync(path.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { package: kotlinPackage || void 0 });
-    fs2.writeFileSync(path.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }

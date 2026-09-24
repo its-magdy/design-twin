@@ -2,11 +2,26 @@
 
 
 // design-to-code/resolve-screen.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 import path from "node:path";
+
+// bridge/src/is-main.ts
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// design-to-code/resolve-screen.ts
 function readJsonOr(file, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    return JSON.parse(fs2.readFileSync(file, "utf8"));
   } catch (e) {
     return fallback;
   }
@@ -25,9 +40,9 @@ function allRows(exportDir) {
   return rows;
 }
 function planRows(planDir) {
-  if (!planDir || !fs.existsSync(planDir)) return [];
+  if (!planDir || !fs2.existsSync(planDir)) return [];
   const out = [];
-  for (const f of fs.readdirSync(planDir)) {
+  for (const f of fs2.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
     const doc = readJsonOr(path.join(planDir, f), null);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, screenName: doc.screenName, nodeId: doc.nodeId, route: doc.route });
@@ -96,7 +111,7 @@ function resolveScreen(exportDir, query, opts) {
   }
   return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [exportDir, query, planDir] = process.argv.slice(2);
   if (!exportDir || !query) {
     console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');

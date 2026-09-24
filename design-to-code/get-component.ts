@@ -14,6 +14,7 @@ import path from "node:path";
 import { assertNotManifest } from "./catalog-input.ts";
 import { DESIGN_SYSTEM_DIR } from "../bridge/src/design-system-layout.ts";
 import type { CatalogComponent, ComponentDetailFile, ComponentsCatalog } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 export type GetComponentResult =
   | { found: false }
@@ -68,7 +69,7 @@ function getComponent(catalogFile: string, handle: string): GetComponentResult {
 export { getComponent, findComponent, resolveVariantsFile };
 
 // CLI: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [catalogFile, handle] = process.argv.slice(2);
   if (!catalogFile || !handle) {
     console.error("usage: node design-to-code/get-component.ts <design-system/components.local.json> <key|id|name>");

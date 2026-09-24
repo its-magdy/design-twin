@@ -30,6 +30,7 @@ import type { TokensDoc, Variable, VariableAlias, VariableCollection, VariableTy
 import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { sourcesOf, type SliceSources } from "./slice-sources.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
 export interface EmitOpts extends UnitOpts {
@@ -1034,7 +1035,7 @@ export { toNative, platformOf, PLATFORMS };
 // from every screen (see tokens-native.ts for why and for the shape of each file).
 // The input is the SPLIT token file — design-system.json is a slim pointer manifest since the split
 // and has no `variables` array (see bridge/design-system-layout.js).
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const args = process.argv.slice(2);
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined ? "" : v; };
   const native = flag("--native");

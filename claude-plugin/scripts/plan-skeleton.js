@@ -2,7 +2,7 @@
 
 
 // design-to-code/plan-skeleton.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path2 from "node:path";
 
 // design-to-code/component-match.ts
@@ -173,12 +173,25 @@ function walkWithHidden(root, fn, opts) {
 }
 
 // design-to-code/audit-gate.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 import path from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// bridge/src/is-main.ts
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/cross-check.ts
@@ -352,20 +365,21 @@ function slug(s) {
 }
 function locateAuditFile(cwd, screenFile, screenName) {
   const dir = path.join(cwd, "design", "audit");
-  if (!fs.existsSync(dir)) return null;
+  if (!fs2.existsSync(dir)) return null;
   const base = screenFile ? path.basename(screenFile, ".json") : null;
   const candidates = [];
   if (base) candidates.push(path.join(dir, base + ".json"));
   let entries = [];
   try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    entries = fs2.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
+  for (const c of candidates) if (fs2.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
-    const hit = entries.find((f) => slug(f.replace(/\.json$/, "")) === wantSlug || slug(f.replace(/\.json$/, "")).startsWith(wantSlug) || wantSlug.startsWith(slug(f.replace(/\.json$/, ""))));
+    const stem = (f) => f.replace(/\.json$/, "");
+    const hit = entries.find((f) => slug(stem(f)) === wantSlug) ?? entries.find((f) => stem(f).includes("__") && slug(stem(f).slice(0, stem(f).indexOf("__"))) === wantSlug);
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;
@@ -375,11 +389,11 @@ function auditGateStatus(cwd, screenFile, screenName) {
   if (!rel) return { auditFile: null, blockers: [] };
   let doc;
   try {
-    doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8"));
+    doc = JSON.parse(fs2.readFileSync(path.join(cwd, rel), "utf8"));
   } catch {
     return { auditFile: rel, blockers: [], unreadable: true };
   }
-  return { auditFile: rel, blockers: blockerIds(doc), doc };
+  return { auditFile: rel, blockers: blockerIds(doc) };
 }
 
 // design-to-code/plan-skeleton.ts
@@ -405,7 +419,7 @@ var USAGE = [
   "                       codeconnect.local.json in the current directory, when present).",
   "  --route <route>      the app route this screen will live at (else left null for you to fill)."
 ].join("\n");
-var readJson = (f) => JSON.parse(fs2.readFileSync(f, "utf8"));
+var readJson = (f) => JSON.parse(fs3.readFileSync(f, "utf8"));
 var readJsonOr = (f, fallback) => {
   try {
     return readJson(f);
@@ -804,12 +818,12 @@ function main(argv) {
     console.error(`plan-skeleton: cannot read the screen's variables ${varsFile}: ${e instanceof Error ? e.message : e}`);
     return 1;
   }
-  const hasDs = dsDir && fs2.existsSync(dsDir) && fs2.statSync(dsDir).isDirectory();
+  const hasDs = dsDir && fs3.existsSync(dsDir) && fs3.statSync(dsDir).isDirectory();
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const ds = hasDs ? readJsonOr(path2.join(dsDir, "tokens.json"), null) : null;
   const catalog = hasDs ? readJsonOr(path2.join(dsDir, "components.local.json"), null) : null;
   const library = hasDs ? readJsonOr(path2.join(dsDir, "components.library.json"), null) : null;
-  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs2.existsSync(f));
+  const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs3.existsSync(f));
   const mapKeys = mapFile ? loadMap(mapFile) : /* @__PURE__ */ new Map();
   const root0 = rootsOf(doc)[0] || {};
   const nodeId = doc.nodeId || root0.id;
@@ -818,20 +832,20 @@ function main(argv) {
   if (!out) {
     process.stdout.write(JSON.stringify(fresh, null, 2) + "\n");
   } else {
-    const prev = fs2.existsSync(out) ? readJsonOr(out, void 0) : null;
+    const prev = fs3.existsSync(out) ? readJsonOr(out, void 0) : null;
     if (prev === void 0) {
       console.error(`plan-skeleton: ${out} exists but is not valid JSON \u2014 refusing to overwrite it`);
       return 1;
     }
     const { plan, dropped } = merge(fresh, prev);
-    fs2.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
-    fs2.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
+    fs3.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
+    fs3.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }
   console.error(`plan-skeleton: ${c.tokens} bound token(s) (${c.tokensVisible} on visible nodes), ${c.instances} visible instance(s), ${c.anchors} visible node anchor slot(s), ${c.hiddenNodes} hidden node(s) excluded`);
   return 0;
 }
-if (import.meta.main) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   USAGE,
   bindingsOf,

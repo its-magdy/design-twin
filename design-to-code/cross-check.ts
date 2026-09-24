@@ -42,6 +42,7 @@ import type {
   CatalogComponent, ComponentsCatalog, CoverageBucket, CoverageEntry, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
   IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection,
 } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -978,7 +979,7 @@ function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
 
 // CLI: node design-to-code/cross-check.ts <screen.json>... [--design-system design/design-system]
 //        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const take = (flag: string): string | undefined => { const i = argv.indexOf(flag); if (i === -1) return undefined; const v = argv[i + 1]; argv.splice(i, 2); return v; };
   const strip = (flag: string): boolean => { const i = argv.indexOf(flag); if (i === -1) return false; argv.splice(i, 1); return true; };

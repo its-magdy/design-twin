@@ -10,7 +10,7 @@
 //   dtwin screenshot <id|url>        = --screenshot <id|url>
 //   dtwin serve | stop | status      = --serve | --stop | --daemon-status
 //   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | --rotate-token | --forget-token
-//   dtwin help                       = --help
+//   dtwin help | version             = --help | --version
 //   dtwin doctor | init | mcp        → their own entry points (routed in figma-pull.ts)
 //
 // A verb is only recognised as the FIRST argument. `dtwin design` still means "pull into ./design":
@@ -20,14 +20,16 @@ export class VerbError extends Error {}
 
 const LIST: Record<string, string> = { "": "--list", frames: "--list", pages: "--list-pages", libraries: "--list-libraries", libs: "--list-libraries", clients: "--list-clients" };
 const TOKEN: Record<string, string> = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
-const SIMPLE: Record<string, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help" };
-export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help"];
+const SIMPLE: Record<string, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help", version: "--version" };
+export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help", "version"];
 
 // Words people (and agents) reach for first that are NOT verbs. Left alone they were a positional
 // outDir: `dtwin export` created ./export and then waited for a plugin, looking exactly like a pull
 // that was working. Same opt-outs as a near-miss: a path, an existing folder, or `dtwin pull export`.
 const ALIASES: Record<string, string> = { export: "pull", get: "pull", fetch: "pull", download: "pull", sync: "pull", ls: "list", frames: "list", pages: "list pages", libraries: "list libraries", clients: "list clients",
-  check: "doctor", diagnose: "doctor", setup: "init", install: "init", connect: "doctor", start: "serve", daemon: "serve", kill: "stop", version: "--version", tokens: "token" };
+  check: "doctor", diagnose: "doctor", setup: "init", install: "init", connect: "doctor", start: "serve", daemon: "serve", kill: "stop", tokens: "token" };
+// (`version` was listed here as an alias for `--version`, which made the real `dtwin version` a
+// did-you-mean error that pointed at itself. It is a SIMPLE verb now.)
 
 const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-");
 

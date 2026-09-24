@@ -23,6 +23,19 @@ function readJsonFile(file, what, hint) {
   }
 }
 
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
 // design-to-code/map-validate.ts
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
@@ -157,7 +170,7 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
   if (file === "--help" || file === "-h") {

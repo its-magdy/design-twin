@@ -735,6 +735,28 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
     run("map-validate.ts", ["ok.json"]).status === 0);
 })();
 
+// ---------- an INVALID map is a validation message, not a TypeError, and is never rewritten ----------
+// drift-lint's only map check was "is it an object", so {"components":{"X":null}} reached driftLint and
+// died with a TypeError stack. map-bootstrap merged whatever it read and rewrote it: an array
+// `components` came back as {"0": …}. Both now run map-validate's validator first.
+(() => {
+  const D2C = path.join(import.meta.dirname, "..", "design-to-code");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "d2c-badmap-"));
+  const run = (script: string, args: string[]) => spawnSync(process.execPath, [path.join(D2C, script), ...args], { encoding: "utf8", cwd });
+  fs.writeFileSync(path.join(cwd, "catalog.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [] }));
+  fs.writeFileSync(path.join(cwd, "null-entry.json"), JSON.stringify({ version: 1, components: { X: null } }));
+  const dl = run("drift-lint.ts", ["null-entry.json", "catalog.json"]);
+  check("[map-invalid] drift-lint on {components:{X:null}} exits non-zero with the validator's message",
+    dl.status !== 0 && /ERROR\s+\[map-invalid\] null-entry\.json: components\.X: entry must be an object/.test(dl.stderr));
+  check("[map-invalid] …and no TypeError / stack trace", !/TypeError/.test(dl.stderr) && !/\n {4}at /.test(dl.stderr));
+  const arrayMap = JSON.stringify({ version: 1, components: [] });
+  fs.writeFileSync(path.join(cwd, "array-map.json"), arrayMap);
+  const mb = run("map-bootstrap.ts", ["catalog.json", "--out", "array-map.json"]);
+  check("[map-invalid] map-bootstrap refuses an existing map whose components is an array (exit 1, names the problem)",
+    mb.status === 1 && /components: must be an object/.test(mb.stderr) && /refusing to rewrite/.test(mb.stderr));
+  check("[map-invalid] …and leaves the file byte-for-byte untouched", fs.readFileSync(path.join(cwd, "array-map.json"), "utf8") === arrayMap);
+})();
+
 // ---------- get-component.js: resolve a catalog entry -> its variantsFile detail -----------------
 (() => {
   // Hand-built fixture: its variant/standalone `node`s omit `id` (IrNode requires it) — not needed here.
@@ -847,7 +869,8 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
 {
   const FXL = path.join(import.meta.dirname, "fixtures", "livetest3");
   const emptyMapFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "p6-123-")), "map.json");
-  fs.writeFileSync(emptyMapFile, JSON.stringify({ components: {} }));
+  // version:1 — drift-lint validates the map now, and a map without it is not a valid map.
+  fs.writeFileSync(emptyMapFile, JSON.stringify({ version: 1, components: {} }));
   const catalogFile = path.join(FXL, "design-system", "components.local.json");
   const screens = [
     path.join(FXL, "verify", "positions___7314_87192.json"),

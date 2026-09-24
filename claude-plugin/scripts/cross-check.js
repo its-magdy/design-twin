@@ -2,7 +2,7 @@
 
 
 // design-to-code/cross-check.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path from "node:path";
 
 // design-to-code/component-match.ts
@@ -10,7 +10,7 @@ function visibleInstances(doc, label) {
   const out = [];
   const roots = !doc ? [] : Array.isArray(doc.nodes) ? doc.nodes : doc.tree ? [doc.tree] : doc.id || doc.type ? [doc] : [];
   const walk2 = (n) => {
-    if (!n || typeof n !== "object" || n.hidden === true || n.visible === false) return;
+    if (!n || typeof n !== "object" || n.hidden === true) return;
     if (n.type === "INSTANCE" && n.mainComponent) {
       const mc = n.mainComponent;
       out.push({
@@ -214,7 +214,7 @@ function readJsonFile(file, what, hint) {
 }
 
 // design-to-code/slice-sources.ts
-function sourcesOf(doc, docPath, fs3, path2) {
+function sourcesOf(doc, docPath, fs4, path2) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
     if (typeof key !== "string" || !key || !screen) return;
@@ -225,9 +225,9 @@ function sourcesOf(doc, docPath, fs3, path2) {
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
-    if (typeof sl.file === "string" && fs3 && path2) {
+    if (typeof sl.file === "string" && fs4 && path2) {
       try {
-        const slice = JSON.parse(fs3.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
+        const slice = JSON.parse(fs4.readFileSync(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), "utf8"));
         for (const v of slice.variables || []) add(v && v.key, sl.screen);
         read = true;
       } catch (_) {
@@ -243,10 +243,10 @@ function sourcesOf(doc, docPath, fs3, path2) {
   }
   return out;
 }
-function variablesContext(screenFiles, varsFile, fs3, path2, opts) {
+function variablesContext(screenFiles, varsFile, fs4, path2, opts) {
   const readJson = (f) => {
     try {
-      return f && fs3.existsSync(f) ? JSON.parse(fs3.readFileSync(f, "utf8")) : null;
+      return f && fs4.existsSync(f) ? JSON.parse(fs4.readFileSync(f, "utf8")) : null;
     } catch (_) {
       return null;
     }
@@ -258,22 +258,35 @@ function variablesContext(screenFiles, varsFile, fs3, path2, opts) {
     const exportRoot = path2.resolve(path2.dirname(files[0]), "..", "..");
     const rootVars = path2.join(exportRoot, "variables.json");
     const sibling = path2.join(path2.dirname(files[0]), "variables.json");
-    if (fs3.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs3.existsSync(sibling)) variablesPath = sibling;
+    if (fs4.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs4.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(files[0]).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readJson(variablesPath);
   let staleLegacy = null;
   if (files.length) {
     const legacy = path2.join(path2.resolve(path2.dirname(files[0]), "..", ".."), "..", "variables.json");
-    if (fs3.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
+    if (fs4.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
   }
-  return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs3, path2) : null, staleLegacy };
+  return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath, fs4, path2) : null, staleLegacy };
 }
 
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// bridge/src/is-main.ts
+import fs2 from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/cross-check.ts
@@ -925,10 +938,10 @@ function toMarkdown(res) {
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs3 = res.findings.filter((f) => f.severity === sev);
-    if (!fs3.length) continue;
-    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs3.length})`, "");
-    for (const f of fs3) L.push(`- \`${f.code}\` ${f.message}`);
+    const fs4 = res.findings.filter((f) => f.severity === sev);
+    if (!fs4.length) continue;
+    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs4.length})`, "");
+    for (const f of fs4) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
   if (res.notChecked.length) {
@@ -941,7 +954,7 @@ function toMarkdown(res) {
 function isScreenDocLike(x) {
   return isJsonObject(x);
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const take = (flag) => {
     const i = argv.indexOf(flag);
@@ -971,8 +984,8 @@ if (import.meta.main) {
 ` : "") + USAGE);
     process.exit(2);
   }
-  const maybe = (f) => f && fs2.existsSync(f) ? JSON.parse(fs2.readFileSync(f, "utf8")) : null;
-  const ctx = variablesContext(argv, varsFile, fs2, path);
+  const maybe = (f) => f && fs3.existsSync(f) ? JSON.parse(fs3.readFileSync(f, "utf8")) : null;
+  const ctx = variablesContext(argv, varsFile, fs3, path);
   const screens = argv.map((f, i) => {
     const d = readJsonFile(f, "screen export");
     return { doc: isScreenDocLike(d) ? d : null, label: path.basename(f, ".json"), vars: ctx.own[i] };
@@ -996,9 +1009,9 @@ if (import.meta.main) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {
-    fs2.mkdirSync(path.dirname(out), { recursive: true });
-    fs2.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs2.writeFileSync(out + ".md", toMarkdown(res));
+    fs3.mkdirSync(path.dirname(out), { recursive: true });
+    fs3.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs3.writeFileSync(out + ".md", toMarkdown(res));
     console.error(`wrote ${out}.json and ${out}.md`);
   } else {
     process.stdout.write(toMarkdown(res));

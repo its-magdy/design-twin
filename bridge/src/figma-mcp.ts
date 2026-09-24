@@ -47,17 +47,36 @@ import { parseNodeId, toNodeId } from "./node-id.ts";
 // Re-resolved when the holder goes away (that session closed, `dtwin stop`), never cached past it.
 import * as daemon from "./daemon.ts";
 import type { DaemonBridge, DaemonConnection, DaemonStatus } from "./daemon.ts";
+type Holder = { own: Bridge } | { via: DaemonConnection };
 let own: Bridge | null = null;
-async function holder(): Promise<{ own: Bridge } | { via: DaemonConnection }> {
+// The in-flight (or settled) resolution, shared. Without it, two tool calls arriving together (or one
+// arriving while main() is still resolving at startup) each saw no daemon and each called
+// createBridge() — the second bind hit EADDRINUSE. Kept while we OWN the bridge (it is the answer);
+// dropped after a daemon route or a failure, so the next call re-resolves (that session may have gone).
+let holding: Promise<Holder> | null = null;
+function holder(): Promise<Holder> {
+  return (holding ??= resolveHolder().finally(() => { if (!own) holding = null; }));
+}
+async function resolveHolder(): Promise<Holder> {
   if (own) return { own };
   const via = await daemon.connect();
   if (via) return { via };
-  const mine = createBridge();
+  // A held port is a TOOL error here, never process.exit: this process is the user's stdio MCP
+  // session, and dying took every tool down with it. `listening` settles the success side.
+  let failed: (e: Error) => void = () => {};
+  const bindFailed = new Promise<never>((_, reject) => { failed = reject; });
+  const mine = createBridge(undefined, { onListenError: (e) => failed(e) });
+  try {
+    await Promise.race([mine.listening, bindFailed]);
+  } catch (e) {
+    mine.close();
+    throw e;
+  }
   own = mine;
   // `dtwin stop` closes the bridge through this wrapper, so the next call re-resolves instead of
-  // talking to a closed server.
+  // talking to a closed server — which means the memo goes with it.
   // Object.create(mine): every bridge method, inherited from the real bridge; only close is overridden.
-  const shared: DaemonBridge = Object.assign(Object.create(mine) as Bridge, { close: () => { own = null; mine.close(); } });
+  const shared: DaemonBridge = Object.assign(Object.create(mine) as Bridge, { close: () => { own = null; holding = null; mine.close(); } });
   daemon.serve(shared, { idleMin: 0, signals: false, log: (m) => console.error("[figma-mcp] " + m) })
     .catch((e) => console.error("[figma-mcp] not sharing the bridge with other sessions: " + errMsg(e)));
   return { own: mine };
@@ -746,7 +765,16 @@ async function main() {
   // stdio is the transport Claude Code speaks; the WebSocket to the plugin is internal.
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  const h = await holder(); // resolve the bridge up front, so a port problem is reported at startup
+  // Resolve the bridge up front, so a port problem is reported at startup — but only REPORTED: the
+  // stdio session stays up, every tool call retries the resolution, and a held port comes back as that
+  // call's error (the port may be free by then). Exiting here killed the whole MCP server.
+  let h: Holder;
+  try {
+    h = await holder();
+  } catch (e) {
+    console.error("[figma-mcp] MCP server up (stdio), but no bridge yet: " + errMsg(e) + " Tool calls will retry.");
+    return;
+  }
   console.error("[figma-mcp] MCP server up (stdio). " + ("own" in h
     ? "Bridge listening on ws://localhost:" + h.own.port + "."
     : "Sharing the bridge already running at " + h.via.sock + "."));

@@ -37,6 +37,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { IndexRow, PageIndex, PagesRootIndex, Plan, ResolveScreenResult, ScreenCandidate } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // Every file read here is one this repo's own writers produced (pages/index.json, a page's index.json,
 // design/plan/*.json), so it is read as the shape it was written in; anything unreadable is `fallback`.
@@ -185,7 +186,7 @@ export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 
 // CLI: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]
 // (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [exportDir, query, planDir] = process.argv.slice(2);
   if (!exportDir || !query) {
     console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');

@@ -2,7 +2,7 @@
 
 
 // design-to-code/verify-screen.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import path2 from "node:path";
 import crypto2 from "node:crypto";
 
@@ -87,6 +87,19 @@ function readJsonFile(file, what, hint) {
 // design-to-code/types.ts
 function isJsonObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+// bridge/src/is-main.ts
+import fs3 from "node:fs";
+import { fileURLToPath } from "node:url";
+function isMainFallback(metaUrl) {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
 }
 
 // design-to-code/verify-screen.ts
@@ -236,7 +249,6 @@ function expectNode(n, ctxOrPath) {
   const notComparable = [];
   const skip = (field, value, why) => notComparable.push({ nodeId: n.id, name: n.name, field, value, why });
   if (n.text != null) spec.text = n.text;
-  else if (n.characters != null) spec.text = n.characters;
   if (n.font) {
     spec.fontFamily = n.font.family;
     if (typeof n.font.size === "number") spec.fontSize = n.font.size;
@@ -1052,14 +1064,14 @@ function reportToMarkdown(r) {
 }
 var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs3.existsSync(dir)) return null;
-  for (const f of fs3.readdirSync(dir)) {
+  if (!nodeId || !fs4.existsSync(dir)) return null;
+  for (const f of fs4.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
     const full = path2.join(dir, f);
     if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
     let doc;
     try {
-      doc = JSON.parse(fs3.readFileSync(full, "utf8"));
+      doc = JSON.parse(fs4.readFileSync(full, "utf8"));
     } catch (e) {
       continue;
     }
@@ -1079,7 +1091,7 @@ function isMeasuredLike(x) {
 function isEvidenceList(x) {
   return Array.isArray(x);
 }
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const take = (flag) => {
     const i = argv.indexOf(flag);
@@ -1094,7 +1106,7 @@ if (import.meta.main) {
     argv.splice(i, 1);
     return true;
   };
-  const sha = (file) => crypto2.createHash("sha256").update(fs3.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto2.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
   const USAGE = "usage:\n  node design-to-code/verify-screen.ts --expect <screen.json>... --out design/verify/<Screen> [--force]\n      writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.\n      Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.\n      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n      directory \u2014 pass --force to write a second one anyway.\n  node design-to-code/verify-screen.ts --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>\n      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n      --out defaults to design/verify/<the .expected.json file's own basename>.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
@@ -1124,9 +1136,9 @@ if (import.meta.main) {
       process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
       return;
     }
-    fs3.mkdirSync(path2.dirname(base), { recursive: true });
-    fs3.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md2) fs3.writeFileSync(base + ".report.md", md2);
+    fs4.mkdirSync(path2.dirname(base), { recursive: true });
+    fs4.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+    if (md2) fs4.writeFileSync(base + ".report.md", md2);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
@@ -1149,7 +1161,7 @@ if (import.meta.main) {
       process.exit(1);
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs3.existsSync(target) ? fs3.readFileSync(target, "utf8") : null;
+    const prev = fs4.existsSync(target) ? fs4.readFileSync(target, "utf8") : null;
     write(outBase, exp);
     const h = crypto2.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
@@ -1165,7 +1177,7 @@ if (import.meta.main) {
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
       console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto2.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs3.existsSync(f));
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs4.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -1199,7 +1211,7 @@ if (import.meta.main) {
   const artifacts = Array.isArray(measured.artifacts) ? measured.artifacts : [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists = !!p && fs3.existsSync(p);
+    const exists = !!p && fs4.existsSync(p);
     return { path: p, exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), sha256: exists ? sha(p) : void 0 };
   });
   let code;
@@ -1208,10 +1220,10 @@ if (import.meta.main) {
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path2.basename(expFile, ".json").replace(/\.expected$/, "");
     const hits = [];
-    for (const f of fs3.existsSync(planDir) ? fs3.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
       let p;
       try {
-        p = JSON.parse(fs3.readFileSync(path2.join(planDir, f), "utf8"));
+        p = JSON.parse(fs4.readFileSync(path2.join(planDir, f), "utf8"));
       } catch {
         continue;
       }

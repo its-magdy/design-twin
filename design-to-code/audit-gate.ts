@@ -27,18 +27,24 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
   for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
-    const hit = entries.find((f) => slug(f.replace(/\.json$/, "")) === wantSlug || slug(f.replace(/\.json$/, "")).startsWith(wantSlug) || wantSlug.startsWith(slug(f.replace(/\.json$/, ""))));
+    // EXACT slug only. A prefix match either way handed "Job Roles" the audit of "Job Roles Detail"
+    // (and "Job Roles Detail" the audit of "Job Roles") — a wrong screen's blockers gating this build.
+    // Audit files are named `<LayerName>__<node-id>.json` (audit.ts --out), so the name is also
+    // compared with that `__<id>` suffix stripped: "Job Roles" finds Job_Roles__9_9.json, never
+    // Job_Roles_Detail__9_9.json.
+    const stem = (f: string): string => f.replace(/\.json$/, "");
+    const hit = entries.find((f) => slug(stem(f)) === wantSlug)
+      ?? entries.find((f) => stem(f).includes("__") && slug(stem(f).slice(0, stem(f).indexOf("__"))) === wantSlug);
     if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
   }
   return null;
 }
 
-/** What auditGateStatus knows about a screen's audit file: `doc` is the parsed report when it was readable. */
+/** What auditGateStatus knows about a screen's audit file. */
 export interface AuditGateStatus {
   auditFile: string | null;
   blockers: string[];
   unreadable?: true;
-  doc?: AuditReport;
 }
 
 function auditGateStatus(cwd: string, screenFile: string | null | undefined, screenName: string | null | undefined): AuditGateStatus {
@@ -47,7 +53,7 @@ function auditGateStatus(cwd: string, screenFile: string | null | undefined, scr
   // An audit report under design/audit/ is this repo's own writer's output (audit.ts --out).
   let doc: AuditReport;
   try { doc = JSON.parse(fs.readFileSync(path.join(cwd, rel), "utf8")) as AuditReport; } catch { return { auditFile: rel, blockers: [], unreadable: true }; }
-  return { auditFile: rel, blockers: blockerIds(doc), doc };
+  return { auditFile: rel, blockers: blockerIds(doc) };
 }
 
 export { locateAuditFile, auditGateStatus, blockerIds, slug };

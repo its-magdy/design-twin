@@ -18,6 +18,8 @@ import { isJsonObject } from "./types.ts";
 import { TYPE_TO_KIND as KIND } from "./kinds.ts"; // shared vocab — kept in sync with drift-lint
 import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { visibleInstances } from "./component-match.ts";
+import { validateMap } from "./map-validate.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o)) as T;
 
@@ -175,7 +177,7 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const usage = "usage: node design-to-code/map-bootstrap.ts <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]";
   const argv = process.argv.slice(2);
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
@@ -206,8 +208,19 @@ if (import.meta.main) {
   // Past the manifest guard, the file is the split catalog this repo's own writer produced.
   const catalog = catalogDoc as ComponentsCatalog;
   const existingFile = existingArg || outFile;
-  // A person's map (hand-edited): bootstrap merges whatever it carries, exactly as the JS did.
-  const existing = existingFile && fs.existsSync(existingFile) ? (readJsonFile(existingFile, "existing map") as CodeConnectMap) : null;
+  // A person's map (hand-edited): bootstrap merges into it and REWRITES it, so it is validated first
+  // and an invalid one is refused, untouched. Merging trusted the shape: an array `components` was
+  // walked by index and written back as `{"0": …}`, silently destroying the person's work.
+  const existingRaw = existingFile && fs.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  if (existingRaw !== null) {
+    const valid = validateMap(existingRaw);
+    if (!valid.ok) {
+      valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
+      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
+      process.exit(1);
+    }
+  }
+  const existing = existingRaw as CodeConnectMap | null; // validated above
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);

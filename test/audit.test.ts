@@ -9,6 +9,7 @@ import { spawnSync, execFileSync } from "node:child_process";
 import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind } from "../design-to-code/audit.ts";
 import type { AuditInput } from "../design-to-code/audit.ts";
 import type { AuditFinding, AuditReport, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenDoc, TokensDoc } from "../design-to-code/types.ts";
+import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
 
 const screen = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), "utf8")) as ScreenDoc;
@@ -337,5 +338,27 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[311] Create Activity Type still gets its REAL Space 4 blocker — on key 64928e3a…, the 16-valued one its own slice carries",
     collision(cat.json, "Space 4").some((f) => f.key === "64928e3a5f094c0d9a2c916f50b98ff37c789882") && cat.r.status === 1);
 }
+
+// ---------- audit-gate: which audit file belongs to a screen -----------------------------------
+// The name fallback matched a slug PREFIX either way, so "Job Roles" picked up the audit of
+// "Job Roles Detail" — another screen's blockers gating (or pre-filling the plan of) this one.
+(() => {
+  console.log("audit-gate — locating a screen's audit by name:");
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-gate-"));
+  fs.mkdirSync(path.join(cwd, "design", "audit"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Job_Roles_Detail__9_9.json"), JSON.stringify({ findings: [] }));
+  check("[gate] screen \"Job Roles\" does NOT take Job_Roles_Detail__9_9.json (longer name, prefix match)",
+    locateAuditFile(cwd, null, "Job Roles") === null && auditGateStatus(cwd, null, "Job Roles").auditFile === null);
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Job.json"), JSON.stringify({ findings: [] }));
+  check("[gate] …nor Job.json (shorter name, reverse prefix match)", locateAuditFile(cwd, null, "Job Roles") === null);
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Job_Roles__9_9.json"), JSON.stringify({ findings: [] }));
+  check("[gate] the screen's OWN <Name>__<id>.json audit (audit.ts --out naming) is found by name alone",
+    locateAuditFile(cwd, null, "Job Roles") === "design/audit/Job_Roles__9_9.json");
+  fs.unlinkSync(path.join(cwd, "design", "audit", "Job_Roles__9_9.json"));
+  fs.writeFileSync(path.join(cwd, "design", "audit", "job-roles.json"), JSON.stringify({ findings: [] }));
+  check("[gate] the exact case/punctuation-insensitive name still matches", locateAuditFile(cwd, null, "Job Roles") === "design/audit/job-roles.json");
+  check("[gate] and the screen file's own basename still wins first",
+    locateAuditFile(cwd, path.join(cwd, "design", "export", "pages", "P", "Job_Roles_Detail__9_9.json"), "Job Roles") === "design/audit/Job_Roles_Detail__9_9.json");
+})();
 
 report();

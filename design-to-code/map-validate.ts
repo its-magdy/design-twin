@@ -13,6 +13,7 @@
 // Returns { ok, errors:[{path,message}] }; never throws on bad data.
 import type { CodeConnectMap, MapValidationResult } from "./types.ts";
 import { readJsonFile } from "./catalog-input.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const STATUSES = ["active", "deprecated", "needs-review"];
 // Allowed key sets per object (mirrors additionalProperties:false in the schema).
@@ -150,7 +151,7 @@ function isCodeConnectMap(x: unknown): x is CodeConnectMap {
 export { validateMap, isCodeConnectMap };
 
 // CLI: node design-to-code/map-validate.ts <codeconnect.local.json>
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const file = process.argv[2];
   const USAGE = "usage: node design-to-code/map-validate.ts <map.json>";
   if (file === "--help" || file === "-h") { console.log(USAGE); process.exit(0); }

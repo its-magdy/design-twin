@@ -19,10 +19,12 @@ import { walkWithHidden } from "./hidden.ts";
 import { assertNotManifest, readJsonFile, NO_DESIGN_SYSTEM_HINT } from "./catalog-input.ts";
 import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./component-match.ts";
 import { isJsonObject } from "./types.ts";
+import { validateMap } from "./map-validate.ts";
 import type {
   CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, IrNode, MapEntry, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const stripSuffix = (k: string): string => String(k).split("#")[0]; // "Size#12:3" -> "Size"
 
@@ -266,11 +268,11 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
 
 export { driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
-// The CLI's inputs are files the user named (readJsonFile -> unknown). A map is any JSON object (an
-// entry-less one lints as "0 entries", exactly as before); a catalog is any JSON object whose
-// `components`, when present, is an array. Anything else behaves as the JS did with a non-object:
-// no entries / no components. (map-validate.ts's isCodeConnectMap could replace the map guard later.)
-function isMapLike(x: unknown): x is CodeConnectMap { return isJsonObject(x) && (x.components === undefined || isJsonObject(x.components)); }
+// The CLI's inputs are files the user named (readJsonFile -> unknown). The MAP goes through
+// map-validate.ts's full validator (below, in the CLI): the old "is it an object" guard let
+// {"components":{"X":null}} through to driftLint, which died on it with a TypeError and a stack. A
+// catalog is any JSON object whose `components`, when present, is an array; anything else behaves as
+// the JS did with a non-object: no components.
 function isCatalogLike(x: unknown): x is ComponentsCatalog { return isJsonObject(x) && (x.components === undefined || Array.isArray(x.components)); }
 function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
 
@@ -278,7 +280,7 @@ function isScreenDocLike(x: unknown): x is ScreenDoc { return isJsonObject(x); }
 //        [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
-if (import.meta.main) {
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const argv = process.argv.slice(2);
   const maxAgeIdx = argv.indexOf("--max-age");
   let maxAgeHours: number | undefined;
@@ -310,7 +312,15 @@ if (import.meta.main) {
   assertNotManifest(catalogRaw, catalogFile, "components", "design-system/components.local.json");
   const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
   const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
-  const map = isMapLike(mapRaw) ? mapRaw : null;
+  // Validate BEFORE linting: driftLint trusts the map's shape. Printed like the lint's own errors,
+  // one per line, and exit 1 — the same code a lint error gets (2 is kept for usage mistakes).
+  const valid = validateMap(mapRaw);
+  if (!valid.ok) {
+    valid.errors.forEach((e) => console.error(`ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`));
+    console.error(`\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`map-validate.js ${mapFile}\`.`);
+    process.exit(1);
+  }
+  const map = mapRaw as CodeConnectMap; // validateMap passed: it IS a CodeConnectMap (see isCodeConnectMap)
   const res = driftLint(map, catalog, { maxAgeMs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));

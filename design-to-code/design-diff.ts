@@ -44,6 +44,7 @@ import { bag } from "./types.ts";
 import { readJsonFile } from "./catalog-input.ts";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
 import { DESIGN_SYSTEM_FILES } from "../bridge/src/design-system-layout.ts";
+import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // The generic key loops below compare WHATEVER a document or node carries, named field or not; they
 // read through types.ts `bag()` (the interfaces there name SOME keys and have no string index).
@@ -640,6 +641,6 @@ function main(argv: string[]): void {
   else process.stdout.write(text);
 }
 
-if (import.meta.main) main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
 
 export { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };
