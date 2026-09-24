@@ -317,7 +317,7 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   const jr = JSON.parse(fs.readFileSync(path.join(FXL, "verify", "positions___7314_87192.json"), "utf8")) as ScreenDoc;
   const hidden = new Set<string | undefined>();
   (function w(n: { id?: string; hidden?: boolean; children?: IrNode[] }, h: boolean) { h = h || !!n.hidden; if (h && n.id) hidden.add(n.id); for (const c of n.children || []) w(c, h); })({ children: jr.nodes }, false);
-  const citesHidden = (f: unknown) => { let hit = false; JSON.stringify(f, (k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
+  const citesHidden = (f: unknown) => { let hit = false; JSON.stringify(f, (_k, v) => { if (typeof v === "string" && hidden.has(v)) hit = true; return v; }); return hit; };
   const rd = <T,>(p: string) => JSON.parse(fs.readFileSync(path.join(FXL, p), "utf8")) as T;
   const tokRes = crossCheck({ screens: [{ doc: jr, label: "positions___7314_87192" }],
     variables: rd<TokensDoc>("pages/__Organization_management_/positions___7314_87192.vars.json"), tokens: rd<TokensDoc>("design-system/tokens.json"),

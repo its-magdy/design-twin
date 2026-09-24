@@ -632,7 +632,7 @@ function dtcgPlan(designSystem) {
 function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
   const root = {};
   const ds = designSystem || {};
-  const { collections, colorProfile } = ds;
+  const { colorProfile } = ds;
   plan = plan || dtcgPlan(designSystem);
   const ref = (referrer) => (name) => {
     const t = aliasTarget(plan, name, referrer, warn);

@@ -547,7 +547,7 @@ function normValue(type, raw) {
   }
   return raw;
 }
-function buildTokens(doc, vis, vars, ds, resolvedModes) {
+function buildTokens(doc, vars, ds, resolvedModes) {
   const uses = /* @__PURE__ */ new Map();
   walkNodes(doc, (n, ctx) => {
     for (const b of bindingsOf(n)) {
@@ -684,7 +684,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   const roots = rootsOf(doc);
   const root = roots[0] || {};
   const resolvedModes = root.resolvedModes || {};
-  const tokens = buildTokens(doc, vis, vars, ds, resolvedModes);
+  const tokens = buildTokens(doc, vars, ds, resolvedModes);
   const components = buildComponents(doc, catalog, library, mapKeys || /* @__PURE__ */ new Map());
   const anchors = {};
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };

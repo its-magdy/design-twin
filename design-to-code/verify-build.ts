@@ -966,7 +966,7 @@ const USAGE = [
 
 interface RecordResult { blocking: string[]; warnings: string[]; cleared: PlanStoredStatus | null | undefined; status: StatusResult }
 
-function checkAndRecord(p: PlanFile, cwd: string, input: HookPayload): RecordResult {
+function checkAndRecord(p: PlanFile, cwd: string): RecordResult {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
   setPhase(`checking ${path.basename(p.file)}`);
@@ -1018,7 +1018,7 @@ async function main(argv: string[]): Promise<number> {
   let targets: PlanFile[] | undefined;
   if (planArgs.length) {
     const read = planArgs.map((f) => readPlan(path.resolve(f)));
-    const bad = planArgs.filter((f, i) => !read[i]);
+    const bad = planArgs.filter((_f, i) => !read[i]);
     if (bad.length) { console.error(`verify-build: cannot read plan(s): ${bad.join(", ")}`); return 1; }
     targets = read.filter((p): p is PlanFile => !!p);
   } else {
@@ -1049,7 +1049,7 @@ async function main(argv: string[]): Promise<number> {
 
   const blockedOut: string[] = [];
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, input);
+    const res = checkAndRecord(p, cwd);
     const name = path.basename(p.file);
     if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (verify-build.js --status), never stored`);
     for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);

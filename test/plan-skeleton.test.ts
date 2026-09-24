@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { skeleton, merge, visibility } from "../design-to-code/plan-skeleton.ts";
+import { visibility } from "../design-to-code/plan-skeleton.ts";
 import { check, report } from "./assert.ts";
 import type { SkeletonPlan } from "../design-to-code/plan-skeleton.ts";
 import type { IrNode, ScreenDoc } from "../design-to-code/types.ts";

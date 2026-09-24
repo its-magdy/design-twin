@@ -14,7 +14,7 @@ import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/
 import { build, ENTRIES } from "../claude-plugin/build-scripts.js";
 import type { CheckPlanResult, PlanFile, ReportRef } from "../design-to-code/verify-build.ts";
 import type {
-  AuditReport, CodeConnectMap, MapEntry, Plan, PlanComputedStatus, PlanHookRecord, ScreenDoc, ScreenExport, VerifyExpectation, VerifyReport, VerifyReportV2,
+  AuditReport, CodeConnectMap, Plan, PlanComputedStatus, PlanHookRecord, ScreenDoc, ScreenExport, VerifyExpectation, VerifyReport, VerifyReportV2,
 } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
@@ -623,7 +623,7 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   const st = () => computeStatus(JSON.parse(fs.readFileSync(planFile, "utf8")) as Plan, { cwd: root, planFile });
   const x = vs(["--expect", `${E}/${JR}.json`]);
   fs.writeFileSync(path.join(root, "design/verify/m.json"), JSON.stringify({ measuredAt: "2026-09-23T00:00:00Z", renderer: "test", nodes: [] }));
-  const c = vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
+  vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
   const repFile = path.join(root, "design/verify", JR + ".report.json");
   const rep = JSON.parse(fs.readFileSync(repFile, "utf8")) as VerifyReportV2;
   const expectation = JSON.parse(fs.readFileSync(path.join(root, "design/verify", JR + ".expected.json"), "utf8")) as VerifyExpectation;

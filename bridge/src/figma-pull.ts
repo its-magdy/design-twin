@@ -190,18 +190,12 @@ import type { ClientRow, RequestArgs } from "./server-core.ts";
 // normalisation is replace(/-/g, ":") — so a pasted design URL worked through the MCP twin
 // (figma_list_children calls parseNodeId) and failed here. Same input, same answer, one parser.
 import { toNodeId } from "./node-id.ts";
-// pages-layout.ts owns the pages/ layout (and the safe() sanitiser that names things inside it) for
-// BOTH writers — this one, and the plugin's browser-download path which bundles the same module.
-// Asset filenames are NOT derived with safe(): the plugin names each asset (assets.ts) and the node
-// tree's `asset` path is built from that same string, so re-deriving the convention on this side could
-// silently point every path at a missing file. basename() in writeAssets is the only guard those need.
-import { safe } from "./pages-layout.ts";
 // write-out.ts is the ONE writer, shared with the MCP export tools' writeToDisk path — so a file
 // pulled through the CLI and the same file pulled through MCP land in the same layout, by
 // construction rather than by two implementations agreeing. The `log` argument is what differs:
 // this front-end narrates every file to stderr, the MCP one stays silent.
 import * as OUT from "./write-out.ts";
-import type { ExportResult, ExportAsset } from "./write-out.ts";
+import type { ExportResult } from "./write-out.ts";
 import type { LayersDoc } from "./doc-types.ts";
 // The ONE registry of read options, shared with the plugin's runOpts and the MCP tool schema.
 import { READ_OPTS } from "./read-opts.ts";
@@ -231,7 +225,6 @@ const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => 
 // OUT.writePages itself) — kept as an export because test/bridge.test.ts drives the pages/ LAYOUT
 // through this exact entry point.
 const writePages = (dir: string, layersDoc: LayersDoc | null | undefined) => OUT.writePages(dir, layersDoc, plog);
-const writeAssets = (dir: string, assets: ExportAsset[] | null | undefined) => OUT.writeAssets(dir, assets, plog);
 const writeScreenshot = (dir: string, r: ExportResult) => OUT.writeScreenshot(dir, r, plog);
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
@@ -1236,7 +1229,7 @@ async function cli(argv: string[]): Promise<void> {
       process.exit(1);
     }
   }
-  if (["--version", "-v", "version"].includes(argv[0])) {
+  if (argv[0] === "--version" || argv[0] === "-v") {
     console.log((JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version);
     process.exit(0);
   }

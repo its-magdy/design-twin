@@ -417,7 +417,7 @@ function dtcgValue(raw: VariableValue, colorProfile: string | undefined, dimensi
 // by the ONE unitDecision() every emitter shares, so tokens.dtcg.json, tokens.css and the resolver set
 // files cannot disagree about which numbers are lengths.
 const SKIP = Symbol("resolver-set omits this token");
-type Pick = (v: Variable) => VariableValue | undefined | typeof SKIP;
+type PickValue = (v: Variable) => VariableValue | undefined | typeof SKIP;
 // The DTCG plan: a token's path is its name's segments; two variables that fold onto one path are
 // disambiguated on the LAST segment (see planIds). Planned over the WHOLE variable list even when a
 // resolver set file only holds one collection, because every set is merged into one namespace.
@@ -427,10 +427,10 @@ function dtcgPlan(designSystem: TokensDoc | null | undefined): IdPlan {
   return planIds(ds.variables || [], (v) => { const p = segs(v.name); return p.length ? p.join(DTCG_SEP) : null; },
     (id, s) => id + "-" + s, ds.collections, "tokens.dtcg.json", (v) => !/[.{}$]/.test(String(v.name)));
 }
-function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string) => void, opts: EmitOpts | undefined, pick: Pick, withExtensions: boolean, plan?: IdPlan): DtcgGroup {
+function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string) => void, opts: EmitOpts | undefined, pick: PickValue, withExtensions: boolean, plan?: IdPlan): DtcgGroup {
   const root: DtcgGroup = {};
   const ds: TokensDoc = designSystem || {};
-  const { collections, colorProfile } = ds;
+  const { colorProfile } = ds;
   plan = plan || dtcgPlan(designSystem);
   const ref = (referrer: Variable) => (name: string): string => {
     const t = aliasTarget(plan, name, referrer, warn);

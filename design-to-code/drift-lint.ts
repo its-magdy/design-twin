@@ -266,7 +266,9 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
   };
 }
 
-export { driftLint, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+// validateMap is re-exported so the MCP server's lazily-loaded drift-lint layer (bridge/src/figma-mcp.ts
+// DriftLintModule) can apply the same map gate as the CLI below from this one module.
+export { driftLint, validateMap, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
 // The CLI's inputs are files the user named (readJsonFile -> unknown). The MAP goes through
 // map-validate.ts's full validator (below, in the CLI): the old "is it an object" guard let

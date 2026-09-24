@@ -730,5 +730,6 @@ export {
   checkFreshness,
   checkLiveFreshness,
   driftLint,
-  screenCoverage
+  screenCoverage,
+  validateMap
 };

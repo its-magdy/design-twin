@@ -1160,7 +1160,7 @@ var USAGE2 = [
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
-function checkAndRecord(p, cwd, input) {
+function checkAndRecord(p, cwd) {
   const exp = locateExport(p.plan, p.file, cwd);
   const reports = locateReports(p.plan, p.file, cwd, exp);
   setPhase(`checking ${path3.basename(p.file)}`);
@@ -1224,7 +1224,7 @@ ${USAGE2}`);
   let targets;
   if (planArgs.length) {
     const read = planArgs.map((f) => readPlan(path3.resolve(f)));
-    const bad = planArgs.filter((f, i) => !read[i]);
+    const bad = planArgs.filter((_f, i) => !read[i]);
     if (bad.length) {
       console.error(`verify-build: cannot read plan(s): ${bad.join(", ")}`);
       return 1;
@@ -1261,7 +1261,7 @@ ${USAGE2}`);
   }
   const blockedOut = [];
   for (const { p, cwd } of all) {
-    const res = checkAndRecord(p, cwd, input);
+    const res = checkAndRecord(p, cwd);
     const name = path3.basename(p.file);
     if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" \u2014 status is computed now (verify-build.js --status), never stored`);
     for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);

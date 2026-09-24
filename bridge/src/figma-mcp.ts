@@ -636,14 +636,16 @@ server.registerTool(
 // than as `typeof import("../../design-to-code/x.ts")`: even a type-only reference pulls that file and
 // its imports into the bridge program, which tsc rejects (TS6059 — rootDir is bridge/src; see
 // doc-types.ts). So dist/ has no dependency of any kind on the layer — only the dynamic import below,
-// which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult and
-// design-to-code/drift-lint.ts driftLint(); keep them in step.
+// which fails soft. Mirrors design-to-code/get-component.ts GetComponentResult,
+// design-to-code/drift-lint.ts driftLint() and the validateMap() it re-exports from map-validate.ts;
+// keep them in step (test/mcp-smoke.test.ts checks the real modules still satisfy these at compile time).
 export interface GetComponentModule {
   getComponent(catalogFile: string, handle: string):
     | { found: false }
     | { found: true; component: CatalogComponent; detail: ComponentDetailFile | null; detailPath?: string };
 }
 export interface DriftLintModule {
+  validateMap(map: unknown): { ok: boolean; errors: Array<{ path: string; message: string }> };
   driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number }):
     { errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown };
 }
@@ -665,12 +667,7 @@ const getComponent = async (catalogFile: string, handle: string) =>
     catalogFile,
     handle
   );
-const driftLint = async (map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number }) =>
-  (await loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint")).driftLint(
-    map,
-    catalog,
-    opts
-  );
+const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint");
 
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
 // filenames — the manifest is the ONE place that records where the export actually landed.
@@ -678,7 +675,7 @@ function componentsLocalPath(exportDir?: string): string {
   const dir = assertInsideCwd(exportDir, "exportDir");
   const manifestPath = path.join(dir, "design-system.json");
   // The slim design-system.json manifest (untyped JSON from disk): only its componentsLocal pointer is read.
-  let manifest: { files?: { componentsLocal?: string } } | null;
+  let manifest: { files?: { componentsLocal?: string } };
   try {
     manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { files?: { componentsLocal?: string } };
   } catch (e) {
@@ -687,7 +684,7 @@ function componentsLocalPath(exportDir?: string): string {
         `writeToDisk:true, or the dtwin CLI), or pass exportDir.`
     );
   }
-  const rel = manifest && manifest.files && manifest.files.componentsLocal;
+  const rel = manifest.files && manifest.files.componentsLocal;
   if (!rel) throw new Error(`${manifestPath} has no files.componentsLocal pointer — re-export with a current dtwin.`);
   return path.join(dir, rel);
 }
@@ -742,8 +739,8 @@ server.registerTool(
   },
   guarded(async (a) => {
     const mapPath = assertInsideCwd(a.map || "codeconnect.local.json", "map");
-    // The map and the catalog are untyped JSON from disk, handed to driftLint as the shapes it reads
-    // (it validates what it needs itself, exactly as it did when these were untyped).
+    // The map and the catalog are untyped JSON from disk. The map goes through validateMap below before
+    // driftLint sees it; the catalog is handed over as the shape driftLint reads.
     let map: unknown;
     try {
       map = JSON.parse(fs.readFileSync(mapPath, "utf8")) as unknown;
@@ -753,8 +750,18 @@ server.registerTool(
           `\`node design-to-code/map-bootstrap.ts <componentsLocal> > codeconnect.local.json\`.`
       );
     }
+    const layer = await driftLintLayer();
+    // Same gate as the CLI (design-to-code/drift-lint.ts): a structurally invalid map is rejected with
+    // its validation errors, never linted — driftLint on a malformed map reports nonsense or throws.
+    const valid = layer.validateMap(map);
+    if (!valid.ok) {
+      return errorResult(
+        valid.errors.map((e) => `ERROR  [map-invalid] ${mapPath}: ${e.path || "(root)"}: ${e.message}`).join("\n") +
+          `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`node design-to-code/map-validate.ts ${mapPath}\`.`
+      );
+    }
     const catalog: ComponentsCatalog | null = JSON.parse(fs.readFileSync(componentsLocalPath(a.exportDir), "utf8"));
-    const res = await driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : undefined);
+    const res = layer.driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : undefined);
     // Drift is a FINDING, not a tool failure — return it as a normal result so the agent reads the
     // errors instead of an isError blob it may discard. `ok` is the thing to branch on.
     return textResult({ ok: res.errors.length === 0, ...res });
