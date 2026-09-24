@@ -416,6 +416,22 @@ const sandbox = context as unknown as Sandbox;
     primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "MIN", children: [] };
   const centerGapOut = await sandbox.serialize(centerGap, 0, false);
   ok("[CENTER] itemSpacing is a real gap -> gap: 12", centerGapOut.layout!.gap === 12);
+  // The counter axis has the same rule (plugin-api.d.ts 1.139, `counterAxisAlignContent`:
+  // "`counterAxisSpacing` is respected when `counterAxisAlignContent` is set to `\"AUTO\"`"; under
+  // SPACE_BETWEEN the free space is divided between the tracks). Wrapped rows under SPACE_BETWEEN must
+  // NOT emit rowGap; under AUTO the stored spacing is the real row gap.
+  const wrapBetween = { type: "FRAME", name: "WrapBetween", visible: true, id: "al:8", width: 100, height: 60,
+    layoutMode: "HORIZONTAL", layoutWrap: "WRAP", itemSpacing: 8, counterAxisSpacing: 16, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", counterAxisAlignContent: "SPACE_BETWEEN", children: [] };
+  const wrapBetweenOut = await sandbox.serialize(wrapBetween, 0, false);
+  ok("[WRAP+SPACE_BETWEEN] counterAxisSpacing is slack -> no rowGap, alignContent: space-between, gap kept",
+    wrapBetweenOut.layout!.rowGap === undefined && wrapBetweenOut.layout!.alignContent === "space-between" && wrapBetweenOut.layout!.gap === 8);
+  const wrapAuto = { type: "FRAME", name: "WrapAuto", visible: true, id: "al:9", width: 100, height: 60,
+    layoutMode: "HORIZONTAL", layoutWrap: "WRAP", itemSpacing: 8, counterAxisSpacing: 16, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+    primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", counterAxisAlignContent: "AUTO", children: [] };
+  const wrapAutoOut = await sandbox.serialize(wrapAuto, 0, false);
+  ok("[WRAP+AUTO] counterAxisSpacing is a real row gap -> rowGap: 16, no alignContent",
+    wrapAutoOut.layout!.rowGap === 16 && wrapAutoOut.layout!.alignContent === undefined);
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
   ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
