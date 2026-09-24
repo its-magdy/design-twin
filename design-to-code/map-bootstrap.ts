@@ -27,6 +27,25 @@ import { nullProto } from "../bridge/src/json-util.ts";
 
 const clone = <T>(o: T): T => structuredClone(o);
 
+// Object.assign(plain-object-target, …sources) invokes the inherited __proto__ SETTER when a source has
+// an OWN property literally named "__proto__" — which JSON.parse can produce (`{"__proto__":{...}}`
+// is a real own, enumerable property on the parsed object, not a prototype link) — repointing the
+// TARGET's prototype instead of copying a normal property (verified: an assigned {} ends up with a
+// polluted object as its own [[Prototype]]). safeAssign copies each source's own enumerable keys one at
+// a time and skips the three names that could repoint or shadow a prototype, so the merged object keeps
+// a normal Object.prototype and drops the hostile key entirely — appropriate here because entry.figma
+// is a fixed-shape record (key/id/name/unstable), not a map keyed by untrusted names.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function safeAssign<T extends object, U extends object, V extends object>(target: T, source1: U, source2: V): T & U & V {
+  for (const src of [source1, source2]) {
+    for (const k of Object.keys(src)) {
+      if (UNSAFE_KEYS.has(k)) continue;
+      (target as Record<string, unknown>)[k] = (src as Record<string, unknown>)[k];
+    }
+  }
+  return target as unknown as T & U & V;
+}
+
 // Split an arbitrary name into alphanumeric words (drops "/", punctuation, whitespace).
 const words = (name: string | null | undefined): string[] => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
 
@@ -60,7 +79,10 @@ function freshEntry(c: CatalogComponent): MapEntry {
   if (c.key) figma.key = c.key; else figma.unstable = true;
   if (c.id) figma.id = c.id;
   const entry: MapEntry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
-  const props: Record<string, PropMap> = {};
+  // props is keyed by an untrusted Figma property NAME — null-prototype so a property literally called
+  // "__proto__" becomes an ordinary own key instead of repointing this object's prototype (see KEYS.prop
+  // in map-validate.ts for the same reasoning). Serializes with JSON.stringify like any plain object.
+  const props: Record<string, PropMap> = nullProto();
   const defs = c.props || {};
   for (const pn of Object.keys(defs)) { const pe = propEntry(pn, defs[pn]); if (pe) props[pn] = pe; }
   if (Object.keys(props).length) entry.props = props;
@@ -102,10 +124,14 @@ function bootstrap(catalog: ComponentsCatalog | null | undefined, existing?: Cod
       // overwrite). A genuinely-stale stub is simply kept; drift-lint reports its staleness.
       usedPrev.add(prevKey);
       const entry = clone(prevEntry);
-      entry.figma = Object.assign({}, entry.figma, { name: c.name || (entry.figma && entry.figma.name) || "Unnamed" });
+      entry.figma = safeAssign({}, entry.figma, { name: c.name || (entry.figma && entry.figma.name) || "Unnamed" });
       if (c.id) entry.figma.id = c.id;
       if (c.key) entry.figma.key = c.key; else if (!entry.figma.key) entry.figma.unstable = true;
-      const props = entry.props = entry.props || {};
+      // Rebuild props on a null-proto object (see freshEntry) — a catalog prop literally named
+      // "__proto__" must not repoint this object's prototype when written below.
+      const props: Record<string, PropMap> = nullProto();
+      if (entry.props) Object.assign(props, entry.props); // safe: props has no prototype to hijack
+      entry.props = props;
       const defs = c.props || {};
       for (const pn of Object.keys(defs)) {
         const cdef = defs[pn], kind = KIND[cdef.type], ex = props[pn];
@@ -254,7 +280,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     }
     const all = catalog.components;
     const scoped = all.filter((c) => (c.key && used.has(c.key)) || (c.id && used.has(c.id)));
-    scopedCatalog = Object.assign({}, catalog, { components: scoped });
+    scopedCatalog = safeAssign({}, catalog, { components: scoped });
     console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
   }
   const written = bootstrap(scopedCatalog, existing);

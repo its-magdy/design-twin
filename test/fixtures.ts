@@ -136,10 +136,12 @@ export function modesOf(leaf: DtcgLeaf): Record<string, DtcgLeafValue> {
   return figmaExt(leaf).modes || fail("leaf has no per-mode values");
 }
 export function asColor(v: DtcgLeafValue | undefined): DtcgColor {
-  return typeof v === "object" && "colorSpace" in v ? v : fail(`not a DTCG colour: ${JSON.stringify(v)}`);
+  // typeof null === "object", so without the null check `"colorSpace" in v` throws a raw TypeError
+  // instead of this function's own FixtureError.
+  return v !== null && typeof v === "object" && "colorSpace" in v ? v : fail(`not a DTCG colour: ${JSON.stringify(v)}`);
 }
 export function asDimension(v: DtcgLeafValue | undefined): DtcgDimension {
-  return typeof v === "object" && "unit" in v ? v : fail(`not a DTCG dimension: ${JSON.stringify(v)}`);
+  return v !== null && typeof v === "object" && "unit" in v ? v : fail(`not a DTCG dimension: ${JSON.stringify(v)}`);
 }
 /** A resolver modifier by name. */
 export function modifierOf(r: ResolverDoc, name: string): ResolverModifier {

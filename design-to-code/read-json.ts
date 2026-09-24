@@ -28,8 +28,18 @@ function readFailure(e: unknown): { error: string; missing?: true } {
 
 /** Read + parse + check. The reason is a phrase that follows the file name: `'<file>' <error>`. */
 export function readJson<T>(file: string, guard: DocGuard<T>): ReadResult<T> {
-  let raw: string;
-  try { raw = fs.readFileSync(file, "utf8"); } catch (e) { return readFailure(e); }
+  let buf: Buffer;
+  try { buf = fs.readFileSync(file); } catch (e) { return readFailure(e); }
+  // A UTF-16 BOM (FF FE little-endian, FE FF big-endian) means decoding as UTF-8 below would either
+  // throw or (worse) silently produce mojibake that then fails JSON.parse with a confusing error — catch
+  // it up front and say what is actually wrong.
+  if (buf.length >= 2 && ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff))) {
+    return { error: "is UTF-16, not UTF-8 — re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  // A UTF-8 BOM (EF BB BF, decoded as U+FEFF) is invisible but not valid JSON syntax — strip it before
+  // parsing (verified: JSON.parse of a BOM'd file throws "Unexpected token" otherwise).
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   let parsed: unknown;
   try { const value: unknown = JSON.parse(raw); parsed = value; } catch (e) { return { error: `is not valid JSON — ${errMsg(e)}` }; }
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };

@@ -28,12 +28,17 @@ function readFailure(e) {
   };
 }
 function readJson(file, guard) {
-  let raw;
+  let buf;
   try {
-    raw = fs.readFileSync(file, "utf8");
+    buf = fs.readFileSync(file);
   } catch (e) {
     return readFailure(e);
   }
+  if (buf.length >= 2 && (buf[0] === 255 && buf[1] === 254 || buf[0] === 254 && buf[1] === 255)) {
+    return { error: "is UTF-16, not UTF-8 \u2014 re-save it as UTF-8" };
+  }
+  let raw = buf.toString("utf8");
+  if (raw.charCodeAt(0) === 65279) raw = raw.slice(1);
   let parsed;
   try {
     const value = JSON.parse(raw);
@@ -427,6 +432,16 @@ ${res.errors.length} error(s)`);
 
 // design-to-code/map-bootstrap.ts
 var clone = (o) => structuredClone(o);
+var UNSAFE_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+function safeAssign(target, source1, source2) {
+  for (const src of [source1, source2]) {
+    for (const k of Object.keys(src)) {
+      if (UNSAFE_KEYS.has(k)) continue;
+      target[k] = src[k];
+    }
+  }
+  return target;
+}
 var words = (name) => String(name || "").replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
 function pascal(name) {
   const p = words(name).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
@@ -467,7 +482,7 @@ function freshEntry(c) {
   else figma.unstable = true;
   if (c.id) figma.id = c.id;
   const entry = { figma, code: { module: "TODO: import path", export: pascal(c.name || "Component") }, status: "needs-review" };
-  const props = {};
+  const props = nullProto();
   const defs = c.props || {};
   for (const pn of Object.keys(defs)) {
     const pe = propEntry(pn, defs[pn]);
@@ -498,11 +513,13 @@ function bootstrap(catalog, existing) {
     if (prevKey && prevEntry) {
       usedPrev.add(prevKey);
       const entry = clone(prevEntry);
-      entry.figma = Object.assign({}, entry.figma, { name: c.name || entry.figma && entry.figma.name || "Unnamed" });
+      entry.figma = safeAssign({}, entry.figma, { name: c.name || entry.figma && entry.figma.name || "Unnamed" });
       if (c.id) entry.figma.id = c.id;
       if (c.key) entry.figma.key = c.key;
       else if (!entry.figma.key) entry.figma.unstable = true;
-      const props = entry.props = entry.props || {};
+      const props = nullProto();
+      if (entry.props) Object.assign(props, entry.props);
+      entry.props = props;
       const defs = c.props || {};
       for (const pn of Object.keys(defs)) {
         const cdef = defs[pn], kind = TYPE_TO_KIND[cdef.type], ex = props[pn];
@@ -649,7 +666,7 @@ ${usage}`);
     }
     const all = catalog.components;
     const scoped = all.filter((c) => c.key && used.has(c.key) || c.id && used.has(c.id));
-    scopedCatalog = Object.assign({}, catalog, { components: scoped });
+    scopedCatalog = safeAssign({}, catalog, { components: scoped });
     console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
   }
   const written = bootstrap(scopedCatalog, existing);
