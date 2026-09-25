@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor` and the
-// verbs are dispatched there before anything else runs — in particular before server-core loads.
+// ROUTING (see `cli()` near the bottom of this file): `dtwin mcp`, `dtwin init`, `dtwin doctor`,
+// `dtwin seed` and the verbs are dispatched there before anything else runs — in particular before server-core loads.
 // `dtwin mcp` routes to the MCP server (figma-mcp.ts). This is the officially-supported registration
 // shape (`npx -y designtwin mcp`), and it must not disturb any existing invocation: the branch is taken
 // ONLY when this file is the process entry AND the first argument is exactly "mcp", so `dtwin …` and
@@ -37,6 +37,7 @@
 //   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | …  See token --help
 //   dtwin doctor [--wait N] [--json]         # diagnose the setup; changes nothing. See doctor --help
 //   dtwin init [--mcp] [--dry-run]           # set up the project you are building. See init --help
+//   dtwin seed [codeRoot] [outDir]           # components.json from your Code Connect files. See seed --help
 //   dtwin mcp                                # run the MCP server (what .mcp.json points at). See mcp --help
 //   dtwin help                               = --help
 //   dtwin --version                          print the installed version
@@ -1153,6 +1154,13 @@ async function cli(argv: string[]): Promise<void> {
   // not ways for the diagnostic to die.
   if (argv[0] === "doctor") {
     await (await import("./doctor.ts")).main(argv.slice(1));
+    return;
+  }
+  // `dtwin seed` — components.json from Code Connect files (seed-components.ts). Routed like `init`: it
+  // reads source files only — no bridge, no token, no plugin — so it must run before server-core loads
+  // (which resolves, and may mint, the token), and it shares none of the pull flags.
+  if (argv[0] === "seed") {
+    (await import("./seed-components.ts")).main(argv.slice(1));
     return;
   }
   // `dtwin <verb>` — verbs.ts rewrites a leading verb into the flags parsed below (`dtwin list pages` →

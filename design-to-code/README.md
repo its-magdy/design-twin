@@ -79,9 +79,9 @@ executed" design). Full shape is enforced by `map-validate.ts` (and documented h
 
 ## Relationship to the existing `design/` maps
 The repo already had a simpler `design/components.json` (`{import, component, props}`) and `design/tokens.json`,
-plus `bridge/src/seed-components.ts` (which seeds the component map from *code-side* Code Connect files).
+plus `bridge/src/seed-components.ts` — `dtwin seed` — (which seeds the component map from *code-side* Code Connect files).
 `design-to-code/` is the **formalized superset**: a schema'd, validated, drift-checked, bootstrappable map plus a
-DTCG token pipeline. `bridge/src/seed-components.ts` seeds from the code side; `design-to-code/map-bootstrap.ts` seeds
+DTCG token pipeline. `bridge/src/seed-components.ts` (`dtwin seed`) seeds from the code side; `design-to-code/map-bootstrap.ts` seeds
 from the Figma side — they are complementary. Consolidating the codegen skill onto the `design-to-code/` format is
 part of the deferred resolver work (needs a target repo).
 
