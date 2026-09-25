@@ -770,6 +770,23 @@ check("every entry is a committed REAL file (a symlink out of the plugin dir is 
 }));
 check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n) =>
   !/(require\(|from )["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
+// Node builtins only: a bare package import would fail in an installed plugin (it has no node_modules),
+// and an INLINED package — esbuild marks each one with a `// …node_modules/<pkg>/…` path comment — bloats every
+// bundle (zod, a bridge dependency, is ~750 KB unminified per script). A bridge module the layer imports
+// must not pull one in.
+{
+  const bad: string[] = [];
+  for (const n of ENTRIES) {
+    const text = fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8");
+    for (const m of text.matchAll(/^(?:import|export)\b[^;]*?["']([^"']+)["']\s*;|\b(?:import|require)\(\s*["']([^"']+)["']\s*\)/gm)) {
+      // Top-level import/export statements (esbuild emits them at column 0), plus literal import()/require().
+      const spec = must(m[1] ?? m[2], "regex group 1 or 2");
+      if (!spec.startsWith("node:") && !spec.startsWith(".")) bad.push(`${n}.js imports '${spec}'`);
+    }
+    for (const m of text.matchAll(/^\/\/ \S*?\bnode_modules\/((?:@[^/\s]+\/)?[^/\s]+)/gm)) bad.push(`${n}.js inlines ${must(m[1], "regex group 1")}`);
+  }
+  check("bundles use Node builtins only — no package imported or inlined" + (bad.length ? " — " + [...new Set(bad)].join(", ") : ""), bad.length === 0);
+}
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
