@@ -116,7 +116,7 @@
       });
       const title = l.tree ? deriveTitle(l.tree) : void 0;
       const texts = l.tree ? collectTexts(l.tree) : void 0;
-      bucket.entries.push({ ...(index || [])[i], title, texts, ...src, file: join(bucket.dir, base) });
+      bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...src, file: join(bucket.dir, base) }));
     });
     const pageDirs = pages.map((b) => ({ page: b.page, ...ifDefined("pageId", b.pageId), dir: b.dir, index: b.index, layers: b.entries.length }));
     const meta = Object.assign(rest, { pageDirs, layers: pages.flatMap((b) => b.entries) });

@@ -671,7 +671,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     }
     const list = () => live.map((e) => `  ${e.connId}  ${JSON.stringify(e.file || "(unidentified)")}${e.fileKey ? "  fileKey " + e.fileKey : ""}`).join("\n");
     if (target === undefined || target === null || target === "") {
-      if (live.length === 1) return live[0];
+      const [only] = live;
+      if (live.length === 1 && only !== undefined) return only; // only is always set when length is 1
       throw new Error(
         `${live.length} Figma files are connected to the bridge — say which one to use.\n${list()}\n` +
         `Pass the connId, the fileKey, or part of the file name (CLI: --client <id|name>; MCP: client: "<id|name>").`
@@ -679,7 +680,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     }
     const t = String(target);
     const matched = matchClient(live, t);
-    if (matched.length === 1) return matched[0];
+    const [hit] = matched;
+    if (matched.length === 1 && hit !== undefined) return hit; // hit is always set when length is 1
     if (matched.length > 1) {
       throw new Error(
         `'${t}' matches ${matched.length} connected files — be more specific, or use the connId.\n${list()}`

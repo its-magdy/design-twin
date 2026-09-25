@@ -134,17 +134,24 @@ export function verbHelp(argv: unknown): string | null {
 }
 
 export function distance(a: string, b: string): number {
-  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  // Levenshtein, one row at a time. `row` is the previous row (row[j] = distance(a[0..i-1), b[0..j)));
+  // `diag`/`left` carry row[j-1] and the new row's [j-1] so no cell is read by index.
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  let last = b.length; // the bottom-right cell: row[b.length]
   for (let i = 1; i <= a.length; i++) {
-    let prev = row[0];
-    row[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cur = row[j];
-      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-      prev = cur;
+    const next = [i];
+    let diag = i - 1; // row[0] of the previous row
+    let left = i;     // next[0]
+    for (const [k, up] of row.slice(1).entries()) { // k = j - 1, up = row[j]
+      const cur = Math.min(up + 1, left + 1, diag + (a[i - 1] === b[k] ? 0 : 1));
+      next.push(cur);
+      diag = up;
+      left = cur;
     }
+    row = next;
+    last = left;
   }
-  return row[b.length];
+  return last;
 }
 
 // Two edits for the longer verbs. A short verb ("pull", "list", "stop", "mcp" …) is one edit from real
