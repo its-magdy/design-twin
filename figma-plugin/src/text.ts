@@ -114,12 +114,20 @@ function fontObj(src: TextStyleSource): FontSpec {
 // output — are unchanged. Of the last four, three are proven the same way: `fontStyle` (L5496) is a
 // function of the already-requested fontName (Figma has no faux italic), and `paragraphIndent` (L5560) /
 // `paragraphSpacing` (L5564) can only differ across a node whose node-level value is figma.mixed
-// (L10027 / L10084). `textStyleOverrides` (L5588) is NOT proven: each member means "overridden relative
-// to the text style" (developers.figma.com/docs/plugins/api/TextStyleOverrides/), and nothing documents
-// whether that flag is a live comparison with the style or a sticky "was set by hand" bit. If it is
-// sticky, two adjacent ranges with the same font/weight/link/decoration but a different override list
-// would now be two runs where they were one. Untested offline — the §5.2 live check on a styled range
-// (sticky-vs-live: still open; the runtime SHAPE is settled — see `styleOverrides` below).
+// (L10027 / L10084). `textStyleOverrides` (L5588) — each member means "overridden relative to the text
+// style" (developers.figma.com/docs/plugins/api/TextStyleOverrides/) — is proven LIVE, not sticky
+// (Figma Desktop, 2026-09-25, §5.2: one text layer, one local text style at weight Regular, `--selection`
+// pulls after each step): (1) an override exists only for the semantic shortcuts — the Help Center
+// (help.figma.com/hc/en-us/articles/360039957034): "You can use keyboard shortcuts ⌘ Command B, ⌘ Command
+// I, and ⌘ Command U to bolden, italicize or underline parts of a text layer without breaking the
+// layer's existing text style" — ⌘B on a range gave a run with the style AND `["SEMANTIC_WEIGHT"]`;
+// a weight picked from the dropdown instead DETACHED the style from that range (its segment came back
+// with an empty textStyleId, so no `textStyle` and no list on that run — a split the node already had).
+// (2) Editing the STYLE itself to Bold made the list disappear and the node collapse to ONE segment;
+// editing it back to Regular took the range with it (the override was absorbed, not remembered). So an
+// override equal to the style's value is not reported and never splits a run — requesting the field
+// cannot make two runs of one. Proven for weight/⌘B only; italic/underline/strikethrough/hyperlink
+// follow the same documented rule and were not exercised.
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
