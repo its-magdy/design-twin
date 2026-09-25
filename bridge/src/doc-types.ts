@@ -216,6 +216,10 @@ export interface FontSpec {
   weight?: string;
   /** numeric CSS weight when the API exposes it (node-level only) */
   weightValue?: number;
+  /** "italic" when the styled-text segment's `fontStyle` is ITALIC (plugin-api.d.ts 1.139.0 L5496,
+   *  `type FontStyle = 'REGULAR' | 'ITALIC'` L4000); REGULAR is the default and is omitted. Segment-only
+   *  in the API: a uniform node that had no readable segment never carries it. */
+  fontStyle?: "italic";
   /** FontName.variationSettings: the variable font axis values applied, e.g. {wght: 600, slnt: -10}.
    *  Absent for a static font. */
   variationSettings?: Record<string, number>;
@@ -256,6 +260,15 @@ export interface TextRun {
   /** This run's paragraph wrap style — only when the node-level `textWrapStyle` is mixed (else it is
    *  `font.textWrap` on the node); AUTO omitted. */
   textWrap?: "balance" | "pretty";
+  /** This run's paragraph spacing / indent (px; StyledTextSegment plugin-api.d.ts 1.139.0 L5560/L5564) —
+   *  only when the node-level value is mixed (L10027/L10084; else it is `font.paragraphSpacing` /
+   *  `font.paragraphIndent` on the node); 0 omitted. */
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  /** StyledTextSegment.textStyleOverrides (plugin-api.d.ts 1.139.0 L5588, TextStyleOverrideType
+   *  L5465-5467), lower-cased: "semantic_italic" | "semantic_weight" | "hyperlink" | "text_decoration".
+   *  Only when non-empty AND the run has a text style (the overrides are "over a text style"). */
+  textStyleOverrides?: string[];
 }
 
 // ---- prototype (prototype.ts)
@@ -354,6 +367,8 @@ export interface TextFields {
   linkNode?: string;
   list?: string;
   indent?: number;
+  /** uniform text's overrides over its text style (`styles.text`) — same rule as `TextRun.textStyleOverrides` */
+  textStyleOverrides?: string[];
   autoResize?: "width_and_height" | "height" | "truncate";
   truncate?: true;
   maxLines?: number;

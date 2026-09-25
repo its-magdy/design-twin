@@ -334,7 +334,8 @@ function isMainFallback(metaUrl) {
 // design-to-code/design-diff.ts
 var CATEGORY = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
-  typography: ["font", "textTokens", "missingFont"],
+  typography: ["font", "textTokens", "missingFont", "textStyleOverrides"],
+  // overrides sit over the text STYLE the font came from
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
   layout: [
     "layout",
