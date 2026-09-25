@@ -20,7 +20,8 @@
     "typescript/switch-exhaustiveness-check": "error",
     "typescript/consistent-type-imports": ["error", { "prefer": "type-imports", "fixStyle": "inline-type-imports" }],
     "typescript/restrict-template-expressions": ["error", { "allowNumber": true }],
-    // Warn only for now (mostly tests); promoted in a later step.
-    "typescript/no-non-null-assertion": "warn"
+    // Promoted from warn (§5.9): 494 sites removed — a value's presence is established by a guard, a typed
+    // helper (design-to-code/map-util.ts getOrInit, test/fixtures.ts must) or a restructure, never asserted.
+    "typescript/no-non-null-assertion": "error"
   }
 }

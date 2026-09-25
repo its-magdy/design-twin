@@ -13,6 +13,7 @@ import type {
 import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesReply, Cmd } from "../bridge/src/commands.ts";
 import { argsShapeError } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
+import { must } from "./fixtures.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
@@ -373,7 +374,7 @@ const sandbox = context as unknown as Sandbox;
 (async () => {
   const sel = await sandbox.collectSelection();
   const tree = sel.screen.nodes[0];
-  const [txt, rect, btn] = tree.children!;
+  const [txt, rect, btn] = must(tree.children, "tree.children");
 
   ok("manifest present", sel.screen.manifest && typeof sel.screen.manifest.nodes === "number");
   ok("manifest counted nodes (>=4)", sel.screen.manifest.nodes >= 4);
@@ -387,18 +388,18 @@ const sandbox = context as unknown as Sandbox;
     layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "SPACE_EVENLY", counterAxisAlignItems: "MIN", children: [] };
   const evenlyOut = await sandbox.serialize(evenlyFrame, 0, false);
-  ok("[SPACE_EVENLY] -> justifyContent: space-evenly", evenlyOut.layout!.justifyContent === "space-evenly");
+  ok("[SPACE_EVENLY] -> justifyContent: space-evenly", evenlyOut.layout?.justifyContent === "space-evenly");
   const aroundFrame = { type: "FRAME", name: "Around", visible: true, id: "al:2", width: 100, height: 20,
     layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
   const aroundOut = await sandbox.serialize(aroundFrame, 0, false);
-  ok("[SPACE_AROUND] -> justifyContent: space-around", aroundOut.layout!.justifyContent === "space-around");
+  ok("[SPACE_AROUND] -> justifyContent: space-around", aroundOut.layout?.justifyContent === "space-around");
   // counterAxisAlignItems still maps as before (unaffected by the SPACE_EVENLY/SPACE_AROUND addition).
   const counterFrame = { type: "FRAME", name: "Counter", visible: true, id: "al:3", width: 100, height: 20,
     layoutMode: "HORIZONTAL", paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "MIN", counterAxisAlignItems: "CENTER", children: [] };
   const counterOut = await sandbox.serialize(counterFrame, 0, false);
-  ok("[counterAxisAlignItems] CENTER -> alignItems: center (unchanged)", counterOut.layout!.alignItems === "center");
+  ok("[counterAxisAlignItems] CENTER -> alignItems: center (unchanged)", counterOut.layout?.alignItems === "center");
 
   // ---- itemSpacing under an "auto gap" distribution mode is Figma's unused slack, not a real gap:
   // https://help.figma.com/hc/en-us/articles/31289464393751 (article 31289464393751), "Guide to auto
@@ -409,22 +410,22 @@ const sandbox = context as unknown as Sandbox;
     layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "SPACE_BETWEEN", counterAxisAlignItems: "MIN", children: [] };
   const betweenSlackOut = await sandbox.serialize(betweenSlack, 0, false);
-  ok("[SPACE_BETWEEN] itemSpacing is slack -> no gap", betweenSlackOut.layout!.gap === undefined);
+  ok("[SPACE_BETWEEN] itemSpacing is slack -> no gap", betweenSlackOut.layout !== undefined && betweenSlackOut.layout.gap === undefined);
   const evenlySlack = { type: "FRAME", name: "EvenlySlack", visible: true, id: "al:5", width: 100, height: 20,
     layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "SPACE_EVENLY", counterAxisAlignItems: "MIN", children: [] };
   const evenlySlackOut = await sandbox.serialize(evenlySlack, 0, false);
-  ok("[SPACE_EVENLY] itemSpacing is slack -> no gap", evenlySlackOut.layout!.gap === undefined);
+  ok("[SPACE_EVENLY] itemSpacing is slack -> no gap", evenlySlackOut.layout !== undefined && evenlySlackOut.layout.gap === undefined);
   const aroundSlack = { type: "FRAME", name: "AroundSlack", visible: true, id: "al:6", width: 100, height: 20,
     layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "SPACE_AROUND", counterAxisAlignItems: "MIN", children: [] };
   const aroundSlackOut = await sandbox.serialize(aroundSlack, 0, false);
-  ok("[SPACE_AROUND] itemSpacing is slack -> no gap", aroundSlackOut.layout!.gap === undefined);
+  ok("[SPACE_AROUND] itemSpacing is slack -> no gap", aroundSlackOut.layout !== undefined && aroundSlackOut.layout.gap === undefined);
   const centerGap = { type: "FRAME", name: "CenterGap", visible: true, id: "al:7", width: 100, height: 20,
     layoutMode: "HORIZONTAL", itemSpacing: 12, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "CENTER", counterAxisAlignItems: "MIN", children: [] };
   const centerGapOut = await sandbox.serialize(centerGap, 0, false);
-  ok("[CENTER] itemSpacing is a real gap -> gap: 12", centerGapOut.layout!.gap === 12);
+  ok("[CENTER] itemSpacing is a real gap -> gap: 12", centerGapOut.layout?.gap === 12);
   // The counter axis has the same rule (plugin-api.d.ts 1.139, `counterAxisAlignContent`:
   // "`counterAxisSpacing` is respected when `counterAxisAlignContent` is set to `\"AUTO\"`"; under
   // SPACE_BETWEEN the free space is divided between the tracks). Wrapped rows under SPACE_BETWEEN must
@@ -434,31 +435,31 @@ const sandbox = context as unknown as Sandbox;
     primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", counterAxisAlignContent: "SPACE_BETWEEN", children: [] };
   const wrapBetweenOut = await sandbox.serialize(wrapBetween, 0, false);
   ok("[WRAP+SPACE_BETWEEN] counterAxisSpacing is slack -> no rowGap, alignContent: space-between, gap kept",
-    wrapBetweenOut.layout!.rowGap === undefined && wrapBetweenOut.layout!.alignContent === "space-between" && wrapBetweenOut.layout!.gap === 8);
+    wrapBetweenOut.layout !== undefined && wrapBetweenOut.layout.rowGap === undefined && wrapBetweenOut.layout.alignContent === "space-between" && wrapBetweenOut.layout.gap === 8);
   const wrapAuto = { type: "FRAME", name: "WrapAuto", visible: true, id: "al:9", width: 100, height: 60,
     layoutMode: "HORIZONTAL", layoutWrap: "WRAP", itemSpacing: 8, counterAxisSpacing: 16, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     primaryAxisAlignItems: "MIN", counterAxisAlignItems: "MIN", counterAxisAlignContent: "AUTO", children: [] };
   const wrapAutoOut = await sandbox.serialize(wrapAuto, 0, false);
   ok("[WRAP+AUTO] counterAxisSpacing is a real row gap -> rowGap: 16, no alignContent",
-    wrapAutoOut.layout!.rowGap === 16 && wrapAutoOut.layout!.alignContent === undefined);
+    wrapAutoOut.layout !== undefined && wrapAutoOut.layout.rowGap === 16 && wrapAutoOut.layout.alignContent === undefined);
 
   ok("text mixed -> runs[] with 2", Array.isArray(txt.runs) && txt.runs.length === 2);
-  ok("text run weight verbatim (Bold)", txt.runs![1].font.weight === "Bold");
-  ok("text run numeric weight from segment fontWeight", txt.runs![1].font.weightValue === 700);
+  ok("text run weight verbatim (Bold)", txt.runs?.[1]?.font.weight === "Bold");
+  ok("text run numeric weight from segment fontWeight", txt.runs?.[1]?.font.weightValue === 700);
   // FontName.variationSettings (Update 138): a segment's variable font axis values are carried on
   // its run's font; a segment/node without them must not have the key at all.
-  ok("text run variationSettings carried when the segment's fontName has them", JSON.stringify(txt.runs![1].font.variationSettings) === '{"wght":600}');
-  ok("text run without variationSettings has no such key", !("variationSettings" in txt.runs![0].font));
-  ok("node-level font has no variationSettings (fontName carries none)", !("variationSettings" in txt.font!));
-  ok("text run underline decoration", txt.runs![1].font.decoration === "underline");
-  ok("text run href", txt.runs![1].href === "https://x.com");
-  ok("lineHeight unit carried (percent)", !!(txt.font!.lineHeight && txt.font!.lineHeight.unit === "percent"));
-  ok("letterSpacing unit carried (px)", !!(txt.font!.letterSpacing && txt.font!.letterSpacing.unit === "px"));
-  ok("paragraphSpacing", txt.font!.paragraphSpacing === 8);
+  ok("text run variationSettings carried when the segment's fontName has them", JSON.stringify(txt.runs?.[1]?.font.variationSettings) === '{"wght":600}');
+  ok("text run without variationSettings has no such key", !("variationSettings" in must(txt.runs?.[0], "txt.runs[0]").font));
+  ok("node-level font has no variationSettings (fontName carries none)", !("variationSettings" in must(txt.font, "txt.font")));
+  ok("text run underline decoration", txt.runs?.[1]?.font.decoration === "underline");
+  ok("text run href", txt.runs?.[1]?.href === "https://x.com");
+  ok("lineHeight unit carried (percent)", !!(txt.font?.lineHeight && txt.font?.lineHeight.unit === "percent"));
+  ok("letterSpacing unit carried (px)", !!(txt.font?.letterSpacing && txt.font?.letterSpacing.unit === "px"));
+  ok("paragraphSpacing", txt.font?.paragraphSpacing === 8);
 
   // --- new READ additions (Batch: close the read gap) ---
   ok("node id captured", txt.id === "1:1");
-  ok("text vertical align", txt.font!.valign === "center");
+  ok("text vertical align", txt.font?.valign === "center");
   ok("text autoResize", txt.autoResize === "height");
   ok("text truncate -> ellipsis", txt.truncate === true);
   ok("text maxLines (line-clamp)", txt.maxLines === 2);
@@ -496,20 +497,25 @@ const sandbox = context as unknown as Sandbox;
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("grid column span", abs.gridColumnSpan === 2);
   ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0].pattern === "columns" && abs.layoutGrids[0].count === 12);
-  ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids![0].size === 60);
+  ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
   ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0].label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
-  ok("gradient transform carried", Array.isArray(flatPaint(abs.fills![0]).transform) && flatPaint(abs.fills![0]).transform![0][0] === 1);
-  ok("image hash carried", flatPaint(abs.fills![1]).hash === "abc123");
-  ok("image intrinsicSize via getImageByHash", !!(flatPaint(abs.fills![1]).intrinsicSize && flatPaint(abs.fills![1]).intrinsicSize!.w === 800 && flatPaint(abs.fills![1]).intrinsicSize!.h === 600));
-  ok("stroke cap + join carried", abs.strokes!.cap === "round" && abs.strokes!.join === "round");
+  const abs0 = flatPaint(must(abs.fills?.[0], "abs.fills[0]"));
+  ok("gradient transform carried", Array.isArray(abs0.transform) && abs0.transform?.[0]?.[0] === 1);
+  const abs1 = flatPaint(must(abs.fills?.[1], "abs.fills[1]"));
+  ok("image hash carried", abs1.hash === "abc123");
+  ok("image intrinsicSize via getImageByHash", !!(abs1.intrinsicSize && abs1.intrinsicSize.w === 800 && abs1.intrinsicSize.h === 600));
+  ok("stroke cap + join carried", abs.strokes?.cap === "round" && abs.strokes?.join === "round");
 
-  ok("gradient stops carried", rect.fills![0].type === "gradient" && Array.isArray(rect.fills![0].stops) && rect.fills![0].stops.length === 2);
-  ok("gradient stop color hex", flatPaint(rect.fills![0]).stops![0].color === "#ff0000");
-  ok("per-side stroke weights (mixed fallback)", !!(rect.strokes!.weights && rect.strokes!.weights.bottom === 2));
+  const rect0 = must(rect.fills?.[0], "rect.fills[0]");
+  ok("gradient stops carried", rect0.type === "gradient" && Array.isArray(flatPaint(rect0).stops) && flatPaint(rect0).stops?.length === 2);
+  ok("gradient stop color hex", flatPaint(rect0).stops?.[0]?.color === "#ff0000");
+  ok("per-side stroke weights (mixed fallback)", !!(rect.strokes?.weights && rect.strokes?.weights.bottom === 2));
   ok("effects ordered array len 2", Array.isArray(rect.effects) && rect.effects.length === 2);
-  ok("drop_shadow discriminated", rect.effects![0].type === "drop_shadow" && rect.effects![0].offset!.y === 2);
-  ok("background_blur no offset", rect.effects![1].type === "background_blur" && flatEffect(rect.effects![1]).offset === undefined);
+  const rectE0 = must(rect.effects?.[0], "rect.effects[0]");
+  ok("drop_shadow discriminated", rectE0.type === "drop_shadow" && flatEffect(rectE0).offset?.y === 2);
+  const rectE1 = must(rect.effects?.[1], "rect.effects[1]");
+  ok("background_blur no offset", rectE1.type === "background_blur" && flatEffect(rectE1).offset === undefined);
   ok("per-corner radius (mixed fallback)", !!(rect.radius && (rect.radius as RadiusCorners).tl === 8 && (rect.radius as RadiusCorners).bl === undefined));
 
   // Two things used to land in `radius` that a builder then copied verbatim into CSS.
@@ -527,8 +533,8 @@ const sandbox = context as unknown as Sandbox;
 
   ok("instance main component name", btn.component === "Button");
   ok("mainComponent join keys captured (id/key)", !!(btn.mainComponent && btn.mainComponent.id === "comp:btn1" && btn.mainComponent.key === "compkey_btn"));
-  ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent!.setId === "set:btn" && btn.mainComponent!.setKey === "setkey_btn");
-  ok("mainComponent variant name kept separately from the set name", btn.mainComponent!.setName === "ButtonSet" && btn.mainComponent!.variant === "Button");
+  ok("mainComponent set join keys captured (setId/setKey)", btn.mainComponent?.setId === "set:btn" && btn.mainComponent?.setKey === "setkey_btn");
+  ok("mainComponent variant name kept separately from the set name", btn.mainComponent?.setName === "ButtonSet" && btn.mainComponent?.variant === "Button");
 
   // A remote main whose `.parent` is NULL (plugin-api.d.ts documented shape) must not throw, and
   // must emit id/key with NO setId/setKey (there is no set to join to).
@@ -537,19 +543,22 @@ const sandbox = context as unknown as Sandbox;
   ok("remote main with null parent: id/key captured, no setId/setKey", !!(remoteSer.mainComponent && remoteSer.mainComponent.id === "rc:1" && remoteSer.mainComponent.remote === true && remoteSer.mainComponent.setId === undefined));
   ok("bound token resolved to name", !!(btn.tokens && btn.tokens.fills === "color/primary"));
   ok("reactions extracted", Array.isArray(btn.reactions) && btn.reactions.length === 1);
-  ok("reaction trigger", btn.reactions![0].trigger === "on_click");
-  ok("reaction navigation + destination name", btn.reactions![0].actions![0].navigation === "navigate" && btn.reactions![0].actions![0].destination === "Details");
-  ok("reaction transition easing (lowercased)", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier");
+  const btnAct0 = must(btn.reactions?.[0]?.actions?.[0], "btn.reactions[0].actions[0]");
+  ok("reaction trigger", btn.reactions?.[0]?.trigger === "on_click");
+  ok("reaction navigation + destination name", btnAct0.navigation === "navigate" && btnAct0.destination === "Details");
+  const btnTr = must(btnAct0.transition, "btn.reactions[0].actions[0].transition");
+  ok("reaction transition easing (lowercased)", btnTr.easing === "custom_cubic_bezier");
 
   const ds = await sandbox.buildDesignSystem();
   const primary = ds.variables.find((v) => v.name === "color/primary");
   ok("variable tier semantic", !!(primary && primary.tier === "semantic"));
   ok("variable codeSyntax carried", !!(primary && primary.codeSyntax && primary.codeSyntax.WEB === "var(--color-primary)"));
   ok("variable alias re-keyed by mode name", !!(primary && primary.values.Light && aliasOf(primary.values.Light) === "blue/600"));
-  ok("COLOR primitive folded to hex", ds.variables.find((v) => v.name === "blue/600")!.values.Value === "#1a4de6");
-  ok("variable hiddenFromPublishing captured", ds.variables.find((v) => v.name === "blue/600")!.hiddenFromPublishing === true);
-  ok("variable key captured (durable identity)", ds.variables.find((v) => v.name === "blue/600")!.key === "varkey_blue600");
-  ok("public variable has no hiddenFromPublishing flag", primary!.hiddenFromPublishing === undefined);
+  const blue600 = must(ds.variables.find((v) => v.name === "blue/600"), "ds.variables blue/600");
+  ok("COLOR primitive folded to hex", blue600.values.Value === "#1a4de6");
+  ok("variable hiddenFromPublishing captured", blue600.hiddenFromPublishing === true);
+  ok("variable key captured (durable identity)", blue600.key === "varkey_blue600");
+  ok("public variable has no hiddenFromPublishing flag", primary !== undefined && primary.hiddenFromPublishing === undefined);
   ok("hygiene: ALL_SCOPES flagged", ds.hygiene.some((h) => h.indexOf("ALL_SCOPES") !== -1));
   // tier regression: a raw (non-alias) variable whose only scope is the ALL_SCOPES default is a
   // primitive, not semantic — ALL_SCOPES must not be treated as a meaningful scope.
@@ -599,24 +608,28 @@ const sandbox = context as unknown as Sandbox;
     sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
   ok("componentPropertyReferences -> propRefs (stripped)", !!(txt.propRefs && txt.propRefs.characters === "Label"));
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
-  ok("text run bound variable -> token name", !!(txt.runs![1].tokens && txt.runs![1].tokens.fills === "color/primary"));
-  ok("effect bound variable -> token name", !!(rect.effects![0].tokens && rect.effects![0].tokens.radius === "misc/bad"));
+  ok("text run bound variable -> token name", !!(txt.runs?.[1]?.tokens && txt.runs?.[1]?.tokens.fills === "color/primary"));
+  ok("effect bound variable -> token name", !!(rect.effects?.[0]?.tokens && rect.effects?.[0]?.tokens.radius === "misc/bad"));
   // matchLayers lives on DirectionalTransition only (MOVE_IN/OUT, PUSH, SLIDE_IN/OUT); SimpleTransition
   // (DISSOLVE, SMART_ANIMATE, SCROLL_ANIMATE) has no such field — developers.figma.com/docs/plugins/api/Transition/.
-  ok("transition matchLayers carried", btn.reactions![0].actions![0].transition!.matchLayers === true);
-  ok("transition type/direction carried", btn.reactions![0].actions![0].transition!.type === "move_in" && btn.reactions![0].actions![0].transition!.direction === "left");
-  ok("transition custom cubic-bezier carried", btn.reactions![0].actions![0].transition!.easing === "custom_cubic_bezier" && btn.reactions![0].actions![0].transition!.cubicBezier!.x1 === 0.4);
+  ok("transition matchLayers carried", btnTr.matchLayers === true);
+  ok("transition type/direction carried", btnTr.type === "move_in" && btnTr.direction === "left");
+  ok("transition custom cubic-bezier carried", btnTr.easing === "custom_cubic_bezier" && must(btnTr.cubicBezier, "btnTr.cubicBezier").x1 === 0.4);
   const btnComp = ds.components.find((c) => c.name === "Button");
   ok("component description captured", !!(btnComp && btnComp.description === "Primary action button"));
-  ok("INSTANCE_SWAP preferredValues captured", !!(btnComp && btnComp.props!.Icon && btnComp.props!.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props!.Icon.preferredValues) && btnComp.props!.Icon.preferredValues.length === 2));
+  ok("INSTANCE_SWAP preferredValues captured", !!(btnComp && btnComp.props?.Icon && btnComp.props.Icon.type === "INSTANCE_SWAP" && Array.isArray(btnComp.props.Icon.preferredValues) && btnComp.props.Icon.preferredValues.length === 2));
 
   // --- READ additions (verified vs developers.figma.com 2026-07-23): bug fix + HIGH tier + MED ---
   // BUG FIX: progressive-blur startOffset/endOffset are Vectors {x,y}, not numbers (were dropped).
-  ok("progressive blur endOffset Vector kept", !!(flatEffect(abs.effects![0]).blurType === "progressive" && flatEffect(abs.effects![0]).endOffset && flatEffect(abs.effects![0]).endOffset!.y === 1));
-  ok("noise effect fields", abs.effects![1].type === "noise" && abs.effects![1].noiseType === "multitone" && abs.effects![1].opacity === 0.3);
-  ok("glass effect fields", abs.effects![2].type === "glass" && abs.effects![2].refraction === 0.2 && abs.effects![2].depth === 4);
-  ok("image filters carried", !!(flatPaint(abs.fills![1]).filters && flatPaint(abs.fills![1]).filters!.saturation === -0.5 && flatPaint(abs.fills![1]).filters!.exposure === undefined));
-  ok("pattern paint fields", abs.fills![2].type === "pattern" && abs.fills![2].sourceNodeId === "9:99" && abs.fills![2].tileType === "rectangular");
+  const absEffect0 = flatEffect(must(abs.effects?.[0], "abs.effects[0]"));
+  ok("progressive blur endOffset Vector kept", !!(absEffect0.blurType === "progressive" && absEffect0.endOffset && absEffect0.endOffset.y === 1));
+  const absEffect1 = must(abs.effects?.[1], "abs.effects[1]");
+  ok("noise effect fields", absEffect1.type === "noise" && absEffect1.noiseType === "multitone" && absEffect1.opacity === 0.3);
+  const absEffect2 = must(abs.effects?.[2], "abs.effects[2]");
+  ok("glass effect fields", absEffect2.type === "glass" && absEffect2.refraction === 0.2 && absEffect2.depth === 4);
+  ok("image filters carried", !!(abs1.filters && abs1.filters.saturation === -0.5 && abs1.filters.exposure === undefined));
+  const absFill2 = must(abs.fills?.[2], "abs.fills[2]");
+  ok("pattern paint fields", absFill2.type === "pattern" && absFill2.sourceNodeId === "9:99" && absFill2.tileType === "rectangular");
   ok("absolute bounding box -> box", !!(abs.box && abs.box.w === 100 && abs.box.h === 50));
   ok("render box emitted when it differs", !!(abs.renderBox && abs.renderBox.h === 56));
   ok("maskType (luminance) carried", abs.maskType === "luminance");
@@ -630,29 +643,29 @@ const sandbox = context as unknown as Sandbox;
   ok("strokesIncludedInLayout flagged", tree.strokesInLayout === true);
   ok("dev-resource links batched at root", Array.isArray(tree.devResources) && tree.devResources[0].url.indexOf("sb.example.com") !== -1);
 
-  ok("per-run textStyle resolved", txt.runs![1].textStyle === "Heading/H1");
-  ok("per-run fillStyle resolved", txt.runs![1].fillStyle === "Brand/Primary");
-  ok("per-run openType features (enabled only)", Array.isArray(txt.runs![1].font.openType) && txt.runs![1].font.openType.indexOf("SMCP") !== -1 && txt.runs![1].font.openType.indexOf("LIGA") === -1);
-  ok("per-run list indentation level", txt.runs![1].indent === 1);
+  ok("per-run textStyle resolved", txt.runs?.[1]?.textStyle === "Heading/H1");
+  ok("per-run fillStyle resolved", txt.runs?.[1]?.fillStyle === "Brand/Primary");
+  ok("per-run openType features (enabled only)", Array.isArray(txt.runs?.[1]?.font.openType) && txt.runs?.[1]?.font.openType?.indexOf("SMCP") !== -1 && txt.runs?.[1]?.font.openType?.indexOf("LIGA") === -1);
+  ok("per-run list indentation level", txt.runs?.[1]?.indent === 1);
 
-  const acts = btn.reactions![0].actions;
-  ok("NODE action preserveScroll flag", acts![0].preserveScroll === true);
-  ok("SET_VARIABLE resolves variable name", acts!.some((a) => a.type === "set_variable" && a.variable === "color/primary"));
-  ok("SET_VARIABLE_MODE resolves collection+mode names", acts!.some((a) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
+  const acts = must(btn.reactions?.[0]?.actions, "btn.reactions[0].actions");
+  ok("NODE action preserveScroll flag", acts[0].preserveScroll === true);
+  ok("SET_VARIABLE resolves variable name", acts.some((a) => a.type === "set_variable" && a.variable === "color/primary"));
+  ok("SET_VARIABLE_MODE resolves collection+mode names", acts.some((a) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
   ok("UPDATE_MEDIA_RUNTIME keeps destinationId + resolved destination name",
-    acts!.some((a) => a.type === "update_media_runtime" && a.mediaAction === "play" && a.destinationId === "frame_2" && a.destination === "Details"));
-  ok("CONDITIONAL nests actions", acts!.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions![0].destination === "Details"));
-  const urlNewTab = acts!.find((a) => a.type === "url" && a.url === "https://newtab.example.com");
-  const urlSameTab = acts!.find((a) => a.type === "url" && a.url === "https://sametab.example.com");
+    acts.some((a) => a.type === "update_media_runtime" && a.mediaAction === "play" && a.destinationId === "frame_2" && a.destination === "Details"));
+  ok("CONDITIONAL nests actions", acts.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions?.[0]?.destination === "Details"));
+  const urlNewTab = acts.find((a) => a.type === "url" && a.url === "https://newtab.example.com");
+  const urlSameTab = acts.find((a) => a.type === "url" && a.url === "https://sametab.example.com");
   ok("URL action emits openInNewTab when true", !!urlNewTab && urlNewTab.openInNewTab === true);
   ok("URL action omits openInNewTab when unset", !!urlSameTab && !("openInNewTab" in urlSameTab));
 
-  ok("collection defaultModeId -> mode name", ds.collections.find((c) => c.name === "Semantic")!.default === "Light");
-  ok("variable description captured", ds.variables.find((v) => v.name === "color/primary")!.description === "Primary brand color");
+  ok("collection defaultModeId -> mode name", ds.collections.find((c) => c.name === "Semantic")?.default === "Light");
+  ok("variable description captured", ds.variables.find((v) => v.name === "color/primary")?.description === "Primary brand color");
   ok("document color profile", ds.colorProfile === "display_p3");
   ok("document file name", ds.file === "My File");
-  ok("component publish key captured", btnComp!.key === "compkey123");
-  ok("component documentationLinks captured", Array.isArray(btnComp!.docs) && btnComp!.docs[0].indexOf("docs.example.com") !== -1);
+  ok("component publish key captured", btnComp !== undefined && btnComp.key === "compkey123");
+  ok("component documentationLinks captured", btnComp !== undefined && Array.isArray(btnComp.docs) && btnComp.docs[0].indexOf("docs.example.com") !== -1);
 
   const tableNode = { type: "TABLE", name: "Data", visible: true, id: "20:0", numRows: 2, numColumns: 2,
     cellAt: (r: number, c: number) => ({ text: { characters: "r" + r + "c" + c }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }], rowSpan: 1, columnSpan: 1 }) };
@@ -661,9 +674,9 @@ const sandbox = context as unknown as Sandbox;
 
   // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
   // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
-  ok("text decoration thickness (value+unit)", !!(txt.runs![1].font.decorationThickness && txt.runs![1].font.decorationThickness.value === 2 && txt.runs![1].font.decorationThickness.unit === "px"));
-  ok("text decoration offset (value+unit)", !!(txt.runs![1].font.decorationOffset && txt.runs![1].font.decorationOffset.value === 1));
-  ok("text decoration skip-ink (only when false)", txt.runs![1].font.decorationSkipInk === false);
+  ok("text decoration thickness (value+unit)", !!(txt.runs?.[1]?.font.decorationThickness && txt.runs?.[1]?.font.decorationThickness.value === 2 && txt.runs?.[1]?.font.decorationThickness.unit === "px"));
+  ok("text decoration offset (value+unit)", !!(txt.runs?.[1]?.font.decorationOffset && txt.runs?.[1]?.font.decorationOffset.value === 1));
+  ok("text decoration skip-ink (only when false)", txt.runs?.[1]?.font.decorationSkipInk === false);
 
   // GRID fidelity: per-track sizes + child anchor index + child cell alignment.
   const gridFrame = {
@@ -675,12 +688,15 @@ const sandbox = context as unknown as Sandbox;
     children: [],
   };
   const gf = await sandbox.serialize(gridFrame, 0, false);
-  ok("grid track sizes (fixed px + flex fr)", gf.layout!.display === "grid" && Array.isArray(gf.layout!.columnSizes) && gf.layout!.columnSizes[0].type === "fixed" && gf.layout!.columnSizes[0].value === 200 && gf.layout!.columnSizes[1].type === "flex");
-  ok("grid HUG track (value-less) handled", gf.layout!.columnSizes![2].type === "hug" && gf.layout!.columnSizes![2].value === undefined);
+  const gfLayout = must(gf.layout, "gf.layout");
+  ok("grid track sizes (fixed px + flex fr)", gfLayout.display === "grid" && Array.isArray(gfLayout.columnSizes) && gfLayout.columnSizes[0].type === "fixed" && gfLayout.columnSizes[0].value === 200 && gfLayout.columnSizes[1].type === "flex");
+  const gfCol2 = must(gfLayout.columnSizes?.[2], "gf.layout.columnSizes[2]");
+  ok("grid HUG track (value-less) handled", gfCol2.type === "hug" && gfCol2.value === undefined);
   ok("grid child anchor index (start cell)", abs.gridColumnStart === 1 && abs.gridRowStart === 0);
   ok("grid child cell align (justify/align-self)", abs.gridJustifySelf === "center" && abs.gridAlignSelf === "end");
 
-  ok("shader paint id captured", abs.fills![3] && abs.fills![3].type === "shader" && abs.fills![3].shaderId === "shader_1");
+  const absFill3 = abs.fills?.[3];
+  ok("shader paint id captured", absFill3 !== undefined && absFill3.type === "shader" && absFill3.shaderId === "shader_1");
   ok("devStatus free-text note captured", abs.devStatusNote === "blocked on API");
   ok("instance component-prop variable binding -> propTokens", !!(btn.propTokens && btn.propTokens.Label === "color/primary"));
 
@@ -704,58 +720,61 @@ const sandbox = context as unknown as Sandbox;
   const tree2 = sel2.screen.nodes[0];
   ok("getCSSAsync -> css oracle (opt-in)", !!(tree2.css && tree2.css.display === "flex" && tree2.css.padding === "16px"));
   ok("own-scope plugin data captured (opt-in)", !!(tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary"));
-  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start!.side === "LEFT");
+  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start?.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
   const sel3 = await sandbox.collectSelection({ motion: true });
   const m3 = sel3.screen.nodes[0].motion;
   ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5));
-  ok("motion keyframe track: base + keyframes + values", !!(m3 && m3.manualTracks!.TRANSLATION_X && m3.manualTracks!.TRANSLATION_X.base === 0 && m3.manualTracks!.TRANSLATION_X.keyframes![1].value === 100));
-  const tx1Easing = m3 && m3.manualTracks!.TRANSLATION_X.keyframes![1].easing;
+  const tx = m3?.manualTracks?.TRANSLATION_X;
+  ok("motion keyframe track: base + keyframes + values", !!(tx && tx.base === 0 && tx.keyframes?.[1]?.value === 100));
+  const tx1Easing = tx?.keyframes?.[1]?.easing;
   ok("motion keyframe custom cubic-bezier easing carried", !!(tx1Easing && "cubicBezier" in tx1Easing && tx1Easing.cubicBezier.x1 === 0.4));
-  ok("motion applied animation style captured", !!(m3 && m3.styles![0].name === "Fade In" && m3.styles![0].duration === 0.3));
-  ok("motion applied animation style carries the applied instance id", !!(m3 && m3.styles![0].id === "applied1"));
-  ok("motion applied animation style props: number value carried verbatim", !!(m3 && m3.styles![0].props && m3.styles![0].props.distance === 24));
+  const style0 = m3?.styles?.[0];
+  ok("motion applied animation style captured", !!(style0 && style0.name === "Fade In" && style0.duration === 0.3));
+  ok("motion applied animation style carries the applied instance id", !!(style0 && style0.id === "applied1"));
+  ok("motion applied animation style props: number value carried verbatim", !!(style0 && style0.props && style0.props.distance === 24));
   ok("motion applied animation style props: MotionEasing value converted like a keyframe easing",
-    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.easing) === '{"type":"ease_out"}');
+    JSON.stringify(style0 && style0.props && style0.props.easing) === '{"type":"ease_out"}');
   ok("motion applied animation style props: VariableAlias value resolves to {aliasOf: <variable name>} (unified with variables.ts)",
-    JSON.stringify(m3 && m3.styles![0].props && m3.styles![0].props.color) === '{"aliasOf":"easing/emphasized"}');
+    JSON.stringify(style0 && style0.props && style0.props.color) === '{"aliasOf":"easing/emphasized"}');
+  const rotTrack = m3?.animations?.ROTATION;
   ok("motion animations: base + duration + per-track op/keyframes surface (was dead pre-fix)",!!(
-    m3 && m3.animations!.ROTATION && m3.animations!.ROTATION.base === 0 && m3.animations!.ROTATION.duration === 1.2 &&
-    m3.animations!.ROTATION.tracks![0].op === "offset" && m3.animations!.ROTATION.tracks![0].keyframes![1].value === 90));
+    rotTrack && rotTrack.base === 0 && rotTrack.duration === 1.2 &&
+    rotTrack.tracks?.[0]?.op === "offset" && rotTrack.tracks?.[0]?.keyframes?.[1]?.value === 90));
   // Indexed collections (fills/strokes keyed by paint index, effects by effect index) used to come out
   // empty — every value was read as one binding — and were dropped. Pin each shape.
-  const mt = m3!.manualTracks!;
+  const mt = must(m3?.manualTracks, "m3.manualTracks");
   ok("motion scalar track output unchanged (TRANSLATION_X, byte-identical)", JSON.stringify(mt.TRANSLATION_X) ===
     '{"base":0,"keyframes":[{"t":0,"value":0,"easing":{"type":"ease_out"}},{"t":0.5,"value":100,"easing":{"type":"custom_cubic_bezier","cubicBezier":{"x1":0.4,"y1":0,"x2":0.2,"y2":1}}}]}');
   const f0 = mt.fills?.["0"];
   ok("motion manualTracks.fills[\"0\"]: base + 2 keyframes", !!(f0 && !("properties" in f0) && f0.base === "#ff0000" &&
-    f0.keyframes!.length === 2 && f0.keyframes![1].value === "#0000ff" && f0.keyframes![1].t === 1));
+    f0.keyframes?.length === 2 && f0.keyframes?.[1]?.value === "#0000ff" && f0.keyframes?.[1]?.t === 1));
   ok("motion keyframe easing bound to an unresolvable variable id falls back to {aliasOf: <id>} (VariableID:1 is not in VARS)",
-    JSON.stringify(f0 && !("properties" in f0) && f0.keyframes![1].easing) === '{"aliasOf":"VariableID:1"}');
+    JSON.stringify(f0 && !("properties" in f0) && f0.keyframes?.[1]?.easing) === '{"aliasOf":"VariableID:1"}');
   const f1 = mt.fills?.["1"];
   ok("motion manualTracks.fills shader track under properties", !!(f1 && "properties" in f1 &&
-    f1.properties["shader:speed"].base === 1 && f1.properties["shader:speed"].keyframes![1].value === 3));
+    f1.properties["shader:speed"].base === 1 && f1.properties["shader:speed"].keyframes?.[1]?.value === 3));
   const s0 = mt.strokes?.["0"];
-  const s0Easing = s0 && !("properties" in s0) && s0.keyframes![0].easing;
+  const s0Easing = s0 && !("properties" in s0) && s0.keyframes?.[0]?.easing;
   ok("motion manualTracks.strokes[\"0\"] track", !!(s0 && !("properties" in s0) && s0.base === 0 &&
-    s0.keyframes!.length === 1 && s0.keyframes![0].value === 0.5 && s0Easing && "type" in s0Easing && s0Easing.type === "ease_in"));
+    s0.keyframes?.length === 1 && s0.keyframes?.[0]?.value === 0.5 && s0Easing && "type" in s0Easing && s0Easing.type === "ease_in"));
   const e0 = mt.effects?.["0"];
-  ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0 && e0.RADIUS.base === 4 && e0.RADIUS.keyframes!.length === 2 && e0.RADIUS.keyframes![1].value === 12));
-  ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0 && e0.properties && e0.properties["shader:glow"].keyframes![0].value === 0.8));
-  const an = m3!.animations!;
+  ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0 && e0.RADIUS.base === 4 && e0.RADIUS.keyframes?.length === 2 && e0.RADIUS.keyframes?.[1]?.value === 12));
+  ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0 && e0.properties && e0.properties["shader:glow"].keyframes?.[0]?.value === 0.8));
+  const an = must(m3?.animations, "m3.animations");
   ok("motion animations scalar output unchanged (ROTATION, byte-identical)", JSON.stringify(an.ROTATION) ===
     '{"base":0,"duration":1.2,"tracks":[{"op":"offset","keyframes":[{"t":0,"value":0},{"t":1,"value":90}]}]}');
   const af0 = an.fills?.["0"];
   ok("motion animations.fills[\"0\"]: base + duration + op track", !!(af0 && !("properties" in af0) && af0.base === 1 && af0.duration === 0.8 &&
-    af0.tracks![0].op === "scale" && af0.tracks![0].keyframes![1].value === 0.5));
+    af0.tracks?.[0]?.op === "scale" && af0.tracks?.[0]?.keyframes?.[1]?.value === 0.5));
   const af2 = an.fills?.["2"];
   ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2 && "properties" in af2 &&
-    af2.properties["shader:phase"].duration === 3 && af2.properties["shader:phase"].tracks![0].op === undefined &&
-    af2.properties["shader:phase"].tracks![0].keyframes![0].value === 6));
+    af2.properties["shader:phase"].duration === 3 && must(af2.properties["shader:phase"].tracks, "af2 shader:phase tracks")[0].op === undefined &&
+    must(af2.properties["shader:phase"].tracks, "af2 shader:phase tracks")[0].keyframes?.[0]?.value === 6));
   const as1 = an.strokes?.["1"];
-  ok("motion animations.strokes[\"1\"] track", !!(as1 && !("properties" in as1) && as1.tracks![0].op === "offset" && as1.tracks![0].keyframes![0].value === 3));
+  ok("motion animations.strokes[\"1\"] track", !!(as1 && !("properties" in as1) && as1.tracks?.[0]?.op === "offset" && as1.tracks?.[0]?.keyframes?.[0]?.value === 3));
   const ae0 = an.effects?.["0"];
-  ok("motion animations.effects[\"0\"].OFFSET_Y track", !!(ae0 && ae0.OFFSET_Y.duration === 0.6 && ae0.OFFSET_Y.tracks![0].keyframes![1].value === 8));
+  ok("motion animations.effects[\"0\"].OFFSET_Y track", !!(ae0 && ae0.OFFSET_Y.duration === 0.6 && ae0.OFFSET_Y.tracks?.[0]?.keyframes?.[1]?.value === 8));
   ok("motion indexed collections follow the scalar fields", JSON.stringify(Object.keys(mt)) === '["TRANSLATION_X","fills","strokes","effects"]' &&
     JSON.stringify(Object.keys(an)) === '["ROTATION","fills","strokes","effects"]');
 
@@ -848,7 +867,8 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.currentPage.selection = [iconSheet];
   const iconNormal = await sandbox.collectSelection({});
   const iconSkipped = await sandbox.collectSelection({ skipAssets: true });
-  const nNode = iconNormal.screen.nodes[0].children![0], sNode = iconSkipped.screen.nodes[0].children![0];
+  const nNode = must(iconNormal.screen.nodes[0].children, "iconNormal tree children")[0];
+  const sNode = must(iconSkipped.screen.nodes[0].children, "iconSkipped tree children")[0];
 
   ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
     typeof nNode.asset === "string" && !nNode.children);
@@ -888,13 +908,13 @@ const sandbox = context as unknown as Sandbox;
 
   ok("[ASSET-NAME] an icon is named after its Figma layer, not its node-id path", fileOf("vuesax/linear/element-4") === "element-4.svg");
   ok("[ASSET-NAME] the hyphen survives — it is the commonest character in an icon name",
-    icons.every((a) => a.file.indexOf("/") === -1) && fileOf("vuesax/linear/element-4")!.indexOf("-") !== -1);
+    icons.every((a) => a.file.indexOf("/") === -1) && must(fileOf("vuesax/linear/element-4"), "fileOf(vuesax/linear/element-4)").indexOf("-") !== -1);
   ok("[ASSET-NAME] a slash-pathed layer name files under its LAST segment, trimmed", fileOf("Linear / School / Diploma") === "Diploma.svg");
   ok("[ASSET-DEDUPE] the same artwork reached through two instance paths produces ONE file", icons.length === 3);
   ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",!!(
-    (() => { const a = icons.find((x) => x.file === "element-4.svg"); return a!.from && a!.from.indexOf("I1:2:3") !== -1 && a!.from.indexOf("I9:8:7") !== -1; })()));
+    (() => { const a = must(icons.find((x) => x.file === "element-4.svg"), "icons element-4.svg"); return a.from && a.from.indexOf("I1:2:3") !== -1 && a.from.indexOf("I9:8:7") !== -1; })()));
   ok("[ASSET-DEDUPE] the deduped node's tree path points at that same one file",
-    named.screen.nodes[0].children![1].asset === "assets/element-4.svg");
+    named.screen.nodes[0].children?.[1]?.asset === "assets/element-4.svg");
   ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",!!(
     (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })()));
   ok("[ASSET-NAME] every filename is still separator-free and ends in its format",
@@ -909,9 +929,9 @@ const sandbox = context as unknown as Sandbox;
   ok("[RD-manifest] the manifest names the opt-in reads that actually ran",
     Array.isArray(normalRun.screen.manifest.reads));
   ok("[RD-manifest] an opt-in read that was requested appears in it",
-    (await sandbox.collectSelection({ measurements: true })).screen.manifest.reads!.includes("measurements"));
+    must((await sandbox.collectSelection({ measurements: true })).screen.manifest.reads, "manifest.reads").includes("measurements"));
   ok("[RD-manifest] one that was not, does not",
-    !(await sandbox.collectSelection({})).screen.manifest.reads!.includes("measurements"));
+    !must((await sandbox.collectSelection({})).screen.manifest.reads, "manifest.reads").includes("measurements"));
   sandbox.figma.currentPage.selection = prevSelection;
 
   // --- FIX: hasMissingFont -> flag + warning so codegen knows the recorded font may be substituted ---
@@ -925,11 +945,11 @@ const sandbox = context as unknown as Sandbox;
   const variableFontText = { type: "TEXT", name: "Variable", visible: true, id: "t:varfont", characters: "x", width: 50,
     fontName: { family: "Roboto Flex", style: "Regular", variationSettings: { wght: 600 } }, fontSize: 12, getStyledTextSegments: () => [] };
   const varFont = await sandbox.serialize(variableFontText, 0, false);
-  ok("uniform text node's fontName.variationSettings emitted on font", JSON.stringify(varFont.font!.variationSettings) === '{"wght":600}');
+  ok("uniform text node's fontName.variationSettings emitted on font", JSON.stringify(varFont.font?.variationSettings) === '{"wght":600}');
   const staticFontText = { type: "TEXT", name: "Static", visible: true, id: "t:staticfont", characters: "x", width: 50,
     fontName: { family: "Roboto", style: "Regular" }, fontSize: 12, getStyledTextSegments: () => [] };
   const staticFont = await sandbox.serialize(staticFontText, 0, false);
-  ok("uniform text node without variationSettings has no such key", !("variationSettings" in staticFont.font!));
+  ok("uniform text node without variationSettings has no such key", !("variationSettings" in must(staticFont.font, "staticFont.font")));
 
   // --- FIX: css auto-on is bounded — a LARGE single selection keeps the per-node oracle OFF ---
   const bigKids = [];
@@ -1005,10 +1025,12 @@ const sandbox = context as unknown as Sandbox;
 
   ok("[RD-alias] hop 1 (aliased library var) is included", !!cv("brand/mid"));
   ok("[RD-alias] hop 2 (alias-of-an-alias) is ALSO included — fixed point, not one extra pass", !!cv("brand/gray-100"));
+  const grayVar = cv("brand/gray-100");
   ok("[RD-alias] the pulled-in primitive carries its real VALUE, not just a name",
-    !!cv("brand/gray-100") && cv("brand/gray-100")!.values.Light === "#e6e6e6");
-  ok("[RD-alias] the intermediate still reads as an alias", !!(!!cv("brand/mid") && cv("brand/mid")!.values.Light &&
-    aliasOf(cv("brand/mid")!.values.Light) === "brand/gray-100"));
+    !!grayVar && grayVar.values.Light === "#e6e6e6");
+  const midVar = cv("brand/mid");
+  ok("[RD-alias] the intermediate still reads as an alias", !!(!!midVar && midVar.values.Light &&
+    aliasOf(midVar.values.Light) === "brand/gray-100"));
   // The false-accusation half: every alias target resolves, so hygiene must NOT claim otherwise.
   ok("[RD-alias] no FALSE 'broken alias' hygiene line for a chain that fully resolves",
     !chainSel.variables.hygiene.some((h) => /broken alias/.test(h)));
@@ -1091,8 +1113,8 @@ const sandbox = context as unknown as Sandbox;
   ok("[composed] every mode of both composed variables is emitted composed", !!scrimL && !!scrimD && !!mutedL && !!mutedD);
   const expr = compVar("text/expr");
   ok("[composed] the COMPOSE_COLOR expression shape (issue #375) reads EXACTLY as the documented {color, opacity} shape",
-    !!expr && !!mutedL && !!scrimL && JSON.stringify(expr.values.Light) === JSON.stringify(muted!.values.Light) &&
-    JSON.stringify(expr.values.Dark) === JSON.stringify(scrim!.values.Light) && composedOf(expr.values.Light) !== undefined);
+    !!expr && !!mutedL && !!scrimL && JSON.stringify(expr.values.Light) === JSON.stringify(must(muted, "muted").values.Light) &&
+    JSON.stringify(expr.values.Dark) === JSON.stringify(must(scrim, "scrim").values.Light) && composedOf(expr.values.Light) !== undefined);
   const libOp = compVar("brand/opacity-60"), libInk = compVar("brand/ink");
   ok("[composed] library var reached ONLY via a nested OPACITY alias is pulled in (aliasTargets)",
     !!libOp && libOp.remote === true && libOp.values.Light === 60);
@@ -1161,7 +1183,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIST] an unreadable page is flagged, not shown as empty", !!badEntry && badEntry.unreadable === true && badEntry.frames === undefined);
   ok("[LIST] and the reason is warned", listBad.manifest.warnings.some((w) => /Locked Page.*could not be read/.test(w)));
   ok("[LIST] a readable page still lists its frames alongside the bad one",
-    Array.isArray(listBad.pages.find((p) => p.name === "Page 1")!.frames));
+    Array.isArray(listBad.pages.find((p) => p.name === "Page 1")?.frames));
   sandbox.figma.root.children = prevRootChildren;
   sandbox.figma.loadAllPagesAsync = prevLoadAll;
 
@@ -1171,11 +1193,12 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIST] marks the current page", listed.pages.some((p) => p.current === true));
   const lf = listed.pages[0].frames;
   ok("[LIST] top-level frames carry id/name/type", Array.isArray(lf) && lf.length > 0 && lf.every((f) => f.id && f.name && f.type));
-  ok("[LIST] frames carry size", lf!.every((f) => typeof f.w === "number" && typeof f.h === "number"));
+  const lfFrames = must(lf, "listed.pages[0].frames");
+  ok("[LIST] frames carry size", lfFrames.every((f) => typeof f.w === "number" && typeof f.h === "number"));
   // The POINT of the op: it is an index, not an export. No recursion, no serialization, no assets.
-  ok("[LIST] frames do NOT recurse (no children)", lf!.every((f) => f.children === undefined));
+  ok("[LIST] frames do NOT recurse (no children)", lfFrames.every((f) => f.children === undefined));
   ok("[LIST] frames carry no serialized detail (no fills/layout/tokens)",
-    lf!.every((f) => f.fills === undefined && f.layout === undefined && f.tokens === undefined));
+    lfFrames.every((f) => f.fills === undefined && f.layout === undefined && f.tokens === undefined));
   ok("[LIST] no assets are produced", listed.assets === undefined);
   ok("[LIST] manifest counts pages and frames", listed.manifest.pages === listed.pages.length && typeof listed.manifest.frames === "number");
   // depth 1 = page names only, and must NOT pay for loading pages.
@@ -1220,8 +1243,8 @@ const sandbox = context as unknown as Sandbox;
   ok("[CHILDREN] lists DIRECT children only", kids.children.length === 2);
   ok("[CHILDREN] each child carries id/name/type", kids.children.every((c) => c.id && c.name && c.type));
   ok("[CHILDREN] children carry size", kids.children.every((c) => typeof c.w === "number" && typeof c.h === "number"));
-  ok("[CHILDREN] a hidden child is flagged", kids.children.find((c) => c.id === "ch:1")!.hidden === true);
-  ok("[CHILDREN] a child that itself has children is flagged hasChildren:true", kids.children.find((c) => c.id === "ch:2")!.hasChildren === true);
+  ok("[CHILDREN] a hidden child is flagged", kids.children.find((c) => c.id === "ch:1")?.hidden === true);
+  ok("[CHILDREN] a child that itself has children is flagged hasChildren:true", kids.children.find((c) => c.id === "ch:2")?.hasChildren === true);
   // The whole point of the op: it does NOT recurse. The grandchild must never appear anywhere.
   ok("[CHILDREN] does NOT recurse into grandchildren", JSON.stringify(kids).indexOf("gc:1") === -1);
   ok("[CHILDREN] no serialized detail leaks in (no fills/layout/tokens)",
@@ -1313,7 +1336,7 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "0:0" ? documentNode : null);
   const docKids = await sandbox.listChildren("0:0");
   ok("[CHILDREN] listChildren(\"0:0\") succeeds and lists pages", docKids.children.length === 2 && docKids.children.some((c) => c.id === "page:a"));
-  ok("[CHILDREN] each page was loaded before its hasChildren was read", docKids.children.find((c) => c.id === "page:a")!.hasChildren === true && docKids.children.find((c) => c.id === "page:b")!.hasChildren === false);
+  ok("[CHILDREN] each page was loaded before its hasChildren was read", docKids.children.find((c) => c.id === "page:a")?.hasChildren === true && docKids.children.find((c) => c.id === "page:b")?.hasChildren === false);
 
   sandbox.figma.getNodeByIdAsync = prevGetNodeC;
 
@@ -1377,15 +1400,16 @@ const sandbox = context as unknown as Sandbox;
   pgA.getMeasurements = () => redline("a");
   pgC.getMeasurements = () => redline("c");
   const measMulti = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
+  const measurements = must(measMulti.layersDoc.measurements, "measMulti.layersDoc.measurements");
   ok("[MEAS] each redline is tagged with the page it came from",
-    measMulti.layersDoc.measurements!.some((m) => m.page === "Screens" && m.text === "a") &&
-    measMulti.layersDoc.measurements!.some((m) => m.page === "Archive" && m.text === "c"));
+    measurements.some((m) => m.page === "Screens" && m.text === "a") &&
+    measurements.some((m) => m.page === "Archive" && m.text === "c"));
   ok("[MEAS] and with the page ID too — the name alone can't tell two same-named pages apart",
-    measMulti.layersDoc.measurements!.every((m) => m.pageId === (m.text === "a" ? "p:A" : "p:C")));
+    measurements.every((m) => m.pageId === (m.text === "a" ? "p:A" : "p:C")));
   // Two pages CAN legitimately share identical redlines — that is data, not an error: emit both.
   pgC.getMeasurements = () => redline("a");
   const measDup = await sandbox.collectFull({ page: ["p:A", "p:C"], measurements: true, css: false });
-  ok("[MEAS] identical sets on two pages are both emitted, not de-duplicated", measDup.layersDoc.measurements!.length === 2);
+  ok("[MEAS] identical sets on two pages are both emitted, not de-duplicated", must(measDup.layersDoc.measurements, "measDup.layersDoc.measurements").length === 2);
   delete pgA.getMeasurements;
   delete pgC.getMeasurements;
 
@@ -1435,17 +1459,18 @@ const sandbox = context as unknown as Sandbox;
 
   // A missing node must FAIL, not silently report {id} — the old behaviour told the agent it worked.
   const wMissing = await sandbox.applyWrites([{ op: "setFill", nodeId: "nope:1", color: "#fff" }]);
-  ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(wMissing.error!));
+  ok("write: setFill on a missing node fails (not silent success)", wMissing.ok === false && /no node with id/.test(must(wMissing.error, "wMissing.error")));
   const wWrongType = await sandbox.applyWrites([{ op: "setText", nodeId: "r:1", text: "x" }]);
-  ok("write: setText on a non-TEXT node fails", wWrongType.ok === false && /not TEXT/.test(wWrongType.error!));
+  ok("write: setText on a non-TEXT node fails", wWrongType.ok === false && /not TEXT/.test(must(wWrongType.error, "wWrongType.error")));
   const wNoFills = await sandbox.applyWrites([{ op: "setFill", nodeId: "g:1", color: "#fff" }]);
-  ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(wNoFills.error!));
+  ok("write: setFill on a node without fills fails", wNoFills.ok === false && /has no fills/.test(must(wNoFills.error, "wNoFills.error")));
 
   // Dev Mode is read-only for plugins (manifest editorType now includes "dev"): the batch is refused
   // up front with the fix, not left to throw an opaque Plugin-API error partway through.
   sandbox.figma.editorType = "dev";
   const wDev = await sandbox.applyWrites([{ op: "createFrame", name: "X" }]);
-  ok("write: refused as a whole in Dev Mode, with the fix in the error", wDev.ok === false && wDev.applied.length === 0 && wDev.failedAt === 0 && /Dev Mode/.test(wDev.error!) && /Design mode/.test(wDev.error!));
+  const wDevErr = must(wDev.error, "wDev.error");
+  ok("write: refused as a whole in Dev Mode, with the fix in the error", wDev.ok === false && wDev.applied.length === 0 && wDev.failedAt === 0 && /Dev Mode/.test(wDevErr) && /Design mode/.test(wDevErr));
   sandbox.figma.editorType = "figma";
 
   // Partial failure: ops 0-1 are already committed, so their ids must come back with the error.
@@ -1459,7 +1484,7 @@ const sandbox = context as unknown as Sandbox;
   ok("write: partial failure keeps the applied prefix", wPartial.applied.length === 2);
   ok("write: partial failure reports the failing index + op", wPartial.failedAt === 2 && wPartial.failedOp === "setFill");
   ok("write: ops after the failure are not applied", created.filter((n) => n.name === "never").length === 0);
-  ok("write: unknown op is rejected", (await sandbox.applyWrites([{ op: "nope" }])).error!.indexOf("unknown write op") !== -1);
+  ok("write: unknown op is rejected", must((await sandbox.applyWrites([{ op: "nope" }])).error, "write nope error").indexOf("unknown write op") !== -1);
   ok("write: empty/omitted batch is a no-op success", (await sandbox.applyWrites(undefined)).ok === true);
 
   // ---- parentId (was entirely uncovered, which is how the silent-reparent bug survived) ----
@@ -1482,15 +1507,15 @@ const sandbox = context as unknown as Sandbox;
 
   const beforeOrphan = created.length;
   const pMissing = await sandbox.applyWrites([{ op: "createFrame", name: "Orphan", parentId: "gone:99" }]);
-  ok("write: unresolvable parentId fails (not silent reparent)", pMissing.ok === false && /not found/.test(pMissing.error!));
+  ok("write: unresolvable parentId fails (not silent reparent)", pMissing.ok === false && /not found/.test(must(pMissing.error, "pMissing.error")));
   ok("write: failed parent leaves NO orphan node behind", created.length === beforeOrphan);
   ok("write: failed parent reports nothing as applied", pMissing.applied.length === 0);
 
   const pLeaf = await sandbox.applyWrites([{ op: "createFrame", parentId: "lf:1" }]);
-  ok("write: parent that cannot have children fails", pLeaf.ok === false && /cannot have children/.test(pLeaf.error!));
+  ok("write: parent that cannot have children fails", pLeaf.ok === false && /cannot have children/.test(must(pLeaf.error, "pLeaf.error")));
 
   const pText = await sandbox.applyWrites([{ op: "createText", text: "hi", parentId: "gone:99" }]);
-  ok("write: createText honours parentId failure too", pText.ok === false && /not found/.test(pText.error!));
+  ok("write: createText honours parentId failure too", pText.ok === false && /not found/.test(must(pText.error, "pText.error")));
 
   // documentAccess:"dynamic-page" — appendChild on a PageNode throws unless the page is loaded first.
   const pPage = await sandbox.applyWrites([{ op: "createFrame", parentId: "pg:1" }]);
@@ -1521,7 +1546,7 @@ const sandbox = context as unknown as Sandbox;
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("inv", [invisibleVec, zeroAreaVec])];
   const invRun = await sandbox.collectSelection({ css: false });
-  const [invNode, zeroNode] = invRun.screen.nodes[0].children!;
+  const [invNode, zeroNode] = must(invRun.screen.nodes[0].children, "invRun tree children");
 
   ok("[AUDIT-1] a vector with no visible paint is skipped (no asset, no geometry)",
     invNode.asset === undefined && invNode.geometry === undefined);
@@ -1545,12 +1570,12 @@ const sandbox = context as unknown as Sandbox;
     exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("geo", [brokenVec])];
   const geoRun = await sandbox.collectSelection({ css: false });
-  const geoNode = geoRun.screen.nodes[0].children![0];
-  ok("[AUDIT-1] a real export failure falls back to fillGeometry", !!(geoNode.geometry && geoNode.geometry.fills![0] === "M0 0h24v24H0z"));
-  ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry!.strokes![0] === "M2 2h20");
+  const geoNode = must(geoRun.screen.nodes[0].children, "geoRun tree children")[0];
+  ok("[AUDIT-1] a real export failure falls back to fillGeometry", !!(geoNode.geometry && geoNode.geometry.fills?.[0] === "M0 0h24v24H0z"));
+  ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry?.strokes?.[0] === "M2 2h20");
   // Without w/h the path data has no coordinate space — a consumer cannot build a viewBox from it.
   ok("[AUDIT-1] geometry carries the node's own w/h so it can be rendered as inline SVG",
-    geoNode.geometry!.w === 24 && geoNode.geometry!.h === 24);
+    geoNode.geometry?.w === 24 && geoNode.geometry?.h === 24);
   ok("[AUDIT-1] the incomplete `vectorPaths` is NOT what gets captured", JSON.stringify(geoNode.geometry).indexOf("M9 9L1 1") === -1);
   ok("[AUDIT-1] a recovered node is still a LEAF, like a successful export", geoNode.children === undefined && geoNode.asset === undefined);
   ok("[AUDIT-1] recovery is counted, and is not a failure",
@@ -1601,8 +1626,9 @@ const sandbox = context as unknown as Sandbox;
   const taperedStroke = taperedRun.screen.nodes[0].strokes;
   ok("[variableWidth] a CUSTOM tapered stroke's profile is captured",
     !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "custom");
+  const taperedPoints = must(taperedStroke?.variableWidth?.points, "taperedStroke.variableWidth.points");
   ok("[variableWidth] and its points, with position+width",
-    taperedStroke!.variableWidth!.points!.length === 3 && taperedStroke!.variableWidth!.points![1].pos === 0.5 && taperedStroke!.variableWidth!.points![1].width === 4);
+    taperedPoints.length === 3 && taperedPoints[1].pos === 0.5 && taperedPoints[1].width === 4);
 
   const presetNode = { type: "VECTOR", name: "wedge", visible: true, id: "vw:3", width: 40, height: 4,
     strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
@@ -1645,7 +1671,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[AUDIT-6c] the manifest is still a flat array of strings", Array.isArray(aggWarnings) && aggWarnings.every((w) => typeof w === "string"));
   // Per-node flags are untouched — aggregation is about the MANIFEST, not about hiding the signal.
   ok("[AUDIT-6c] every affected node still carries its own missingFont flag",
-    aggRun.screen.nodes[0].children!.every((c) => c.missingFont === true));
+    must(aggRun.screen.nodes[0].children, "aggRun tree children").every((c) => c.missingFont === true));
   sandbox.figma.currentPage.selection = prevSel2;
 
   // ---- [AUDIT-6a] box.x/y is page-space and must not survive inside an auto-layout parent ----
@@ -1658,17 +1684,18 @@ const sandbox = context as unknown as Sandbox;
     layoutMode: "VERTICAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     absoluteBoundingBox: { x: 5, y: 6, width: 100, height: 100 }, children: [flowKid, absKid] };
   const stack = await sandbox.serialize(autoParent, 0, false);
-  const [flowOut, absOut] = stack.children!;
-  ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box!.w === 100 && flowOut.box!.h === 20);
-  ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box!.x === undefined && flowOut.box!.y === undefined);
+  const [flowOut, absOut] = must(stack.children, "stack.children");
+  ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box?.w === 100 && flowOut.box?.h === 20);
+  ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box !== undefined && flowOut.box.x === undefined && flowOut.box.y === undefined);
   // The exceptions have to survive, or absolutely-positioned overlays lose their only placement data.
-  ok("[AUDIT-6a] an ABSOLUTE child keeps box.x/y", absOut.box!.x === 40 && absOut.box!.y === 80);
+  ok("[AUDIT-6a] an ABSOLUTE child keeps box.x/y", absOut.box?.x === 40 && absOut.box?.y === 80);
   const looseParent = { type: "FRAME", name: "Canvas", visible: true, id: "bx:l", width: 100, height: 100,
     layoutMode: "NONE", children: [boxed("loose")] };
   const loose = await sandbox.serialize(looseParent, 0, false);
-  ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", loose.children![0].box!.x === 40 && loose.children![0].box!.y === 80);
+  const looseBox = must(loose.children, "loose.children")[0].box;
+  ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", looseBox?.x === 40 && looseBox?.y === 80);
   // The export ROOT has no parent in the doc, so its own page-space origin is the only anchor there is.
-  ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box!.x === 5 && stack.box!.y === 6);
+  ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box?.x === 5 && stack.box?.y === 6);
 
   // ---- [AUDIT-6b] widthMode/heightMode: emit only the non-default values ----
   const sizing = (h: string, v: string) => ({ type: "FRAME", name: "S", visible: true, id: "sz:1", width: 10, height: 10,
@@ -1695,8 +1722,9 @@ const sandbox = context as unknown as Sandbox;
       { format: "PNG", suffix: "@3x", constraint: { type: "SCALE", value: 3 } },
     ] }, 0, false);
   ok("[AUDIT-5] exportSettings captured, format lowercased", Array.isArray(exportNode.exportSettings) && exportNode.exportSettings[0].format === "svg");
-  ok("[AUDIT-5] the density suffix + scale survive", exportNode.exportSettings![1].suffix === "@3x" && exportNode.exportSettings![1].constraint!.value === 3);
-  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", exportNode.exportSettings![0].constraint === undefined);
+  const es = must(exportNode.exportSettings, "exportNode.exportSettings");
+  ok("[AUDIT-5] the density suffix + scale survive", es[1].suffix === "@3x" && es[1].constraint?.value === 3);
+  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", es[0].constraint === undefined);
   ok("[AUDIT-5] a node with no presets emits nothing", plainFrame.exportSettings === undefined);
 
   // ---- [AUDIT-5] skew: the sheared transform the decomposition used to throw away ----
@@ -1720,7 +1748,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[AUDIT-4] index entries carry a subtree node count", entry.nodes === countTree(layerTree));
   ok("[AUDIT-4] and an approximate serialized byte size", typeof entry.bytes === "number" && entry.bytes > 100);
   ok("[AUDIT-4] bytes tracks the tree that actually lands in the layer file",
-    Math.abs(entry.bytes! - JSON.stringify(layerTree).length) < 2);
+    Math.abs(must(entry.bytes, "entry.bytes") - JSON.stringify(layerTree).length) < 2);
   ok("[AUDIT-4] the identity fields are unchanged", !!entry.id && !!entry.name && !!entry.type && !!entry.page);
 
   // ---- [AUDIT-5] page backgrounds: the canvas a screen sits on ----
@@ -1735,8 +1763,8 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.root.children = [bgPage, defaultPage];
   const bgRun = await sandbox.collectFull({ allPages: true, css: false });
   const bgEntry = (bgRun.layersDoc.pageSettings || []).find((p) => p.pageId === "p:bg");
-  ok("[AUDIT-5] a page's chosen canvas background is captured", !!(bgEntry && flatPaint(bgEntry.background![0]).color === "#1a1a1a"));
-  ok("[AUDIT-5] prototypeBackgrounds is captured separately", !!(bgEntry && flatPaint(bgEntry.prototypeBackground![0]).color === "#000000"));
+  ok("[AUDIT-5] a page's chosen canvas background is captured", !!(bgEntry && flatPaint(must(bgEntry.background?.[0], "bgEntry.background[0]")).color === "#1a1a1a"));
+  ok("[AUDIT-5] prototypeBackgrounds is captured separately", !!(bgEntry && flatPaint(must(bgEntry.prototypeBackground?.[0], "bgEntry.prototypeBackground[0]")).color === "#000000"));
   ok("[AUDIT-5] the page entry is keyed by pageId, not by the non-unique name", !!(bgEntry && bgEntry.page === "Dark"));
   // Figma's own default carries no designer intent — emitting it would put a line on every page.
   ok("[AUDIT-5] the plain-white default is omitted", !(bgRun.layersDoc.pageSettings || []).some((p) => p.pageId === "p:plain"));
@@ -1785,18 +1813,23 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIB] an instance whose main cannot be resolved does not abort the scan", !!btnLib && !!cardLib);
   // Dedupe is by KEY, never by name: two libraries can both ship a "Button".
   ok("[LIB] deduped by publish key", !!btnLib && libComps.filter((c) => c.key === "libkey_btn").length === 1);
-  ok("[LIB] and the instance count survives the dedupe", btnLib!.uses === 3);
+  const btnLibC = must(btnLib, "btnLib");
+  const cardLibC = must(cardLib, "cardLib");
+  ok("[LIB] and the instance count survives the dedupe", btnLibC.uses === 3);
   // parent === null is the documented remote shape — reading .parent.name would have thrown here.
-  ok("[LIB] a NULL parent on a remote main is survivable, and its own name is used", btnLib!.name === "Size=md, State=default" && btnLib!.variant === undefined);
-  ok("[LIB] a COMPONENT_SET parent gives the useful name, with the variant kept", cardLib!.name === "CardSet" && cardLib!.variant === "Card");
+  ok("[LIB] a NULL parent on a remote main is survivable, and its own name is used", btnLibC.name === "Size=md, State=default" && btnLibC.variant === undefined);
+  ok("[LIB] a COMPONENT_SET parent gives the useful name, with the variant kept", cardLibC.name === "CardSet" && cardLibC.variant === "Card");
   // The getter THROWS on a variant — the fallback must engage, and must SAY it did.
-  ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLib!.derivedFrom === "instances");
-  ok("[LIB] observed variant values aggregated across instances", btnLib!.props!.Size.observed!.indexOf("md") !== -1 && btnLib!.props!.Size.observed!.indexOf("lg") !== -1);
-  ok("[LIB] repeated values are uniqued, not appended per instance", btnLib!.props!.Size.observed!.length === 2);
-  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnLib!.props!.Label && btnLib!.props!.Label.key === "Label#1:0");
+  ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLibC.derivedFrom === "instances");
+  const btnProps = must(btnLibC.props, "btnLib.props");
+  const btnSizeObserved = must(btnProps.Size.observed, "btnLib.props.Size.observed");
+  ok("[LIB] observed variant values aggregated across instances", btnSizeObserved.indexOf("md") !== -1 && btnSizeObserved.indexOf("lg") !== -1);
+  ok("[LIB] repeated values are uniqued, not appended per instance", btnSizeObserved.length === 2);
+  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnProps.Label && btnProps.Label.key === "Label#1:0");
   // The whole point of derivedFrom: an inferred sample must never be mistaken for a complete enum.
-  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLib!.derivedFrom === "definitions" && cardLib!.props!.Tone.options!.length === 2);
-  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnLib!.props!.Size.options === undefined && cardLib!.props!.Tone.observed === undefined);
+  const cardProps = must(cardLibC.props, "cardLib.props");
+  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLibC.derivedFrom === "definitions" && must(cardProps.Tone.options, "cardLib.props.Tone.options").length === 2);
+  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnProps.Size.options === undefined && cardProps.Tone.observed === undefined);
   ok("[LIB] every entry is flagged remote", libComps.every((c) => c.remote === true));
   // There is NO API mapping a component key to its library — unattributed must read as unknown.
   ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c) => c.source === "unknown-library"));
@@ -1838,7 +1871,7 @@ const sandbox = context as unknown as Sandbox;
   const dsOff = await sandbox.collectDesignSystemOnly();
   const tagOff = dsOff.designSystem.components.find((c) => c.id === "set:tag");
   const soloOff = dsOff.designSystem.components.find((c) => c.id === "c:solo");
-  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", !!(tagOff && tagOff.visuals && flatPaint(tagOff.visuals.fills![0]).color === "#9947ff"));
+  ok("[VARIANTVIS] off by default: the set-wrapper's OWN visuals are what's captured (selection chrome, not design)", !!(tagOff && tagOff.visuals && flatPaint(must(tagOff.visuals.fills?.[0], "tagOff.visuals.fills[0]")).color === "#9947ff"));
   ok("[VARIANTVIS] off by default: no per-variant data attached (regression guard)", !!(tagOff && tagOff.variants === undefined));
   ok("[VARIANTVIS] off by default: a standalone COMPONENT gets no node tree either (regression guard)", !!(soloOff && soloOff.node === undefined));
 
@@ -1847,11 +1880,12 @@ const sandbox = context as unknown as Sandbox;
   const soloOn = dsOn.designSystem.components.find((c) => c.id === "c:solo");
   ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", !!(soloOn && soloOn.node && soloOn.node.fills && flatPaint(soloOn.node.fills[0]).color === "#ff0000" && soloOn.node.radius === 8));
   ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", !!(soloOn && soloOn.variants === undefined));
-  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", !!(tagOn && tagOn.visuals && flatPaint(tagOn.visuals.fills![0]).color === "#9947ff"));
+  ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", !!(tagOn && tagOn.visuals && flatPaint(must(tagOn.visuals.fills?.[0], "tagOn.visuals.fills[0]")).color === "#9947ff"));
   ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", !!(tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
     tagOn.variants.every((v) => v.id && v.name && v.key)));
-  const va = tagOn!.variants!.find((v) => v.id === "v:a");
-  const vb = tagOn!.variants!.find((v) => v.id === "v:b");
+  const tagOnVariants = must(tagOn?.variants, "tagOn.variants");
+  const va = tagOnVariants.find((v) => v.id === "v:a");
+  const vb = tagOnVariants.find((v) => v.id === "v:b");
   ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", !!(va && va.values && va.values.Type === "Default" && va.values.Status === "Default"));
   ok("[VARIANTVIS] variant values read from variantProperties when present", !!(vb && vb.values && vb.values.Status === "Hover"));
   ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",!!(
@@ -1865,8 +1899,8 @@ const sandbox = context as unknown as Sandbox;
   // A user-maintained registry is the ONLY honest attribution route.
   sandbox.figma.root.getPluginData = (k: string) => (k === "libraryRegistry" ? JSON.stringify({ libkey_btn: "Acme DS" }) : "");
   const attributed = await sandbox.collectLibraryComponents(() => {});
-  ok("[LIB] the registry attributes a component to its library", attributed.find((c) => c.key === "libkey_btn")!.source === "Acme DS");
-  ok("[LIB] and unregistered ones stay unknown", attributed.find((c) => c.key === "libkey_card")!.source === "unknown-library");
+  ok("[LIB] the registry attributes a component to its library", attributed.find((c) => c.key === "libkey_btn")?.source === "Acme DS");
+  ok("[LIB] and unregistered ones stay unknown", attributed.find((c) => c.key === "libkey_card")?.source === "unknown-library");
   sandbox.figma.root.getPluginData = () => "!!not json!!";
   const badReg = await sandbox.collectLibraryComponents(() => {});
   ok("[LIB] a corrupt registry degrades to no attribution, it does not throw", badReg.length === 2 && badReg.every((c) => c.source === "unknown-library"));
@@ -1878,9 +1912,9 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIB] a missing teamlibrary permission is a WARNING, not a crash", Array.isArray(noPerm.libraries) && noPerm.warnings.some((w) => /teamlibrary/.test(w)));
   ok("[LIB] and the component half still reports without it", noPerm.libraries.some((l) => l.componentCount === 2));
   ok("[LIB] the local file is listed as kind:local", noPerm.libraries.some((l) => l.kind === "local" && l.name === "My File"));
-  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local")!.variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 3));
+  ok("[LIB] local variable collections are counted", (noPerm.libraries.find((l) => l.kind === "local")?.variableCollections || []).some((c) => c.name === "Semantic" && c.variableCount === 3));
   ok("[LIB] the unknown-library bucket says counts are USED-IN-THIS-FILE, not what the library offers",
-    /USED IN THIS FILE/.test(noPerm.libraries.find((l) => l.name === "unknown-library")!.note!));
+    /USED IN THIS FILE/.test(must(noPerm.libraries.find((l) => l.name === "unknown-library")?.note, "unknown-library note")));
 
   // Enabled-but-empty: a fresh file with no library turned on. NORMAL, and must say so.
   sandbox.figma.teamLibrary = { getAvailableLibraryVariableCollectionsAsync: async () => [], getVariablesInLibraryCollectionAsync: async () => [] };
@@ -1907,10 +1941,12 @@ const sandbox = context as unknown as Sandbox;
   const libs = await sandbox.listLibraries();
   const acme = libs.libraries.find((l) => l.name === "Acme DS");
   ok("[LIB] enabled libraries are grouped by libraryName (the ONLY name the API gives)", !!acme && acme.kind === "library" && acme.variableCollections.length === 3);
-  ok("[LIB] each collection carries its variable count", acme!.variableCollections.find((c) => c.name === "Semantic")!.variableCount === 2);
-  ok("[LIB] one unreadable collection omits only its own count", acme!.variableCollections.find((c) => c.name === "Broken")!.variableCount === undefined
+  const acmeC = must(acme, "acme");
+  ok("[LIB] each collection carries its variable count", acmeC.variableCollections.find((c) => c.name === "Semantic")?.variableCount === 2);
+  const brokenColl = must(acmeC.variableCollections.find((c) => c.name === "Broken"), "acme Broken collection");
+  ok("[LIB] one unreadable collection omits only its own count", brokenColl.variableCount === undefined
     && libs.warnings.some((w) => /'Broken'/.test(w)));
-  ok("[LIB] a library with no attributable components carries no invented count", acme!.componentCount === undefined && /cannot be enumerated|impossible/.test(acme!.note!));
+  ok("[LIB] a library with no attributable components carries no invented count", acmeC.componentCount === undefined && /cannot be enumerated|impossible/.test(must(acmeC.note, "acme.note")));
 
   // --- the merge into the design-system catalog ---
   const dsLib = await sandbox.buildDesignSystem();
@@ -1929,9 +1965,10 @@ const sandbox = context as unknown as Sandbox;
     const d = lib.designSystem;
 
     ok("[LIB-FILE] stamps source.role=library", !!(d.source && d.source.role === "library"));
-    ok("[LIB-FILE] carries the library name the user typed", d.source!.libraryName === "NERA");
-    ok("[LIB-FILE] records fileKey as the durable directory identity", d.source!.fileKey === "FILEKEY1234567");
-    ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(d.source!.collectionKeys));
+    const src = must(d.source, "d.source");
+    ok("[LIB-FILE] carries the library name the user typed", src.libraryName === "NERA");
+    ok("[LIB-FILE] records fileKey as the durable directory identity", src.fileKey === "FILEKEY1234567");
+    ok("[LIB-FILE] collectionKeys are the join back to --list-libraries", Array.isArray(src.collectionKeys));
     // exportedAt/file must stay top-level and unchanged — snapshot-meta.js and drift-lint read them.
     ok("[LIB-FILE] keeps the freshness stamp intact", typeof d.exportedAt === "string" && d.file === "My File");
 
@@ -1983,10 +2020,10 @@ const sandbox = context as unknown as Sandbox;
     // Page boundaries are the frames that must NEVER be dropped by the throttle — a missed one leaves
     // the status line naming a page the walk already finished.
     ok("[PROGRESS] one frame per page boundary, 1-based, with the total",
-      [1, 2, 3].every((i) => pageFrames.some((m) => m.page!.index === i && m.page!.of === 3)));
-    ok("[PROGRESS] the frame carries the page NAME for display…", pageFrames.some((m) => m.page!.index === 2 && m.page!.name === "Checkout"));
+      [1, 2, 3].every((i) => pageFrames.some((m) => m.page?.index === i && m.page?.of === 3)));
+    ok("[PROGRESS] the frame carries the page NAME for display…", pageFrames.some((m) => m.page?.index === 2 && m.page?.name === "Checkout"));
     // Page names are NOT unique in Figma; the id is the identity. Same rule as the exported docs.
-    ok("[PROGRESS] …and the pageId, which is the actual identity", pageFrames.some((m) => m.page!.pageId === "p:pc2"));
+    ok("[PROGRESS] …and the pageId, which is the actual identity", pageFrames.some((m) => m.page?.pageId === "p:pc2"));
     ok("[PROGRESS] running node/asset counters ride along", pageFrames.every((m) => typeof m.nodes === "number" && typeof m.assets === "number"));
     ok("[PROGRESS] the design-system phase is announced (the walk going quiet reads as a hang otherwise)",
       posted.some((m) => m.type === "progress" && m.phase === "design-system"));
@@ -2012,7 +2049,7 @@ const sandbox = context as unknown as Sandbox;
     ok("[CANCEL] a cancelled run rejects — no partial doc is ever handed back", cancelled === null && !!cancelErr);
     // (a): this exact string is what main.ts puts in `bridge-result.error`, so the CLI/MCP fails fast
     // with a human cause instead of sitting out its request timeout.
-    ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(cancelErr!.message));
+    ok("[CANCEL] with the message the CLI/MCP prints verbatim", /export cancelled by the designer in Figma/.test(must(cancelErr, "cancelErr").message));
     ok("[CANCEL] the cancel was matched to the live run", !!(cancelHit && cancelHit.source === "bridge" && cancelHit.label === "exportFull"));
     ok("[CANCEL] the bridge-triggered run was visible in the plugin window, and for whom",
       posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportFull"));
