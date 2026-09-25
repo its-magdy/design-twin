@@ -135,9 +135,14 @@ function isComposedColor(v: VariableValue): v is VariableComposedColor {
 // valuesByMode as
 //   { type: "VARIABLE_EXPRESSION", expressionFunction: "COMPOSE_COLOR",
 //     expressionArguments: [ <RGB | RGBA | VariableAlias>, <number | VariableAlias> ] }
-// while typings 1.139 declare VariableComposedColor as {color, opacity}. Nothing public says which one a
-// current runtime returns, so BOTH are read: this normalises the expression form into the documented one
-// and every path below sees {color, opacity}. Anything else stays on the verbatim path, as before.
+// while typings 1.139 declare VariableComposedColor as {color, opacity}. LIVE (Figma Desktop, 2026-09-25,
+// §5.2): a colour variable authored in the UI as an alias of another colour variable at 40% opacity
+// (the "Control opacity at scale" release of 2026-09-03) came back from valuesByMode as the DOCUMENTED
+// shape — `{"color":{"type":"VARIABLE_ALIAS","id":"VariableID:…"},"opacity":40}`, opacity the 0–100
+// percentage — and the IR carried it as {composed: {color: {aliasOf}, opacity: 40}}. The expression form
+// was not seen (one variable, one mode, alias + literal opacity; a number-variable opacity and a literal
+// colour were not exercised). It stays readable: this normalises the expression form into the documented
+// one and every path below sees {color, opacity}. Anything else stays on the verbatim path, as before.
 function isRgb(x: unknown): x is RGB | RGBA {
   return !!x && typeof x === "object" && "r" in x && typeof x.r === "number" && "g" in x && typeof x.g === "number" && "b" in x && typeof x.b === "number";
 }
