@@ -12,7 +12,12 @@ export interface SetTokenMsg { type: "set-token"; token?: string; }
 export interface GetIdentityMsg { type: "get-identity"; }
 export interface RunSelectionMsg { type: "run-selection"; }
 export interface RunFullMsg { type: "run-full"; }
-export interface CancelMsg { type: "cancel"; }
+// Three meanings, one message type (main.ts `case "cancel"`):
+//   no `id`, no `scope` — the designer's Cancel button (answered with `cancel-ack`, unchanged);
+//   `id`                — the bridge gave up on request <id> (ui.html forwards the socket's
+//                         `{ type: "cancel", id }` frame); no ack;
+//   `scope: "bridge"`   — the socket closed: every bridge-sourced run is abandoned; no ack.
+export interface CancelMsg { type: "cancel"; id?: string; scope?: "bridge"; }
 // `args` is the bridge command's own payload, parsed JSON whose shape varies per `cmd` — `unknown`
 // until handleBridge (bridge.ts) narrows it per command.
 export interface BridgeMsg { type: "bridge"; id?: string; cmd: string; args?: unknown; }

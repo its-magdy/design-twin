@@ -17,7 +17,9 @@ import type {
 // a designer watching Figma go busy can see that a CLI/MCP pull — and which one — is walking their
 // file, rather than being left to guess. Built from `cmd` rather than hand-written per case: a new
 // queued op then cannot ship without a label.
-const bridgeRun = (cmd: Cmd): RunInfo => ({ source: "bridge", label: cmd });
+// `requestId` is the bridge frame's id: what a later `{ type: "cancel", id }` frame is matched on. It
+// never reaches the label (the plugin window shows the label).
+const bridgeRun = (cmd: Cmd, id: string | undefined): RunInfo => ({ source: "bridge", label: cmd, ...ifDefined("requestId", id) });
 
 // Identity of THIS plugin run, minted once when the bundle is first evaluated. It is the only way to
 // tell two simultaneously-running instances apart from the bridge side: `fileKey` is gated to private
@@ -37,19 +39,21 @@ function readFileKey(): string | undefined {
   }
 }
 
-export async function handleBridge(cmd: string, args: unknown): Promise<unknown> {
+// `id` is the bridge request id (main.ts passes the frame's `raw.id`; absent for the internal
+// get-identity call and the `__designExport` test surface).
+export async function handleBridge(cmd: string, args: unknown, id?: string): Promise<unknown> {
   // The ONE boundary between the wire and the contract: `args` is parsed JSON, checked here against
   // the command's declared `*Args` (commands.ts parseCommandRequest) before any collector sees it. A
   // missing nodeId still reads "No node id provided." (NO_NODE_ID, the collectors' own text), an
   // unknown `cmd` still reads "unknown cmd: <cmd>", and an undeclared key is ignored as it always was.
   const parsed = parseCommandRequest(cmd, args);
   if (!parsed.ok) throw new Error(parsed.error);
-  return dispatch(parsed.req);
+  return dispatch(parsed.req, id);
 }
 
 // The collectors return their own typed envelopes (collect.ts ScreenResult/FullResult/…), which are
 // subtypes of the replies the contract promises; each branch below is where that is checked.
-async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
+async function dispatch(req: CommandRequest, id: string | undefined): Promise<Commands[Cmd]["reply"]> {
   switch (req.cmd) {
     // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
     // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
@@ -95,27 +99,27 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
     case "exportFull": {
       const a = req.args;
-      return serializeRun(() => collectFull(a), bridgeRun(req.cmd));
+      return serializeRun(() => collectFull(a), bridgeRun(req.cmd, id));
     }
     // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
     // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
     case "exportDesignSystem": {
       const a = req.args;
-      return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd));
+      return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd, id));
     }
     // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
     // the full catalog build and mutates the same per-run state they do.
     case "exportLibrary": {
       const a = req.args;
-      return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd));
+      return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd, id));
     }
     case "exportSelection": {
       const a = req.args;
-      return serializeRun(() => collectSelection(a), bridgeRun(req.cmd));
+      return serializeRun(() => collectSelection(a), bridgeRun(req.cmd, id));
     }
     case "exportNode": {
       const a = req.args;
-      return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd));
+      return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd, id));
     }
     // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
     // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
@@ -123,7 +127,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
     case "screenshot": {
       const a = req.args;
       // `scale` is a number or absent (parseCommandRequest); a value <= 0 still means "default" in collectReference.
-      return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd));
+      return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd, id));
     }
     case "getSelection":
       return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -144,7 +148,7 @@ async function dispatch(req: CommandRequest): Promise<Commands[Cmd]["reply"]> {
       return listLibraries();
     case "write": {
       const ops = req.args.ops;
-      return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd));
+      return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd, id));
     }
     default: {
       // Exhaustive: a command added to commands.ts without a branch here fails to compile. Unreachable

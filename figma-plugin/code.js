@@ -332,14 +332,25 @@
 
   // src/progress.ts
   var CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
+  var ABANDONED_MESSAGE = "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
   var CANCELLED = "__designTwinCancelled";
+  var ABANDONED = "__designTwinAbandoned";
   function cancelledError() {
     const e = new Error(CANCELLED_MESSAGE);
     e[CANCELLED] = true;
     return e;
   }
+  function abandonedError() {
+    const e = new Error(ABANDONED_MESSAGE);
+    e[CANCELLED] = true;
+    e[ABANDONED] = true;
+    return e;
+  }
+  function isAbandonment(e) {
+    return !!e && typeof e === "object" && e[ABANDONED] === true;
+  }
   var running = null;
-  var cancelRequested = false;
+  var cancelRequested = null;
   var lastPost = 0;
   var page;
   var MIN_INTERVAL_MS = 250;
@@ -351,24 +362,30 @@
   }
   function beginRun(info) {
     running = info;
-    cancelRequested = false;
+    cancelRequested = null;
     page = void 0;
     lastPost = 0;
     post({ type: "run-begin", source: info.source, label: info.label });
   }
-  function endRun() {
+  function endRun(abandoned) {
     running = null;
-    cancelRequested = false;
+    cancelRequested = null;
     page = void 0;
-    post({ type: "run-end" });
+    post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
   }
   function requestCancel() {
     if (!running) return null;
-    cancelRequested = true;
+    cancelRequested = "designer";
+    return running;
+  }
+  function requestAbandon(matches) {
+    if (!running || !matches(running)) return null;
+    if (cancelRequested === null) cancelRequested = "abandoned";
     return running;
   }
   function checkCancelled() {
-    if (cancelRequested) throw cancelledError();
+    if (cancelRequested === "designer") throw cancelledError();
+    if (cancelRequested === "abandoned") throw abandonedError();
   }
   function progress(phase, extra, force) {
     if (!running) return;
@@ -717,24 +734,53 @@
   var nodeNameLookup = memoName((id) => figma.getNodeByIdAsync(id));
   var collectionLookup = memoName((id) => figma.variables && figma.variables.getVariableCollectionByIdAsync ? figma.variables.getVariableCollectionByIdAsync(id) : Promise.resolve(null));
   var getCollection = collectionLookup.obj;
+  var queuedRuns = /* @__PURE__ */ new Set();
   var runChain = Promise.resolve();
   function serializeRun(fn, run) {
-    const go = () => bracket(fn, run);
+    const ticket = { run, abandoned: false };
+    queuedRuns.add(ticket);
+    const go = () => {
+      queuedRuns.delete(ticket);
+      if (ticket.abandoned) return Promise.reject(abandonedError());
+      return bracket(fn, run);
+    };
     const next = runChain.then(go, go);
     runChain = next.then(() => {
     }, () => {
     });
     return next;
   }
+  function cancelBridgeRequest(id) {
+    for (const t of queuedRuns) {
+      if (t.run.source === "bridge" && t.run.requestId === id) {
+        t.abandoned = true;
+        return t.run;
+      }
+    }
+    return requestAbandon((r) => r.source === "bridge" && r.requestId === id);
+  }
+  function cancelBridgeRuns() {
+    let hit = 0;
+    for (const t of queuedRuns) {
+      if (t.run.source === "bridge" && !t.abandoned) {
+        t.abandoned = true;
+        hit++;
+      }
+    }
+    if (requestAbandon((r) => r.source === "bridge")) hit++;
+    return hit;
+  }
   async function bracket(fn, run) {
     beginRun(run);
+    let abandoned = false;
     try {
       return await fn();
     } catch (e) {
+      abandoned = isAbandonment(e);
       releaseAssets();
       throw e;
     } finally {
-      endRun();
+      endRun(abandoned);
     }
   }
   function releaseAssets() {
@@ -3426,7 +3472,7 @@
   }
 
   // src/bridge.ts
-  var bridgeRun = (cmd) => ({ source: "bridge", label: cmd });
+  var bridgeRun = (cmd, id) => ({ source: "bridge", label: cmd, ...ifDefined("requestId", id) });
   var INSTANCE_ID = "fig-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var INSTANCE_STARTED_AT = Date.now();
   function readFileKey() {
@@ -3436,12 +3482,12 @@
       return void 0;
     }
   }
-  async function handleBridge(cmd, args) {
+  async function handleBridge(cmd, args, id) {
     const parsed = parseCommandRequest(cmd, args);
     if (!parsed.ok) throw new Error(parsed.error);
-    return dispatch(parsed.req);
+    return dispatch(parsed.req, id);
   }
-  async function dispatch(req) {
+  async function dispatch(req, id) {
     switch (req.cmd) {
       // The probe for the multi-file question: run it in two files at once and compare `instanceId`.
       // UNQUEUED (like ping/getSelection) on purpose — it must stay answerable DURING a long export,
@@ -3487,34 +3533,34 @@
       // export can never overlap. ping/getSelection are read-only and stay responsive (unqueued).
       case "exportFull": {
         const a = req.args;
-        return serializeRun(() => collectFull(a), bridgeRun(req.cmd));
+        return serializeRun(() => collectFull(a), bridgeRun(req.cmd, id));
       }
       // The tokens/styles/components-only pull — no page/frame walk, no assets. See collect.ts's
       // collectDesignSystemOnly for the one tradeoff (library-variable completeness).
       case "exportDesignSystem": {
         const a = req.args;
-        return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd));
+        return serializeRun(() => collectDesignSystemOnly(a), bridgeRun(req.cmd, id));
       }
       // The library-file pull. QUEUED like its export siblings (not unqueued like listLibraries): it runs
       // the full catalog build and mutates the same per-run state they do.
       case "exportLibrary": {
         const a = req.args;
-        return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd));
+        return serializeRun(() => collectLibraryFile(a), bridgeRun(req.cmd, id));
       }
       case "exportSelection": {
         const a = req.args;
-        return serializeRun(() => collectSelection(a), bridgeRun(req.cmd));
+        return serializeRun(() => collectSelection(a), bridgeRun(req.cmd, id));
       }
       case "exportNode": {
         const a = req.args;
-        return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd));
+        return serializeRun(() => collectNode(a.nodeId, a), bridgeRun(req.cmd, id));
       }
       // The on-demand single-node screenshot — deliberately its own op rather than a mode of exportNode:
       // it skips serialize() and the recursive asset walk entirely (see collectScreenshot's comment), so
       // routing it through exportNode's shape would mislead a caller into thinking it got a tree back.
       case "screenshot": {
         const a = req.args;
-        return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd));
+        return serializeRun(() => collectScreenshot(a.nodeId, ifDefined("scale", a.scale)), bridgeRun(req.cmd, id));
       }
       case "getSelection":
         return figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type }));
@@ -3535,7 +3581,7 @@
         return listLibraries();
       case "write": {
         const ops = req.args.ops;
-        return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd));
+        return serializeRun(() => applyWrites(ops), bridgeRun(req.cmd, id));
       }
       default: {
         const exhaustive = req;
@@ -3636,6 +3682,14 @@
         break;
       }
       case "cancel": {
+        if (raw.id !== void 0) {
+          cancelBridgeRequest(raw.id);
+          break;
+        }
+        if (raw.scope === "bridge") {
+          cancelBridgeRuns();
+          break;
+        }
         const hit = requestCancel();
         figma.ui.postMessage({ type: "cancel-ack", accepted: !!hit, label: hit ? hit.label : null });
         break;
@@ -3644,7 +3698,7 @@
         let result;
         let error;
         try {
-          result = await handleBridge(raw.cmd, raw.args);
+          result = await handleBridge(raw.cmd, raw.args, raw.id);
         } catch (e) {
           error = errMsg(e);
         }

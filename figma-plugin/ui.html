@@ -243,6 +243,10 @@
         // Bridge-triggered runs never produce a `files`/`error` message here, so this is the ONLY
         // place a designer learns their cancel took effect on one.
         if (wasCancelled) setStatus("Export cancelled — nothing was delivered.", true);
+        // `abandoned` is set only when the run died because the BRIDGE gave up on the request that
+        // asked for it (its caller timed out, stalled out, or disconnected) — no one here clicked
+        // anything, so the button's sentence would be a lie. The designer's own cancel wins if both.
+        else if (m.abandoned) setStatus("Export cancelled — the caller went away.", true);
         return;
       }
       if (m.type === "progress") {
@@ -434,6 +438,12 @@
       s.onclose = function (ev) {
         if (s !== ws) return;
         ws = null;
+        // The socket that asked for any bridge work is gone. We reconnect to whatever bridge answers
+        // next, and a reply carrying an id nobody there knows is dropped — so finishing a bridge run
+        // is pure waste that queues every later command behind it. Abandon them all (UI-started runs
+        // are untouched). Also on CLOSE_BAD_TOKEN: nothing can collect the result there either. Not
+        // on onerror — it closes the socket, and this handler follows.
+        parent.postMessage({ pluginMessage: { type: "cancel", scope: "bridge" } }, "*");
         if (ev && ev.code === CLOSE_BAD_TOKEN) {
           // A bridge IS there — stay on its port instead of walking on to the next one — and this is
           // the one state only the user can fix, so open the section and say exactly what to do. Retry
@@ -456,6 +466,15 @@
         if (s !== ws) return;
         var cmd;
         try { cmd = JSON.parse(ev.data); } catch (e) { return; }
+        // `{ type: "cancel", id }` with no `cmd`: the bridge gave up on request <id> (its caller timed
+        // out, stalled out, or went away). Forwarded to the main thread, which aborts that run if it
+        // is executing or drops it if it is still queued. Anything else keeps today's path.
+        // A cancel frame with no string id is DROPPED, never forwarded: an id-less `cancel` is the
+        // designer's button to the main thread, and the bridge must not be able to press it.
+        if (cmd && cmd.type === "cancel" && cmd.cmd === undefined) {
+          if (typeof cmd.id === "string") parent.postMessage({ pluginMessage: { type: "cancel", id: cmd.id } }, "*");
+          return;
+        }
         parent.postMessage({ pluginMessage: { type: "bridge", id: cmd.id, cmd: cmd.cmd, args: cmd.args } }, "*");
       };
     }
