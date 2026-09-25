@@ -4,7 +4,7 @@
 // `import.meta.main` was only added in Node v24.2.0 (Stability 1); on 24.0/24.1 it is `undefined`, and
 // a bare `if (import.meta.main)` there made every CLI exit 0 having done nothing. The literal
 // `import.meta.main` stays at each call site (not wrapped in a helper) because
-// claude-plugin/build-scripts.js textually rewrites it to `false` in inlined modules — and
+// claude-plugin/build-scripts.ts textually rewrites it to `false` in inlined modules — and
 // `false ?? x` is `false`, so the fallback never runs for a bundled library module.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
