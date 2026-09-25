@@ -518,7 +518,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         entry.fileKey = msg.fileKey;
         entry.page = msg.page;
         // Finding 327: the plugin's own build version (figma-plugin/package.json, baked in at build
-        // time — see figma-plugin/build.js). `null` for a plugin bundle old enough to predate this
+        // time — see figma-plugin/build.ts). `null` for a plugin bundle old enough to predate this
         // field entirely, which is itself a useful signal (definitely stale).
         entry.pluginVersion = msg.pluginVersion;
         const stalenessNote = pluginStalenessNote(entry.pluginVersion);

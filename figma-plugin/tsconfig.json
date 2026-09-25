@@ -3,7 +3,7 @@
     // Figma's plugin main thread is a QuickJS-like realm: ES6 but NO browser/DOM globals.
     // "dom" is deliberately omitted — it would pull in DOM-typed console/fetch/timers that
     // conflict with the narrower ones @figma/plugin-typings declares (see index.d.ts).
-    // The Figma sandbox baseline used by build.js (esbuild target es2019); matches "lib".
+    // The Figma sandbox baseline used by build.ts (esbuild target es2019); matches "lib".
     "target": "es2019",
     "lib": ["es2019"],
     "strict": true,

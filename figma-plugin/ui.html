@@ -342,7 +342,7 @@
             file: idn.file || null,
             fileKey: idn.fileKeyAvailable ? idn.fileKey : null,
             page: idn.page || null,
-            // Finding 327: the plugin's own build version (baked in at build time — see build.js),
+            // Finding 327: the plugin's own build version (baked in at build time — see build.ts),
             // so the bridge can tell a stale plugin apart from a freshly reloaded one.
             pluginVersion: idn.pluginVersion || null
           }));
