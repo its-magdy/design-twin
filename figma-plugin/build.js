@@ -15,9 +15,19 @@ const path = require("path");
 const PLUGIN_VERSION = require("./package.json").version;
 
 const watch = process.argv.includes("--watch");
+// `--outfile <path>`: build somewhere else (a reviewer comparing a fresh bundle against the committed
+// code.js, CI diffing artefacts) without touching the tree. Default is the committed code.js.
+// esbuild writes its `// path` comments relative to its working directory, which "normally defaults
+// to the current working directory of the process" and is used for "pretty-printing absolute paths
+// as relative paths" (https://esbuild.github.io/api/#working-directory) — so a build from the repo
+// root used to differ from `npm run build`'s, which runs here. `absWorkingDir` pins it to this
+// directory, and the bundle is byte-identical from any cwd.
+const outArg = process.argv.indexOf("--outfile");
+const outfile = outArg !== -1 && process.argv[outArg + 1] ? path.resolve(process.argv[outArg + 1]) : path.join(__dirname, "code.js");
 const opts = {
+  absWorkingDir: __dirname,
   entryPoints: [path.join(__dirname, "src", "main.ts")],
-  outfile: path.join(__dirname, "code.js"),
+  outfile,
   bundle: true,
   format: "iife",
   target: "es2019", // Figma sandbox baseline
@@ -34,7 +44,7 @@ async function run() {
     console.log("[build] watching src/ …");
   } else {
     await esbuild.build(opts);
-    console.log("[build] wrote code.js");
+    console.log("[build] wrote " + path.relative(process.cwd(), outfile));
   }
 }
 run().catch((e) => { console.error(e); process.exit(1); });
