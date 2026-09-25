@@ -357,7 +357,8 @@ A named target (file name or fileKey) is **waited for**: each open plugin window
 3 s clock, so right after a bridge starts only one of two open files may be connected yet. `dtwin`
 gives the named file up to 15 s (or `--timeout`, whichever is shorter) to land before resolving the
 name; a name that never matches then fails with the list of what *is* connected. A bare `c<N>`
-never waits.
+never waits. The MCP `client` argument gets the same 15 s wait on every tool (holding the bridge or
+routed through a daemon).
 
 `--client` is an **address**, not a scope — it composes with every other flag:
 ```
