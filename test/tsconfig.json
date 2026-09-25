@@ -14,6 +14,8 @@
     "allowUnusedLabels": false,
     // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (as in bridge/tsconfig.json)
     "exactOptionalPropertyTypes": true,
+    // `arr[i]` / `record[k]` are `T | undefined` until checked — in tests via must() (test/fixtures.ts), a guard or a restructure
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
