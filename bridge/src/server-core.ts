@@ -736,8 +736,9 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // a 300s/908s silent wait — on a connected, identified bridge — for work finding 220 proved takes
   // 7.5-8.8s once a daemon keeps the plugin warm. A stalled one-shot connection (the shape those two
   // findings share: no `dtwin serve` running) shows NO activity at all on the socket — not even a
-  // progress frame — for the whole wait, where a genuinely large/slow export keeps resetting
-  // `lastActivity` via the periodic progress relay (see the `ws.on("message")` handler above). Only
+  // progress frame — for the whole wait, where a genuinely large/slow export shows life through the
+  // progress relay (see the `ws.on("message")` handler above). The check is armed only until that
+  // first sign of life: a working export can go quiet for minutes (see the loop below). Only
   // figma-pull.ts's own one-shot bridge (no daemon) opts into this, and only for export-class
   // commands — a cheap `whoami`/`list` finishing in under a second never needs it, and the daemon path
   // deliberately does NOT pass it: a persistent connection is exactly the case finding 220 shows is
@@ -783,8 +784,17 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         const sentAt = Date.now();
         stallTimer = setInterval(() => {
           if (!pending.has(id)) return; // settled already — the interval's own clear below is racing it
-          const quiet = Date.now() - Math.max(client.lastActivity, sentAt);
-          if (quiet < stallMs) return;
+          // LIVE (2026-09-25): a real one-page export goes legitimately quiet for longer than any
+          // sensible window — measured 14–24 s at the end of one large top-level frame (the tree is
+          // counted and measured before the next tick) and 116–135 s between the last page tick and
+          // the reply (catalog build, then a 120 MB reply serialised and sent) — so "quiet for stallMs
+          // at ANY point" aborted a working export and left the plugin walking for nobody. The stall
+          // this exists to catch (findings 202/213) is a connection that never shows life for the
+          // request at all; so the check disarms itself on the FIRST sign of life after `sentAt` and
+          // the real per-command timeout bounds everything after that (as it always did on the daemon
+          // path, which never opts in).
+          if (client.lastActivity >= sentAt) { if (stallTimer) clearInterval(stallTimer); stallTimer = null; return; }
+          if (Date.now() - sentAt < stallMs) return;
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
           clearTimeout(timer);

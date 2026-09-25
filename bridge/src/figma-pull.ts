@@ -860,9 +860,11 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     console.error("[dtwin] no `dtwin serve` daemon is running — this pull opens its own bridge and waits out the plugin's full reconnect, which can take minutes on a cold connection. Run `dtwin serve` in another terminal for a fast, reliable connection.");
   }
   // The stall-check window (server-core.ts's request() `stallMs`): if NOTHING at all is heard back
-  // from the plugin (not even a progress frame) within this long, abort rather than sit until the full
-  // export timeout. Only applied to the one-shot bridge below, and only for export commands — see the
-  // comment on `request()`'s stallMs parameter for why the daemon path opts out.
+  // from the plugin (not even a progress frame) within this long of SENDING the command, abort rather
+  // than sit until the full export timeout. It disarms on the first sign of life — a working export
+  // legitimately goes quiet for minutes near its end (measured live, see server-core.ts) — so after
+  // that only --timeout bounds it. Only applied to the one-shot bridge below, and only for export
+  // commands — see the comment on `request()`'s stallMs parameter for why the daemon path opts out.
   const STALL_MS = Number(process.env.FIGMA_BRIDGE_STALL_MS) || 20000;
 
   let bridge: Bridge | null = null;

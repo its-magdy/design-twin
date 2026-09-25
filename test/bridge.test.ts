@@ -3142,10 +3142,36 @@ void (async () => {
     await new Promise((r) => setTimeout(r, 900)); // 3x the stall window, with progress the whole time
     clearInterval(ticker);
     ok("[stall] periodic progress frames keep resetting the stall clock (no premature abort)", !rejectedWithStall);
-    // Now let it actually go quiet — the SAME request must still time out via the stall path shortly
-    // after progress stops, proving the reset was real and not just "it never fires at all".
-    await new Promise((r) => setTimeout(r, 900)); // stallMs (300) + the 500ms poll granularity, with margin
-    ok("[stall] once progress genuinely stops, the same request is still eventually aborted by the stall check", rejectedWithStall);
+    // LIVE 2026-09-25: a working export goes quiet for 14–24 s after a big frame and for 116–135 s
+    // before its reply (catalog build + a 120 MB send). Once the plugin has shown ANY life for this
+    // request, going quiet is work, not a stall — only the real per-command timeout bounds it now.
+    // Before this change the line below saw the stall rejection ~800 ms after the ticks stopped.
+    let outcome: string | undefined;
+    req.then(() => { outcome = "resolved"; }, (e: unknown) => { outcome = e instanceof Error ? e.message : String(e); });
+    await new Promise((r) => setTimeout(r, 1500)); // 5x the stall window (300) of silence after the last tick
+    ok("[stall] once the plugin has shown life, silence is NOT a stall: the request stays pending past the stall window", outcome === undefined && !rejectedWithStall);
+    await new Promise((r) => setTimeout(r, 3000)); // now the real timeout (5000 ms from send) has passed
+    ok("[stall] …and the real per-command timeout still bounds it, with the timeout text (not the stall text)",
+      typeof outcome === "string" && /did not answer 'exportFull' within 5s/.test(outcome) && !/no response from the Figma plugin/.test(outcome));
+    ws1.close();
+    b.close();
+  }
+  {
+    // Life shown BEFORE the command was sent does not count: the first test's client `hello`d and
+    // then went silent, and was aborted — this pins that the disarm reads activity since `sentAt`,
+    // not "ever". A second silent request on a connection that answered progress for an EARLIER
+    // request must still stall.
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    ws1.send(JSON.stringify({ type: "hello", instanceId: "silent-2", file: "Silent File 2" }));
+    await b.waitForIdentified(1000);
+    ws1.send(JSON.stringify({ type: "progress", phase: "pages" })); // life, but before the request below
+    await new Promise((r) => setTimeout(r, 50));
+    let err: Error | undefined;
+    const start = Date.now();
+    try { await b.request("exportFull", {}, 60000, undefined, 300); }
+    catch (e) { err = asErr(e); }
+    ok("[stall] activity from BEFORE the command was sent does not disarm the check: a request with no life since send still stalls",
+      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
     ws1.close();
     b.close();
   }
