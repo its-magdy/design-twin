@@ -77,7 +77,7 @@ for (const dir of DIRS) {
     if (!TS.test(file)) continue;
     const lineStarts = [0];
     for (let i = 0; i < src.length; i++) if (src[i] === "\n") lineStarts.push(i + 1);
-    const lineOf = (off: number): number => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lineStarts[m] <= off) lo = m; else hi = m - 1; } return lo; };
+    const lineOf = (off: number): number => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; const start = lineStarts[m]; if (start !== undefined && start <= off) lo = m; else hi = m - 1; } return lo; };
     for (const m of src.matchAll(/JSON\.parse\(/g)) {
       const ln = lineOf(m.index);
       const before = src.slice(lineStarts[ln], m.index);
@@ -85,7 +85,7 @@ for (const dir of DIRS) {
       const end = matchParen(src, m.index + "JSON.parse".length);
       const typedAfter = end > 0 && /^\s*as\s/.test(src.slice(end, end + 200));
       const typedDecl = /:[^=;]*[^=!<>]=\s*$/.test(before);
-      if (!typedAfter && !typedDecl) hits.push(`${rel}:${ln + 1}: untyped JSON.parse: ${lines[ln].trim().slice(0, 140)}`);
+      if (!typedAfter && !typedDecl) hits.push(`${rel}:${ln + 1}: untyped JSON.parse: ${(lines[ln] ?? "").trim().slice(0, 140)}`);
     }
     for (const m of src.matchAll(/(?<![\w.$])import\(/g)) {
       const ln = lineOf(m.index);
@@ -99,7 +99,7 @@ for (const dir of DIRS) {
       if (/^("[^"\\]*"|'[^'\\]*')$/.test(arg)) continue; // plain string literal: typed from the module
       let after = src.slice(end, end + 200);
       if (/^\s*\)/.test(after)) after = after.replace(/^\s*\)/, ""); // `(await import(x)) as T`
-      if (!/^\s*as\s/.test(after)) hits.push(`${rel}:${ln + 1}: untyped computed import(): ${lines[ln].trim().slice(0, 140)}`);
+      if (!/^\s*as\s/.test(after)) hits.push(`${rel}:${ln + 1}: untyped computed import(): ${(lines[ln] ?? "").trim().slice(0, 140)}`);
     }
   }
 }

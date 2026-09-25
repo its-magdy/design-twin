@@ -40,7 +40,7 @@ function prune(x: JsonValue): JsonObject {
   }
   for (const k of PAINTS) {
     const v = n[k];
-    const arr = Array.isArray(v) ? v.filter((p): p is JsonObject => isJsonObject(p) && Boolean(p.tokens)).map((p) => ({ tokens: p.tokens })) : [];
+    const arr = Array.isArray(v) ? v.flatMap((p) => (isJsonObject(p) && p.tokens ? [{ tokens: p.tokens }] : [])) : [];
     if (arr.length) o[k] = arr;
   }
   if (Array.isArray(n.children) && n.children.length) o.children = n.children.map(prune);
