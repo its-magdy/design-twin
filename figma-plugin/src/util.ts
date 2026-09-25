@@ -23,7 +23,11 @@ export function round<T>(n: number | T): number | T {
 // is the ONE place that mapping is asserted — Lowercase<T> is exactly what it computes for an ASCII enum.
 export const lower = <T extends string>(s: T): Lowercase<T> => s.toLowerCase() as Lowercase<T>;
 
-export const propName = (k: string): string => k.split("#")[0]; // strip Figma's "#nnn:nn" suffix
+// Strip Figma's "#nnn:nn" suffix: everything before the first "#" (the whole key when there is none).
+export const propName = (k: string): string => {
+  const hash = k.indexOf("#");
+  return hash === -1 ? k : k.slice(0, hash);
+};
 
 // Figma's ComponentPropertyType, emitted verbatim. doc-types' ComponentPropType lists the same five
 // members (SLOT included — kinds.ts maps it to "instance"); this is the one place the two unions are
@@ -139,12 +143,14 @@ export function toBase64(bytes: Uint8Array): string {
   let out = "";
   let chunk = "";
   for (let i = 0; i < n; i += 3) {
-    const t = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+    // `bytes[i] || 0`: i < n, so bytes[i] is a byte and the `|| 0` only maps 0 to 0 (same value).
+    const t = ((bytes[i] || 0) << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+    // charAt, not B64[...]: the index is masked to 0..63 on a 64-char string, so both read the same char.
     chunk +=
-      B64[(t >> 18) & 63] +
-      B64[(t >> 12) & 63] +
-      (i + 1 < n ? B64[(t >> 6) & 63] : "=") +
-      (i + 2 < n ? B64[t & 63] : "=");
+      B64.charAt((t >> 18) & 63) +
+      B64.charAt((t >> 12) & 63) +
+      (i + 1 < n ? B64.charAt((t >> 6) & 63) : "=") +
+      (i + 2 < n ? B64.charAt(t & 63) : "=");
     if (chunk.length >= B64_CHUNK) { out += chunk; chunk = ""; }
   }
   return out + chunk;

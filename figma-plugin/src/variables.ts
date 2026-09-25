@@ -37,7 +37,8 @@ export async function resolveBoundMap(bound: BoundVariableMap | null | undefined
     const val = bound[key];
     if (Array.isArray(val)) {
       const names = (await Promise.all(val.map(resolveVar))).filter((x): x is string => !!x);
-      if (names.length) out[key] = names.length === 1 ? names[0] : names;
+      const [first, ...rest] = names;
+      if (first !== undefined) out[key] = rest.length ? names : first; // one name -> the string, several -> the list
     } else {
       const n = await resolveVar(val);
       if (n) out[key] = n;
@@ -91,9 +92,8 @@ export async function nodeStyles(node: SceneNode): Promise<StyleRefs | undefined
 async function resolveModeMap(raw: { [collectionId: string]: string } | undefined, skipSingleMode: boolean): Promise<ModeMap | undefined> {
   if (!raw || !Object.keys(raw).length) return undefined;
   const out: ModeMap = {};
-  for (const collectionId of Object.keys(raw)) {
+  for (const [collectionId, modeId] of Object.entries(raw)) {
     const c = await getCollection(collectionId);
-    const modeId = raw[collectionId];
     if (!c || !Array.isArray(c.modes)) {
       out[collectionId] = modeId; // collection unreadable (remote) — keep raw ids over dropping the pin
       continue;
@@ -274,7 +274,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // new ids appear rather than doing one extra pass.
   const aliasTargets = (v: Variable): string[] => {
     const out: string[] = [];
-    for (const modeId of Object.keys(v.valuesByMode || {})) out.push(...aliasIds(v.valuesByMode[modeId]));
+    for (const value of Object.values(v.valuesByMode || {})) out.push(...aliasIds(value));
     return out;
   };
   const remoteVars: Variable[] = [];
@@ -318,12 +318,9 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
     // Mode values resolve independently, so the (async) resolution fans out while the synchronous
     // alias/hygiene bookkeeping stays a plain loop. Awaited per mode, a 500-variable x 3-mode file
     // chained ~1500 round trips onto the tail of every export.
-    const modeIds = Object.keys(v.valuesByMode);
-    const resolved = await Promise.all(modeIds.map((modeId) =>
-      resolveModeValue(v.valuesByMode[modeId], v.resolvedType)));
-    for (let i = 0; i < modeIds.length; i++) {
-      const modeId = modeIds[i];
-      const raw = v.valuesByMode[modeId];
+    const modes = await Promise.all(Object.entries(v.valuesByMode).map(async ([modeId, raw]) =>
+      ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
+    for (const { modeId, raw, value } of modes) {
       // A composed colour always holds at least one alias (Figma's own constraint), so it is an alias
       // for the tier and for the "raw value in a multi-mode collection" hygiene check below.
       if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
@@ -334,7 +331,7 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
         // with non-issues. Only report an alias whose target we genuinely could not resolve.
         if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' — target " + id + " could not be resolved");
       }
-      values[modeName[modeId] || modeId] = resolved[i];
+      values[modeName[modeId] || modeId] = value;
     }
     const rec: IrVariable = {
       name: v.name,
@@ -371,12 +368,12 @@ export async function dumpVariables(opts?: { asLibrary?: string }): Promise<Vari
   // status — a variable can be CURRENT inside a collection that has never been published).
   if (pendingPublish.length) {
     const st = await Promise.all(pendingPublish.map((p) => publishOf(p.obj)));
-    for (let i = 0; i < pendingPublish.length; i++) { const s = st[i]; if (s) pendingPublish[i].rec.publish = s; }
+    for (const [i, p] of pendingPublish.entries()) { const s = st[i]; if (s) p.rec.publish = s; }
   }
   const collPublish: Record<string, string> = {};
   if (asLibrary) {
     const st = await Promise.all(allCollections.map((c) => publishOf(c)));
-    for (let i = 0; i < allCollections.length; i++) { const s = st[i]; if (s) collPublish[allCollections[i].id] = s; }
+    for (const [i, c] of allCollections.entries()) { const s = st[i]; if (s) collPublish[c.id] = s; }
   }
 
   return {

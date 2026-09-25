@@ -151,7 +151,10 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
     segs = undefined;
   }
   let font: FontSpec;
-  if (segs && segs.length > 1) {
+  // The first run, shared by both branches; with length > 1 it is always present, so the extra test
+  // below only narrows the type.
+  const s0 = segs && segs[0];
+  if (segs && segs.length > 1 && s0) {
     // Per-run wrap style only when the node-level value is figma.mixed (plugin-api.d.ts 1.139.0 L10141,
     // NonResizableTextMixin: `textWrapStyle: TextWrapStyle | PluginAPI['mixed']`); otherwise the single
     // value is `font.textWrap` below and the runs stay as they were. TEXT_PATH lacks it -> never mixed.
@@ -172,9 +175,8 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
         return r;
       })
     );
-    font = out.font = fontObj(segs[0]);
+    font = out.font = fontObj(s0);
   } else {
-    const s0 = segs && segs[0];
     font = out.font = fontObj(s0 ? s0 : node);
     const bv = await resolveBoundMap(s0 ? s0.boundVariables : undefined);
     if (bv) out.textTokens = bv;

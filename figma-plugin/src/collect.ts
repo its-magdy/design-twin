@@ -194,11 +194,10 @@ async function findNodeById(nodeId: string, sink: (msg: string) => void): Promis
 function resolvePages(wanted: ReadonlyArray<string>, all: ReadonlyArray<PageNode>): PageNode[] {
   const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
   const pick = (sel: string, matches: PageNode[], how: string): PageNode | null => {
-    if (matches.length === 1) return matches[0];
     if (matches.length > 1) {
       throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) — use its id. Available pages:\n  ${avail()}`);
     }
-    return null;
+    return matches[0] ?? null; // exactly one match -> it; none -> null
   };
   const resolveOne = (sel: string): PageNode => {
     const byId = all.find((p) => p.id === sel);
@@ -256,7 +255,7 @@ const DEFAULT_PAGE_BG = ["#ffffff", "#f5f5f5", "#e5e5e5"];
 function isDefaultBg(f: IrPaint[] | undefined): boolean {
   if (!f) return true;
   const only = f[0];
-  return f.length === 1 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
+  return f.length === 1 && only !== undefined && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
 }
 // Reuses simplifyFills rather than hand-reading `.color`: page backgrounds are full Paint[] (an image
 // or gradient canvas is legal), and a second reader here would be a permanently-lagging copy of paint.ts.
@@ -317,10 +316,11 @@ function collectMeasurements(pages?: ReadonlyArray<PageNode>): IrMeasurement[] |
 export async function collectSelection(opts?: CollectOpts): Promise<ScreenResult> {
   resetRun();
   const sel = figma.currentPage.selection;
-  if (!sel.length) throw new Error("Select at least one frame first.");
+  const first = sel[0]; // selection is ReadonlyArray<SceneNode>: undefined exactly when it is empty
+  if (!first) throw new Error("Select at least one frame first.");
   // Single small selection ("inspect one component") auto-enables the CSS oracle; multi-select keeps
   // it opt-in (a several-frame selection is closer to a full export than a component inspect).
-  applyOpts(sel.length === 1 ? autoCss(opts, sel[0]) : opts);
+  applyOpts(sel.length === 1 ? autoCss(opts, first) : opts);
   const nodes: IrNode[] = [];
   for (const nd of sel) {
     const tree = await rootTree(nd);
@@ -328,7 +328,7 @@ export async function collectSelection(opts?: CollectOpts): Promise<ScreenResult
   }
   // A selection is always on the current page by construction, so no walk is needed — but the id of
   // the FIRST selected node is what the file is named after, so that is the one recorded.
-  return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes, { page: figma.currentPage, nodeId: sel[0].id });
+  return screenResult(sel.length === 1 ? first.name : "selection", first.name, nodes, { page: figma.currentPage, nodeId: first.id });
 }
 
 // Walk up to the owning PAGE node (needed to switch pages before selecting a linked node).
@@ -676,7 +676,7 @@ export async function collectFull(opts?: CollectOpts): Promise<FullResult> {
     // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
     // whatever the user happens to be looking at).
     scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-    ...ifDefined("page", allPages || pages.length !== 1 ? undefined : pages[0].name),
+    ...ifDefined("page", allPages || pages.length !== 1 ? undefined : pages[0]?.name),
     ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : undefined),
     ...ifDefined("flows", flows.length ? flows : undefined),
     ...ifDefined("pageSettings", pageSettings.length ? pageSettings : undefined),

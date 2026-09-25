@@ -113,7 +113,8 @@ function register(a: { id: string; name: string; format: AssetFormat; base64?: s
     // Same human name (case-insensitively), different bytes — two distinct icons that happen to share
     // a leaf name, or differ only in case. Keep both, tell them apart by content, and never let the
     // second silently replace the first.
-    file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
+    const [head = ""] = hash.split("-"); // split() always returns at least one element, so the default never applies
+    file = base + "-" + head.slice(0, 6) + "." + fmt;
   }
   byName.set(file.toLowerCase(), hash);
 

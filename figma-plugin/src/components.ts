@@ -219,11 +219,9 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
             // The per-definition binding lookups are independent of each other, so fan them out ONCE
             // instead of awaiting inside the page->component->property loop: awaited in place, a
             // design-system file paid one serialized round trip per property definition in the file.
-            const keys = Object.keys(defs);
-            const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
-            for (let i = 0; i < keys.length; i++) {
-              const k = keys[i];
-              const d = defs[k];
+            const defEntries = Object.entries(defs);
+            const boundPerKey = await Promise.all(defEntries.map(([, d]) => resolveBoundMap(d.boundVariables)));
+            for (const [i, [k, d]] of defEntries.entries()) {
               // Keep the REAL #uid key + type + default (needed to address TEXT/BOOL/SWAP/SLOT props).
               const p: ComponentPropDef = { key: k, type: propType(d.type) };
               if (d.type === "VARIANT") { if (d.variantOptions !== undefined) p.options = d.variantOptions; variantCombos *= (d.variantOptions ? d.variantOptions.length : 1); }
@@ -326,9 +324,9 @@ async function collectComponentCatalog(hygiene: string[], asLibrary?: boolean, s
   }
   if (pendingPublish.length) {
     const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
-    for (let i = 0; i < pendingPublish.length; i++) {
+    for (const [i, p] of pendingPublish.entries()) {
       const s = statuses[i];
-      if (s) pendingPublish[i].entry.publish = s;
+      if (s) p.entry.publish = s;
     }
   }
   return components;

@@ -119,12 +119,11 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   if (node.type === "INSTANCE" && node.componentProperties) {
     const props: ComponentPropValues = {};
     const propTokens: TokenMap = {}; // a BOOLEAN/TEXT prop whose value is driven by a variable (token link)
-    const componentProperties = node.componentProperties;
-    const keys = Object.keys(componentProperties);
+    const propEntries = Object.entries(node.componentProperties);
     // One await for the whole prop set rather than one per property — the bindings are independent.
-    const bound = await Promise.all(keys.map((k) => resolveBoundMap(componentProperties[k].boundVariables)));
-    keys.forEach((k, i) => {
-      props[propName(k)] = componentProperties[k].value;
+    const bound = await Promise.all(propEntries.map(([, cp]) => resolveBoundMap(cp.boundVariables)));
+    propEntries.forEach(([k, cp], i) => {
+      props[propName(k)] = cp.value;
       const bv = bound[i];
       if (bv && bv.value) propTokens[propName(k)] = bv.value;
     });

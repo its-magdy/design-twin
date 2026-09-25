@@ -111,7 +111,8 @@ const runFull = (): Promise<void> =>
 
 function notifySelection(): void {
   const sel = figma.currentPage.selection;
-  figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
+  const first = sel[0]; // undefined exactly when the selection is empty
+  figma.ui.postMessage({ type: "selection", count: sel.length, name: first ? first.name : null });
 }
 
 figma.ui.onmessage = async (raw: unknown) => {

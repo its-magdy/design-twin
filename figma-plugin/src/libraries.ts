@@ -130,8 +130,7 @@ function tryDefinitions(main: ComponentNode): Record<string, ComponentPropDef> |
     const defs = main.componentPropertyDefinitions;
     if (!defs || !Object.keys(defs).length) return undefined;
     const props: Record<string, ComponentPropDef> = {};
-    for (const k of Object.keys(defs)) {
-      const d = defs[k];
+    for (const [k, d] of Object.entries(defs)) {
       const p: ComponentPropDef = { key: k, type: propType(d.type) };
       if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
       if (d.defaultValue !== undefined) p.default = d.defaultValue;
@@ -188,15 +187,15 @@ export async function collectLibraryComponents(sinkIn?: (m: string) => void): Pr
   // key -> { main, instances[] }. Built first so aggregateFromInstances sees ALL instances of a key.
   const byKey = new Map<string, { main: ComponentNode; instances: InstanceNode[] }>();
   let unkeyed = 0;
-  for (let i = 0; i < instances.length; i++) {
+  for (const [i, inst] of instances.entries()) {
     const main = mains[i];
     if (!main) continue;
     if (!main.remote) continue; // local mains are already in collectComponentCatalog
     const key = main.key;
     if (!key) { unkeyed++; continue; } // a remote main with no publish key cannot be deduped or mapped
     const bucket = byKey.get(key);
-    if (bucket) bucket.instances.push(instances[i]);
-    else byKey.set(key, { main, instances: [instances[i]] });
+    if (bucket) bucket.instances.push(inst);
+    else byKey.set(key, { main, instances: [inst] });
   }
   if (unkeyed) sink(unkeyed + " remote component instance(s) have a main component with no publish key — omitted from the library catalog");
 
@@ -270,8 +269,7 @@ async function libraryVariableCollections(sink: (m: string) => void): Promise<Ma
       }
     })
   );
-  for (let i = 0; i < collections.length; i++) {
-    const c = collections[i];
+  for (const [i, c] of collections.entries()) {
     const lib = c.libraryName || UNKNOWN_LIBRARY;
     const entry: LibraryCollectionRow = { key: c.key, name: c.name };
     const count = counts[i];
@@ -337,8 +335,9 @@ export async function listLibraries(): Promise<LibrariesListing> {
   for (const [libName, collections] of varsByLibrary) {
     seenSources.add(libName);
     const componentCount = compBySource.get(libName);
+    const firstCollection = collections[0];
     libraries.push({
-      key: collections.length ? collections[0].key : libName, // libraries themselves have no key — a collection key is the closest stable handle
+      key: firstCollection ? firstCollection.key : libName, // libraries themselves have no key — a collection key is the closest stable handle
       name: libName,
       kind: "library",
       variableCollections: collections,

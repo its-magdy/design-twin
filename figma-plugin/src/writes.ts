@@ -148,23 +148,24 @@ export async function applyWrites(ops: WriteOp[]): Promise<WriteResult> {
   // Plugin-API error, the first one partway into the batch. Refuse the whole batch up front, with the
   // fix, in the same shape a mid-batch failure reports.
   if (list.length && figma.editorType === "dev") {
+    const first = list[0];
     return {
       ok: false,
       applied,
       failedAt: 0,
-      failedOp: list[0] && list[0].op,
+      ...ifDefined("failedOp", first && first.op),
       error: "the file is open in Dev Mode, which is read-only for plugins — switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode.",
     };
   }
-  for (let i = 0; i < list.length; i++) {
+  for (const [i, op] of list.entries()) {
     try {
-      applied.push(await applyWrite(list[i]));
+      applied.push(await applyWrite(op));
     } catch (e) {
       return {
         ok: false,
         applied,
         failedAt: i,
-        failedOp: list[i] && list[i].op,
+        failedOp: op && op.op,
         error: errMsg(e),
       };
     }
