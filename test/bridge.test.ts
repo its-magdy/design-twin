@@ -17,23 +17,23 @@ import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import type { ClientOptions, RawData } from "ws";
 import { ok, report } from "./assert.ts";
-import { must } from "./fixtures.ts";
+import { clientRow, collection, component, malformed, manifest, must, node, screenReply, variable } from "./fixtures.ts";
+import { screenPaths } from "../bridge/src/pages-layout.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
   ComponentDetailFile, ComponentsCatalog, DesignSystemDoc, DesignSystemManifest, DesignSystemStamp, EffectStylesDoc, GridStylesDoc,
-  HygieneDoc, IrNode, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
+  HygieneDoc, LibrariesIndex, LibrariesIndexRow, LibraryManifest, PageIndex, PagesRootIndex, PaintStylesDoc, ScreenExport,
   TextStylesDoc, TokensDoc, Asset,
 } from "../bridge/src/doc-types.ts";
 import type { ComponentsEntry } from "../bridge/src/seed-components.ts";
 import type { AssetIndexEntry } from "../bridge/src/write-out.ts";
 import type { SnapshotInfo, SnapshotParseError } from "../bridge/src/snapshot-meta.ts";
-import type { Stamped } from "../bridge/src/write-out.ts";
 import type { ClientRow, ProgressTick } from "../bridge/src/server-core.ts";
-import type { Cmd, DesignSystemReply, FullExportReply, ScreenReply, ScreenshotReply } from "../bridge/src/commands.ts";
+import type { Cmd } from "../bridge/src/commands.ts";
 import type { TokenStatus } from "../bridge/src/token-store.ts";
-import type { DaemonBridge, DaemonStatus } from "../bridge/src/daemon.ts";
-import type { Check, PluginProbe, Report } from "../bridge/src/doctor.ts";
+import type { DaemonBridge } from "../bridge/src/daemon.ts";
+import type { Check, Report } from "../bridge/src/doctor.ts";
 import type { MergedVariablesDoc } from "../bridge/src/variables-merge.ts";
 
 // A fixed token so verifyClient's comparisons are deterministic. server-core reads this at require
@@ -49,9 +49,6 @@ const core = await import("../bridge/src/server-core.ts");
 const asErr = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 // The one bridge -> plugin frame the fake plugins below read: `{ id, cmd, args }` (not exported by server-core).
 interface CommandFrame { id: string; cmd: Cmd; args?: Record<string, unknown> }
-// Hand-built export fixtures below carry only the fields the assertion reads. The intersection of every
-// reply type is assignable to each writer's own parameter, so ONE cast target serves them all.
-type ExportFixture = Stamped<FullExportReply & DesignSystemReply & ScreenReply & ScreenshotReply>;
 // A fixture asset with the producer-owned identity fields filled in (doc-types.ts Asset).
 const asset = (a: { id: string; file: string; text?: string; base64?: string; hash?: string; kind?: "reference" | "source" }): Asset =>
   ({ name: a.id, format: a.text !== undefined ? "svg" : "png", ...a });
@@ -1196,9 +1193,9 @@ void (async () => {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }, { name: "C", id: "3:3" }],
     layers: [
-      { name: "A", id: "1:1", page: "Design System", pageId: "0:1", tree: {} as unknown as IrNode },
-      { name: "B", id: "2:2", page: "Design/System", pageId: "0:2", tree: {} as unknown as IrNode }, // folds to the SAME dir as above
-      { name: "C", id: "3:3", page: "Screens", pageId: "0:3", tree: {} as unknown as IrNode },
+      { name: "A", id: "1:1", page: "Design System", pageId: "0:1", tree: node({ type: "FRAME", id: "1:1", name: "A" }) },
+      { name: "B", id: "2:2", page: "Design/System", pageId: "0:2", tree: node({ type: "FRAME", id: "2:2", name: "B" }) }, // folds to the SAME dir as above
+      { name: "C", id: "3:3", page: "Screens", pageId: "0:3", tree: node({ type: "FRAME", id: "3:3", name: "C" }) },
     ],
   });
   const rootIndex = readJson<PagesRootIndex>(pagesDir, "pages", "index.json");
@@ -1257,8 +1254,8 @@ void (async () => {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }],
     layers: [
-      { name: "A", id: "1:1", page: "Screens", pageId: "0:1", tree: {} as unknown as IrNode },
-      { name: "B", id: "2:2", page: "Screens", pageId: "0:9", tree: {} as unknown as IrNode }, // SAME name, different page
+      { name: "A", id: "1:1", page: "Screens", pageId: "0:1", tree: node({ type: "FRAME", id: "1:1", name: "A" }) },
+      { name: "B", id: "2:2", page: "Screens", pageId: "0:9", tree: node({ type: "FRAME", id: "2:2", name: "B" }) }, // SAME name, different page
     ],
   });
   const dupIndex = readJson<PagesRootIndex>(dupDir, "pages", "index.json");
@@ -1278,7 +1275,7 @@ void (async () => {
   pull.writePages(oldDir, {
     exportedAt: "t",
     index: [{ name: "A", id: "1:1" }, { name: "B", id: "2:2" }],
-    layers: [{ name: "A", id: "1:1", page: "Screens", tree: {} as unknown as IrNode }, { name: "B", id: "2:2", page: "Screens", tree: {} as unknown as IrNode }],
+    layers: [{ name: "A", id: "1:1", page: "Screens", tree: node({ type: "FRAME", id: "1:1", name: "A" }) }, { name: "B", id: "2:2", page: "Screens", tree: node({ type: "FRAME", id: "2:2", name: "B" }) }],
   });
   const oldIndex = readJson<PagesRootIndex>(oldDir, "pages", "index.json");
   const oldPageDir0 = must(oldIndex.pageDirs[0], "old export's pageDirs[0]");
@@ -1455,13 +1452,13 @@ void (async () => {
     const fixtureScreen = JSON.parse(fs.readFileSync(
       path.join(import.meta.dirname, "fixtures", "livetest3", "pages-titled", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-"));
-    OUT.writeScreen(sdir, {
+    OUT.writeScreen(sdir, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
       page: "✅ Organization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: fixtureScreen.nodes, manifest: fixtureScreen.manifest, exportedAt: "2026-09-23T00:00:00.000Z" },
-    } as unknown as ExportFixture, undefined);
+    }), undefined);
     const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8")) as PagesRootIndex;
     const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8")) as PageIndex;
     const rootRow0 = must(rootIdx.layers?.[0], "rootIdx.layers[0]");
@@ -1485,14 +1482,14 @@ void (async () => {
   // in a different one.
   {
     const sdir2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-src-"));
-    OUT.writeScreen(sdir2, {
+    OUT.writeScreen(sdir2, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
       page: "✅ Organization management ",
       pageId: "5282:58823",
       sourceFile: "TeamSmart (Copy)",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
-    } as unknown as ExportFixture, undefined);
+    }), undefined);
     const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
     ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
@@ -1502,13 +1499,13 @@ void (async () => {
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
     // is simply ABSENT, never a guessed or default value.
     const sdir3 = fs.mkdtempSync(path.join(os.tmpdir(), "write-screen-nosrc-"));
-    OUT.writeScreen(sdir3, {
+    OUT.writeScreen(sdir3, screenReply({
       screenName: "positions ",
       nodeId: "7314:87192",
       page: "✅ Organization management ",
       pageId: "5282:58823",
       screen: { screen: "positions ", nodes: [{ id: "7314:87192", type: "FRAME", name: "positions " }], manifest: { nodes: 1 }, exportedAt: "2026-09-23T00:00:00.000Z" },
-    } as unknown as ExportFixture, undefined);
+    }), undefined);
     const screenDoc2 = JSON.parse(fs.readFileSync(path.join(sdir3, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     ok("[write-screen sourceFile] absent when the pull result carried none — never defaulted", !("sourceFile" in screenDoc2));
     fs.rmSync(sdir3, { recursive: true, force: true });
@@ -1518,19 +1515,18 @@ void (async () => {
   // The library catalog must land in a tree that CANNOT collide with design-system/, because the two
   // describe different Figma files and answer different questions.
   {
-    // Hand-built: its collections omit `theming` (and more) — only what the library split reads.
-    const libDoc = {
+    const libDoc: DesignSystemDoc = {
       file: "NERA DS",
       exportedAt: "2026-08-16T00:00:00.000Z",
       colorProfile: "srgb",
       source: { role: "library", libraryName: "NERA", fileKey: "ABCDEFGH12345", collectionKeys: ["ck_core"] },
-      collections: [{ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" }],
-      variables: [{ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" }],
+      collections: [collection({ name: "Core", modes: ["Light"], default: "Light", key: "ck_core", publish: "current" })],
+      variables: [variable({ name: "color/primary", type: "COLOR", collection: "Core", tier: "primitive", values: { Light: "#112233" }, key: "vk1", publish: "current" })],
       styles: { paint: [{ name: "Brand", key: "pk1", publish: "changed" }], text: [], effect: [], grid: [] },
       // A main consumed from ANOTHER library: not this library's to claim.
-      components: [{ name: "Button", key: "ck1", publish: "current" }, { name: "Foreign", key: "ck2", remote: true }],
+      components: [component({ name: "Button", type: "COMPONENT", key: "ck1", publish: "current" }), component({ name: "Foreign", type: "COMPONENT", key: "ck2", remote: true })],
       hygiene: [],
-    } as unknown as DesignSystemDoc;
+    };
     const ldir = fs.mkdtempSync(path.join(os.tmpdir(), "write-lib-"));
     const res: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: libDoc }, () => {});
     const base = path.join(ldir, "design");
@@ -1598,16 +1594,16 @@ void (async () => {
       file: "Demo",
       exportedAt: "2026-08-12T00:00:00.000Z",
       colorProfile: "srgb",
-      collections: [{ id: "VariableCollectionId:1:1", name: "Core", modes: ["Light"] }],
-      variables: [{ name: "color/bg", type: "COLOR" }],
+      collections: [collection({ name: "Core", modes: ["Light"] })],
+      variables: [variable({ name: "color/bg", type: "COLOR", values: {} })],
       styles: { paint: [{ name: "Brand" }], text: [], effect: [], grid: [] },
       components: [
-        { key: "k1", name: "Button", id: "2:1", page: "Home", pageId: "1:0" },
-        { key: "k2", name: "Card", remote: true, derivedFrom: "instances" },
+        { key: "k1", name: "Button", type: "COMPONENT", id: "2:1", page: "Home", pageId: "1:0" },
+        { key: "k2", name: "Card", type: "COMPONENT", remote: true, derivedFrom: "instances" },
         { key: "k3", name: "Badge", type: "COMPONENT_SET", id: "2:9", page: "Home", pageId: "1:0",
           variants: [
-            { id: "2:10", name: "Size=Small", key: "vk1", values: { Size: "Small" }, node: { type: "COMPONENT", name: "Size=Small", children: [] } },
-            { id: "2:11", name: "Size=Large", key: "vk2", values: { Size: "Large" }, node: { type: "COMPONENT", name: "Size=Large", children: [] } },
+            { id: "2:10", name: "Size=Small", key: "vk1", values: { Size: "Small" }, node: node({ type: "COMPONENT", id: "2:10", name: "Size=Small", children: [] }) },
+            { id: "2:11", name: "Size=Large", key: "vk2", values: { Size: "Large" }, node: node({ type: "COMPONENT", id: "2:11", name: "Size=Large", children: [] }) },
           ] },
         { key: "k4", name: "NoNodes", type: "COMPONENT_SET", id: "2:12", page: "Home", pageId: "1:0",
           variants: [{ id: "2:13", name: "State=Default", key: "vk3", values: { State: "Default" } }] },
@@ -1616,13 +1612,13 @@ void (async () => {
     },
     layersDoc: {
       index: [{ id: "1:2", name: "Hero", type: "FRAME", pageId: "1:0", page: "Home" }],
-      layers: [{ id: "1:2", name: "Hero", type: "FRAME" }],
+      layers: [{ id: "1:2", name: "Hero", tree: node({ type: "FRAME", id: "1:2", name: "Hero" }) }],
     },
     assets: [
-      { id: "1:3", file: "icon.svg", text: "<svg/>" },
-      { id: "1:4", file: "img.png", base64: Buffer.from("hi").toString("base64") },
+      asset({ id: "1:3", file: "icon.svg", text: "<svg/>" }),
+      asset({ id: "1:4", file: "img.png", base64: Buffer.from("hi").toString("base64") }),
     ],
-  } as unknown as ExportFixture);
+  });
   ok("[write-out] the full export writes design-system.json",
     fs.existsSync(path.join(wdir, "design", "design-system.json")));
   ok("[write-out] asset BYTES land on disk — the thing the inline MCP path cannot do",
@@ -1742,10 +1738,10 @@ void (async () => {
 
   // The selection/node shape takes the other writer — dispatched on the RESULT, so a tool never has
   // to know which writer its own command implies.
-  const sel: WriteView = OUT.writeAny(path.join(wdir, "sel"), {
+  const sel: WriteView = OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Login/Screen", page: "Flows", pageId: "0:3", nodeId: "2:1",
-    screen: { id: "2:1", nodes: [{ id: "2:1", type: "FRAME" }] }, variables: { a: 1 }, assets: [],
-  } as unknown as ExportFixture);
+    screen: { nodes: [{ id: "2:1", type: "FRAME" }] }, assets: [],
+  }));
   ok("[write-out] the selection shape files into the pages/ tree, named with safe() + the node id",
     fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Login_Screen__2_1.json")));
   ok("[write-out] and the merged variables.json at the export root", fs.existsSync(path.join(wdir, "sel", "variables.json")));
@@ -1755,14 +1751,14 @@ void (async () => {
 
   // The whole point of the nested layout: ONE index a consumer opens without knowing which pull shape
   // produced the tree, and two same-named frames that cannot overwrite each other (finding 63).
-  OUT.writeAny(path.join(wdir, "sel"), {
+  OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20170:132666",
-    screen: { id: "20170:132666", nodes: [{ id: "20170:132666", type: "FRAME" }] }, assets: [],
-  } as unknown as ExportFixture);
-  OUT.writeAny(path.join(wdir, "sel"), {
+    screen: { nodes: [{ id: "20170:132666", type: "FRAME" }] }, assets: [],
+  }));
+  OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20173:142455",
-    screen: { id: "20173:142455", nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
-  } as unknown as ExportFixture);
+    screen: { nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
+  }));
   ok("[write-out] two frames with the SAME name land in two files, not one",
     fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20170_132666.json")) &&
     fs.existsSync(path.join(wdir, "sel", "pages", "Flows", "Popup__20173_142455.json")));
@@ -1771,10 +1767,10 @@ void (async () => {
   ok("[write-out] and keeps the page's real name beside the sanitised dir", pageIdx.page === "Flows" && pageIdx.pageId === "0:3");
   ok("[write-out] re-pulling one screen REPLACES its row rather than appending a duplicate",
     (() => {
-      OUT.writeAny(path.join(wdir, "sel"), {
+      OUT.writeAny(path.join(wdir, "sel"), screenReply({
         screenName: "Popup", page: "Flows", pageId: "0:3", nodeId: "20173:142455",
-        screen: { id: "20173:142455", nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
-      } as unknown as ExportFixture);
+        screen: { nodes: [{ id: "20173:142455", type: "FRAME" }] }, assets: [],
+      }));
       return (JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")) as PageIndex).layers.length === 3;
     })());
   const rootIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "index.json"), "utf8")) as PagesRootIndex;
@@ -1782,26 +1778,28 @@ void (async () => {
   ok("[write-out] the root pages/index.json points at the page dir with a live layer count",
     rootIdx.pageDirs.length === 1 && rootPageDir0.layers === 3 && rootPageDir0.index === "pages/Flows/index.json");
   // An export written before the plugin emitted page identity still has to land somewhere predictable.
-  OUT.writeAny(path.join(wdir, "sel"), { screenName: "Legacy", nodeId: "9:9", screen: { nodes: [] }, assets: [] } as unknown as ExportFixture);
+  // Kept WITHOUT `variables` (off-type, hence malformed()): the one fixture that still drives writeScreen's
+  // no-slice branch, which every screenReply() — like every real reply — now fills.
+  OUT.writeAny(path.join(wdir, "sel"), malformed<Parameters<typeof OUT.writeAny>[1]>({ screenName: "Legacy", nodeId: "9:9", screen: { nodes: [], manifest: manifest() }, assets: [] }));
   ok("[write-out] a page-less export files under _unfiled rather than guessing a page",
     fs.existsSync(path.join(wdir, "sel", "pages", "_unfiled", "Legacy__9_9.json")));
   // The index row's join key is the node id. A screen with none at all (no nodeId, no root node) would
   // be a row nothing can ever address again — refused with a reason, never written keyless.
   ok("[write-out] a screen with no id at all is refused rather than indexed without its join key",
-    (() => { try { OUT.writeAny(path.join(wdir, "sel"), { screenName: "Keyless", screen: { nodes: [] }, assets: [] } as unknown as ExportFixture); return false; }
+    (() => { try { OUT.writeAny(path.join(wdir, "sel"), screenReply({ screenName: "Keyless", screen: { nodes: [] }, assets: [] })); return false; }
       catch (e) { return /screen 'Keyless' has no id — cannot index/.test(asErr(e).message); } })());
 
   // Per-screen asset index: which of the shared, cumulative assets/ belong to THIS screen, and which
   // of them are byte-identical (the same icon exported once per instance path — finding 97).
-  const withAssets: WriteView = OUT.writeAny(path.join(wdir, "sel"), {
+  const withAssets: WriteView = OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Icons", page: "Flows", pageId: "0:3", nodeId: "5:5",
-    screen: { id: "5:5", nodes: [{ id: "5:5", type: "FRAME" }] },
+    screen: { nodes: [{ id: "5:5", type: "FRAME" }] },
     assets: [
-      { id: "a", file: "I1_2_3.svg", text: "<svg><path d='M0 0'/></svg>" },
-      { id: "b", file: "I4_5_6.svg", text: "<svg><path d='M0 0'/></svg>" },
-      { id: "c", file: "I7_8_9.svg", text: "<svg><path d='M1 1'/></svg>" },
+      asset({ id: "a", file: "I1_2_3.svg", text: "<svg><path d='M0 0'/></svg>" }),
+      asset({ id: "b", file: "I4_5_6.svg", text: "<svg><path d='M0 0'/></svg>" }),
+      asset({ id: "c", file: "I7_8_9.svg", text: "<svg><path d='M1 1'/></svg>" }),
     ],
-  } as unknown as ExportFixture);
+  }));
   const aIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Icons__5_5.assets.json"), "utf8")) as ScreenAssetsDoc;
   ok("[write-out] the asset index lists every asset this screen references", aIdx.files.length === 3);
   // P5 round 3 (findings 24/25/27): writeAssets now dedups by CONTENT before ever writing a file, so
@@ -1816,14 +1814,14 @@ void (async () => {
   // Which icons are safe to recolour. Figma exports the frame as it LOOKS, so a Dark-mode glyph
   // arrives with its stroke baked in and cannot serve a Light theme (finding 73) — but a red trash
   // icon carries meaning and must keep its colour. One colour throughout is the tell.
-  OUT.writeAny(path.join(wdir, "sel"), {
+  OUT.writeAny(path.join(wdir, "sel"), screenReply({
     screenName: "Glyphs", page: "Flows", pageId: "0:3", nodeId: "6:6",
-    screen: { id: "6:6", nodes: [{ id: "6:6", type: "FRAME" }] },
+    screen: { nodes: [{ id: "6:6", type: "FRAME" }] },
     assets: [
-      { id: "g1", file: "arrow-down.svg", text: '<svg><path stroke="#D4D4D4" d="M0 0"/><path stroke="#d4d4d4" d="M1 1"/></svg>' },
-      { id: "g2", file: "trash.svg", text: '<svg><path fill="#FF6767" d="M0 0"/><path fill="none" stroke="#ffffff" d="M1 1"/></svg>' },
+      asset({ id: "g1", file: "arrow-down.svg", text: '<svg><path stroke="#D4D4D4" d="M0 0"/><path stroke="#d4d4d4" d="M1 1"/></svg>' }),
+      asset({ id: "g2", file: "trash.svg", text: '<svg><path fill="#FF6767" d="M0 0"/><path fill="none" stroke="#ffffff" d="M1 1"/></svg>' }),
     ],
-  } as unknown as ExportFixture);
+  }));
   const gIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "Glyphs__6_6.assets.json"), "utf8")) as ScreenAssetsDoc;
   ok("[write-out] a single-coloured glyph is marked monochrome — safe to swap for currentColor",
     gIdx.monochrome.length === 1 && gIdx.monochrome[0] === "assets/arrow-down.svg");
@@ -1838,23 +1836,23 @@ void (async () => {
   // screen B silently deleted screen A's tokens and A's theme stopped resolving — with no warning,
   // because the screen JSON carries raw hex beside every binding (live-test findings 35/64).
   const vdir = path.join(wdir, "vars");
-  const V = (name: string, key: string, values: Record<string, string>, collection?: string) => ({ name, key, collection: collection || "Sem", type: "COLOR", values });
-  OUT.writeAny(vdir, {
-    screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { id: "1:1", nodes: [] }, assets: [],
+  const V = (name: string, key: string, values: Record<string, string>, coll?: string) => variable({ name, key, collection: coll || "Sem", type: "COLOR", values });
+  OUT.writeAny(vdir, screenReply({
+    screenName: "Job roles", page: "P", pageId: "0:1", nodeId: "1:1", screen: { nodes: [] }, assets: [],
     variables: {
-      collections: [{ name: "Sem", key: "ck1", modes: ["Dark"] }],
+      collections: [collection({ name: "Sem", key: "ck1", modes: ["Dark"] })],
       variables: [V("Text/Main", "k1", { Dark: "#fff" }), V("Bg/Page", "k2", { Dark: "#111" })],
       hygiene: ["one"],
     },
-  } as unknown as ExportFixture);
-  OUT.writeAny(vdir, {
-    screenName: "Filter", page: "P", pageId: "0:1", nodeId: "2:2", screen: { id: "2:2", nodes: [] }, assets: [],
+  }));
+  OUT.writeAny(vdir, screenReply({
+    screenName: "Filter", page: "P", pageId: "0:1", nodeId: "2:2", screen: { nodes: [] }, assets: [],
     variables: {
-      collections: [{ name: "Sem", key: "ck1", modes: ["Light"] }, { name: "Space", key: "ck2", modes: ["Desktop"] }],
+      collections: [collection({ name: "Sem", key: "ck1", modes: ["Light"] }), collection({ name: "Space", key: "ck2", modes: ["Desktop"] })],
       variables: [V("Bg/Page", "k2", { Dark: "#111" }), V("Border/Soft", "k3", { Dark: "#222" })],
       hygiene: ["two"],
     },
-  } as unknown as ExportFixture);
+  }));
   const merged = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
   const byName = (n: string) => merged.variables.filter((v) => v.name === n);
   ok("[write-out/vars] the earlier screen's tokens SURVIVE the next pull",
@@ -1877,10 +1875,10 @@ void (async () => {
 
   // A token that resolves differently in two screens is a REAL disagreement between two libraries
   // (finding 69) — the newest wins, but it is recorded rather than silently applied.
-  const conf: WriteView = OUT.writeAny(vdir, {
-    screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
+  const conf: WriteView = OUT.writeAny(vdir, screenReply({
+    screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { nodes: [] }, assets: [],
     variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] },
-  } as unknown as ExportFixture);
+  }));
   const merged2 = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
   ok("[write-out/vars] a value conflict is reported, not swallowed",
     conf.wrote.variablesMerge?.conflicts === 1 && merged2._conflicts?.length === 1);
@@ -1890,8 +1888,8 @@ void (async () => {
     merged2.hygiene.some((h) => /CONFLICT: 'Bg\/Page'/.test(h)));
   ok("[write-out/vars] re-pulling the SAME screen replaces its slice entry rather than appending",
     (() => {
-      OUT.writeAny(vdir, { screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { id: "3:3", nodes: [] }, assets: [],
-        variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] } } as unknown as ExportFixture);
+      OUT.writeAny(vdir, screenReply({ screenName: "Popup", page: "P", pageId: "0:1", nodeId: "3:3", screen: { nodes: [] }, assets: [],
+        variables: { collections: [], variables: [V("Bg/Page", "k2", { Dark: "#999" })], hygiene: [] } }));
       const m = JSON.parse(fs.readFileSync(path.join(vdir, "variables.json"), "utf8")) as MergedVariablesDoc;
       return m._slices.length === 3 && m._slices.filter((s) => s.screen === "Popup__3_3").length === 1;
     })());
@@ -1900,9 +1898,9 @@ void (async () => {
   // Three docs used to give three different answers and the printed path found nothing (20/31/34).
   const shot: WriteView = OUT.writeAny(path.join(wdir, "shot"), {
     id: "7410:12299", name: "Job Role Details", type: "FRAME",
-    reference: "assets/7410_12299_ref.png",
+    reference: "assets/7410_12299_ref.png", manifest: manifest(),
     assets: [asset({ id: "7410:12299", file: "7410_12299_ref.png", base64: Buffer.from("png").toString("base64"), kind: "reference" })],
-  } as unknown as ExportFixture);
+  });
   ok("[write-out/shot] a screenshot lands in assets/ — where a --node pull puts the same PNG",
     fs.existsSync(path.join(wdir, "shot", "assets", "7410_12299_ref.png")));
   ok("[write-out/shot] and there is no second copy under screenshots/",
@@ -1955,9 +1953,9 @@ void (async () => {
     // The daemon forwards the connected-file listing through __status, so the fake has to answer it
     // too — two rows, so the routing assertions below have something to disambiguate between.
     listClients: () => [
-      { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true },
-      { connId: "c2", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true },
-    ] as unknown as ClientRow[], // hand-built: rows omit pluginVersion/pluginStale
+      clientRow({ connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true }),
+      clientRow({ connId: "c2", file: "NERA Library", fileKey: "KEYLIB", page: "Tokens", instanceId: "fig-b", connectedAt: 2, uptimeMs: 2000, identified: true }),
+    ],
     close: () => calls.push("close"),
     waitForConnection: async () => {},
     // Records the bounded named-client wait the daemon asks for (target + window), see daemon.ts.
@@ -2798,13 +2796,13 @@ void (async () => {
   {
     const shadowedS: TokenStatus = { ...tokS, envSet: true, activeSource: "env", shadowed: true };
     ok("[doctor] token: shadowed + a real (non-daemon) connection succeeding is reported as OK, not a warn",
-      doctor.checkToken(shadowedS, { id: "plugin", status: "ok", detail: "connected: X" } as unknown as Check, false).status === "ok");
+      doctor.checkToken(shadowedS, { id: "plugin", title: "Figma plugin", status: "ok", detail: "connected: X" }, false).status === "ok");
     ok("[doctor] token: shadowed + the SAME connection routed THROUGH A DAEMON proves nothing (daemon authenticated once, at its own start) — still 'could not be checked'",
-      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", status: "ok", detail: "connected: X" } as unknown as Check, true); return c.status === "warn" && /could not be checked/.test(c.detail) && /daemon/.test(c.detail); })());
+      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", title: "Figma plugin", status: "ok", detail: "connected: X" }, true); return c.status === "warn" && /could not be checked/.test(c.detail) && /daemon/.test(c.detail); })());
     ok("[doctor] token: shadowed + the plugin explicitly rejecting a different token is a real failure",
-      doctor.checkToken(shadowedS, { id: "plugin", status: "fail", detail: "a plugin IS running, but with a different token (...)" } as unknown as Check, false).status === "fail");
+      doctor.checkToken(shadowedS, { id: "plugin", title: "Figma plugin", status: "fail", detail: "a plugin IS running, but with a different token (...)" }, false).status === "fail");
     ok("[doctor] token: shadowed + no plugin reachable at all is 'could not be checked', not a false 'make sure'",
-      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", status: "warn", detail: "not checked — no token yet" } as unknown as Check, false); return c.status === "warn" && /could not be checked/.test(c.detail); })());
+      (() => { const c = doctor.checkToken(shadowedS, { id: "plugin", title: "Figma plugin", status: "warn", detail: "not checked — no token yet" }, false); return c.status === "warn" && /could not be checked/.test(c.detail); })());
   }
   // Finding 204: a missing daemon used to report `ok` for "none running", which undersold the real
   // cost — every pull without one starts its own bridge and waits out the plugin's full reconnect
@@ -2813,14 +2811,14 @@ void (async () => {
   ok("[doctor] daemon: none running is a warn naming `dtwin serve`, not a plain ok",
     doctor.checkDaemon(null, 8787).status === "warn" && /dtwin serve/.test(doctor.checkDaemon(null, 8787).next || ""));
   ok("[doctor] daemon: a running one reports its connected file names",
-    doctor.checkDaemon({ pid: 1, port: 8787, pluginConnected: true, clients: [{ file: "App — Base" }] } as unknown as DaemonStatus, 8787).detail.includes("App — Base"));
+    doctor.checkDaemon({ daemon: true, pid: 1, port: 8787, pluginConnected: true, clients: [clientRow({ file: "App — Base", identified: true })] }, 8787).detail.includes("App — Base"));
   ok("[doctor] port: unset → 8787; an allowed value is kept", doctor.resolvePort(undefined).port === 8787 && doctor.resolvePort("8789").port === 8789);
   ok("[doctor] port: a value outside the manifest's three is a failure", doctor.resolvePort("9999").problem?.status === "fail");
   ok("[doctor] port: free is ok; held by our daemon is ok; held by a ws server is a note; by anything else a failure",
-    doctor.checkPort(8787, { free: true }, null).status === "ok" && doctor.checkPort(8787, { free: false, holder: "websocket" }, { pid: 7 } as unknown as DaemonStatus).status === "ok"
+    doctor.checkPort(8787, { free: true }, null).status === "ok" && doctor.checkPort(8787, { free: false, holder: "websocket" }, { daemon: true, pid: 7 }).status === "ok"
     && doctor.checkPort(8787, { free: false, holder: "websocket" }, null).status === "warn"
     && doctor.checkPort(8787, { free: false, holder: "http", detail: "x" }, null).status === "fail");
-  const wrongTok = doctor.checkPlugin({ clients: [], badToken: { fingerprint: "11111111" }, expected: "22222222" } as unknown as PluginProbe, 10);
+  const wrongTok = doctor.checkPlugin({ clients: [], badToken: { at: 0, fingerprint: "11111111" }, expected: "22222222" }, 10);
   ok("[doctor] plugin: a refused token reads as 'running, wrong token' with both fingerprints and the fix",
     wrongTok.status === "fail" && wrongTok.detail.includes("11111111") && wrongTok.detail.includes("22222222") && /--show-token/.test(wrongTok.next ?? ""));
   ok("[doctor] plugin: connected / nobody came / skipped",
@@ -3404,8 +3402,6 @@ void (async () => {
   // ---------------------------------------------------------------- P5: write-out.js asset clobbering (findings 23/104/124/125/28/30)
   console.log("\nwrite-out.js — asset writes are refuse-or-version, never clobber (findings 23/104/124/125):");
   const writeOut = await import("../bridge/src/write-out.ts");
-  // writeScreenAssets reads only `base`/`assets` of the screen paths; the fixtures below pass just those.
-  type ScreenPaths = Parameters<typeof writeOut.writeScreenAssets>[1];
   {
     // Two Figma layers named `angle-left` and `Angle-left` — different content, different screens'
     // pulls, into the SAME shared assets/ dir. On a case-insensitive filesystem (macOS default) they
@@ -3460,7 +3456,7 @@ void (async () => {
     // duplicates must be EMPTY for this group now that dedup happens before either file is written —
     // there is only ever one file, so there is nothing for the duplicates scan to find.
     fs.mkdirSync(path.join(dir, "pages", "P"), { recursive: true });
-    writeOut.writeScreenAssets(dir, { base: "S", assets: "pages/P/S.assets.json" } as unknown as ScreenPaths, [a1, a2]);
+    writeOut.writeScreenAssets(dir, screenPaths({ screenName: "S", page: "P" }, "/"), [a1, a2]);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "S.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[content-dedup] `duplicates` is empty — the writer no longer creates the duplicate it used to report",
       doc.duplicates.length === 0);
@@ -3515,7 +3511,7 @@ void (async () => {
     const icon = asset({ id: "i1", file: "assets/icon.svg", text: "<svg></svg>", hash: "cccccccc-1" });
     const ref = asset({ id: "n1:ref", file: "assets/n1_ref.png", base64: Buffer.from("x".repeat(1000)).toString("base64"), hash: "dddddddd-1", kind: "reference" });
     writeOut.writeAssets(dir, [icon, ref]);
-    writeOut.writeScreenAssets(dir, { base: "Screen", assets: "pages/P/Screen.assets.json" } as unknown as ScreenPaths, [icon, ref]);
+    writeOut.writeScreenAssets(dir, screenPaths({ screenName: "Screen", page: "P" }, "/"), [icon, ref]);
     const doc = JSON.parse(fs.readFileSync(path.join(dir, "pages", "P", "Screen.assets.json"), "utf8")) as ScreenAssetsDoc;
     ok("[ref-asset] the reference PNG is not counted in `count`/`totalBytes`", doc.count === 1 && doc.totalBytes === (icon.text ?? "").length);
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
@@ -3531,7 +3527,7 @@ void (async () => {
     // Criterion 10, end to end: writeScreen() itself must surface the warning through `log` — not just
     // the standalone helper — since that is what a real `dtwin pull` actually calls.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-geo-e2e-"));
-    const r = {
+    const r = screenReply({
       screenName: "Icons",
       screen: {
         exportedAt: "2026-01-01T00:00:00Z",
@@ -3539,7 +3535,7 @@ void (async () => {
         nodes: [{ id: "1:1", type: "FRAME", name: "Icons" }],
         manifest: { nodes: 100, assetsGeometry: 40 },
       },
-    } as unknown as ExportFixture; // hand-built: the manifest carries only what the warning reads
+    });
     const lines: string[] = [];
     writeOut.writeScreen(dir, r, (m) => lines.push(m));
     ok("[geometry-warn] writeScreen() logs the geometry-fallback warning at pull time",
@@ -3571,7 +3567,8 @@ void (async () => {
       const prevAssetPath = path.join(tmp, "assets"); fs.mkdirSync(prevAssetPath);
       fs.writeFileSync(path.join(prevAssetPath, "arrow-down.svg"), content);
       const { hashes } = diffMod.assetHashes(path.join(tmp, "screen.json"), docFor());
-      return { kind: "snapshot", assets: hashes } as unknown as Baseline; // ts-port: hand-built fixture
+      const prev: Baseline = { doc: docFor(), source: "screen.json.snapshot", kind: "snapshot", assets: hashes, notes: [] };
+      return prev;
     };
     const now3ea6be = setup(read("arrow-down-3ea6be.svg"));
     // 3ea6be and ccfd6b are the SAME icon (finding 25's own example, ≤0.002px drift) — must NOT be

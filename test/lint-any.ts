@@ -2,8 +2,9 @@
 // lint:any — the "no `any` in hand-written TypeScript" gate (owner rule, docs/ts-port-handoff.md
 // "Decisions taken").
 //
-// Scans test/, design-to-code/, bridge/src/ and figma-plugin/src/ (recursively, node_modules skipped) and exits 1 with
-// file:line for every hit of either rule:
+// Scans test/, design-to-code/, bridge/src/ and figma-plugin/src/ (recursively, node_modules skipped), plus the
+// hand-written TypeScript outside them (the two build scripts, figma-augment.d.ts), and exits 1 with
+// file:line for every hit of any rule:
 //
 //  1. LITERAL `any` — `: any`, `as any`, `<any>`, `any[]`, `Record<string, any>` anywhere in any file
 //     (the same regex the old grep gate used; this script itself is skipped — its own patterns match).
@@ -33,11 +34,22 @@
 //     rule 2, an `import(` preceded on its line by an ODD number of backticks is skipped: it is text
 //     inside a template literal — the source of a generated plain-JS child script (bridge.test.ts's
 //     drain.mjs), which cannot carry `as T`.
+//
+//  4. DOUBLE ASSERTION — `as unknown as T` (whitespace/newlines between the words allowed) anywhere in
+//     a .ts/.mts/.cts file. It forces any value into any type with no check at all, which is how test
+//     fixtures drifted from the IR while the types said otherwise (test/assert.ts). Build the value
+//     properly instead: a test/fixtures.ts builder, a complete literal, `satisfies`, or a type guard
+//     that checks at runtime; a deliberately MALFORMED test input goes through fixtures.ts
+//     `malformed()`. There is no exception marker. Comments are skipped like rule 2's (so prose that
+//     names the pattern, like this, is fine), except that a `//` inside an earlier string on the line
+//     (a URL) does not count as one. Text inside a string literal is treated as code — over-flagging,
+//     never a miss.
 import fs from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DIRS = ["test", "design-to-code", "bridge/src", "figma-plugin/src"];
+const FILES = ["claude-plugin/build-scripts.ts", "figma-plugin/build.ts", "figma-plugin/figma-augment.d.ts"];
 const SELF = path.resolve(import.meta.filename);
 const LITERAL = /: any|as any|<any>|any\[\]|Record<string, any>/;
 const TS = /\.(ts|mts|cts)$/;
@@ -66,46 +78,68 @@ function matchParen(src: string, open: number): number {
   return -1;
 }
 
+/** Whether `before` (a line's text up to a match) opens a `//` line comment OUTSIDE a quoted string —
+ *  so a URL in an earlier string literal does not hide the match. Used by rule 4 only. */
+function inLineComment(before: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < before.length; i++) {
+    const c = before[i];
+    if (quote) { if (c === "\\") i++; else if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "/" && before[i + 1] === "/") return true;
+  }
+  return false;
+}
+
+function* sources(): Generator<string> {
+  for (const dir of DIRS) yield* walk(path.join(ROOT, dir));
+  for (const f of FILES) yield path.join(ROOT, f);
+}
+
 const hits: string[] = [];
-for (const dir of DIRS) {
-  for (const file of walk(path.join(ROOT, dir))) {
-    if (path.resolve(file) === SELF) continue;
-    const src = fs.readFileSync(file, "utf8");
-    const rel = path.relative(ROOT, file);
-    const lines = src.split("\n");
-    lines.forEach((l, i) => { if (LITERAL.test(l)) hits.push(`${rel}:${i + 1}: literal any: ${l.trim()}`); });
-    if (!TS.test(file)) continue;
-    const lineStarts = [0];
-    for (let i = 0; i < src.length; i++) if (src[i] === "\n") lineStarts.push(i + 1);
-    const lineOf = (off: number): number => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; const start = lineStarts[m]; if (start !== undefined && start <= off) lo = m; else hi = m - 1; } return lo; };
-    for (const m of src.matchAll(/JSON\.parse\(/g)) {
-      const ln = lineOf(m.index);
-      const before = src.slice(lineStarts[ln], m.index);
-      if (before.includes("//") || /^\s*(\*|\/\*)/.test(before)) continue; // comment
-      const end = matchParen(src, m.index + "JSON.parse".length);
-      const typedAfter = end > 0 && /^\s*as\s/.test(src.slice(end, end + 200));
-      const typedDecl = /:[^=;]*[^=!<>]=\s*$/.test(before);
-      if (!typedAfter && !typedDecl) hits.push(`${rel}:${ln + 1}: untyped JSON.parse: ${(lines[ln] ?? "").trim().slice(0, 140)}`);
-    }
-    for (const m of src.matchAll(/(?<![\w.$])import\(/g)) {
-      const ln = lineOf(m.index);
-      const before = src.slice(lineStarts[ln], m.index);
-      if (before.includes("//") || /^\s*(\*|\/\*)/.test(before)) continue; // comment
-      if ((before.match(/`/g) || []).length % 2 === 1) continue; // inside a template literal (generated JS source)
-      const open = m.index + "import".length;
-      const end = matchParen(src, open);
-      if (end < 0) continue;
-      const arg = src.slice(open + 1, end - 1).trim();
-      if (/^("[^"\\]*"|'[^'\\]*')$/.test(arg)) continue; // plain string literal: typed from the module
-      let after = src.slice(end, end + 200);
-      if (/^\s*\)/.test(after)) after = after.replace(/^\s*\)/, ""); // `(await import(x)) as T`
-      if (!/^\s*as\s/.test(after)) hits.push(`${rel}:${ln + 1}: untyped computed import(): ${(lines[ln] ?? "").trim().slice(0, 140)}`);
-    }
+for (const file of sources()) {
+  if (path.resolve(file) === SELF) continue;
+  const src = fs.readFileSync(file, "utf8");
+  const rel = path.relative(ROOT, file);
+  const lines = src.split("\n");
+  lines.forEach((l, i) => { if (LITERAL.test(l)) hits.push(`${rel}:${i + 1}: literal any: ${l.trim()}`); });
+  if (!TS.test(file)) continue;
+  const lineStarts = [0];
+  for (let i = 0; i < src.length; i++) if (src[i] === "\n") lineStarts.push(i + 1);
+  const lineOf = (off: number): number => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; const start = lineStarts[m]; if (start !== undefined && start <= off) lo = m; else hi = m - 1; } return lo; };
+  for (const m of src.matchAll(/JSON\.parse\(/g)) {
+    const ln = lineOf(m.index);
+    const before = src.slice(lineStarts[ln], m.index);
+    if (before.includes("//") || /^\s*(\*|\/\*)/.test(before)) continue; // comment
+    const end = matchParen(src, m.index + "JSON.parse".length);
+    const typedAfter = end > 0 && /^\s*as\s/.test(src.slice(end, end + 200));
+    const typedDecl = /:[^=;]*[^=!<>]=\s*$/.test(before);
+    if (!typedAfter && !typedDecl) hits.push(`${rel}:${ln + 1}: untyped JSON.parse: ${(lines[ln] ?? "").trim().slice(0, 140)}`);
+  }
+  for (const m of src.matchAll(/(?<![\w.$])import\(/g)) {
+    const ln = lineOf(m.index);
+    const before = src.slice(lineStarts[ln], m.index);
+    if (before.includes("//") || /^\s*(\*|\/\*)/.test(before)) continue; // comment
+    if ((before.match(/`/g) || []).length % 2 === 1) continue; // inside a template literal (generated JS source)
+    const open = m.index + "import".length;
+    const end = matchParen(src, open);
+    if (end < 0) continue;
+    const arg = src.slice(open + 1, end - 1).trim();
+    if (/^("[^"\\]*"|'[^'\\]*')$/.test(arg)) continue; // plain string literal: typed from the module
+    let after = src.slice(end, end + 200);
+    if (/^\s*\)/.test(after)) after = after.replace(/^\s*\)/, ""); // `(await import(x)) as T`
+    if (!/^\s*as\s/.test(after)) hits.push(`${rel}:${ln + 1}: untyped computed import(): ${(lines[ln] ?? "").trim().slice(0, 140)}`);
+  }
+  for (const m of src.matchAll(/\bas\s+unknown\s+as\b/g)) {
+    const ln = lineOf(m.index);
+    const before = src.slice(lineStarts[ln], m.index);
+    if (inLineComment(before) || /^\s*(\*|\/\*)/.test(before)) continue; // comment
+    hits.push(`${rel}:${ln + 1}: double assertion (as unknown as): ${(lines[ln] ?? "").trim().slice(0, 140)}`);
   }
 }
 if (hits.length) {
   console.error(hits.join("\n"));
-  console.error(`lint:any — ${hits.length} hit(s). Type JSON.parse results in place (\`as T\` / \`const x: T = …\`), never \`any\`; cast a computed \`import()\` result with \`as T\`.`);
+  console.error(`lint:any — ${hits.length} hit(s). Type JSON.parse results in place (\`as T\` / \`const x: T = …\`), never \`any\`; cast a computed \`import()\` result with \`as T\`; never \`as unknown as T\` — build the value (test/fixtures.ts) or narrow it with a runtime check.`);
   process.exit(1);
 }
 console.log("lint:any — 0 hits");
