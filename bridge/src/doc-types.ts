@@ -267,7 +267,9 @@ export interface TextRun {
   paragraphIndent?: number;
   /** StyledTextSegment.textStyleOverrides (plugin-api.d.ts 1.139.0 L5588, TextStyleOverrideType
    *  L5465-5467), lower-cased: "semantic_italic" | "semantic_weight" | "hyperlink" | "text_decoration".
-   *  Only when non-empty AND the run has a text style (the overrides are "over a text style"). */
+   *  Only when non-empty AND the run has a text style (the overrides are "over a text style"). The
+   *  runtime hands the plugin bare strings, not the typings' `{ type }` objects (live, 2026-09-25;
+   *  figma-plugin/src/text.ts `styleOverrides` reads both). */
   textStyleOverrides?: string[];
 }
 

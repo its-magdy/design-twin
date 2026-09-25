@@ -1595,10 +1595,20 @@
     "paragraphSpacing",
     "textStyleOverrides"
   ];
+  function overrideName(o) {
+    if (typeof o === "string") return o;
+    if (o !== null && typeof o === "object" && "type" in o && typeof o.type === "string") return o.type;
+    return void 0;
+  }
   function styleOverrides(s) {
     const ov = s.textStyleOverrides;
     if (!s.textStyleId || !Array.isArray(ov) || !ov.length) return void 0;
-    return ov.map((o) => lower(o.type));
+    const names = [];
+    for (const o of ov) {
+      const n = overrideName(o);
+      if (n !== void 0) names.push(n.toLowerCase());
+    }
+    return names.length ? names : void 0;
   }
   function inlineExtras(src, out) {
     const hl = src.hyperlink;

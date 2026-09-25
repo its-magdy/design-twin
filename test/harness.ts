@@ -2358,6 +2358,16 @@ const sandbox = context as unknown as Sandbox;
       oneItalic.runs === undefined && oneItalic.font?.fontStyle === "italic" && oneItalic.font.weightValue === 400 &&
       JSON.stringify(oneItalic.textStyleOverrides) === '["semantic_weight"]' &&
       noSeg.font !== undefined && !("fontStyle" in noSeg.font) && !("textStyleOverrides" in noSeg));
+    // LIVE 2026-09-25: Figma Desktop returns textStyleOverrides as bare STRINGS (the docs page's own
+    // example, developers.figma.com/docs/plugins/api/TextStyleOverrides/), not the `{ type }` objects
+    // plugin-api.d.ts 1.139.0 L5465-5467 declares; `o.type.toLowerCase()` threw and killed the page
+    // export. Strings, objects and a mix must all give the same output; a junk member is skipped.
+    const asStrings = await sandbox.serialize(segText("rf:4", {}, [{ characters: "Solo", ...italicFont, fontWeight: 400, fontStyle: "ITALIC",
+      textStyleId: "s_heading", textStyleOverrides: ["SEMANTIC_WEIGHT"] }]), 0, false);
+    const mixedShapes = await sandbox.serialize(segText("rf:1", { paragraphSpacing: MIXED, paragraphIndent: 4 },
+      runSegs([0, 12, 16]).map((s, i) => i === 1 ? { ...s, textStyleOverrides: ["SEMANTIC_ITALIC", { type: "HYPERLINK" }, 7, null, {}] } : s)), 0, false);
+    ok("[RUN-FIELDS] textStyleOverrides as runtime STRINGS -> same output as the typings' {type} objects (single-run and per-run); junk members skipped",
+      JSON.stringify(asStrings) === JSON.stringify(oneItalic) && JSON.stringify(mixedShapes) === JSON.stringify(mixedSpacing));
   }
 
   report();
