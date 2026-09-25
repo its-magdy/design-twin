@@ -45,6 +45,17 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   `design/lib`) so exports don't collide.
 - **A connection that sat idle came back as a different `instanceId`** → Figma restarted the plugin
   runtime. Don't leave the Figma window **minimized** (its renderer gets suspended); occluded is fine.
+- **An export slowed to a crawl — a progress tick every ~3 s and the node counter barely moving** → the
+  file's tab is not the *active* tab in Figma Desktop. Measured live (2026-09-25, one page, daemon):
+  31–38 ticks and ~2,500 nodes per 10 s with the file's tab in front; 3–5 ticks and ~15 nodes per 10 s
+  while another file's tab was in front (about 100× slower); then 27 ticks in the first 10 s after
+  switching back and the normal 31–38 from the second window on. Nothing is lost — the export
+  finishes, just late — but a `--timeout` sized for the foreground will fire. Figma Desktop is an
+  Electron app, and Electron's `backgroundThrottling` (default `true`) is "Whether to throttle
+  animations and timers when the page becomes background"; the plugin's walk has no timers of its own
+  (it advances on Figma API awaits), so the throttle is the tab's. Keep the exporting file's tab in
+  front for the duration; switching between two exporting files means each runs only while it is in
+  front.
 - **A component in an export has no library/main component** → its library probably wasn't enabled
   when the export ran. Enable it in Figma, re-pull; there is no API to enable it.
 - **MCP `designtwin` not showing up** → **this repo registers no MCP server** (there is no `.mcp.json`
