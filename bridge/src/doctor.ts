@@ -27,6 +27,7 @@ import fs from "node:fs";
 import net from "node:net";
 import http from "node:http";
 import path from "node:path";
+import { z } from "zod";
 import * as tokenStore from "./token-store.ts";
 import type { TokenStatus } from "./token-store.ts";
 import * as daemon from "./daemon.ts";
@@ -35,7 +36,7 @@ import { readSnapshotInfo } from "./snapshot-meta.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
-import { isOurMcpEntry } from "./init.ts";
+import { isOurMcpEntry, McpJsonSchema } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
 // The manifest's allowedDomains ports — ports.ts, the same list server-core.ts binds from. Its own
 // dependency-free module, so reading it never loads server-core (which exits the process on a bad
@@ -234,16 +235,42 @@ const ageStr = (ms: number) => { const h = ms / 3600000; return h < 1 ? `${Math.
 // Reading it directly means this never has to guess by opening each screen file, or fall back to
 // whichever document snapshot-meta happened to pick first — the exact bug this replaces (finding 33:
 // "attributes the whole export to the wrong Figma file").
-// The fields read off pages/index.json and each page's index.json — untyped JSON from disk, read with
-// the same guards as before.
-interface IndexRowView { file?: string; sourceFile?: string; exportedAt?: string }
-interface IndexView { pageDirs?: Array<{ index: string }>; layers?: Array<IndexRowView | null> }
+// The fields read off pages/index.json, each page's index.json, and the design-system manifest —
+// JSON from disk that an older bridge or a hand edit may have written, so each is checked before it
+// is read. Loose: only the fields read here are checked. A row may be null (an older index could hold
+// one); it is skipped, as it always was.
+const IndexRowSchema = z.looseObject({ file: z.string().optional(), sourceFile: z.string().optional(), exportedAt: z.string().optional() });
+const IndexSchema = z.looseObject({
+  pageDirs: z.array(z.looseObject({ index: z.string() })).optional(),
+  layers: z.array(IndexRowSchema.nullable()).optional(),
+});
+const DsStampSchema = z.looseObject({ file: z.string().optional(), exportedAt: z.string().optional() });
+type IndexRowView = z.infer<typeof IndexRowSchema>;
 
-function exportSourceCounts(exportDir: string, now: number): { parts: string[]; newestOverall: number | null } {
+// A zod error on one line, for a doctor detail.
+const oneLine = (e: z.ZodError): string => z.prettifyError(e).replace(/\n\s*/g, " ");
+
+// Read + parse + check one export file. null when it is absent; `bad` names a corrupt or wrong-shaped
+// one, so the caller can say so instead of quietly counting nothing.
+function readExportJson<T>(file: string, schema: z.ZodType<T>): { doc: T } | { bad: string } | null {
+  let text: string;
+  try { text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  let raw: unknown;
+  try { raw = JSON.parse(text) as unknown; } catch (e) { return { bad: "is not valid JSON: " + errMsg(e) }; }
+  const r = schema.safeParse(raw);
+  return r.success ? { doc: r.data } : { bad: "is not the expected shape: " + oneLine(r.error) };
+}
+
+function exportSourceCounts(exportDir: string, now: number): { parts: string[]; newestOverall: number | null; problems: string[] } {
   const screensByFile = new Map<string, Array<string | undefined>>(); // file (or "" for unstamped) -> [{exportedAt}]
+  const problems: string[] = [];
   const note = (l: IndexRowView) => { const key = l.sourceFile || ""; let ats = screensByFile.get(key); if (!ats) { ats = []; screensByFile.set(key, ats); } ats.push(l.exportedAt); };
-  try {
-    const idx = JSON.parse(fs.readFileSync(path.join(exportDir, "pages", "index.json"), "utf8")) as IndexView;
+  const rootRel = path.join("pages", "index.json");
+  const rootRead = readExportJson(path.join(exportDir, rootRel), IndexSchema);
+  if (rootRead && "bad" in rootRead) problems.push(`${rootRel} ${rootRead.bad}`);
+  // No (readable) page index — a design-system-only or as-yet-empty export.
+  if (rootRead && "doc" in rootRead) {
+    const idx = rootRead.doc;
     // The root `layers[]` only ever holds what write-out.ts's writeScreen path has merged into it — a
     // whole-page pull's layers never backfill it (mergeRootIndex only appends the ONE entry its own
     // call passed). So the true, complete list is every PAGE's own index, keyed by `file` so a screen
@@ -251,13 +278,19 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
     // once — root wins that merge since it is the more recently written of the two.
     const byFile = new Map<string, IndexRowView>();
     for (const p of idx.pageDirs || []) {
-      try { const pi = JSON.parse(fs.readFileSync(path.join(exportDir, p.index), "utf8")) as IndexView; for (const l of pi.layers || []) if (l && l.file) byFile.set(l.file, l); } catch { /* page index missing/corrupt */ }
+      const pi = readExportJson(path.join(exportDir, p.index), IndexSchema);
+      if (pi && "bad" in pi) problems.push(`${p.index} ${pi.bad}`);
+      if (pi && "doc" in pi) for (const l of pi.doc.layers || []) if (l && l.file) byFile.set(l.file, l);
     }
     for (const l of idx.layers || []) if (l && l.file) byFile.set(l.file, l);
     for (const l of byFile.values()) note(l);
-  } catch { /* no page index — a design-system-only or as-yet-empty export */ }
+  }
   let designSystem: { file: string; exportedAt: string | undefined } | null = null;
-  const maybe = (rel: string): { file?: string; exportedAt?: string } | null => { try { return JSON.parse(fs.readFileSync(path.join(exportDir, rel), "utf8")) as { file?: string; exportedAt?: string }; } catch { return null; } };
+  const maybe = (rel: string): z.infer<typeof DsStampSchema> | null => {
+    const r = readExportJson(path.join(exportDir, rel), DsStampSchema);
+    if (r && "bad" in r) problems.push(`${rel} ${r.bad}`);
+    return r && "doc" in r ? r.doc : null;
+  };
   const dsDoc = maybe("design-system.json") || maybe(path.join("design-system", "tokens.json"));
   if (dsDoc && dsDoc.file) designSystem = { file: dsDoc.file, exportedAt: dsDoc.exportedAt };
 
@@ -277,7 +310,7 @@ function exportSourceCounts(exportDir: string, now: number): { parts: string[]; 
     noteNewest(designSystem.exportedAt);
     parts.push(`design system from '${designSystem.file}' (${ageStr(now - Date.parse(String(designSystem.exportedAt)))} ago)`);
   }
-  return { parts, newestOverall };
+  return { parts, newestOverall, problems };
 }
 
 // Everything about the project in `cwd`. Several checks, none of them ✗: doctor is also run outside a
@@ -334,6 +367,8 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
         const from = snap.sourceFile ? ` from '${snap.sourceFile}'` : "";
         out.push(ageMs > STALE_MS ? warn("export", "Export", `exported ${age} ago${from} — the Figma file may have moved on`, "re-run the pull before building from it") : ok("export", "Export", `exported ${age} ago${from}`));
       }
+      // After the summary line, which stays the first "export" check.
+      for (const p of counts.problems) out.push(warn("export", "Export", `${p} — left out of the export summary`, "re-run the pull that writes it (or fix the hand edit)"));
     }
 
     const map = LAYOUT.findMapFile(cwd);
@@ -349,7 +384,13 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
   const mcpFile = path.join(cwd, ".mcp.json");
   if (fs.existsSync(mcpFile)) {
     let servers: Record<string, unknown> | null = null;
-    try { servers = (JSON.parse(fs.readFileSync(mcpFile, "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers || {}; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
+    let raw: unknown;
+    try { raw = JSON.parse(fs.readFileSync(mcpFile, "utf8")) as unknown; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
+    if (raw !== undefined) {
+      const r = McpJsonSchema.safeParse(raw);
+      if (r.success) servers = r.data.mcpServers || {};
+      else out.push(warn("mcp", "MCP registration", ".mcp.json is not an .mcp.json object: " + oneLine(r.error), "fix it, then `dtwin init --mcp`"));
+    }
     if (servers) {
       const found = servers;
       const mine = Object.keys(found).find((k) => isOurMcpEntry(found[k]));
