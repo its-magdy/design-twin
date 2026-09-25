@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // lint:any — the "no `any` in hand-written TypeScript" gate (owner rule, docs/ts-port-handoff.md
-// "Decisions taken"). Plain JS on purpose: build/lint scripts stay JS.
+// "Decisions taken").
 //
 // Scans test/, design-to-code/, bridge/src/ and figma-plugin/src/ (recursively, node_modules skipped) and exits 1 with
 // file:line for every hit of either rule:
 //
 //  1. LITERAL `any` — `: any`, `as any`, `<any>`, `any[]`, `Record<string, any>` anywhere in any file
-//     (the same regex the old grep gate used; this script itself is skipped).
+//     (the same regex the old grep gate used; this script itself is skipped — its own patterns match).
 //
 //  2. IMPLICIT `any` from JSON.parse — lib.d.ts types `JSON.parse(...)` as `any`, so a bare call leaks
 //     an untyped value. In .ts/.mts/.cts files, every `JSON.parse(` call must be typed IN PLACE, i.e.:
@@ -42,7 +42,7 @@ const SELF = path.resolve(import.meta.filename);
 const LITERAL = /: any|as any|<any>|any\[\]|Record<string, any>/;
 const TS = /\.(ts|mts|cts)$/;
 
-function* walk(dir) {
+function* walk(dir: string): Generator<string> {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
     const p = path.join(dir, e.name);
@@ -52,7 +52,7 @@ function* walk(dir) {
 }
 
 /** Index just past the `)` matching the `(` at `open`, or -1. Skips quoted strings. */
-function matchParen(src, open) {
+function matchParen(src: string, open: number): number {
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     const c = src[i];
@@ -66,7 +66,7 @@ function matchParen(src, open) {
   return -1;
 }
 
-const hits = [];
+const hits: string[] = [];
 for (const dir of DIRS) {
   for (const file of walk(path.join(ROOT, dir))) {
     if (path.resolve(file) === SELF) continue;
@@ -77,7 +77,7 @@ for (const dir of DIRS) {
     if (!TS.test(file)) continue;
     const lineStarts = [0];
     for (let i = 0; i < src.length; i++) if (src[i] === "\n") lineStarts.push(i + 1);
-    const lineOf = (off) => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lineStarts[m] <= off) lo = m; else hi = m - 1; } return lo; };
+    const lineOf = (off: number): number => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lineStarts[m] <= off) lo = m; else hi = m - 1; } return lo; };
     for (const m of src.matchAll(/JSON\.parse\(/g)) {
       const ln = lineOf(m.index);
       const before = src.slice(lineStarts[ln], m.index);
