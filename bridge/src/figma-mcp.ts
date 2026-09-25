@@ -26,6 +26,7 @@ import path from "node:path";
 // with one file connected, required with several (the bridge refuses rather than guessing; see
 // server-core's resolveClient).
 import { createBridge, TIMEOUTS, exportTimeout, errMsg } from "./server-core.ts";
+import { NAMED_CLIENT_WAIT_MS } from "./timeouts.ts";
 import type { Bridge, ClientRow, ConnectionInfo, ProgressTick } from "./server-core.ts";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -98,10 +99,24 @@ const bridge = {
   // daemon from before progress frames sends none — that export simply reports no progress. Each
   // relayed tick also re-arms the socket's outer timeout, so a long export that keeps ticking is not
   // cut off by the `timeoutMs + 30000` guard; the daemon's own `timeoutMs` still bounds the command.
+  // A NAMED `client` (file name / fileKey — not a bare c<N> connId) gets the same bounded wait the
+  // CLI (figma-pull.ts) and the daemon (daemon.ts) give `--client <name>`: every open plugin window
+  // redials on its own 3 s clock (figma-plugin ui.html), so right after this process opened the bridge
+  // only one of two open files may have landed yet, and resolving the name at once failed on the
+  // other file (seen live, 1c89dac). Holding the bridge: waitForClient polls until the name matches
+  // or NAMED_CLIENT_WAIT_MS runs out, then resolveClient reports whatever IS connected — its error
+  // text is unchanged. Routed through a daemon: `waitForConnection` is the field the CLI sends for
+  // the same purpose; the daemon waits for a first connection and then for the name, capped at
+  // NAMED_CLIENT_WAIT_MS (daemon.ts). Either way a name that never lands now fails after the window
+  // instead of at once; a bare connId never waits (it does not depend on identification).
   async request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string, onProgress?: (t: ProgressTick) => void): Promise<Commands[C]["reply"]> {
     const h = await holder();
-    if ("own" in h) return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
-    return h.via.request({ cmd, args, timeoutMs, ...ifDefined("client", target) }, timeoutMs + 30000, onProgress);
+    const named = target !== undefined && target !== "" && !/^c\d+$/.test(target);
+    if ("own" in h) {
+      if (named) await h.own.waitForClient(target, NAMED_CLIENT_WAIT_MS);
+      return h.own.request(cmd, args, timeoutMs, target, undefined, onProgress);
+    }
+    return h.via.request({ cmd, args, timeoutMs, ...ifDefined("client", target), ...(named ? { waitForConnection: NAMED_CLIENT_WAIT_MS } : {}) }, timeoutMs + 30000, onProgress);
   },
   async listClients(): Promise<ClientRow[]> {
     const h = await holder();

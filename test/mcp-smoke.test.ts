@@ -194,6 +194,35 @@ void (async () => {
       await client2.close().catch(() => {});
     }
     ticks = 0;
+
+    // A NAMED `client` is waited for (figma-mcp.ts bridge.request, same bounded wait as `--client
+    // <name>` in the CLI and the daemon): the fake plugin above never identified, so "Late File"
+    // matches nothing when the call starts; a second window that says hello 400 ms later must be
+    // routed to, not refused. A bare connId never waits: an unknown `c9` fails at once.
+    const late = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+    const pinged: string[] = [];
+    late.on("message", (raw: RawData) => {
+      const m = JSON.parse(String(raw)) as CommandFrame;
+      pinged.push(m.cmd);
+      if (m.cmd === "ping") late.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "Cover", file: "Late File" } }));
+    });
+    await new Promise((res, rej) => { late.on("open", res); late.on("error", rej); });
+    const t0 = Date.now();
+    const pending = client.callTool({ name: "figma_status", arguments: { client: "Late File" } });
+    setTimeout(() => late.send(JSON.stringify({ type: "hello", instanceId: "fig-late", file: "Late File" })), 400);
+    const routed = await pending;
+    const routedMs = Date.now() - t0;
+    // figma_status lists the roster BEFORE it pings (the list is what the tool is for), so the roster
+    // still shows c2 unidentified here; the ping's own `file` is the proof the named window was routed to.
+    const statusOf = (r: JsonRpcReply): { pong?: boolean; file?: string } => JSON.parse(firstText(r)) as { pong?: boolean; file?: string };
+    ok("a NAMED client that lands after the call started is waited for and routed to (not refused on the first file that connected)",
+      !routed.isError && pinged.includes("ping") && statusOf(routed).pong === true && statusOf(routed).file === "Late File");
+    ok("…and the wait ends as soon as the name matches, not at the 15 s window (took " + routedMs + " ms)", routedMs >= 300 && routedMs < 5000);
+    const t1 = Date.now();
+    const bare = await client.callTool({ name: "figma_status", arguments: { client: "c9" } });
+    ok("a bare connId that nobody has is refused at once with the connected list (no wait)",
+      bare.isError === true && /no connected Figma file matches 'c9'/.test(firstText(bare)) && /Late File/.test(firstText(bare)) && Date.now() - t1 < 2000);
+    late.close();
     plugin.close();
   } catch (e) {
     ok("MCP smoke run completed without throwing — " + (e instanceof Error ? e.message : e), false);
