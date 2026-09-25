@@ -430,6 +430,15 @@ Use `--list-clients` to see *which* files are connected; use `--whoami` to inter
 > `instanceId` is the symptom. Related and better attested: an *occluded* Figma window is fine, a
 > **minimized** one gets its renderer suspended.
 
+> **Background tab.** Measured live (2026-09-25, one page through the daemon): with the exporting
+> file's tab in front, 31–38 progress ticks and ~2,500 nodes per 10 s; with another file's tab in
+> front, 3–5 ticks and ~15 nodes per 10 s — about 100× slower; then 27 ticks in the first 10 s after
+> switching back and the normal 31–38 from the second window on. The export completes either way,
+> but a `--timeout` sized for the foreground fires. Figma Desktop is an Electron app; Electron's
+> `backgroundThrottling` (default `true`) is "Whether to throttle animations and timers when the
+> page becomes background", and the plugin's walk advances on Figma API awaits, so it is the tab
+> that is throttled. Keep the exporting file's tab in front.
+
 MCP twin: `figma_whoami`.
 
 ### `--list-libraries` — the library discovery step
