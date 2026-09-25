@@ -203,8 +203,8 @@ const textNode = {
   fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
   componentPropertyReferences: { characters: "Label#1:0" }, // prop-driven text
   getStyledTextSegments: () => ([
-    { characters: "Hello ", fontName: { family: "Inter", style: "Regular" }, fontSize: 24, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "NONE", fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], hyperlink: null, listOptions: { type: "NONE" }, boundVariables: {} },
-    { characters: "World", fontName: { family: "Inter", style: "Bold", variationSettings: { wght: 600 } }, fontSize: 24, fontWeight: 700, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } } },
+    { characters: "Hello ", fontName: { family: "Inter", style: "Regular" }, fontSize: 24, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "NONE", fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], hyperlink: null, listOptions: { type: "NONE" }, boundVariables: {}, fontStyle: "REGULAR", paragraphSpacing: 8, paragraphIndent: 0, textStyleOverrides: [] },
+    { characters: "World", fontName: { family: "Inter", style: "Bold", variationSettings: { wght: 600 } }, fontSize: 24, fontWeight: 700, lineHeight: { unit: "PERCENT", value: 120 }, letterSpacing: { unit: "PIXELS", value: 0.5 }, textCase: "ORIGINAL", textDecoration: "UNDERLINE", textDecorationThickness: { value: 2, unit: "PIXELS" }, textDecorationOffset: { value: 1, unit: "PIXELS" }, textDecorationSkipInk: false, fills: [{ type: "SOLID", visible: true, color: { r: 0.1, g: 0.3, b: 0.9 }, opacity: 1 }], hyperlink: { type: "URL", value: "https://x.com" }, listOptions: { type: "NONE" }, indentation: 1, openTypeFeatures: { SMCP: true, LIGA: false }, textStyleId: "s_heading", fillStyleId: "s_brand", boundVariables: { fills: { type: "VARIABLE_ALIAS", id: "v_primary" } }, fontStyle: "REGULAR", paragraphSpacing: 8, paragraphIndent: 0, textStyleOverrides: [] },
   ]),
 };
 const gradientRect = {
@@ -456,6 +456,16 @@ const sandbox = context as unknown as Sandbox;
   ok("lineHeight unit carried (percent)", !!(txt.font?.lineHeight && txt.font?.lineHeight.unit === "percent"));
   ok("letterSpacing unit carried (px)", !!(txt.font?.letterSpacing && txt.font?.letterSpacing.unit === "px"));
   ok("paragraphSpacing", txt.font?.paragraphSpacing === 8);
+  // [RUN-FIELDS] the segments above now also carry fontStyle REGULAR, a uniform paragraphSpacing/Indent
+  // and an empty textStyleOverrides — every run must be byte-identical to the output before those four
+  // fields were requested (the exact JSON the extractor produced at d9d8e71).
+  ok("[RUN-FIELDS] REGULAR fontStyle / uniform paragraph spacing / empty overrides on segments: runs byte-identical to before",
+    JSON.stringify(txt.runs) === '[{"text":"Hello ","font":{"size":24,"family":"Inter","weight":"Regular","lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},"color":"#000000"}},' +
+      '{"text":"World","font":{"size":24,"family":"Inter","weight":"Bold","variationSettings":{"wght":600},"weightValue":700,"lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},' +
+      '"decoration":"underline","decorationThickness":{"value":2,"unit":"px"},"decorationOffset":{"value":1,"unit":"px"},"decorationSkipInk":false,"openType":["SMCP"],"color":"#1a4de6"},' +
+      '"href":"https://x.com","indent":1,"textStyle":"Heading/H1","fillStyle":"Brand/Primary","tokens":{"fills":"color/primary"}}]' &&
+    JSON.stringify(txt.font) === '{"size":24,"family":"Inter","weight":"Regular","lineHeight":{"value":120,"unit":"percent"},"letterSpacing":{"value":0.5,"unit":"px"},"color":"#000000","align":"left","paragraphSpacing":8,"valign":"center"}' &&
+    !("textStyleOverrides" in txt));
 
   // --- new READ additions (Batch: close the read gap) ---
   ok("node id captured", txt.id === "1:1");
@@ -2294,6 +2304,60 @@ const sandbox = context as unknown as Sandbox;
       (uniformWrap.runs || []).length === 2 && (uniformWrap.runs || []).every((r) => !("textWrap" in r)) &&
       uniformWrap.font !== undefined && uniformWrap.font.textWrap === "balance" &&
       JSON.stringify(uniformWrap) === JSON.stringify(uniformNoSegWrap));
+
+    // 5. [RUN-FIELDS] per-run fontStyle / paragraphSpacing / paragraphIndent / textStyleOverrides
+    // (StyledTextSegment, plugin-api.d.ts 1.139.0 L5496 / L5560 / L5564 / L5588). This fake honours the
+    // requested field list for EVERY field, so a field the extractor forgot to request is simply absent.
+    const segText = (id: string, node: Seg, segs: Seg[]): FakeNode => ({
+      type: "TEXT", name: "Copy", visible: true, id, width: 100, characters: segs.map((s) => String(s.characters)).join(""),
+      fontName: { family: "Inter", style: "Regular" }, fontSize: 14, ...node,
+      getStyledTextSegments: (fields: string[]) => segs.map((s) => {
+        const o: Seg = {};
+        for (const [k, v] of Object.entries(s)) if (k === "characters" || fields.indexOf(k) !== -1) o[k] = v;
+        return o;
+      }),
+    });
+    const italicFont = { ...segFont, fontName: { family: "Inter", style: "Italic" } };
+    const runSegs = (spacing: [number, number, number]): Seg[] => [
+      { characters: "Intro\n", ...segFont, fontStyle: "REGULAR", paragraphSpacing: spacing[0], paragraphIndent: 4, textStyleId: "", textStyleOverrides: [] },
+      { characters: "Emph\n", ...italicFont, fontStyle: "ITALIC", paragraphSpacing: spacing[1], paragraphIndent: 4, textStyleId: "s_heading",
+        textStyleOverrides: [{ type: "SEMANTIC_ITALIC" }, { type: "HYPERLINK" }] },
+      { characters: "Tail", ...segFont, fontStyle: "REGULAR", paragraphSpacing: spacing[2], paragraphIndent: 4, textStyleId: "",
+        textStyleOverrides: [{ type: "TEXT_DECORATION" }] }];
+    const mixedSpacing = await sandbox.serialize(segText("rf:1", { paragraphSpacing: MIXED, paragraphIndent: 4 }, runSegs([0, 12, 16])), 0, false);
+    const mRuns = mixedSpacing.runs || [];
+    ok("[RUN-FIELDS] ITALIC segment -> run font.fontStyle \"italic\"; REGULAR runs have no fontStyle key",
+      mRuns.length === 3 && mRuns[1]?.font.fontStyle === "italic" && !("fontStyle" in must(mRuns[0], "mRuns[0]").font) && !("fontStyle" in must(mRuns[2], "mRuns[2]").font));
+    ok("[RUN-FIELDS] textStyleOverrides lower-cased on the styled run; dropped on a run with no textStyleId and when empty",
+      JSON.stringify(mRuns[1]?.textStyleOverrides) === '["semantic_italic","hyperlink"]' &&
+      !("textStyleOverrides" in must(mRuns[0], "mRuns[0]")) && !("textStyleOverrides" in must(mRuns[2], "mRuns[2]")));
+    ok("[RUN-FIELDS] node paragraphSpacing mixed -> runs[].paragraphSpacing (0 omitted), no font.paragraphSpacing; uniform paragraphIndent stays node-level only",
+      JSON.stringify(mRuns.map((r) => r.paragraphSpacing === undefined ? null : r.paragraphSpacing)) === "[null,12,16]" &&
+      mRuns.every((r) => !("paragraphIndent" in r)) && mixedSpacing.font?.paragraphIndent === 4 &&
+      mixedSpacing.font !== undefined && !("paragraphSpacing" in mixedSpacing.font));
+    ok("[RUN-FIELDS] exact italic run shape (fontStyle after weight, style ref, spacing, overrides last)",
+      JSON.stringify(mRuns[1]) === '{"text":"Emph\\n","font":{"size":14,"family":"Inter","weight":"Italic","fontStyle":"italic","color":"#000000"},' +
+        '"textStyle":"Heading/H1","paragraphSpacing":12,"textStyleOverrides":["semantic_italic","hyperlink"]}');
+    const indentMixed = await sandbox.serialize(segText("rf:2", { paragraphSpacing: 8, paragraphIndent: MIXED }, runSegs([8, 8, 8]).map((s, i) => ({ ...s, paragraphIndent: [0, 6, 0][i] }))), 0, false);
+    ok("[RUN-FIELDS] node paragraphIndent mixed -> runs[].paragraphIndent (0 omitted); uniform paragraphSpacing stays node-level only",
+      JSON.stringify((indentMixed.runs || []).map((r) => r.paragraphIndent === undefined ? null : r.paragraphIndent)) === "[null,6,null]" &&
+      (indentMixed.runs || []).every((r) => !("paragraphSpacing" in r)) && indentMixed.font?.paragraphSpacing === 8);
+    // Uniform paragraph values: the runs must be exactly what segments WITHOUT the two paragraph fields give.
+    const uniformSpacing = await sandbox.serialize(segText("rf:3", { paragraphSpacing: 8, paragraphIndent: 4 }, runSegs([8, 8, 8])), 0, false);
+    const uniformNoSpacing = await sandbox.serialize(segText("rf:3", { paragraphSpacing: 8, paragraphIndent: 4 },
+      runSegs([8, 8, 8]).map(({ paragraphSpacing: _s, paragraphIndent: _i, ...s }) => s)), 0, false);
+    ok("[RUN-FIELDS] uniform paragraphSpacing/Indent -> no per-run keys, output byte-identical to segments without the fields",
+      (uniformSpacing.runs || []).length === 3 && (uniformSpacing.runs || []).every((r) => !("paragraphSpacing" in r) && !("paragraphIndent" in r)) &&
+      JSON.stringify(uniformSpacing) === JSON.stringify(uniformNoSpacing));
+    // Single-run text: the lone segment's fontStyle lands on the node's `font` (where weightValue lives),
+    // its overrides on the node itself; the bare-node fallback (no segment) has neither.
+    const oneItalic = await sandbox.serialize(segText("rf:4", {}, [{ characters: "Solo", ...italicFont, fontWeight: 400, fontStyle: "ITALIC",
+      textStyleId: "s_heading", textStyleOverrides: [{ type: "SEMANTIC_WEIGHT" }] }]), 0, false);
+    const noSeg = await sandbox.serialize(segText("rf:5", {}, []), 0, false);
+    ok("[RUN-FIELDS] single-run italic -> font.fontStyle \"italic\" beside weightValue, node textStyleOverrides [\"semantic_weight\"]; no segment -> neither key",
+      oneItalic.runs === undefined && oneItalic.font?.fontStyle === "italic" && oneItalic.font.weightValue === 400 &&
+      JSON.stringify(oneItalic.textStyleOverrides) === '["semantic_weight"]' &&
+      noSeg.font !== undefined && !("fontStyle" in noSeg.font) && !("textStyleOverrides" in noSeg));
   }
 
   report();

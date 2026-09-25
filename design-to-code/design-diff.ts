@@ -59,7 +59,7 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 
 const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   text: ["text", "runs", "truncate", "maxLines", "autoResize"],
-  typography: ["font", "textTokens", "missingFont"],
+  typography: ["font", "textTokens", "missingFont", "textStyleOverrides"], // overrides sit over the text STYLE the font came from
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
   layout: ["layout", "widthMode", "heightMode", "sizeLimits", "aspectRatio", "grow", "alignSelf", "absolute", "pin", "clip", "fixedChildren", "strokesInLayout", "layoutGrids",
     "gridColumnSpan", "gridRowSpan", "gridColumnStart", "gridRowStart", "gridJustifySelf", "gridAlignSelf", "size"],

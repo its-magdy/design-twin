@@ -55,7 +55,7 @@ how a value becomes code on your stack, see the profile.
   let text wrap; keep an explicit break only when it's clearly intentional against the `.png`.
 - **`font.size`** px (or `"mixed"` → read `runs`). **`font.family`**, **`font.weight`** = the style
   string verbatim (`"Semibold Italic"` → weight 600 + italic), **`font.weightValue`** numeric when
-  available.
+  available, **`font.fontStyle:"italic"`** when Figma reports the text italic (absent = regular).
 - **`font.lineHeight`** — `{unit:"auto"}` (the font's natural leading) | `{value, unit:"px"}` |
   `{value, unit:"percent"}` (**percent of font size**: 150 → 1.5×). Figma distributes the extra leading
   half above, half below each line.
@@ -72,7 +72,12 @@ how a value becomes code on your stack, see the profile.
 - **`runs[]`** — mixed-format text: render each run (`text`, `font`, `textStyle`, `fillStyle`, `tokens`,
   `href` external link / `linkNode` internal link, `list` ordered/unordered, `indent`).
   **`runs[].textWrap`** (`balance`/`pretty`) appears only when paragraphs use different wrap styles
-  (the node then has no `font.textWrap`); apply it to that run's paragraph.
+  (the node then has no `font.textWrap`); apply it to that run's paragraph. Likewise
+  **`runs[].paragraphSpacing`** / **`runs[].paragraphIndent`** (px) appear only when paragraphs differ
+  (the node then has no `font.paragraphSpacing` / `font.paragraphIndent`).
+- **`textStyleOverrides`** (on a run, or on the node for single-style text) — how this text departs
+  from its text style: `semantic_italic`, `semantic_weight`, `hyperlink`, `text_decoration`. Use the
+  style's token, then apply the override (e.g. italic) on top rather than inventing a new style.
 - **`autoResize`** — `width_and_height` (hugs both axes) | `height` (fixed width, wraps and grows
   down) | `truncate`. **Absent = fixed-size box** — it will clip longer text; decide an overflow rule.
 - **`truncate:true`** (ellipsis at end) and **`maxLines:N`** (clamp) — the design's overflow rule.

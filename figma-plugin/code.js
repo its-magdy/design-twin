@@ -1540,6 +1540,7 @@
       if (vs && Object.keys(vs).length) f.variationSettings = { ...vs };
     }
     if (typeof src.fontWeight === "number") f.weightValue = src.fontWeight;
+    if (src.fontStyle === "ITALIC") f.fontStyle = "italic";
     const lh = lineH(src.lineHeight);
     if (lh) f.lineHeight = lh;
     const ls = letterS(src.letterSpacing);
@@ -1588,8 +1589,17 @@
     "textStyleId",
     "fillStyleId",
     "boundVariables",
-    "textWrapStyle"
+    "textWrapStyle",
+    "fontStyle",
+    "paragraphIndent",
+    "paragraphSpacing",
+    "textStyleOverrides"
   ];
+  function styleOverrides(s) {
+    const ov = s.textStyleOverrides;
+    if (!s.textStyleId || !Array.isArray(ov) || !ov.length) return void 0;
+    return ov.map((o) => lower(o.type));
+  }
   function inlineExtras(src, out) {
     const hl = src.hyperlink;
     if (hl && hl !== figma.mixed && hl.value) {
@@ -1612,6 +1622,8 @@
     const s0 = segs && segs[0];
     if (segs && segs.length > 1 && s0) {
       const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
+      const spacingMixed = "paragraphSpacing" in node && node.paragraphSpacing === figma.mixed;
+      const indentMixed = "paragraphIndent" in node && node.paragraphIndent === figma.mixed;
       out.runs = await Promise.all(
         segs.map(async (s) => {
           const r = { text: s.characters, font: fontObj(s) };
@@ -1621,6 +1633,10 @@
           if (fs) r.fillStyle = fs;
           if (bv) r.tokens = bv;
           if (wrapMixed && typeof s.textWrapStyle === "string" && s.textWrapStyle !== "AUTO") r.textWrap = lower(s.textWrapStyle);
+          if (spacingMixed && typeof s.paragraphSpacing === "number" && s.paragraphSpacing) r.paragraphSpacing = s.paragraphSpacing;
+          if (indentMixed && typeof s.paragraphIndent === "number" && s.paragraphIndent) r.paragraphIndent = s.paragraphIndent;
+          const ov = styleOverrides(s);
+          if (ov) r.textStyleOverrides = ov;
           return r;
         })
       );
@@ -1630,6 +1646,8 @@
       const bv = await resolveBoundMap(s0 ? s0.boundVariables : void 0);
       if (bv) out.textTokens = bv;
       inlineExtras(s0 || node, out);
+      const ov = s0 ? styleOverrides(s0) : void 0;
+      if (ov) out.textStyleOverrides = ov;
     }
     if ("textAlignHorizontal" in node && node.textAlignHorizontal) font.align = lower(node.textAlignHorizontal);
     if ("paragraphSpacing" in node && typeof node.paragraphSpacing === "number" && node.paragraphSpacing) font.paragraphSpacing = node.paragraphSpacing;

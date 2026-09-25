@@ -37,6 +37,9 @@ interface TextStyleSource {
   fontSize: number | PluginAPI["mixed"];
   fontName: FontName | PluginAPI["mixed"];
   fontWeight: number | PluginAPI["mixed"];
+  // Segment-only: `fontStyle: FontStyle` exists on StyledTextSegment (plugin-api.d.ts 1.139.0 L5493-5496)
+  // but on no node type, so the uniform-text fallback (the bare node) never has it.
+  fontStyle?: FontStyle;
   lineHeight?: LineHeight | PluginAPI["mixed"];
   letterSpacing: LetterSpacing | PluginAPI["mixed"];
   textCase: TextCase | PluginAPI["mixed"];
@@ -63,6 +66,10 @@ function fontObj(src: TextStyleSource): FontSpec {
   // Numeric CSS weight when the API exposes it (both node-level and per-segment; figma.mixed for
   // mixed-weight uniform text falls through and leaves weightValue unset).
   if (typeof src.fontWeight === "number") f.weightValue = src.fontWeight;
+  // `type FontStyle = 'REGULAR' | 'ITALIC'` (plugin-api.d.ts 1.139.0 L4000; StyledTextSegment.fontStyle
+  // L5496, "The style of the font (i.e. "REGULAR", "ITALIC")"). Same "absent = default" rule as
+  // case/decoration below: REGULAR says nothing and is omitted, ITALIC -> "italic".
+  if (src.fontStyle === "ITALIC") f.fontStyle = "italic";
   const lh = lineH(src.lineHeight);
   if (lh) f.lineHeight = lh;
   const ls = letterS(src.letterSpacing);
@@ -98,18 +105,35 @@ function fontObj(src: TextStyleSource): FontSpec {
 // element type stays `keyof Omit<StyledTextSegment, 'characters'|'start'|'end'>` — a readonly tuple
 // isn't assignable to getStyledTextSegments' `T extends (...)[]` (mutable array) constraint, and the
 // wider element type still gives every field below full compile-time checking (TS just can't narrow the
-// segment's Pick<> to exactly these 22 keys — it types it as the full StyledTextSegment shape instead).
+// segment's Pick<> to exactly these 26 keys — it types it as the full StyledTextSegment shape instead).
+// Every field StyledTextSegment offers (plugin-api.d.ts 1.139.0 L5468-5589) except characters/start/end.
 // `textWrapStyle` (StyledTextSegment, plugin-api.d.ts 1.139.0 L5565-5568: "The text wrap style applied
 // to the paragraph." `textWrapStyle: TextWrapStyle`) is requested so a node whose node-level value is
 // figma.mixed yields one segment per wrap style (the typings' own example, L10122-10137). Requesting it
 // cannot split a node whose paragraphs all share one wrap style, so every other node's segments — and
-// output — are unchanged.
+// output — are unchanged. The same holds for the last four: `fontStyle` (L5496), `paragraphIndent`
+// (L5560), `paragraphSpacing` (L5564) and `textStyleOverrides` (L5588). fontStyle and the overrides only
+// differ where the font / link / decoration already differ (fields requested above), and the two
+// paragraph fields only split a node whose node-level value is figma.mixed (L10027 / L10084).
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
   "textDecorationSkipInk", "fills", "hyperlink", "listOptions", "indentation", "listSpacing",
   "openTypeFeatures", "textStyleId", "fillStyleId", "boundVariables", "textWrapStyle",
+  "fontStyle", "paragraphIndent", "paragraphSpacing", "textStyleOverrides",
 ];
+
+// `textStyleOverrides: TextStyleOverrideType[]` (plugin-api.d.ts 1.139.0 L5585-5588, "Overrides applied
+// over a text style"; `type TextStyleOverrideType = { type: 'SEMANTIC_ITALIC' | 'SEMANTIC_WEIGHT' |
+// 'HYPERLINK' | 'TEXT_DECORATION' }` L5465-5467). developers.figma.com/docs/plugins/api/TextStyleOverrides/
+// defines every member as "if the text range has a style which has been overridden to …", so the list
+// is only meaningful on a range that HAS a text style: emitted (lower-cased, in API order) only when
+// non-empty AND the segment's textStyleId is set; otherwise undefined -> absent.
+function styleOverrides(s: { textStyleId?: string; textStyleOverrides?: TextStyleOverrideType[] }): string[] | undefined {
+  const ov = s.textStyleOverrides;
+  if (!s.textStyleId || !Array.isArray(ov) || !ov.length) return undefined;
+  return ov.map((o) => lower(o.type));
+}
 
 // Hyperlink / list / indent live on a styled-text SEGMENT or, for uniform text, on the node itself —
 // identical rules either way. One helper so a new inline attribute can't be added to the mixed-runs
@@ -159,6 +183,12 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
     // NonResizableTextMixin: `textWrapStyle: TextWrapStyle | PluginAPI['mixed']`); otherwise the single
     // value is `font.textWrap` below and the runs stay as they were. TEXT_PATH lacks it -> never mixed.
     const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
+    // Per-run paragraph spacing / indent under the same rule: only when the node-level value is
+    // figma.mixed (NonResizableTextMixin, plugin-api.d.ts 1.139.0 L10027 `paragraphIndent: number |
+    // PluginAPI['mixed']`, L10084 `paragraphSpacing: number | PluginAPI['mixed']`) — a uniform value is
+    // already `font.paragraphSpacing`/`font.paragraphIndent` below. TEXT_PATH lacks both -> never mixed.
+    const spacingMixed = "paragraphSpacing" in node && node.paragraphSpacing === figma.mixed;
+    const indentMixed = "paragraphIndent" in node && node.paragraphIndent === figma.mixed;
     // Mixed runs — a heading with one bold word must not collapse to a single style.
     out.runs = await Promise.all(
       segs.map(async (s) => {
@@ -172,6 +202,11 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
         if (bv) r.tokens = bv; // per-run variable bindings (color/size/etc.)
         // Same mapping as the node-level `font.textWrap`: lowercased, AUTO (the default) omitted.
         if (wrapMixed && typeof s.textWrapStyle === "string" && s.textWrapStyle !== "AUTO") r.textWrap = lower(s.textWrapStyle);
+        // Same mapping as the node-level font.paragraphSpacing/paragraphIndent: 0 (the default) omitted.
+        if (spacingMixed && typeof s.paragraphSpacing === "number" && s.paragraphSpacing) r.paragraphSpacing = s.paragraphSpacing;
+        if (indentMixed && typeof s.paragraphIndent === "number" && s.paragraphIndent) r.paragraphIndent = s.paragraphIndent;
+        const ov = styleOverrides(s);
+        if (ov) r.textStyleOverrides = ov;
         return r;
       })
     );
@@ -183,6 +218,10 @@ export async function serializeText(node: TextNode | TextPathNode | TextSublayer
     // Uniform (single-run) text still carries hyperlink/list/indent — these live on the lone
     // segment (or the node), NOT only on mixed runs.
     inlineExtras(s0 || node, out);
+    // The lone segment's overrides over the node's text style (the style itself is `styles.text`).
+    // No segment (the bare-node fallback) -> no overrides: no node type declares the field.
+    const ov = s0 ? styleOverrides(s0) : undefined;
+    if (ov) out.textStyleOverrides = ov;
   }
   if ("textAlignHorizontal" in node && node.textAlignHorizontal) font.align = lower(node.textAlignHorizontal);
   // paragraphSpacing/paragraphIndent/listSpacing/leadingTrim live on NonResizableTextMixin — TEXT and
