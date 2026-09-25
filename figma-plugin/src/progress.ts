@@ -17,7 +17,11 @@ export interface ProgressPage { index: number; of: number; name: string; pageId?
 /** The running counters a progress frame carries (each phase reports the ones it has). */
 export interface ProgressCounters { nodes?: number; assets?: number; components?: number }
 export interface RunBeginMsg { type: "run-begin"; source: RunInfo["source"]; label: string }
-export interface RunEndMsg { type: "run-end" }
+/** `abandoned` is present (and `true`) only when the run THREW because the bridge request that asked
+ *  for it was abandoned — the one case where the window has no other way to learn why a run ended (a
+ *  bridge run's error goes to the socket, never to the window). Absent otherwise, so the designer's
+ *  Cancel and every normal run still post exactly `{ type: "run-end" }`. */
+export interface RunEndMsg { type: "run-end"; abandoned?: true }
 export interface ProgressMsg extends ProgressCounters {
   type: "progress";
   phase: Phase;
@@ -34,20 +38,44 @@ export type ProgressPost = RunBeginMsg | RunEndMsg | ProgressMsg;
  *  say a human stopped the export, not look like a plugin crash they should retry or report. */
 export const CANCELLED_MESSAGE = "export cancelled by the designer in Figma";
 
+/** The message a run fails with when the BRIDGE gave up on the request that asked for it (the caller's
+ *  stall check or timeout fired, or its process/socket went away). Deliberately not CANCELLED_MESSAGE:
+ *  no designer pressed anything, and saying so would send someone looking for a click that never
+ *  happened. Usually nobody is left to read it, but a caller or log that is must be told the truth. */
+export const ABANDONED_MESSAGE =
+  "export cancelled: the bridge request that asked for it was abandoned (its caller timed out, stalled out, or disconnected)";
+
 // A marker PROPERTY rather than `class CancelledError extends Error`. The bundle is downlevelled to
 // es2019 by esbuild and its errors cross the main-thread/iframe boundary and the VM-harness realm
 // boundary; `instanceof` is the classic thing that silently stops matching across either. A property
 // survives both, and errMsg() already carries the message through unchanged.
 const CANCELLED = "__designTwinCancelled";
+// A second marker, on the abandonment error only, so bracket (state.ts) can tell the window WHY a run
+// ended without string-matching. An abandonment carries BOTH markers: it is a cancellation.
+const ABANDONED = "__designTwinAbandoned";
 
 interface CancelledMarked {
   [CANCELLED]?: boolean;
+  [ABANDONED]?: boolean;
 }
 
 export function cancelledError(): Error {
   const e: Error & CancelledMarked = new Error(CANCELLED_MESSAGE);
   e[CANCELLED] = true;
   return e;
+}
+
+export function abandonedError(): Error {
+  const e: Error & CancelledMarked = new Error(ABANDONED_MESSAGE);
+  e[CANCELLED] = true;
+  e[ABANDONED] = true;
+  return e;
+}
+
+/** Is this thrown value a BRIDGE-initiated cancellation (ABANDONED_MESSAGE)? Such a value is always
+ *  also isCancellation(). */
+export function isAbandonment(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as CancelledMarked)[ABANDONED] === true;
 }
 
 /** Is this thrown value a cancellation rather than a real failure? Exported so a caller can tell
@@ -63,13 +91,20 @@ export function isCancellation(e: unknown): boolean {
 export interface RunInfo {
   source: "ui" | "bridge";
   label: string;
+  /** The id of the bridge frame that asked for this run — present only on bridge runs whose frame
+   *  carried one. A `{ type: "cancel", id }` frame from the bridge is matched on it. */
+  requestId?: string;
 }
 
 // `null` whenever no run is bracketed by beginRun/endRun — which is also how a directly-driven
 // collector (the test harness, a future internal caller) stays completely silent instead of posting
 // progress nobody asked for.
 let running: RunInfo | null = null;
-let cancelRequested = false;
+// Who asked the executing run to stop, if anyone: the designer's Cancel button, or the bridge giving up
+// on the request (requestAbandon). One field rather than two flags so the run fails with exactly one,
+// truthful message. A designer's click overrides an earlier abandonment (a human did ask); an
+// abandonment never overrides a click.
+let cancelRequested: "designer" | "abandoned" | null = null;
 let lastPost = 0;
 // The page the walk is currently on, remembered here so the phases that are NOT page-boundaries (the
 // per-asset ticks below) can still say WHERE they are without every caller threading it through.
@@ -101,35 +136,49 @@ export function beginRun(info: RunInfo): void {
   // Requirement: the flag resets at the START of every run, not only at the end. A cancel that landed
   // while nothing was running, or after the run it was meant for had already finished, must not kill
   // the NEXT export — that is a failure with no visible cause, which is the worst kind.
-  cancelRequested = false;
+  cancelRequested = null;
   page = undefined;
   lastPost = 0;
   post({ type: "run-begin", source: info.source, label: info.label });
 }
 
-/** Bracket the end of a run — success, failure or cancellation alike. */
-export function endRun(): void {
+/** Bracket the end of a run — success, failure or cancellation alike. `abandoned` is true only when the
+ *  run actually THREW the abandonment error: a flag that landed too late to reach a safe point changed
+ *  nothing, and the window must not claim otherwise. */
+export function endRun(abandoned?: boolean): void {
   running = null;
-  cancelRequested = false;
+  cancelRequested = null;
   page = undefined;
-  post({ type: "run-end" });
+  post(abandoned ? { type: "run-end", abandoned: true } : { type: "run-end" });
 }
 
 /** The UI's Cancel click. Returns the run it applies to, or null when nothing is running — the caller
  *  reports that back so a click on a stale button is visibly a no-op rather than a silently armed flag. */
 export function requestCancel(): RunInfo | null {
   if (!running) return null;
-  cancelRequested = true;
+  cancelRequested = "designer";
   return running;
 }
 
-/** Throw if the designer pressed Cancel. Call this ONLY where the walk already awaits (between pages,
+/** The bridge gave up on a request. If the EXECUTING run matches, arm the flag exactly as the Cancel
+ *  button does (the run aborts at its next safe point), but so that it fails with ABANDONED_MESSAGE.
+ *  Returns the run it hit, or null when nothing running matches. Queued runs are state.ts's business
+ *  (serializeRun owns the queue) — this module only ever knows the one run that is executing. */
+export function requestAbandon(matches: (run: RunInfo) => boolean): RunInfo | null {
+  if (!running || !matches(running)) return null;
+  if (cancelRequested === null) cancelRequested = "abandoned";
+  return running;
+}
+
+/** Throw if the designer pressed Cancel (CANCELLED_MESSAGE) or the bridge abandoned the request that
+ *  asked for this run (ABANDONED_MESSAGE). Call this ONLY where the walk already awaits (between pages,
  *  between top-level frames, at the per-node asset export) — those are the points where the extractor
  *  holds no half-built structure. There is no way to interrupt an in-flight exportAsync, and a partial
  *  export must NEVER be delivered as a complete one, so aborting by throwing is the whole mechanism:
  *  every caller's error path already refuses to emit a doc. */
 export function checkCancelled(): void {
-  if (cancelRequested) throw cancelledError();
+  if (cancelRequested === "designer") throw cancelledError();
+  if (cancelRequested === "abandoned") throw abandonedError();
 }
 
 // ---------------------------------------------------------------- emission

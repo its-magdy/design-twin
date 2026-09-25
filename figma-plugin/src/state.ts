@@ -3,7 +3,7 @@
 
 import type { Asset, Manifest } from "../../bridge/src/doc-types.ts";
 import { errMsg } from "./util";
-import { beginRun, endRun, type RunInfo } from "./progress";
+import { abandonedError, beginRun, endRun, isAbandonment, requestAbandon, type RunInfo } from "./progress";
 import { resetAssetNames } from "./assets";
 import { readOptDefaults, type ReadOptName } from "../../bridge/src/read-opts.ts";
 
@@ -183,12 +183,56 @@ export const getCollection = collectionLookup.obj;
 // the one place that knows a run is actually EXECUTING rather than merely queued — bracketing at the
 // dispatch sites instead would have a bridge pull queued behind a manual export announce itself as
 // in-progress for however long it waits, and would let two overlapping brackets clobber each other.
+//
+// It is also the one place that knows which runs are QUEUED (accepted, not yet started), which is what
+// lets the bridge cancel one before it ever executes (cancelBridgeRequest / cancelBridgeRuns below).
+// Each serializeRun call gets its own ticket object, tracked by identity — never by `run`, which a
+// caller is free to reuse — so two queued runs can never be confused with each other.
+interface QueuedRun { run: RunInfo; abandoned: boolean }
+const queuedRuns = new Set<QueuedRun>();
 let runChain: Promise<unknown> = Promise.resolve();
 export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
-  const go = () => bracket(fn, run);
+  const ticket: QueuedRun = { run, abandoned: false };
+  queuedRuns.add(ticket);
+  const go = (): Promise<T> => {
+    queuedRuns.delete(ticket);
+    // Abandoned while it waited: fail at once, WITHOUT calling fn and without bracketing — it never
+    // executed, so the window must never see a run-begin/run-end for it. The chain proceeds as it
+    // does after any failed run.
+    if (ticket.abandoned) return Promise.reject(abandonedError());
+    return bracket(fn, run);
+  };
   const next = runChain.then(go, go);
   runChain = next.then(() => {}, () => {});
   return next;
+}
+
+/** The bridge gave up on request `id`: abandon the QUEUED run it asked for (it will fail without
+ *  executing when its turn comes), or — if it is the one executing — arm the cancel flag so it aborts
+ *  at its next safe point. Returns the run it hit, or null for an id nobody knows (a no-op). */
+export function cancelBridgeRequest(id: string): RunInfo | null {
+  for (const t of queuedRuns) {
+    if (t.run.source === "bridge" && t.run.requestId === id) {
+      t.abandoned = true;
+      return t.run;
+    }
+  }
+  return requestAbandon((r) => r.source === "bridge" && r.requestId === id);
+}
+
+/** The socket that asked for work is gone: abandon EVERY bridge-sourced run — the executing one (if
+ *  it is a bridge run) and all currently queued ones. UI-sourced runs are untouched, and a run queued
+ *  after this call runs normally. Returns how many runs were hit. */
+export function cancelBridgeRuns(): number {
+  let hit = 0;
+  for (const t of queuedRuns) {
+    if (t.run.source === "bridge" && !t.abandoned) {
+      t.abandoned = true;
+      hit++;
+    }
+  }
+  if (requestAbandon((r) => r.source === "bridge")) hit++;
+  return hit;
 }
 
 // `run` is required, not optional: every caller genuinely knows who asked (the UI button, or the
@@ -196,9 +240,11 @@ export function serializeRun<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> 
 // — which is the exact gap progress exists to close.
 async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
   beginRun(run);
+  let abandoned = false;
   try {
     return await fn();
   } catch (e) {
+    abandoned = isAbandonment(e);
     // A run that THREW — cancelled or crashed — still allocated asset payloads (tens of MB of base64
     // PNG/SVG), and nobody downstream takes them off our hands: only a SUCCESSFUL collector returns
     // assets.slice() for the caller to post. Dropping them here is what keeps "state is fully reset
@@ -210,7 +256,9 @@ async function bracket<T>(fn: () => Promise<T>, run: RunInfo): Promise<T> {
     // (The other per-run toggle a cancel could strand — figma.skipInvisibleInstanceChildren, set by
     // the component-catalog and library walks — is already restored by their own `finally` blocks,
     // which a thrown cancellation runs exactly like any other error.)
-    endRun();
+    // `abandoned` tells the window this run died because its bridge caller went away — the only way it
+    // can learn that, since a bridge run's error goes to the socket, not to the window.
+    endRun(abandoned);
   }
 }
 

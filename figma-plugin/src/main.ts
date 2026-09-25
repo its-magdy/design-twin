@@ -15,7 +15,7 @@ import { ifDefined } from "../../bridge/src/json-util.ts";
 // esbuild inlines here — see bridge/pages-layout.js.
 import { buildPageLayout } from "../../bridge/src/pages-layout.ts";
 import { buildDesignSystemLayout } from "../../bridge/src/design-system-layout.ts";
-import { releaseAssets, serializeRun, type Asset } from "./state";
+import { cancelBridgeRequest, cancelBridgeRuns, releaseAssets, serializeRun, type Asset } from "./state";
 import { requestCancel } from "./progress";
 import { collectSelection, collectFull, collectDesignSystemOnly, collectLibraryFile, collectNode, collectScreenshot, listPages, listChildren, type ScreenResult, type FullResult } from "./collect";
 import { serialize } from "./serialize";
@@ -151,6 +151,14 @@ figma.ui.onmessage = async (raw: unknown) => {
       break;
     }
     case "cancel": {
+      // The BRIDGE gave up (ui.html forwards a socket `{ type: "cancel", id }` frame, or reports the
+      // socket closed as `scope: "bridge"`). No work anyone can collect should keep the file busy and
+      // queue every later command behind it, so: an executing matching run aborts at its next safe
+      // point, a queued one fails without ever executing (state.ts). Deliberately NO cancel-ack: the
+      // window's ack handling is the Cancel BUTTON's ("Nothing to cancel…" + tearing down the run
+      // chrome on a miss), and a bridge-side cancel must never drive it.
+      if (raw.id !== undefined) { cancelBridgeRequest(raw.id); break; }
+      if (raw.scope === "bridge") { cancelBridgeRuns(); break; }
       // The designer pressed Cancel. All this does is SET a flag: there is no way to interrupt an
       // in-flight exportAsync, so the walk aborts itself at its next safe point (progress.ts
       // checkCancelled) by throwing — which is also what guarantees no partial doc is ever delivered,
@@ -165,12 +173,13 @@ figma.ui.onmessage = async (raw: unknown) => {
       let result: unknown;
       let error: string | undefined;
       try {
-        result = await handleBridge(raw.cmd, raw.args);
+        result = await handleBridge(raw.cmd, raw.args, raw.id);
       } catch (e) {
         // A CANCELLED bridge run lands here like any other failure, which is exactly what we want: the
         // cancellation message (progress.ts CANCELLED_MESSAGE) rides out as `error`, the iframe forwards
         // it to the socket, and the CLI/MCP fails FAST with "export cancelled by the designer in Figma"
-        // instead of sitting out its request timeout wondering whether Figma is still working.
+        // instead of sitting out its request timeout wondering whether Figma is still working. A run the
+        // bridge itself abandoned fails the same way with ABANDONED_MESSAGE (usually to nobody).
         error = errMsg(e);
       }
       figma.ui.postMessage({ type: "bridge-result", id: raw.id, ok: !error, result, error });
