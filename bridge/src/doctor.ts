@@ -36,7 +36,7 @@ import { readSnapshotInfo } from "./snapshot-meta.ts";
 import { errMsg } from "./errmsg.ts";
 import { ifDefined } from "./json-util.ts";
 import * as LAYOUT from "./project-layout.ts";
-import { isOurMcpEntry, McpJsonSchema } from "./init.ts";
+import { isOurMcpEntry, readMcpJson } from "./init.ts";
 import { daemonRowStalenessNote } from "./staleness.ts";
 // The manifest's allowedDomains ports — ports.ts, the same list server-core.ts binds from. Its own
 // dependency-free module, so reading it never loads server-core (which exits the process on a bad
@@ -387,9 +387,9 @@ function checkProject(cwd: string, now: number = Date.now()): Check[] {
     let raw: unknown;
     try { raw = JSON.parse(fs.readFileSync(mcpFile, "utf8")) as unknown; } catch (e) { out.push(warn("mcp", "MCP registration", ".mcp.json is not valid JSON: " + errMsg(e), "fix it, then `dtwin init --mcp`")); }
     if (raw !== undefined) {
-      const r = McpJsonSchema.safeParse(raw);
-      if (r.success) servers = r.data.mcpServers || {};
-      else out.push(warn("mcp", "MCP registration", ".mcp.json is not an .mcp.json object: " + oneLine(r.error), "fix it, then `dtwin init --mcp`"));
+      const r = readMcpJson(raw);
+      if ("servers" in r) servers = r.servers;
+      else out.push(warn("mcp", "MCP registration", ".mcp.json: " + r.error, "fix it, then `dtwin init --mcp`"));
     }
     if (servers) {
       const found = servers;
