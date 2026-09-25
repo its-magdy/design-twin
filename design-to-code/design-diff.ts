@@ -47,6 +47,7 @@ import { isComponentsCatalog, isStringRecord, isTokensDoc } from "./doc-guards.t
 import type { DocGuard } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { ifDefined, isStringArray } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { normalizeForCompare, sha1Hex } from "../bridge/src/asset-compare.ts";
@@ -201,8 +202,7 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
   // Which names need more than the name to say which variable they are.
   const identities = new Map<string, Map<string, string>>();
   for (const v of [...A.values(), ...B.values()]) {
-    if (!identities.has(v.name)) identities.set(v.name, new Map());
-    identities.get(v.name)!.set(idOf(v), v.collection || "");
+    getOrInit(identities, v.name, () => new Map<string, string>()).set(idOf(v), v.collection || "");
   }
   const label = (v: Variable): string => {
     const ids = identities.get(v.name);
@@ -225,10 +225,12 @@ function diffTokens(oldDoc: TokensDoc, newDoc: TokensDoc): TokensDiff {
   // `Spacing`, and a name-keyed Map compared whichever came last on each side.
   const collNames = new Map<string, Set<string>>();
   for (const c of [...(oldDoc.collections || []), ...(newDoc.collections || [])]) collNames.set(c.name, (collNames.get(c.name) || new Set<string>()).add(c.key || c.name));
-  const colLabel = (c: VariableCollection): string => (collNames.get(c.name)!.size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
+  // colLabel only sees collections of oldDoc/newDoc, all registered just above, so `?? 0` is inert.
+  const colLabel = (c: VariableCollection): string => ((collNames.get(c.name)?.size ?? 0) > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}…)` : c.name);
   const cols = (doc: TokensDoc) => new Map((doc.collections || []).map((c): [string, { label: string; v: { modes: string[]; default?: string } }] => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections: FieldDiff[] = [];
-  for (const id of new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id))!.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
+  // new Map([...CA, ...CB]): CA's ids then CB's new ones (the old Set order), each holding CB's entry else CA's.
+  for (const [id, e] of new Map([...CA, ...CB])) collections.push(...fieldDiffs(e.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 

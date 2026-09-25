@@ -139,7 +139,9 @@ export interface MatchRow {
 export interface MatchSummary {
   instances: number; names: number; byKey: number; proposed: number; proposedWithSignature: number; withCandidates: number; unmatched: number; remote: number;
 }
-export interface MatchResult { rows: MatchRow[]; proposals: MatchRow[]; summary: MatchSummary }
+/** A row matchByNameAndSignature proposes: it has a catalog match (and none by key). */
+export type ProposedMatchRow = MatchRow & { match: MatchTarget };
+export interface MatchResult { rows: MatchRow[]; proposals: ProposedMatchRow[]; summary: MatchSummary }
 /** cross-check.js componentProposals[] — a MatchRow reshaped for a person to confirm. */
 export interface ComponentProposal {
   name: string; instances: number; screens: string[]; instanceKeys: string[]; remote: boolean;

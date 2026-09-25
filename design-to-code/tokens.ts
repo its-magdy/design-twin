@@ -59,6 +59,7 @@ import { normHex, clampOpacityPct } from "./color.ts";
 import nativeEmitter, { type UnitDecision, type UnitOpts } from "./tokens-native.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
@@ -189,8 +190,8 @@ export interface CollisionNote { output: string; id: string; differ: boolean; me
 /** planIds' plan: `id(v)` is undefined for a variable the emitter skips (idOf gave null). */
 export interface IdPlan {
   id: (v: Variable) => string | undefined;
-  /** the ONE record emitted per identifier */
-  canonical: Set<Variable>;
+  /** the ONE record emitted per identifier, mapped to that identifier (= its `id(v)`) */
+  canonical: Map<Variable, string>;
   notes: CollisionNote[];
   byName: Map<string, Variable[]>;
 }
@@ -207,10 +208,9 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
   for (const v of vars) {
     const id = idOf(v);
     if (id == null) continue;
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id)!.push(v);
+    getOrInit(groups, id, () => []).push(v);
   }
-  const ids = new Map<Variable, string>(), canonical = new Set<Variable>(), notes: CollisionNote[] = [];
+  const ids = new Map<Variable, string>(), canonical = new Map<Variable, string>(), notes: CollisionNote[] = [];
   const taken = new Set(groups.keys());
   for (const [id, list] of groups) {
     const byIdent = new Map<string, Variable>();
@@ -224,31 +224,33 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
     const onlyCluster = clusters.length === 1 ? clusters[0] : undefined;
     if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical.add(onlyCluster[0]); // members[0]: the first member always opens the first cluster
+      canonical.set(onlyCluster[0], id); // members[0]: the first member always opens the first cluster
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
-    // Every member of this group gets an identifier below, so the lookups that follow never miss.
-    const assigned = new Map<string, string>();
+    // Every member of this group gets exactly one identifier below, recorded in member order.
+    const assigned = new Map<string, string>(), memberIds: CollisionNote["members"] = [];
     const exactOnes = exact ? members.filter((v) => exact(v)) : [];
     const exactOne = exactOnes.length === 1 ? exactOnes[0] : undefined;
     const keeper = exactOne && members.filter((v) => v.name === exactOne.name).length === 1 ? exactOne : null;
     for (const v of members) {
-      if (v === keeper) { assigned.set(identityOf(v), id); canonical.add(v); continue; }
+      if (v === keeper) { assigned.set(identityOf(v), id); canonical.set(v, id); memberIds.push({ v, id }); continue; }
       const s = shortKey(v) || suffixSlug(v.collection) || "alt";
       let nid = suffix(id, s);
       for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
       taken.add(nid);
       assigned.set(identityOf(v), nid);
-      canonical.add(v);
+      canonical.set(v, nid);
+      memberIds.push({ v, id: nid });
     }
-    for (const v of list) ids.set(v, assigned.get(identityOf(v))!);
-    notes.push({ output, id, differ: true, members: members.map((v) => ({ v, id: assigned.get(identityOf(v))! })) });
+    // Every record in `list` shares its identity with one member (byIdent above), so every lookup hits;
+    // a miss would only leave id(v) undefined, which is what the old `ids.set(v, undefined)` gave too.
+    for (const v of list) { const got = assigned.get(identityOf(v)); if (got !== undefined) ids.set(v, got); }
+    notes.push({ output, id, differ: true, members: memberIds });
   }
   const byName = new Map<string, Variable[]>();
   for (const v of vars) {
-    if (!byName.has(v.name)) byName.set(v.name, []);
-    byName.get(v.name)!.push(v);
+    getOrInit(byName, v.name, () => []).push(v);
   }
   return { id: (v) => ids.get(v), canonical, notes, byName };
 }
@@ -257,20 +259,26 @@ function planIds(vars: readonly Variable[], idOf: (v: Variable) => string | null
 // variables makes the target ambiguous. Equivalent candidates share one identifier and it does not
 // matter; otherwise prefer the referrer's own collection, then the lowest key — deterministic, so a
 // re-ordered input cannot change the output — and SAY so.
-function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): Variable | null {
-  const cands = (plan.byName.get(name) || []).filter((c) => plan.id(c) != null);
+// Returns the target together with its planned identifier (candidates without one are never picked).
+function aliasTargetId(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): { v: Variable; id: string } | null {
+  const cands: Array<{ v: Variable; id: string }> = [];
+  for (const c of plan.byName.get(name) || []) { const id = plan.id(c); if (id != null) cands.push({ v: c, id }); }
   const firstCand = cands[0];
   if (firstCand === undefined) return null;
-  if (new Set(cands.map((c) => plan.id(c))).size === 1) return firstCand;
-  const sameColl = cands.filter((c) => referrer && c.collection === referrer.collection);
-  const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands)
-    .slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
+  if (new Set(cands.map((c) => c.id)).size === 1) return firstCand;
+  const sameColl = cands.filter((c) => referrer && c.v.collection === referrer.collection);
+  const pool = (sameColl.length && new Set(sameColl.map((c) => c.id)).size === 1 ? sameColl : cands)
+    .slice().sort((a, b) => String(a.v.key || "").localeCompare(String(b.v.key || "")));
   const pick = pool[0] ?? firstCand; // ?? firstCand: pool is sameColl (non-empty) or cands (non-empty), so it never applies
   if (warn) {
     warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' ` +
-      `(${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+      `(${cands.map(({ v: c }) => (shortKey(c) ? "key " + shortKey(c) + "…" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) — pointed at ${pick.id}; confirm in Figma which one it really aliases`);
   }
   return pick;
+}
+function aliasTarget(plan: IdPlan, name: string, referrer: Variable | null | undefined, warn?: (m: string) => void): Variable | null {
+  const t = aliasTargetId(plan, name, referrer, warn);
+  return t ? t.v : null;
 }
 
 // One message per SET of colliding variables, however many outputs it showed up in — the same
@@ -379,7 +387,7 @@ function aliasNames(v: unknown): string[] {
 // escaper whether it changed anything. The escaper is then the only place the rules live. ---
 const CSS_UNSAFE = /[\\\n\r\f;{}]/g;
 // `c` is always one character (a regex match), so it has a code point.
-const hexEsc = (c: string): string => "\\" + c.codePointAt(0)!.toString(16) + " ";
+const hexEsc = (c: string): string => "\\" + (c.codePointAt(0) ?? 0).toString(16) + " "; // `?? 0` is inert
 
 // True when `(`/`)` or quote characters don't pair up across the whole value.
 function cssUnbalanced(s: string): boolean {
@@ -516,14 +524,15 @@ function buildTree(designSystem: TokensDoc | null | undefined, warn: (m: string)
   const { colorProfile } = ds;
   plan = plan || dtcgPlan(designSystem);
   const ref = (referrer: Variable) => (name: string): string => {
-    const t = aliasTarget(plan, name, referrer, warn);
-    return t ? "{" + plan.id(t)!.split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
+    const t = aliasTargetId(plan, name, referrer, warn);
+    return t ? "{" + t.id.split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
   };
   for (const v of (designSystem && designSystem.variables) || []) {
     if (!segs(v.name).length) { warn(`variable with empty/degenerate name skipped: '${v.name}'`); continue; }
     if (!emitted(v)) { warn(`token '${v.name}' is a ${v.type} variable — its values are not colours, numbers or strings, so no DTCG token is emitted for it (skipped)`); continue; }
-    if (!plan.canonical.has(v)) continue; // the same variable twice, or an identical twin — emitted once, reported by planIds
-    const path = plan.id(v)!.split(DTCG_SEP); // canonical ⇒ planned ⇒ it has an id
+    const planned = plan.canonical.get(v);
+    if (planned === undefined) continue; // the same variable twice, or an identical twin — emitted once, reported by planIds
+    const path = planned.split(DTCG_SEP);
     // Reserved keys would let a token name walk into / write onto Object.prototype (prototype pollution)
     // — token maps are semi-trusted third-party dumps, so refuse them explicitly.
     if (path.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
@@ -786,7 +795,7 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   // is exactly the silent overwrite that shipped `--spacing-space-4: 16px` (livetest-3 #44).
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
-  const ref = (referrer: Variable) => (name: string): string => { const t = aliasTarget(plan, name, referrer); return t ? plan.id(t)! : cssVarName(name); };
+  const ref = (referrer: Variable) => (name: string): string => { const t = aliasTargetId(plan, name, referrer); return t ? t.id : cssVarName(name); };
   const pctRef = (referrer: Variable) => (name: string): boolean => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = new Map<string, string>();
   // Null-prototype: keyed by MODE NAMES (free-form designer strings, reaching us through JSON.parse,
@@ -797,14 +806,14 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
     if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
-    if (!plan.canonical.has(v)) continue;
+    const varName = plan.canonical.get(v);
+    if (varName === undefined) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === undefined) continue; // never emit `--x: undefined;`
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
-    const varName = plan.id(v)!; // canonical ⇒ planned
     const r = ref(v), p = pctRef(v);
     rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
     for (const m of Object.keys(values)) {
@@ -893,16 +902,16 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
-    if (!plan.canonical.has(v)) continue;
+    const name = plan.canonical.get(v);
+    if (name === undefined) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === undefined) continue;
-    const name = plan.id(v)!; // canonical ⇒ planned
     if (twKind(v, opts)) utilities++;
     const unit = numberUnit(v, opts);
     // An alias must point at the TAILWIND name of its target (its own namespace, its own
     // disambiguated name), not the tokens.css one.
-    const ref = (n: string): string => { const t = aliasTarget(plan, n, v); return t ? plan.id(t)! : "--" + TW_PREFIX + twSlug(n); };
+    const ref = (n: string): string => { const t = aliasTargetId(plan, n, v); return t ? t.id : "--" + TW_PREFIX + twSlug(n); };
     const pctRef = (n: string): boolean => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
     const val = (raw: VariableValue): string => cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
@@ -993,8 +1002,7 @@ function toResolver(designSystem: TokensDoc | null | undefined, warnings?: strin
   const groups = new Map<string, Variable[]>();
   for (const v of vars) {
     const key = String((v && v.collection) || "");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(v);
+    getOrInit(groups, key, () => []).push(v);
   }
   const declared = new Map<string, VariableCollection>();
   for (const c of collections) if (c && c.name != null && !declared.has(String(c.name))) declared.set(String(c.name), c);
@@ -1290,8 +1298,10 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     }
   }
   let canonicalFile: string | null = null;
-  if (web !== undefined && webFile !== undefined) { // webFile is set whenever web is (unknown targets exit above)
-    const tw = tailwind!; // emitTokens built it: opts.tailwind is `web !== undefined`
+  // webFile is set whenever web is (unknown targets exit above), and emitTokens built `tailwind` whenever
+  // web is (opts.tailwind is `web !== undefined`), so the extra `tw` check never skips this block.
+  const tw = tailwind;
+  if (web !== undefined && webFile !== undefined && tw !== undefined) {
     const file = webFile;
     fs.writeFileSync(path.join(outDir, file), tw.text);
     canonicalFile = file;

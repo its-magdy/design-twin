@@ -48,6 +48,7 @@ import type {
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ---------------------------------------------------------------- tolerances
@@ -250,6 +251,11 @@ export interface ExpectedSpec extends VerifySpec { __notComparable?: NotComparab
  * (`notComparable`, each with a reason). `ctx` = { path, frame, inheritedState }.
  */
 function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): ExpectedSpec {
+  return expectNodeRow(n, ctxOrPath).spec;
+}
+
+/** expectNode() plus the same `notComparable` array it hangs on the row, typed, for buildExpectation. */
+function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { spec: ExpectedSpec; notComparable: NotComparable[] } {
   const ctx: ExpectContext = ctxOrPath == null ? {} : typeof ctxOrPath === "string" ? { path: ctxOrPath } : ctxOrPath;
   const spec: ExpectedSpec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable: NotComparable[] = [];
@@ -356,7 +362,7 @@ function expectNode(n: IrNode, ctxOrPath?: string | ExpectContext | null): Expec
   if (ctx.frameId) spec.frameId = ctx.frameId;
   // Backward-compatible return: callers that only want the row get it; buildExpectation reads both.
   Object.defineProperty(spec, "__notComparable", { value: notComparable, enumerable: false });
-  return spec;
+  return { spec, notComparable };
 }
 
 // Which nodes are worth a row. Everything visible that CARRIES a checkable value — a node with no
@@ -430,10 +436,10 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
         const inherited = c.parent ? stateOf.get(c.parent) : undefined;
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
-        const spec = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
+        const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
-        notComparable.push(...spec.__notComparable!);
+        notComparable.push(...gaps);
 
         if (n.type === "INSTANCE" && n.mainComponent) {
           instances.push({
@@ -891,9 +897,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   for (const i of expectation.instances || []) {
     if (hiddenSet.has(String(i.nodeId))) continue;
     const k = i.setName || i.name;
-    if (!bySet.has(k)) bySet.set(k, { setName: k, ...ifDefined("setKey", i.setKey), nodeIds: [], instances: 0 });
-    bySet.get(k)!.instances++;
-    bySet.get(k)!.nodeIds.push(i.nodeId);
+    const e = getOrInit(bySet, k, () => ({ setName: k, ...ifDefined("setKey", i.setKey), nodeIds: [], instances: 0 }));
+    e.instances++;
+    e.nodeIds.push(i.nodeId);
   }
   const untaggedInstanceSets: VerifyReportV2["untaggedInstanceSets"] = [];
   let setsViaSharedPath = 0;

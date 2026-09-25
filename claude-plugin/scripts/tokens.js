@@ -490,8 +490,8 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
         return { name, id };
       };
       const modes = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
-      const def = modeNames.includes(String(c.default)) ? String(c.default) : firstModeName;
-      out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def).id, fields });
+      const defMode = modes.find((m) => m.name === String(c.default)) ?? modes[0];
+      out.push({ name: c.name, type, modes, default: defMode.name, defaultId: defMode.id, fields });
     }
     return out;
   }
@@ -533,15 +533,16 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
     ];
     for (const c of cols) {
       L.push("", `// Figma collection "${c.name}"`);
-      if (c.modes.length === 1) {
-        L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+      const [m0, m1] = c.modes;
+      if (m1 === void 0) {
+        L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
         continue;
       }
       L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
       for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
       L.push(
         "",
-        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default).id])}) { \u2026 }`,
+        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([(m0.id !== c.defaultId ? m0 : m1).id])}) { \u2026 }`,
         `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
       );
     }
@@ -698,6 +699,15 @@ function isMainFallback(metaUrl) {
   }
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/tokens.ts
 var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
 var round = (x) => Math.round(x * 1e4) / 1e4;
@@ -742,10 +752,9 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
   for (const v of vars) {
     const id = idOf(v);
     if (id == null) continue;
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(v);
+    getOrInit(groups, id, () => []).push(v);
   }
-  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Set(), notes = [];
+  const ids = /* @__PURE__ */ new Map(), canonical = /* @__PURE__ */ new Map(), notes = [];
   const taken = new Set(groups.keys());
   for (const [id, list] of groups) {
     const byIdent = /* @__PURE__ */ new Map();
@@ -760,18 +769,19 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
     const onlyCluster = clusters.length === 1 ? clusters[0] : void 0;
     if (onlyCluster) {
       for (const v of list) ids.set(v, id);
-      canonical.add(onlyCluster[0]);
+      canonical.set(onlyCluster[0], id);
       if (members.length > 1) notes.push({ output, id, differ: false, members: members.map((v) => ({ v, id })) });
       continue;
     }
-    const assigned = /* @__PURE__ */ new Map();
+    const assigned = /* @__PURE__ */ new Map(), memberIds = [];
     const exactOnes = exact ? members.filter((v) => exact(v)) : [];
     const exactOne = exactOnes.length === 1 ? exactOnes[0] : void 0;
     const keeper = exactOne && members.filter((v) => v.name === exactOne.name).length === 1 ? exactOne : null;
     for (const v of members) {
       if (v === keeper) {
         assigned.set(identityOf(v), id);
-        canonical.add(v);
+        canonical.set(v, id);
+        memberIds.push({ v, id });
         continue;
       }
       const s = shortKey(v) || suffixSlug(v.collection) || "alt";
@@ -779,30 +789,41 @@ function planIds(vars, idOf, suffix, collections, output, exact) {
       for (let n = 2; taken.has(nid); n++) nid = suffix(id, s + "-" + n);
       taken.add(nid);
       assigned.set(identityOf(v), nid);
-      canonical.add(v);
+      canonical.set(v, nid);
+      memberIds.push({ v, id: nid });
     }
-    for (const v of list) ids.set(v, assigned.get(identityOf(v)));
-    notes.push({ output, id, differ: true, members: members.map((v) => ({ v, id: assigned.get(identityOf(v)) })) });
+    for (const v of list) {
+      const got = assigned.get(identityOf(v));
+      if (got !== void 0) ids.set(v, got);
+    }
+    notes.push({ output, id, differ: true, members: memberIds });
   }
   const byName = /* @__PURE__ */ new Map();
   for (const v of vars) {
-    if (!byName.has(v.name)) byName.set(v.name, []);
-    byName.get(v.name).push(v);
+    getOrInit(byName, v.name, () => []).push(v);
   }
   return { id: (v) => ids.get(v), canonical, notes, byName };
 }
-function aliasTarget(plan, name, referrer, warn) {
-  const cands = (plan.byName.get(name) || []).filter((c) => plan.id(c) != null);
+function aliasTargetId(plan, name, referrer, warn) {
+  const cands = [];
+  for (const c of plan.byName.get(name) || []) {
+    const id = plan.id(c);
+    if (id != null) cands.push({ v: c, id });
+  }
   const firstCand = cands[0];
   if (firstCand === void 0) return null;
-  if (new Set(cands.map((c) => plan.id(c))).size === 1) return firstCand;
-  const sameColl = cands.filter((c) => referrer && c.collection === referrer.collection);
-  const pool = (sameColl.length && new Set(sameColl.map((c) => plan.id(c))).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
+  if (new Set(cands.map((c) => c.id)).size === 1) return firstCand;
+  const sameColl = cands.filter((c) => referrer && c.v.collection === referrer.collection);
+  const pool = (sameColl.length && new Set(sameColl.map((c) => c.id)).size === 1 ? sameColl : cands).slice().sort((a, b) => String(a.v.key || "").localeCompare(String(b.v.key || "")));
   const pick = pool[0] ?? firstCand;
   if (warn) {
-    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map((c) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${plan.id(pick)}; confirm in Figma which one it really aliases`);
+    warn(`alias '${referrer ? referrer.name : "?"}' -> '${name}' is AMBIGUOUS: the export names an alias target by name, and ${cands.length} different variables are called '${name}' (${cands.map(({ v: c }) => (shortKey(c) ? "key " + shortKey(c) + "\u2026" : "'" + (c.collection ?? "") + "'") + " " + JSON.stringify(c.values)).join(", ")}) \u2014 pointed at ${pick.id}; confirm in Figma which one it really aliases`);
   }
   return pick;
+}
+function aliasTarget(plan, name, referrer, warn) {
+  const t = aliasTargetId(plan, name, referrer, warn);
+  return t ? t.v : null;
 }
 function collisionMessages(notes, opts) {
   const sources = opts && opts.sources || null;
@@ -869,7 +890,7 @@ function aliasNames(v) {
   return out;
 }
 var CSS_UNSAFE = /[\\\n\r\f;{}]/g;
-var hexEsc = (c) => "\\" + c.codePointAt(0).toString(16) + " ";
+var hexEsc = (c) => "\\" + (c.codePointAt(0) ?? 0).toString(16) + " ";
 function cssUnbalanced(s) {
   let depth = 0, dq = 0, sq = 0;
   for (const ch of String(s)) {
@@ -960,8 +981,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
   const { colorProfile } = ds;
   plan = plan || dtcgPlan(designSystem);
   const ref = (referrer) => (name) => {
-    const t = aliasTarget(plan, name, referrer, warn);
-    return t ? "{" + plan.id(t).split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
+    const t = aliasTargetId(plan, name, referrer, warn);
+    return t ? "{" + t.id.split(DTCG_SEP).join(".") + "}" : dtcgRef(name);
   };
   for (const v of designSystem && designSystem.variables || []) {
     if (!segs(v.name).length) {
@@ -972,8 +993,9 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       warn(`token '${v.name}' is a ${v.type} variable \u2014 its values are not colours, numbers or strings, so no DTCG token is emitted for it (skipped)`);
       continue;
     }
-    if (!plan.canonical.has(v)) continue;
-    const path3 = plan.id(v).split(DTCG_SEP);
+    const planned = plan.canonical.get(v);
+    if (planned === void 0) continue;
+    const path3 = planned.split(DTCG_SEP);
     if (path3.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
@@ -1150,8 +1172,8 @@ function toCSS(designSystem, opts, notes) {
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer) => (name) => {
-    const t = aliasTarget(plan, name, referrer);
-    return t ? plan.id(t) : cssVarName(name);
+    const t = aliasTargetId(plan, name, referrer);
+    return t ? t.id : cssVarName(name);
   };
   const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
@@ -1159,14 +1181,14 @@ function toCSS(designSystem, opts, notes) {
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue;
-    if (!plan.canonical.has(v)) continue;
+    const varName = plan.canonical.get(v);
+    if (varName === void 0) continue;
     const values = v.values || {};
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
-    const varName = plan.id(v);
     const r = ref(v), p = pctRef(v);
     rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
     for (const m of Object.keys(values)) {
@@ -1225,16 +1247,16 @@ function toTailwind(designSystem, opts, notes) {
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue;
-    if (!plan.canonical.has(v)) continue;
+    const name = plan.canonical.get(v);
+    if (name === void 0) continue;
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
-    const name = plan.id(v);
     if (twKind(v, opts)) utilities++;
     const unit = numberUnit(v, opts);
     const ref = (n) => {
-      const t = aliasTarget(plan, n, v);
-      return t ? plan.id(t) : "--" + TW_PREFIX + twSlug(n);
+      const t = aliasTargetId(plan, n, v);
+      return t ? t.id : "--" + TW_PREFIX + twSlug(n);
     };
     const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
     const val = (raw) => cssValue(webNumber(v, raw), unit, ref, pctRef);
@@ -1276,8 +1298,7 @@ function toResolver(designSystem, warnings, opts) {
   const groups = /* @__PURE__ */ new Map();
   for (const v of vars) {
     const key = String(v && v.collection || "");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(v);
+    getOrInit(groups, key, () => []).push(v);
   }
   const declared = /* @__PURE__ */ new Map();
   for (const c of collections) if (c && c.name != null && !declared.has(String(c.name))) declared.set(String(c.name), c);
@@ -1507,8 +1528,8 @@ ${USAGE}`);
     }
   }
   let canonicalFile = null;
-  if (web !== void 0 && webFile !== void 0) {
-    const tw = tailwind;
+  const tw = tailwind;
+  if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
     const file = webFile;
     fs3.writeFileSync(path2.join(outDir, file), tw.text);
     canonicalFile = file;

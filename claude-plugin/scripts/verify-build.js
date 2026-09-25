@@ -46,6 +46,15 @@ function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
@@ -641,7 +650,8 @@ function visibility(doc) {
   const tally = (n, root) => {
     if (!n || typeof n !== "object") return;
     const r = root || (count.has(n.id) ? n.id : null);
-    if (r) count.get(r).nodes++;
+    const entry = r ? count.get(r) : void 0;
+    if (entry) entry.nodes++;
     for (const c of n.children || []) tally(c, r);
   };
   for (const r of screenRoots(doc)) tally(r, null);
@@ -847,7 +857,7 @@ var SOURCE_EXT = /* @__PURE__ */ new Set([
   "cs",
   "xaml"
 ]);
-var extOf = (rel) => String(rel).toLowerCase().split(".").pop();
+var extOf = (rel) => String(rel).toLowerCase().split(".").pop() ?? "";
 var isSourceFile = (rel) => SOURCE_EXT.has(extOf(rel));
 var PROSE = /\b[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}[,.;:]?\s+[A-Za-z]{2,}\b/;
 var isProse = (s) => PROSE.test(s) && !/-\[|\[#/.test(s);
@@ -1065,19 +1075,22 @@ function anchorCoverage(plan, doc) {
   const anchors = plan.anchors || {};
   const covered = /* @__PURE__ */ new Map();
   const isCovered = (id) => {
-    if (covered.has(id)) return covered.get(id);
+    const known = covered.get(id);
+    if (known !== void 0) return known;
     const v = visible.get(id);
     const r = anchored(anchors[id]) || !!v && !!v.parentId && visible.has(v.parentId) && isCovered(v.parentId);
     covered.set(id, r);
     return r;
   };
   const hasAnchoredBelow = /* @__PURE__ */ new Set();
-  for (const id of visible.keys()) {
+  for (const [id, v] of visible) {
     if (!anchored(anchors[id])) continue;
-    let p = visible.get(id).parentId;
-    while (p && visible.has(p) && !hasAnchoredBelow.has(p)) {
+    let p = v.parentId;
+    while (p && !hasAnchoredBelow.has(p)) {
+      const pv = visible.get(p);
+      if (!pv) break;
       hasAnchoredBelow.add(p);
-      p = visible.get(p).parentId;
+      p = pv.parentId;
     }
   }
   const unmapped = [], wrappers = [];
@@ -1260,8 +1273,7 @@ function checkPlan({ plan, file }, cwd, opts) {
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
     if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
-      if (!colourHits.has(lit)) colourHits.set(lit, { value: row.value, tokens: [] });
-      const e = colourHits.get(lit);
+      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [] }));
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
@@ -1285,8 +1297,9 @@ function checkPlan({ plan, file }, cwd, opts) {
       seenModule.add(row.mapModule);
       if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) \u2014 was it regenerated instead of reused?`);
     }
-    if (verdict === "new" && row.key && mapped.has(row.key)) {
-      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mapped.get(row.key).module} in codeconnect.local.json \u2014 reuse the existing component`);
+    const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : void 0;
+    if (mappedTo) {
+      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mappedTo.module} in codeconnect.local.json \u2014 reuse the existing component`);
     }
     if (verdict === "missing") warnings.push(`component '${row.name}' has no recorded reuse/new decision`);
   }
@@ -1359,7 +1372,7 @@ function locateReports(plan, planFile, cwd, exp) {
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs5.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
-    else if (layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
+    else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try {
@@ -1394,9 +1407,9 @@ function locateReports(plan, planFile, cwd, exp) {
   return out;
 }
 function reportVerdict(plan, cwd, exp, reports) {
-  const mode = plan.verification && plan.verification.mode;
+  const v = plan.verification;
   if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${plan.verification.reason || "no reason recorded"})`] };
+    if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically \u2014 not rendered (${v.reason || "no reason recorded"})`] };
     return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ \u2014 run verify-screen.js --expect/--compare (the report's verdict is what grants "verified")`] };
   }
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);

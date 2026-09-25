@@ -54,6 +54,7 @@ import type {
 } from "./types.ts";
 import { parseHex, formatHex, composeAlpha } from "./color.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const USAGE = [
@@ -114,7 +115,8 @@ function visibility(doc: ScreenDoc | null | undefined): Visibility {
   const tally = (n: IrNode | null | undefined, root: string | null): void => {
     if (!n || typeof n !== "object") return;
     const r = root || (count.has(n.id) ? n.id : null);
-    if (r) count.get(r)!.nodes++;
+    const entry = r ? count.get(r) : undefined; // r is always a key of count (root, or n.id when count has it)
+    if (entry) entry.nodes++;
     for (const c of n.children || []) tally(c, r);
   };
   for (const r of screenRoots(doc)) tally(r, null);
@@ -248,19 +250,17 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
   const uses = new Map<string, { fields: Set<string>; visible: number; hidden: number }>(); // name -> { fields:Set, visible, hidden }
   walkNodes(doc, (n, ctx) => {
     for (const b of bindingsOf(n)) {
-      if (!uses.has(b.name)) uses.set(b.name, { fields: new Set(), visible: 0, hidden: 0 });
-      const u = uses.get(b.name)!;
+      const u = getOrInit(uses, b.name, () => ({ fields: new Set<string>(), visible: 0, hidden: 0 }));
       u.fields.add(b.field);
       if (ctx.hidden) u.hidden++; else u.visible++;
     }
   });
   const own = new Map<string, Variable[]>();
-  for (const v of (vars && vars.variables) || []) { if (!own.has(v.name)) own.set(v.name, []); own.get(v.name)!.push(v); }
+  for (const v of (vars && vars.variables) || []) getOrInit(own, v.name, () => []).push(v);
   const dsByKey = new Map<string, Variable>(), dsByName = new Map<string, Variable[]>();
   for (const v of (ds && ds.variables) || []) {
     if (v.key) dsByKey.set(v.key, v);
-    if (!dsByName.has(v.name)) dsByName.set(v.name, []);
-    dsByName.get(v.name)!.push(v);
+    getOrInit(dsByName, v.name, () => []).push(v);
   }
   const ownResolve = resolver([vars, ds], resolvedModes);
   const dsResolve = resolver([ds], resolvedModes);
@@ -294,10 +294,14 @@ function buildTokens(doc: ScreenDoc | null | undefined, vars: TokensDoc | null |
     if (!v) row.note = `'${name}' is bound on the frame but not defined in the screen's .vars.json — re-pull the screen`;
     // Design-system definition: by KEY; a name-only match is a labelled fallback, never silently the value.
     let dv: Variable | null = null, how: "key" | "name" | null = null;
-    for (const c of cands) if (c.key && dsByKey.has(c.key)) { dv = dsByKey.get(c.key)!; how = "key"; break; }
-    if (!dv && dsByName.has(name)) {
-      const same = dsByName.get(name)!.filter((x) => !v || x.collection === v.collection);
-      dv = (same.length ? same : dsByName.get(name)!)[0] ?? null; // ?? null: every dsByName list has an entry (built by push), and dv is only tested for truthiness
+    for (const c of cands) {
+      const hit = c.key ? dsByKey.get(c.key) : undefined;
+      if (hit) { dv = hit; how = "key"; break; }
+    }
+    const named = dv ? undefined : dsByName.get(name);
+    if (named) {
+      const same = named.filter((x) => !v || x.collection === v.collection);
+      dv = (same.length ? same : named)[0] ?? null; // ?? null: every dsByName list has an entry (built by push), and dv is only tested for truthiness
       how = "name";
     }
     if (dv && how) {
@@ -358,11 +362,12 @@ function buildComponents(doc: ScreenDoc | null | undefined, catalog: ComponentsC
 
   return insts.map((i) => {
     let match: PlanComponentMatch | null = null;
-    const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
-    if (k) { const c = catKeys.get(k)!; match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name }; }
-    else if (byName.has(i.name) && byName.get(i.name)!.match) {
-      const r = byName.get(i.name)!;
-      match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match!.id), ...ifDefined("key", r.match!.key), name: r.match!.name, confirmed: false };
+    // the first of key / setKey the catalog has (catalog entries are objects, so `??` = first hit)
+    const c = (i.key ? catKeys.get(i.key) : undefined) ?? (i.setKey ? catKeys.get(i.setKey) : undefined);
+    const r = byName.get(i.name);
+    if (c) match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
+    else if (r && r.match) {
+      match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
     }
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
     const row: PlanComponentRow = {
@@ -487,7 +492,7 @@ function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult 
   dropped.tokens = [...prevTok.keys()].filter((k) => !fresh.tokens.some((t) => tk(t) === k || t.figmaName === k)).length;
   const prevComp = new Map((prev.components || []).filter((c): c is PlanComponentRow & { nodeId: string } => !!(c && c.nodeId)).map((c): [string, PlanComponentRow] => [c.nodeId, c]));
   out.components = fresh.components.map((c) => {
-    const p = prevComp.get(c.nodeId!);
+    const p = c.nodeId ? prevComp.get(c.nodeId) : undefined; // prevComp has no falsy-id keys
     const row: PlanComponentRow = Object.assign({}, c);
     if (p) for (const f of FILLED_COMPONENT) if (p[f] !== undefined && p[f] !== null && p[f] !== "") Object.assign(row, { [f]: p[f] });
     return row;

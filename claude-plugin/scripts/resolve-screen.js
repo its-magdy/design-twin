@@ -164,6 +164,15 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -233,8 +242,7 @@ function resolveScreen(exportDir, query, opts) {
   const union = /* @__PURE__ */ new Map();
   const join = (row, via) => {
     const key = row.id || row.file || JSON.stringify(row);
-    if (!union.has(key)) union.set(key, { row, via: /* @__PURE__ */ new Set() });
-    union.get(key).via.add(via);
+    getOrInit(union, key, () => ({ row, via: /* @__PURE__ */ new Set() })).via.add(via);
   };
   for (const r of rows) {
     if (fold(r.name) === qFold) join(r, "exact layer name");

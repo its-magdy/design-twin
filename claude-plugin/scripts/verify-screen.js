@@ -328,6 +328,15 @@ function colorKey(v) {
   return h === null ? null : h.length === 7 ? h + "ff" : h;
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // bridge/src/is-main.ts
 import fs3 from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -475,6 +484,9 @@ var growsAlong = (c, dir) => {
 };
 var PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
 function expectNode(n, ctxOrPath) {
+  return expectNodeRow(n, ctxOrPath).spec;
+}
+function expectNodeRow(n, ctxOrPath) {
   const ctx = ctxOrPath == null ? {} : typeof ctxOrPath === "string" ? { path: ctxOrPath } : ctxOrPath;
   const spec = { nodeId: n.id, name: n.name, type: n.type, ...ifDefined("path", ctx.path) };
   const notComparable = [];
@@ -569,7 +581,7 @@ function expectNode(n, ctxOrPath) {
   if (n.tokens && Object.keys(n.tokens).length) spec.tokens = n.tokens;
   if (ctx.frameId) spec.frameId = ctx.frameId;
   Object.defineProperty(spec, "__notComparable", { value: notComparable, enumerable: false });
-  return spec;
+  return { spec, notComparable };
 }
 function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
@@ -608,10 +620,10 @@ function buildExpectation(docs) {
         const inherited = c.parent ? stateOf.get(c.parent) : void 0;
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
-        const spec = expectNode(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
+        const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
-        notComparable.push(...spec.__notComparable);
+        notComparable.push(...gaps);
         if (n.type === "INSTANCE" && n.mainComponent) {
           instances.push({
             nodeId: n.id,
@@ -1088,9 +1100,9 @@ function compare(expectation, measured, opts) {
   for (const i of expectation.instances || []) {
     if (hiddenSet.has(String(i.nodeId))) continue;
     const k = i.setName || i.name;
-    if (!bySet.has(k)) bySet.set(k, { setName: k, ...ifDefined("setKey", i.setKey), nodeIds: [], instances: 0 });
-    bySet.get(k).instances++;
-    bySet.get(k).nodeIds.push(i.nodeId);
+    const e = getOrInit(bySet, k, () => ({ setName: k, ...ifDefined("setKey", i.setKey), nodeIds: [], instances: 0 }));
+    e.instances++;
+    e.nodeIds.push(i.nodeId);
   }
   const untaggedInstanceSets = [];
   let setsViaSharedPath = 0;

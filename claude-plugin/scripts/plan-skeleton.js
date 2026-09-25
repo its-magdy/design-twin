@@ -47,6 +47,15 @@ function ifDefined(key, v) {
   return o;
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/component-match.ts
 function parseVariant(s) {
   if (isJsonObject(s)) {
@@ -129,8 +138,7 @@ function matchByNameAndSignature(instances, catalog, library) {
   const comps = catalog && catalog.components || [];
   const byName = /* @__PURE__ */ new Map();
   comps.forEach((c, i) => {
-    if (!byName.has(c.name)) byName.set(c.name, []);
-    byName.get(c.name).push(Object.assign({ _order: i }, c));
+    getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c));
   });
   const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
   const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
@@ -194,7 +202,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
-  const proposals = rows.filter((r) => r.match && !r.byKey);
+  const proposals = rows.filter((r) => !!r.match && !r.byKey);
   return {
     rows,
     proposals,
@@ -868,7 +876,8 @@ function visibility(doc) {
   const tally = (n, root) => {
     if (!n || typeof n !== "object") return;
     const r = root || (count.has(n.id) ? n.id : null);
-    if (r) count.get(r).nodes++;
+    const entry = r ? count.get(r) : void 0;
+    if (entry) entry.nodes++;
     for (const c of n.children || []) tally(c, r);
   };
   for (const r of screenRoots(doc)) tally(r, null);
@@ -970,23 +979,18 @@ function buildTokens(doc, vars, ds, resolvedModes) {
   const uses = /* @__PURE__ */ new Map();
   walkNodes(doc, (n, ctx) => {
     for (const b of bindingsOf(n)) {
-      if (!uses.has(b.name)) uses.set(b.name, { fields: /* @__PURE__ */ new Set(), visible: 0, hidden: 0 });
-      const u = uses.get(b.name);
+      const u = getOrInit(uses, b.name, () => ({ fields: /* @__PURE__ */ new Set(), visible: 0, hidden: 0 }));
       u.fields.add(b.field);
       if (ctx.hidden) u.hidden++;
       else u.visible++;
     }
   });
   const own = /* @__PURE__ */ new Map();
-  for (const v of vars && vars.variables || []) {
-    if (!own.has(v.name)) own.set(v.name, []);
-    own.get(v.name).push(v);
-  }
+  for (const v of vars && vars.variables || []) getOrInit(own, v.name, () => []).push(v);
   const dsByKey = /* @__PURE__ */ new Map(), dsByName = /* @__PURE__ */ new Map();
   for (const v of ds && ds.variables || []) {
     if (v.key) dsByKey.set(v.key, v);
-    if (!dsByName.has(v.name)) dsByName.set(v.name, []);
-    dsByName.get(v.name).push(v);
+    getOrInit(dsByName, v.name, () => []).push(v);
   }
   const ownResolve = resolver([vars, ds], resolvedModes);
   const dsResolve = resolver([ds], resolvedModes);
@@ -1016,14 +1020,18 @@ function buildTokens(doc, vars, ds, resolvedModes) {
     }
     if (!v) row.note = `'${name}' is bound on the frame but not defined in the screen's .vars.json \u2014 re-pull the screen`;
     let dv = null, how = null;
-    for (const c of cands) if (c.key && dsByKey.has(c.key)) {
-      dv = dsByKey.get(c.key);
-      how = "key";
-      break;
+    for (const c of cands) {
+      const hit = c.key ? dsByKey.get(c.key) : void 0;
+      if (hit) {
+        dv = hit;
+        how = "key";
+        break;
+      }
     }
-    if (!dv && dsByName.has(name)) {
-      const same = dsByName.get(name).filter((x) => !v || x.collection === v.collection);
-      dv = (same.length ? same : dsByName.get(name))[0] ?? null;
+    const named = dv ? void 0 : dsByName.get(name);
+    if (named) {
+      const same = named.filter((x) => !v || x.collection === v.collection);
+      dv = (same.length ? same : named)[0] ?? null;
       how = "name";
     }
     if (dv && how) {
@@ -1072,12 +1080,10 @@ function buildComponents(doc, catalog, library, mapKeys) {
   if (catalog) for (const r of matchByNameAndSignature(insts, catalog, library).rows) byName.set(r.name, r);
   return insts.map((i) => {
     let match = null;
-    const k = [i.key, i.setKey].find((x) => x && catKeys.has(x));
-    if (k) {
-      const c = catKeys.get(k);
-      match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
-    } else if (byName.has(i.name) && byName.get(i.name).match) {
-      const r = byName.get(i.name);
+    const c = (i.key ? catKeys.get(i.key) : void 0) ?? (i.setKey ? catKeys.get(i.setKey) : void 0);
+    const r = byName.get(i.name);
+    if (c) match = { by: "key", ...ifDefined("id", c.id), ...ifDefined("key", c.key), name: c.name };
+    else if (r && r.match) {
       match = { by: r.evidence || "name+signature", ...ifDefined("id", r.match.id), ...ifDefined("key", r.match.key), name: r.match.name, confirmed: false };
     }
     const mapped = [i.key, i.setKey].map((x) => x && mapKeys.get(x)).find(Boolean) || null;
@@ -1177,7 +1183,7 @@ function merge(fresh, prev) {
   dropped.tokens = [...prevTok.keys()].filter((k) => !fresh.tokens.some((t) => tk(t) === k || t.figmaName === k)).length;
   const prevComp = new Map((prev.components || []).filter((c) => !!(c && c.nodeId)).map((c) => [c.nodeId, c]));
   out.components = fresh.components.map((c) => {
-    const p = prevComp.get(c.nodeId);
+    const p = c.nodeId ? prevComp.get(c.nodeId) : void 0;
     const row = Object.assign({}, c);
     if (p) {
       for (const f of FILLED_COMPONENT) if (p[f] !== void 0 && p[f] !== null && p[f] !== "") Object.assign(row, { [f]: p[f] });

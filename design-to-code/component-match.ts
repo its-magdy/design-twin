@@ -24,11 +24,12 @@
 // The reference this was checked against is livetest-3's hand-written scripts-test/map-components.mjs:
 // same visible-instance walk, same name rule, same variant/prop evidence and tie-breaks.
 import type {
-  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, ScreenDoc, VisibleInstance,
+  CatalogComponent, ComponentPropDef, ComponentsCatalog, IrNode, MatchAlternative, MatchInstance, MatchResult, MatchRow, ProposedMatchRow, ScreenDoc, VisibleInstance,
 } from "./types.ts";
 import { screenRoots } from "./export-shape.ts";
 import { isJsonObject } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 
 // Hidden layers are not built, so they are not mapped either (and a hidden subtree's instances are
 // skipped with it).
@@ -129,7 +130,7 @@ interface Scored { c: OrderedComponent; verified: boolean; score: number; reason
 function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: ComponentsCatalog | null | undefined, library?: ComponentsCatalog | null): MatchResult {
   const comps = (catalog && catalog.components) || [];
   const byName = new Map<string, OrderedComponent[]>();
-  comps.forEach((c, i) => { if (!byName.has(c.name)) byName.set(c.name, []); byName.get(c.name)!.push(Object.assign({ _order: i }, c)); });
+  comps.forEach((c, i) => { getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c)); });
   const catKeys = new Set(comps.map((c) => c.key).filter((k): k is string => !!k));
   const libKeys = new Set(((library && library.components) || []).map((c) => c.key).filter((k): k is string => !!k));
   const libNames = new Set(((library && library.components) || []).map((c) => c.name));
@@ -205,7 +206,7 @@ function matchByNameAndSignature(instances: readonly MatchInstance[], catalog: C
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog — re-keyed)"));
     rows.push(row);
   }
-  const proposals = rows.filter((r) => r.match && !r.byKey);
+  const proposals = rows.filter((r): r is ProposedMatchRow => !!r.match && !r.byKey);
   return {
     rows,
     proposals,
