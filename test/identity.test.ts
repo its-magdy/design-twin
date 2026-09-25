@@ -247,8 +247,10 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
   const m2: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
+  // The catalog key must exist for the second half to test anything (a `?? ""` fallback would pass on any map).
+  const btnCatalogKey = btn.catalog?.key;
   ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
-    !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog?.key ?? ""]);
+    btnCatalogKey !== undefined && !!m2.components[btn.instanceKeys[0]] && !m2.components[btnCatalogKey]);
   const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 
