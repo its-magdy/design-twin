@@ -85,7 +85,8 @@ check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the
   const pr = problems({ "a.tsx": "bg-[#ffffff1a]" }, { files: ["a.tsx"], tokens: [scrim],
     allowedLiterals: [{ value: "#ffffff", reason: "theme defines white" }], verification: STATIC });
   // …and the message names the spelling that is actually in the code, not the other one.
-  return pr.length === 1 && /raw colour #ffffff1a\b/.test(pr[0]) && /bg-scrim/.test(pr[0]);
+  const msg = must(pr[0], "pr[0]");
+  return pr.length === 1 && /raw colour #ffffff1a\b/.test(msg) && /bg-scrim/.test(msg);
 })());
 check("arbitraryPx reads [Npx] and [Nrem] as px", (() => { const d = arbitraryPx("gap-[14px] p-[1.5rem]"); return d.has(14) && d.has(24); })());
 // Live finding 88: keyed on the number alone, every `rounded-[20px]` was reported as the 20px a
@@ -154,7 +155,8 @@ check("[defs] allowedLiterals may now name a FILE instead of a value", (() => {
 })());
 check("[defs] and the failure message says allowedLiterals matches an exact value string", (() => {
   const pr = problems({ "a.tsx": "color: #5b5fc7" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC });
-  return pr.length === 1 && /matched on the exact value string/.test(pr[0]) && /"file"/.test(pr[0]);
+  const msg = must(pr[0], "pr[0]");
+  return pr.length === 1 && /matched on the exact value string/.test(msg) && /"file"/.test(msg);
 })());
 
 console.log("token checks — only plan-resolved values fail:");
@@ -189,7 +191,7 @@ check("[no-token] every no-token spelling behaves the same way", (() => {
 check("[no-token] but a row with no token AND no decision still fails — the rule keeps its teeth", (() => {
   const pr = problems({ "a.tsx": "bg-[#f1efc4]" }, { files: ["a.tsx"],
     tokens: [{ value: "#f1efc4", kind: "color", codeToken: "MISSING", verdict: "MISSING" }], verification: STATIC });
-  return pr.length === 1 && /no recorded decision/.test(pr[0]);
+  return pr.length === 1 && /no recorded decision/.test(must(pr[0], "pr[0]"));
 })());
 check("[no-token] a REAL token is still enforced — the sentinel list is not a blanket escape",
   has(problems({ "a.tsx": "bg-[#5b5fc7]" }, { files: ["a.tsx"], tokens: [brand], verification: STATIC }), /raw colour .*brand-600/));
@@ -205,15 +207,16 @@ check("[no-token] a REAL token is still enforced — the sentinel list is not a 
     row("Schemes/On Primary", "#ffffff", "text-on-surface"),
     row("Schemes/On Surface", "#ffffff", "text-on-surface"),
   ] });
+  const mergedMsg = must(merged[0], "merged[0]");
   check("[identity] two Figma tokens on one code token is reported, naming both",
-    merged.length === 1 && /2 DIFFERENT Figma tokens/.test(merged[0])
-    && /Schemes\/On Primary/.test(merged[0]) && /Schemes\/On Surface/.test(merged[0]));
+    merged.length === 1 && /2 DIFFERENT Figma tokens/.test(mergedMsg)
+    && /Schemes\/On Primary/.test(mergedMsg) && /Schemes\/On Surface/.test(mergedMsg));
   check("[identity] the message says WHY sharing a value now is not sharing an identity",
-    /diverge in another mode/.test(merged[0]));
+    /diverge in another mode/.test(mergedMsg));
   check("[identity] three merged tokens are counted as three", (() => {
     const p3 = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
       row("a/one", "#fff", "t"), row("b/two", "#fff", "t"), row("c/three", "#fff", "t")] });
-    return p3.length === 1 && /3 DIFFERENT/.test(p3[0]);
+    return p3.length === 1 && /3 DIFFERENT/.test(must(p3[0], "p3[0]"));
   })());
   // The same Figma token legitimately appears on several rows (one per node/usage) — that is one
   // identity, not a collision, and flagging it would make honest plans unfinishable.
@@ -365,11 +368,11 @@ check("[header] the hook WARNS (never blocks) on a plan with no header", (() => 
   return r.status === 0 && /plan header is missing `screenName`, `nodeId`, `route`, `file`/.test(r.stderr);
 })());
 check("[header] a plan missing every header field is flagged, one message naming all of them",
-  (() => { const w = validatePlanHeader({}); return w.length === 1 && /screenName/.test(w[0]) && /nodeId/.test(w[0]) && /route/.test(w[0]) && /file/.test(w[0]); })());
+  (() => { const w = validatePlanHeader({}); const msg = must(w[0], "w[0]"); return w.length === 1 && /screenName/.test(msg) && /nodeId/.test(msg) && /route/.test(msg) && /file/.test(msg); })());
 check("[header] a plan with a complete header is clean",
   validatePlanHeader({ screenName: "Job Roles", nodeId: "7314:87192", route: "/job-roles", file: "src/JobRoles.tsx" }).length === 0);
 check("[header] a plan missing only `route` names just that field",
-  (() => { const w = validatePlanHeader({ screenName: "Job Roles", nodeId: "7314:87192", file: "x.tsx" }); return w.length === 1 && /`route`/.test(w[0]) && !/screenName/.test(w[0]); })());
+  (() => { const w = validatePlanHeader({ screenName: "Job Roles", nodeId: "7314:87192", file: "x.tsx" }); const msg = must(w[0], "w[0]"); return w.length === 1 && /`route`/.test(msg) && !/screenName/.test(msg); })());
 check("[header] an empty string counts as missing, not present", validatePlanHeader({ screenName: "", nodeId: "1:1", route: "/x", file: "x.tsx" }).length === 1);
 
 check("abandoned / already-closed plans are skipped (fast path)", (() => {
@@ -431,8 +434,9 @@ console.log("P2b [100] a hex in a comment or a provenance note is not a literal:
   const hdr = path.join(root, "app/src/layout/Header.tsx");
   fs.appendFileSync(hdr, "\nexport const Leak = () => <div style={{ background: '#121319' }} />;\n");
   const r = colourBlocks(checkLive(root, JR));
+  const rMsg = must(r[0], "r[0]");
   check("[100] …the same hex in CODE still blocks — once per literal, naming every token that resolves it",
-    r.length === 1 && /#121319/.test(r[0]) && /bg-backgrounds-side-menu/.test(r[0]) && /bg-neutrals-neutral-0/.test(r[0]) && /Header\.tsx/.test(r[0]));
+    r.length === 1 && /#121319/.test(rMsg) && /bg-backgrounds-side-menu/.test(rMsg) && /bg-neutrals-neutral-0/.test(rMsg) && /Header\.tsx/.test(rMsg));
 }
 check("[100] scanText drops //, /* */, JSX {/* */} and <!-- --> comments but keeps code", (() => {
   const t = scanText("a.tsx", "// #111111\nconst a = 1; /* #222222 */\n<div>{/* #333333 */}</div>\nconst b = '#444444';");
@@ -478,13 +482,13 @@ console.log("P2b [131] a reused component resolves by module path, not by substr
     "../../../components/SquareButton": "app/src/components/SquareButton.tsx", "../../../components/DataTable": "app/src/components/DataTable.tsx",
     "../../../components/Icon": "app/src/components/Icon.tsx", "../../../components/Modal": "app/src/components/Modal.tsx" };
   let rewritten = 0;
-  for (const c of must(plan.components, "plan.components")) if (c.mapModule && repo[c.mapModule]) { c.mapModule = repo[c.mapModule]; rewritten++; }
+  for (const c of must(plan.components, "plan.components")) { const to = c.mapModule ? repo[c.mapModule] : undefined; if (to) { c.mapModule = to; rewritten++; } }
   plan.files = ["app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx"];
   const root = liveProject({ [GP]: plan });
   const r = checkLive(root, GP);
   check(`[131] the live Global Policies plan with ${rewritten} honest repo-path mapModules: no import warning, and nothing about components blocks`,
     rewritten === 6 && !r.warnings.some((w) => /imports that module/.test(w)) && !r.blocking.some((b) => /component/.test(b)));
-  must(plan.components, "plan.components")[2].mapModule = "app/src/components/Tooltip.tsx";
+  must(must(plan.components, "plan.components")[2], "plan.components[2]").mapModule = "app/src/components/Tooltip.tsx";
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(plan));
   const r2 = checkLive(root, GP);
   check("[131] a genuinely un-imported reuse is a WARNING, not a block", r2.warnings.some((w) => /Tooltip/.test(w)) && !r2.blocking.some((b) => /Tooltip/.test(b)));
@@ -495,7 +499,7 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
   const S = path.join(FX, "export/pages/__Organization_management_", JR + ".json");
   const doc = readFixture(S, isScreenExport);
   const cov0 = anchorCoverage({ anchors: {} }, doc);
-  check("[anchors] with no anchors, all 254 visible nodes are unmapped — reported as ONE subtree (the frame)", cov0.visible === 254 && cov0.unmappedNodes === 254 && cov0.unmapped.length === 1 && cov0.unmapped[0].id === "7314:87192");
+  check("[anchors] with no anchors, all 254 visible nodes are unmapped — reported as ONE subtree (the frame)", cov0.visible === 254 && cov0.unmappedNodes === 254 && cov0.unmapped.length === 1 && cov0.unmapped[0]?.id === "7314:87192");
   const cov1 = anchorCoverage({ anchors: { "7314:87192": { mapModule: "app/src/features/job-roles/screens/JobRolesScreen.tsx" } } }, doc);
   check("[anchors] one anchor on the frame covers every descendant (children inherit)", cov1.unmapped.length === 0 && cov1.unmappedNodes === 0);
   // the real JR plan anchors 16 ids including the frame → covered; its hidden-node ids are not required
@@ -508,7 +512,8 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
   const root = liveProject({ [GP]: Object.assign(fxPlan(GP), { status: "pending" }) });
   const r = checkLive(root, GP);
   const b = r.blocking.filter((m) => /no anchor in the plan/.test(m));
-  check("[anchors] the live Global Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(b[0]) && /^3 visible/.test(b[0]));
+  const bMsg = must(b[0], "b[0]");
+  check("[anchors] the live Global Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(bMsg) && /^3 visible/.test(bMsg));
   const fixed = fxPlan(GP);
   must(fixed.anchors, "fixed.anchors")["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));
@@ -522,14 +527,14 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   const st = (s: string) => computeStatus(readFixture(planFile(s), isPlan), { cwd: root, planFile: planFile(s) });
   const before = [st(JR), st(GP)];
   check("[155] before the hook runs, the stored \"verified\" is ignored — computed status is pending, and says why",
-    fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0])));
+    fxPlan(JR).status === "verified" && fxPlan(GP).status === "verified" && before.every((s) => s.status === "pending" && /not confirmed by the current hook and is ignored/.test(s.reasons[0] ?? "")));
   const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const after = { jr: readFixture(planFile(JR), isPlan), gp: readFixture(planFile(GP), isPlan) };
   check("[155] the hook actively clears the stored \"verified\" from both plans", after.jr.status === undefined && after.gp.status === undefined && /removed the stored "status": "verified"/.test(r.stderr));
   const jr = st(JR), gp = st(GP);
   check(`[155/316] Job Roles: not verified — its report (JobRoles.report.json, schema @1) is flagged as predating @2, and its false "31 component(s) … never built" is NOT repeated (got ${jr.status})`,
     jr.status === "unverified" && /JobRoles\.report\.json is designtwin\/verify-report@1 \(its verdict: "fail"\) — it predates designtwin\/verify-report@2/.test(jr.reasons.join(" "))
-    && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0].matchedBy === "layer name");
+    && !/never built|31 component/.test(jr.reasons.join(" ")) && jr.reports[0]?.matchedBy === "layer name");
   check(`[189] Global Policies: not verified either (got ${gp.status} — its hook run blocked on the unanchored footer)`, gp.status !== "verified" && gp.status === "blocked");
   const cli = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
   const rows = parseAs(cli.stdout, isStatusRows, "--status --json");
@@ -545,7 +550,7 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
   // the P3 `<Layer>__<id>` report naming is found by name too
   fs.renameSync(path.join(root, "design/verify/JobRoles.report.json"), path.join(root, "design/verify", JR + ".report.json"));
   const jr2 = st(JR);
-  check("[155] the new <Layer>__<id>.report.json naming is found as well", jr2.status === "unverified" && jr2.reports[0].matchedBy === "name");
+  check("[155] the new <Layer>__<id>.report.json naming is found as well", jr2.status === "unverified" && jr2.reports[0]?.matchedBy === "name");
 }
 
 console.log("P2b [156] the verification block is checked against itself; [196] deviations are calibrated:");
@@ -577,7 +582,7 @@ console.log("P2b end to end — plan-skeleton.js writes the plan, the hook check
   check("…its header is complete except the route, and its unfilled token rows are ONE warning, not 33",
     /plan header is missing `route`/.test(r1.stderr) && (r1.stderr.match(/have no token and no recorded decision/g) || []).length === 1 && /33 token row\(s\)/.test(r1.stderr));
   const p = readFixture(path.join(root, planRel), isPlan);
-  must(p.anchors, "p.anchors")["7314:87192"].mapModule = "app/src/layout/Header.tsx";
+  must(must(p.anchors, "p.anchors")["7314:87192"], "p.anchors['7314:87192']").mapModule = "app/src/layout/Header.tsx";
   p.files = ["app/src/layout/Header.tsx"];
   p.route = "/job-roles";
   fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
@@ -606,7 +611,7 @@ console.log("P2b — the verify-report@2 shape (P2a): incomplete ≠ pass, a cha
   const v2 = (verdict: string, extra?: object) => Object.assign({ schema: "designtwin/verify-report@2", screen: "positions ", verdict, headline: `${verdict.toUpperCase()} — nodes measured 180/189`, why: [], inputs: { expectationSha256: sha(EXP) }, summary: { componentsAbsent: 0 } }, extra);
   const inc = setup(v2("incomplete"), EXP);
   check(`an @2 report found through its expectation's frame.nodeId; verdict "incomplete" → unverified, quoting the headline (got ${inc.status})`,
-    inc.status === "unverified" && inc.reports[0].matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
+    inc.status === "unverified" && inc.reports[0]?.matchedBy === "expectation frame" && /INCOMPLETE — nodes measured 180\/189/.test(inc.reasons.join(" ")));
   const pass = setup(v2("pass"), EXP);
   check(`an @2 "pass" that does not record the export content hash it measured → unverified, saying so (got ${pass.status})`, pass.status === "unverified" && /inputs\.exportContentSha256/.test(pass.reasons.join(" ")));
   const moved = setup(v2("pass"), EXP.replace("positions ", "positions"));
@@ -624,7 +629,9 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   check("[314] the real no-change re-pull pair: the files differ (exportedAt), the export content hash does not",
     rawB !== rawA && exportContentSha256(parseAs(rawB, isScreenExport, "the export")) === exportContentSha256(parseAs(rawA, isScreenExport, "the export")));
   check("[314] …while a real design edit (one layer renamed) does change it", (() => {
-    const d = parseAs(rawA, isScreenExport, "the export"); must(d.nodes[0].children, "d.nodes[0].children")[0].name += " (edited)";
+    const d = parseAs(rawA, isScreenExport, "the export");
+    const dChild = must(must(must(d.nodes[0], "d.nodes[0]").children, "d.nodes[0].children")[0], "d.nodes[0].children[0]");
+    dChild.name += " (edited)";
     return exportContentSha256(d) !== exportContentSha256(parseAs(rawA, isScreenExport, "the export"));
   })());
   check("[314] `_slices[].at` (variables-merge provenance) is stripped too, the rest of a slice is not", (() => {
@@ -676,7 +683,9 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   check(`[314] a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}; before: unverified)`,
     /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
   // a real design change
-  const edited = parseAs(rawA, isScreenExport, "the export"); must(edited.nodes[0].children, "edited.nodes[0].children")[0].name += " (edited)";
+  const edited = parseAs(rawA, isScreenExport, "the export");
+  const editedChild = must(must(must(edited.nodes[0], "edited.nodes[0]").children, "edited.nodes[0].children")[0], "edited.nodes[0].children[0]");
+  editedChild.name += " (edited)";
   fs.writeFileSync(exportFile, JSON.stringify(edited));
   const s3 = st();
   check(`[314] a real design change → unverified, naming the content hash change (got ${s3.status})`, s3.status === "unverified" && /the design changed since/.test(s3.reasons.join(" ")));
@@ -695,12 +704,13 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
 check("[325] the block message names the file that USES the literal, not the allow-listed token file", (() => {
   const b = blocks({ "app/src/theme/theme.css": ".x { background: #5B5FC7 }", "app/src/Screen.tsx": "<div style={{ color: '#5B5FC7' }} />" },
     { files: ["app/src/theme/theme.css", "app/src/Screen.tsx"], tokens: [brand], allowedLiterals: [{ file: "app/src/theme/theme.css", reason: "generated token source" }], verification: STATIC });
-  return b.length === 1 && /in app\/src\/Screen\.tsx, but/.test(b[0]) && !/theme\.css/.test(b[0].split(", but")[0]);
+  const bMsg = must(b[0], "b[0]");
+  return b.length === 1 && /in app\/src\/Screen\.tsx, but/.test(bMsg) && !/theme\.css/.test(must(bMsg.split(", but")[0], "bMsg.split(', but')[0]"));
 })());
 check("[325] …nor a file whose only occurrence is the token's own definition line", (() => {
   const b = blocks({ "theme.css": ":root { --brand-600: #5B5FC7; }", "Card.tsx": "<div style={{ color: '#5B5FC7' }} />" },
     { files: ["theme.css", "Card.tsx"], tokens: [brand], verification: STATIC });
-  return b.length === 1 && /in Card\.tsx, but/.test(b[0]);
+  return b.length === 1 && /in Card\.tsx, but/.test(must(b[0], "b[0]"));
 })());
 
 console.log("P2b follow-up — --status on the untouched live plan: precedence, and a why that is never empty:");
@@ -709,7 +719,7 @@ console.log("P2b follow-up — --status on the untouched live plan: precedence, 
   // original schema-@1 JobRoles.report.json saying fail.
   const root = liveProject({ [JR]: fxPlan(JR), [GP]: fxPlan(GP) });
   const cli = spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" });
-  const row = parseAs(cli.stdout, isStatusRows, "--status --json")[0];
+  const row = must(parseAs(cli.stdout, isStatusRows, "--status --json")[0], "status row [0]");
   check(`the untouched Job Roles plan → pending, with a why naming the ignored stored status, the unrun hook, and the @1 report and its verdict (got ${row.status}; why ${row.why === null ? "null" : "set"})`,
     cli.status === 0 && row.status === "pending" && typeof row.why === "string"
     && /stored "status": "verified" was not confirmed/.test(row.why) && /Stop hook has not checked this plan/.test(row.why)
@@ -720,7 +730,7 @@ console.log("P2b follow-up — --status on the untouched live plan: precedence, 
   // precedence 2 over 5: an @2 report that FAILS is reported as failed even though the hook never ran
   const rep = readFixture(path.join(root, "design/verify/JobRoles.report.json"), isVerifyReport);
   fs.writeFileSync(path.join(root, "design/verify/JobRoles.report.json"), JSON.stringify(Object.assign(rep, { schema: "designtwin/verify-report@2", headline: "FAIL — nodes measured 76/186" })));
-  const r2 = parseAs(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json")[0];
+  const r2 = must(parseAs(spawnSync(process.execPath, [HOOK, "--status", `design/plan/${JR}.json`, "--json"], { cwd: root, encoding: "utf8" }).stdout, isStatusRows, "--status --json")[0], "status row [0]");
   check(`precedence: a failing @2 report is "failed" even before the hook has run, and why still says the hook has not (got ${r2.status})`,
     r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why ?? "") && /hook: the build-screen Stop hook has not checked/.test(r2.why ?? ""));
   check("--help documents the precedence", /First match wins/.test(spawnSync(process.execPath, [HOOK, "--help"], { encoding: "utf8" }).stdout));
@@ -734,15 +744,16 @@ const mapFile = path.join(bootDir, "codeconnect.local.json");
 fs.writeFileSync(catalogFile, JSON.stringify({ components: [{ type: "COMPONENT", key: "k-btn", id: "1:2", name: "Button", props: {} }] }));
 check("--out writes the map file and keeps stdout clean", (() => {
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
-  return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && (readFixture(mapFile, isCodeConnectMap)).components["k-btn"].status === "needs-review";
+  return r.status === 0 && r.stdout === "" && /wrote/.test(r.stderr) && must(readFixture(mapFile, isCodeConnectMap).components["k-btn"], "map.components['k-btn']").status === "needs-review";
 })());
 check("re-running --out MERGES into the existing map — hand edits survive", (() => {
   const map = readFixture(mapFile, isCodeConnectMap);
-  map.components["k-btn"].code.module = "@/ui/Button";
-  map.components["k-btn"].status = "active"; // a hand edit: a real MapStatus, not the bootstrap default
+  const entry = must(map.components["k-btn"], "map.components['k-btn']");
+  entry.code.module = "@/ui/Button";
+  entry.status = "active"; // a hand edit: a real MapStatus, not the bootstrap default
   fs.writeFileSync(mapFile, JSON.stringify(map));
   const r = spawnSync(process.execPath, [BOOT, catalogFile, "--out", mapFile], { encoding: "utf8" });
-  const after = (readFixture(mapFile, isCodeConnectMap)).components["k-btn"];
+  const after = must(readFixture(mapFile, isCodeConnectMap).components["k-btn"], "map.components['k-btn']");
   return r.status === 0 && after.code.module === "@/ui/Button" && after.status === "active" && /merged/.test(r.stderr);
 })());
 check("without --out it still prints to stdout (back-compat)", (() => {
@@ -769,8 +780,11 @@ check("bundles are self-contained — no require() that leaves the plugin direct
   const bare: string[] = [];
   for (const f of [...walk(path.join(SCRIPTS, "..", "skills")), ...walk(path.join(SCRIPTS, "..", "agents"))]) {
     const text = fs.readFileSync(f, "utf8");
-    for (const m of text.matchAll(/scripts\/([a-z-]+)\.js"(\s*)(\S)/g))
-      if (NEEDS_ARGS.includes(m[1]) && (m[3] === "`" || m[3] === ")")) bare.push(`${path.basename(path.dirname(f))}/${path.basename(f)}: ${m[1]}.js`);
+    for (const m of text.matchAll(/scripts\/([a-z-]+)\.js"(\s*)(\S)/g)) {
+      const script = must(m[1], "regex group 1");
+      const ch = must(m[3], "regex group 3");
+      if (NEEDS_ARGS.includes(script) && (ch === "`" || ch === ")")) bare.push(`${path.basename(path.dirname(f))}/${path.basename(f)}: ${script}.js`);
+    }
   }
   check("skill docs never invoke an argument-taking script bare" + (bare.length ? " — " + bare.join(", ") : ""), bare.length === 0);
 }
@@ -830,7 +844,8 @@ void build(tmp).then(async () => {
   type HooksJson = { hooks: Record<string, Array<{ hooks: Array<{ command: string; timeout: number }> }>> };
   const isHooksJson = (x: unknown): x is HooksJson => isJsonObject(x) && isJsonObject(x.hooks) && Object.values(x.hooks).every((list) => Array.isArray(list) && list.every((e) => isJsonObject(e) && Array.isArray(e.hooks)));
   const hooks = readFixture(path.join(import.meta.dirname, "..", "claude-plugin", "hooks", "hooks.json"), isHooksJson);
-  const h = hooks.hooks.SubagentStop[0].hooks[0];
+  const subagentStop = must(hooks.hooks.SubagentStop, "hooks.hooks.SubagentStop");
+  const h = must(must(subagentStop[0], "hooks.hooks.SubagentStop[0]").hooks[0], "hooks.hooks.SubagentStop[0].hooks[0]");
   check("[hooks.json] the SubagentStop gate runs the bundled verify-build.js and gives it longer than its own 60 s cut-off",
     /scripts\/verify-build\.js"?$/.test(h.command) && h.timeout > 60);
 
@@ -852,21 +867,24 @@ void build(tmp).then(async () => {
       const cwd = mkCwd();
       const plan = { screenName: "System Configurations" };
       const w = auditGateWarnings(plan, cwd, null);
+      const msg = must(w[0], "w[0]");
       check("[P6-136] a Blocked audit with no auditGate at all on the plan WARNS, naming the file and every blocker id",
-        w.length === 1 && /System_Configurations\.json/.test(w[0]) && ids.every((id) => w[0].includes(id)));
+        w.length === 1 && /System_Configurations\.json/.test(msg) && ids.every((id) => msg.includes(id)));
     }
     {
       const cwd = mkCwd();
-      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: [ids[0], ids[1]], reason: "provenance issues, not build issues" } } satisfies Plan;
+      const overrideFirstTwo = [must(ids[0], "ids[0]"), must(ids[1], "ids[1]")];
+      const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: overrideFirstTwo, reason: "provenance issues, not build issues" } } satisfies Plan;
       const w = auditGateWarnings(plan, cwd, null);
+      const msg = must(w[0], "w[0]");
       check("[P6-136] an auditGate that overrides only 2 of 5 blockers WARNS about the 3 not covered",
-        w.length === 1 && ids.slice(2).every((id) => w[0].includes(id)) && !w[0].includes(ids[0]));
+        w.length === 1 && ids.slice(2).every((id) => msg.includes(id)) && !msg.includes(must(ids[0], "ids[0]")));
     }
     {
       const cwd = mkCwd();
       const plan = { screenName: "System Configurations", auditGate: { auditFile: "design/audit/System_Configurations.json", verdict: "blocked", overridden: ids } } satisfies Plan;
       const w = auditGateWarnings(plan, cwd, null);
-      check("[P6-136] every blocker overridden but no `reason` still WARNS (a reason is required)", w.length === 1 && /reason/.test(w[0]));
+      check("[P6-136] every blocker overridden but no `reason` still WARNS (a reason is required)", w.length === 1 && /reason/.test(must(w[0], "w[0]")));
     }
     {
       const cwd = mkCwd();
@@ -885,7 +903,7 @@ void build(tmp).then(async () => {
       fs.writeFileSync(path.join(cwd, "design", "audit", "System_Configurations.json"), "{ truncated");
       const w = auditGateWarnings({ screenName: "System Configurations" }, cwd, null);
       check("[P6-136] an audit file that cannot be read WARNS that the gate was not checked (was: silently no blockers)",
-        w.length === 1 && /System_Configurations\.json is not valid JSON .*the audit gate was NOT checked/.test(w[0]));
+        w.length === 1 && /System_Configurations\.json is not valid JSON .*the audit gate was NOT checked/.test(must(w[0], "w[0]")));
     }
   }
 

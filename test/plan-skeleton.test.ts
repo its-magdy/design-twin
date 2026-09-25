@@ -106,7 +106,7 @@ const names = new Set(plan.components.map((c) => c.name));
 const matched = new Set(plan.components.filter((c) => c.catalog).map((c) => c.name));
 check(`41 distinct components, 26 matched to the NERA catalog by name+prop signature (P1's matcher; mapping.json agrees 26/15) — got ${names.size}/${matched.size}`,
   names.size === 41 && matched.size === 26 && plan.components.filter((c) => c.catalog).every((c) => c.catalog?.by !== "key" && c.catalog?.confirmed === false));
-const first = plan.components[0];
+const first = must(plan.components[0], "plan.components[0]");
 check("each row carries key/setKey/name/variant/props and an empty mapModule/verdict to fill",
   first.nodeId === "10970:111588" && !!first.key && !!first.setKey && first.name === "Component 1" && !!first.variant && first.mapModule === "" && first.verdict === null);
 {
@@ -114,8 +114,9 @@ check("each row carries key/setKey/name/variant/props and an empty mapModule/ver
   const map = path.join(dir, "codeconnect.local.json");
   fs.writeFileSync(map, JSON.stringify({ version: 1, components: { [must(first.key, "first.key")]: { figma: { key: first.key, name: "Component 1" }, code: { module: "app/src/layout/Sidebar.tsx", export: "Sidebar" }, status: "active" } } }));
   const p = planOf(run([screen(JR), vars(JR), DS, "--map", map]).stdout);
+  const pFirst = must(p.components[0], "p.components[0]");
   check("--map: an instance whose key is mapped in codeconnect.local.json gets that module pre-filled",
-    p.components[0].mapped?.module === "app/src/layout/Sidebar.tsx" && p.components[0].mapModule === "app/src/layout/Sidebar.tsx");
+    pFirst.mapped?.module === "app/src/layout/Sidebar.tsx" && pFirst.mapModule === "app/src/layout/Sidebar.tsx");
 }
 
 console.log("determinism, merge, and the second screen:");
@@ -128,17 +129,18 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   const filledSpace4 = must(filled.tokens.find((t) => t.figmaName === "Space 4"), "filled.tokens 'Space 4'");
   filledSpace4.codeToken = "spacing-figma-space-4";
   filledSpace4.verdict = "exact";
-  filled.components[0].mapModule = "app/src/layout/Sidebar.tsx";
-  filled.anchors["7314:87192"].mapModule = "app/src/features/job-roles/screens/JobRolesScreen.tsx";
+  must(filled.components[0], "filled.components[0]").mapModule = "app/src/layout/Sidebar.tsx";
+  must(filled.anchors["7314:87192"], "filled.anchors['7314:87192']").mapModule = "app/src/features/job-roles/screens/JobRolesScreen.tsx";
   filled.files = ["app/src/features/job-roles/screens/JobRolesScreen.tsx"];
   filled.route = "/job-roles";
   filled.verification = { mode: "static-only", reason: "x" };
   fs.writeFileSync(out, JSON.stringify(filled));
   const again = run([screen(JR), vars(JR), DS, "--out", out]);
   const m = read(out, isSkeletonPlan);
+  const mAnchor = m.anchors["7314:87192"];
   check("re-running --out MERGES: every filled field and every top-level field it does not own survives",
     again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
-    && m.components[0].mapModule === "app/src/layout/Sidebar.tsx" && m.anchors["7314:87192"].mapModule?.endsWith("JobRolesScreen.tsx") === true
+    && m.components[0]?.mapModule === "app/src/layout/Sidebar.tsx" && mAnchor?.mapModule?.endsWith("JobRolesScreen.tsx") === true
     && m.files?.length === 1 && m.route === "/job-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
   fs.writeFileSync(out, "{ not json");
   check("an existing plan that is not JSON is never overwritten", run([screen(JR), vars(JR), DS, "--out", out]).status === 1 && fs.readFileSync(out, "utf8") === "{ not json");
@@ -152,7 +154,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
 check("visibility() never reads `visible` — a component PROPERTY called \"visible\" does not hide a node (finding 34)", (() => {
   // `visible: false` is not a field the producer writes — which is the point: it must not hide anything.
   const v = visibility(screenExport([{ id: "1:1", type: "FRAME", children: [malformed<NodeInput>({ id: "1:2", type: "INSTANCE", props: { visible: "Show Breadcrumb" }, visible: false }), { id: "1:3", type: "FRAME", hidden: true, children: [{ id: "1:4", type: "FRAME" }] }] }]));
-  return v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4") && v.hiddenRoots.length === 1 && v.hiddenRoots[0].nodes === 2;
+  return v.visible.has("1:2") && !v.visible.has("1:3") && v.hidden.has("1:4") && v.hiddenRoots.length === 1 && v.hiddenRoots[0]?.nodes === 2;
 })());
 
 console.log("CLI:");
