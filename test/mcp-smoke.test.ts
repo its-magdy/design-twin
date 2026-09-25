@@ -212,8 +212,8 @@ void (async () => {
     setTimeout(() => late.send(JSON.stringify({ type: "hello", instanceId: "fig-late", file: "Late File" })), 400);
     const routed = await pending;
     const routedMs = Date.now() - t0;
-    // figma_status lists the roster BEFORE it pings (the list is what the tool is for), so the roster
-    // still shows c2 unidentified here; the ping's own `file` is the proof the named window was routed to.
+    // With a `client`, figma_status pings first and lists the roster after (so the roster shows the
+    // window the ping reached, identified); the ping's own `file` is the proof it was routed by name.
     const statusOf = (r: JsonRpcReply): { pong?: boolean; file?: string } => JSON.parse(firstText(r)) as { pong?: boolean; file?: string };
     ok("a NAMED client that lands after the call started is waited for and routed to (not refused on the first file that connected)",
       !routed.isError && pinged.includes("ping") && statusOf(routed).pong === true && statusOf(routed).file === "Late File");
@@ -224,6 +224,34 @@ void (async () => {
       bare.isError === true && /no connected Figma file matches 'c9'/.test(firstText(bare)) && /Late File/.test(firstText(bare)) && Date.now() - t1 < 2000);
     late.close();
     plugin.close();
+    await new Promise((r) => setTimeout(r, 200)); // both sockets gone: the bridge has NO client now
+
+    // LIVE 2026-09-25 (§5.2c): with NOTHING connected — every window mid-redial right after a bridge
+    // restart — `figma_status {client:"<name>"}` answered `connected:false` in 10 ms: its zero-clients
+    // early return skipped the named wait that bridge.request() gives every other tool. Now the ping
+    // (and its wait) comes first. The old code fails the first check (no pong, connected:false) and the
+    // second (a bare connId with nothing connected was `connected:false`, not the refusal every other
+    // tool gives).
+    const t2 = Date.now();
+    const pending0 = client.callTool({ name: "figma_status", arguments: { client: "Late File 2" } });
+    const late2 = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
+    late2.on("message", (raw: RawData) => {
+      const m = JSON.parse(String(raw)) as CommandFrame;
+      if (m.cmd === "ping") late2.send(JSON.stringify({ id: m.id, ok: true, result: { pong: true, page: "Cover", file: "Late File 2" } }));
+    });
+    await new Promise((res, rej) => { late2.on("open", res); late2.on("error", rej); });
+    setTimeout(() => late2.send(JSON.stringify({ type: "hello", instanceId: "fig-late-2", file: "Late File 2" })), 400);
+    const routed0 = await pending0;
+    const s0 = JSON.parse(firstText(routed0)) as { connected?: boolean; pong?: boolean; file?: string; clients?: Array<{ file?: string | null }> };
+    ok("figma_status with a NAMED client and NOTHING yet connected waits for that window and answers connected:true with its pong and roster (took " + (Date.now() - t2) + " ms)",
+      !routed0.isError && s0.connected === true && s0.pong === true && s0.file === "Late File 2" &&
+      Array.isArray(s0.clients) && s0.clients.some((c) => c.file === "Late File 2") && Date.now() - t2 < 5000);
+    late2.close();
+    await new Promise((r) => setTimeout(r, 200));
+    const t3 = Date.now();
+    const bare0 = await client.callTool({ name: "figma_status", arguments: { client: "c9" } });
+    ok("figma_status with a bare connId and nothing connected is refused at once like every other tool (no wait, not connected:false)",
+      bare0.isError === true && Date.now() - t3 < 2000);
   } catch (e) {
     ok("MCP smoke run completed without throwing — " + (e instanceof Error ? e.message : e), false);
   } finally {

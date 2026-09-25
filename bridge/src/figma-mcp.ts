@@ -301,19 +301,29 @@ server.registerTool(
   },
   guarded(async (a) => {
     const snapshot = readSnapshotInfo();
-    const clients = await bridge.listClients();
-    if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
-    // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
-    // failing. "Which files can I talk to?" is exactly what this tool is for.
-    if (clients.length > 1 && !(a && a.client)) {
-      return textResult({
-        connected: true,
-        clients,
-        snapshot,
-        note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
-      });
+    if (!(a && a.client)) {
+      const clients = await bridge.listClients();
+      if (!clients.length) return textResult({ connected: false, hint: "Open the Figma file and run the plugin.", snapshot });
+      // With several connected, an unaddressed ping would be REFUSED — so report the roster instead of
+      // failing. "Which files can I talk to?" is exactly what this tool is for.
+      if (clients.length > 1) {
+        return textResult({
+          connected: true,
+          clients,
+          snapshot,
+          note: "Several Figma files are connected. Pass `client` (connId, fileKey, or part of the file name) to every tool call, or it will be refused rather than guess which file you meant.",
+        });
+      }
     }
-    return textResult({ connected: true, clients, ...(await bridge.request("ping", {}, TIMEOUTS.command, a && a.client)), snapshot });
+    // The ping comes BEFORE the roster is listed: the request wrapper above is where a named `client` is waited
+    // for (NAMED_CLIENT_WAIT_MS, the same rule as `--client <name>`), and live (2026-09-25, §5.2c) right
+    // after a bridge restart — every window mid-redial, nothing connected yet — the zero-clients early
+    // return above answered `connected: false` in 10 ms for a file that landed two seconds later. With a
+    // `client` the early returns are skipped, so the wait applies; listing after the ping also means the
+    // roster shows the window the ping reached, identified. A bare connId never waits (resolveClient's
+    // own refusal, as for every other tool).
+    const pong = await bridge.request("ping", {}, TIMEOUTS.command, a && a.client);
+    return textResult({ connected: true, clients: await bridge.listClients(), ...pong, snapshot });
   })
 );
 
