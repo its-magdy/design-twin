@@ -373,8 +373,11 @@ const sandbox = context as unknown as Sandbox;
 // ---- run + assert ----
 (async () => {
   const sel = await sandbox.collectSelection();
-  const tree = sel.screen.nodes[0];
-  const [txt, rect, btn] = must(tree.children, "tree.children");
+  const tree = must(sel.screen.nodes[0], "the screen's root node");
+  const treeChildren = must(tree.children, "tree.children");
+  const txt = must(treeChildren[0], "tree.children[0]");
+  const rect = must(treeChildren[1], "tree.children[1]");
+  const btn = must(treeChildren[2], "tree.children[2]");
 
   ok("manifest present", sel.screen.manifest && typeof sel.screen.manifest.nodes === "number");
   ok("manifest counted nodes (>=4)", sel.screen.manifest.nodes >= 4);
@@ -506,9 +509,9 @@ const sandbox = context as unknown as Sandbox;
   ok("hidden node kept + flagged", abs.hidden === true && abs.name === "Overlay");
   ok("absolute x/y captured", abs.x === 12.4 && abs.y === 40);
   ok("grid column span", abs.gridColumnSpan === 2);
-  ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0].pattern === "columns" && abs.layoutGrids[0].count === 12);
+  ok("frame layoutGrids captured", Array.isArray(abs.layoutGrids) && abs.layoutGrids[0]?.pattern === "columns" && abs.layoutGrids[0]?.count === 12);
   ok("COLUMNS grid keeps its sectionSize as `size` (only GRID's cell size was read after the de-any)", abs.layoutGrids?.[0]?.size === 60);
-  ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0].label === "Use spacing token md");
+  ok("dev-mode annotations captured", Array.isArray(abs.annotations) && abs.annotations[0]?.label === "Use spacing token md");
   ok("devStatus captured", abs.devStatus === "ready_for_dev");
   const abs0 = flatPaint(must(abs.fills?.[0], "abs.fills[0]"));
   ok("gradient transform carried", Array.isArray(abs0.transform) && abs0.transform?.[0]?.[0] === 1);
@@ -573,8 +576,10 @@ const sandbox = context as unknown as Sandbox;
   // tier regression: a raw (non-alias) variable whose only scope is the ALL_SCOPES default is a
   // primitive, not semantic — ALL_SCOPES must not be treated as a meaningful scope.
   ok("tier: raw + ALL_SCOPES-only => primitive", (ds.variables.find((v) => v.name === "misc/bad") || {}).tier === "primitive");
-  ok("paint style carries color value", !!(ds.styles.paint[0] && ds.styles.paint[0].paints && flatPaint(ds.styles.paint[0].paints[0]).color === "#1a4de6"));
-  ok("grid style exported", ds.styles.grid && ds.styles.grid[0] && Array.isArray(ds.styles.grid[0].grids) && ds.styles.grid[0].grids[0].count === 12);
+  const paintStyle0Paint0 = ds.styles.paint[0]?.paints?.[0];
+  ok("paint style carries color value", paintStyle0Paint0 !== undefined && flatPaint(paintStyle0Paint0).color === "#1a4de6");
+  const gridStyle0Grid0 = ds.styles.grid[0]?.grids?.[0];
+  ok("grid style exported", gridStyle0Grid0 !== undefined && gridStyle0Grid0.count === 12);
 
   // collectDesignSystemOnly — the --design-system / figma_export_design_system path: no page/frame
   // walk, no assets, just { designSystem }. Exercises the actual collector (not just buildDesignSystem
@@ -617,7 +622,8 @@ const sandbox = context as unknown as Sandbox;
   ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
     sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
   ok("componentPropertyReferences -> propRefs (stripped)", !!(txt.propRefs && txt.propRefs.characters === "Label"));
-  ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btn.overrides[0].fields.indexOf("characters") !== -1);
+  const btnOverride0 = btn.overrides?.[0];
+  ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btnOverride0 !== undefined && btnOverride0.fields.indexOf("characters") !== -1);
   ok("text run bound variable -> token name", !!(txt.runs?.[1]?.tokens && txt.runs?.[1]?.tokens.fills === "color/primary"));
   ok("effect bound variable -> token name", !!(rect.effects?.[0]?.tokens && rect.effects?.[0]?.tokens.radius === "misc/bad"));
   // matchLayers lives on DirectionalTransition only (MOVE_IN/OUT, PUSH, SLIDE_IN/OUT); SimpleTransition
@@ -647,11 +653,12 @@ const sandbox = context as unknown as Sandbox;
   ok("targetAspectRatio -> ratio", abs.aspectRatio === 1.78);
   ok("detachedInfo (library key)", !!(abs.detachedFrom && abs.detachedFrom.key === "libkey123"));
   ok("overlay settings (scrim + close-on-click-outside)", !!(abs.overlay && abs.overlay.closeOnClickOutside === true && abs.overlay.background && abs.overlay.position === "center"));
-  ok("annotation categoryId", Array.isArray(abs.annotations) && abs.annotations[0].categoryId === "cat_spacing");
+  ok("annotation categoryId", Array.isArray(abs.annotations) && abs.annotations[0]?.categoryId === "cat_spacing");
 
   ok("resolved box on auto-layout root", !!(tree.box && tree.box.w === 375));
   ok("strokesIncludedInLayout flagged", tree.strokesInLayout === true);
-  ok("dev-resource links batched at root", Array.isArray(tree.devResources) && tree.devResources[0].url.indexOf("sb.example.com") !== -1);
+  const treeDevResource0 = tree.devResources?.[0];
+  ok("dev-resource links batched at root", Array.isArray(tree.devResources) && treeDevResource0 !== undefined && treeDevResource0.url.indexOf("sb.example.com") !== -1);
 
   ok("per-run textStyle resolved", txt.runs?.[1]?.textStyle === "Heading/H1");
   ok("per-run fillStyle resolved", txt.runs?.[1]?.fillStyle === "Brand/Primary");
@@ -659,12 +666,12 @@ const sandbox = context as unknown as Sandbox;
   ok("per-run list indentation level", txt.runs?.[1]?.indent === 1);
 
   const acts = must(btn.reactions?.[0]?.actions, "btn.reactions[0].actions");
-  ok("NODE action preserveScroll flag", acts[0].preserveScroll === true);
+  ok("NODE action preserveScroll flag", acts[0]?.preserveScroll === true);
   ok("SET_VARIABLE resolves variable name", acts.some((a) => a.type === "set_variable" && a.variable === "color/primary"));
   ok("SET_VARIABLE_MODE resolves collection+mode names", acts.some((a) => a.type === "set_variable_mode" && a.collection === "Semantic" && a.mode === "Dark"));
   ok("UPDATE_MEDIA_RUNTIME keeps destinationId + resolved destination name",
     acts.some((a) => a.type === "update_media_runtime" && a.mediaAction === "play" && a.destinationId === "frame_2" && a.destination === "Details"));
-  ok("CONDITIONAL nests actions", acts.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0].actions?.[0]?.destination === "Details"));
+  ok("CONDITIONAL nests actions", acts.some((a) => a.type === "conditional" && Array.isArray(a.conditionalBlocks) && a.conditionalBlocks[0]?.actions?.[0]?.destination === "Details"));
   const urlNewTab = acts.find((a) => a.type === "url" && a.url === "https://newtab.example.com");
   const urlSameTab = acts.find((a) => a.type === "url" && a.url === "https://sametab.example.com");
   ok("URL action emits openInNewTab when true", !!urlNewTab && urlNewTab.openInNewTab === true);
@@ -675,12 +682,14 @@ const sandbox = context as unknown as Sandbox;
   ok("document color profile", ds.colorProfile === "display_p3");
   ok("document file name", ds.file === "My File");
   ok("component publish key captured", btnComp !== undefined && btnComp.key === "compkey123");
-  ok("component documentationLinks captured", btnComp !== undefined && Array.isArray(btnComp.docs) && btnComp.docs[0].indexOf("docs.example.com") !== -1);
+  const btnCompDoc0 = btnComp?.docs?.[0];
+  ok("component documentationLinks captured", btnComp !== undefined && Array.isArray(btnComp.docs) && btnCompDoc0 !== undefined && btnCompDoc0.indexOf("docs.example.com") !== -1);
 
   const tableNode = { type: "TABLE", name: "Data", visible: true, id: "20:0", numRows: 2, numColumns: 2,
     cellAt: (r: number, c: number) => ({ text: { characters: "r" + r + "c" + c }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }], rowSpan: 1, columnSpan: 1 }) };
   const tbl = await sandbox.serialize(tableNode, 0, false);
-  ok("table cells traversed via cellAt", Array.isArray(tbl.tableCells) && tbl.tableCells.length === 2 && tbl.tableCells[0][0].text === "r0c0");
+  const tblCell00 = tbl.tableCells?.[0]?.[0];
+  ok("table cells traversed via cellAt", Array.isArray(tbl.tableCells) && tbl.tableCells.length === 2 && tblCell00 !== undefined && tblCell00.text === "r0c0");
 
   // --- READ additions (2026-07-23 fresh 3-agent doc audit): bug fixes + grid fidelity + prop/style bindings ---
   // BUG FIX: textDecorationThickness/Offset are { value:number, unit } — .value IS the number (was read as .value.value → always dropped).
@@ -699,7 +708,7 @@ const sandbox = context as unknown as Sandbox;
   };
   const gf = await sandbox.serialize(gridFrame, 0, false);
   const gfLayout = must(gf.layout, "gf.layout");
-  ok("grid track sizes (fixed px + flex fr)", gfLayout.display === "grid" && Array.isArray(gfLayout.columnSizes) && gfLayout.columnSizes[0].type === "fixed" && gfLayout.columnSizes[0].value === 200 && gfLayout.columnSizes[1].type === "flex");
+  ok("grid track sizes (fixed px + flex fr)", gfLayout.display === "grid" && Array.isArray(gfLayout.columnSizes) && gfLayout.columnSizes[0]?.type === "fixed" && gfLayout.columnSizes[0]?.value === 200 && gfLayout.columnSizes[1]?.type === "flex");
   const gfCol2 = must(gfLayout.columnSizes?.[2], "gf.layout.columnSizes[2]");
   ok("grid HUG track (value-less) handled", gfCol2.type === "hug" && gfCol2.value === undefined);
   ok("grid child anchor index (start cell)", abs.gridColumnStart === 1 && abs.gridRowStart === 0);
@@ -727,14 +736,14 @@ const sandbox = context as unknown as Sandbox;
   ok("css auto-on for small single selection", !!(tree.css && tree.css.display === "flex" && tree.css.padding === "16px"));
   ok("pluginData still off by default (not auto-enabled)", tree.pluginData === undefined);
   const sel2 = await sandbox.collectSelection({ css: true, measurements: true, pluginData: true });
-  const tree2 = sel2.screen.nodes[0];
+  const tree2 = must(sel2.screen.nodes[0], "sel2.screen.nodes[0]");
   ok("getCSSAsync -> css oracle (opt-in)", !!(tree2.css && tree2.css.display === "flex" && tree2.css.padding === "16px"));
   ok("own-scope plugin data captured (opt-in)", !!(tree2.pluginData && tree2.pluginData.codeConnect === "Button/Primary"));
-  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0].text === "16" && sel2.screen.measurements[0].start?.side === "LEFT");
+  ok("measurements captured via sync getMeasurements (opt-in)", Array.isArray(sel2.screen.measurements) && sel2.screen.measurements[0]?.text === "16" && sel2.screen.measurements[0]?.start?.side === "LEFT");
   ok("motion off by default", tree.motion === undefined);
   const sel3 = await sandbox.collectSelection({ motion: true });
-  const m3 = sel3.screen.nodes[0].motion;
-  ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0].duration === 0.5));
+  const m3 = must(sel3.screen.nodes[0], "sel3.screen.nodes[0]").motion;
+  ok("motion timelines captured (opt-in)", !!(m3 && Array.isArray(m3.timelines) && m3.timelines[0]?.duration === 0.5));
   const tx = m3?.manualTracks?.TRANSLATION_X;
   ok("motion keyframe track: base + keyframes + values", !!(tx && tx.base === 0 && tx.keyframes?.[1]?.value === 100));
   const tx1Easing = tx?.keyframes?.[1]?.easing;
@@ -762,15 +771,17 @@ const sandbox = context as unknown as Sandbox;
   ok("motion keyframe easing bound to an unresolvable variable id falls back to {aliasOf: <id>} (VariableID:1 is not in VARS)",
     JSON.stringify(f0 && !("properties" in f0) && f0.keyframes?.[1]?.easing) === '{"aliasOf":"VariableID:1"}');
   const f1 = mt.fills?.["1"];
-  ok("motion manualTracks.fills shader track under properties", !!(f1 && "properties" in f1 &&
-    f1.properties["shader:speed"].base === 1 && f1.properties["shader:speed"].keyframes?.[1]?.value === 3));
+  const f1Speed = f1 && "properties" in f1 ? f1.properties["shader:speed"] : undefined;
+  ok("motion manualTracks.fills shader track under properties", !!(f1Speed && f1Speed.base === 1 && f1Speed.keyframes?.[1]?.value === 3));
   const s0 = mt.strokes?.["0"];
   const s0Easing = s0 && !("properties" in s0) && s0.keyframes?.[0]?.easing;
   ok("motion manualTracks.strokes[\"0\"] track", !!(s0 && !("properties" in s0) && s0.base === 0 &&
     s0.keyframes?.length === 1 && s0.keyframes?.[0]?.value === 0.5 && s0Easing && "type" in s0Easing && s0Easing.type === "ease_in"));
   const e0 = mt.effects?.["0"];
-  ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0 && e0.RADIUS.base === 4 && e0.RADIUS.keyframes?.length === 2 && e0.RADIUS.keyframes?.[1]?.value === 12));
-  ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0 && e0.properties && e0.properties["shader:glow"].keyframes?.[0]?.value === 0.8));
+  const e0Radius = e0?.RADIUS;
+  ok("motion manualTracks.effects[\"0\"].RADIUS track", !!(e0Radius && e0Radius.base === 4 && e0Radius.keyframes?.length === 2 && e0Radius.keyframes?.[1]?.value === 12));
+  const e0GlowShader = e0?.properties?.["shader:glow"];
+  ok("motion manualTracks.effects[\"0\"].properties shader track", !!(e0GlowShader && e0GlowShader.keyframes?.[0]?.value === 0.8));
   const an = must(m3?.animations, "m3.animations");
   ok("motion animations scalar output unchanged (ROTATION, byte-identical)", JSON.stringify(an.ROTATION) ===
     '{"base":0,"duration":1.2,"tracks":[{"op":"offset","keyframes":[{"t":0,"value":0},{"t":1,"value":90}]}]}');
@@ -778,20 +789,22 @@ const sandbox = context as unknown as Sandbox;
   ok("motion animations.fills[\"0\"]: base + duration + op track", !!(af0 && !("properties" in af0) && af0.base === 1 && af0.duration === 0.8 &&
     af0.tracks?.[0]?.op === "scale" && af0.tracks?.[0]?.keyframes?.[1]?.value === 0.5));
   const af2 = an.fills?.["2"];
-  ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2 && "properties" in af2 &&
-    af2.properties["shader:phase"].duration === 3 && must(af2.properties["shader:phase"].tracks, "af2 shader:phase tracks")[0].op === undefined &&
-    must(af2.properties["shader:phase"].tracks, "af2 shader:phase tracks")[0].keyframes?.[0]?.value === 6));
+  const af2Phase = af2 && "properties" in af2 ? af2.properties["shader:phase"] : undefined;
+  const af2PhaseTrack0 = af2Phase && must(af2Phase.tracks, "af2 shader:phase tracks")[0];
+  ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2Phase && af2Phase.duration === 3 &&
+    af2PhaseTrack0 && af2PhaseTrack0.op === undefined && af2PhaseTrack0.keyframes?.[0]?.value === 6));
   const as1 = an.strokes?.["1"];
   ok("motion animations.strokes[\"1\"] track", !!(as1 && !("properties" in as1) && as1.tracks?.[0]?.op === "offset" && as1.tracks?.[0]?.keyframes?.[0]?.value === 3));
   const ae0 = an.effects?.["0"];
-  ok("motion animations.effects[\"0\"].OFFSET_Y track", !!(ae0 && ae0.OFFSET_Y.duration === 0.6 && ae0.OFFSET_Y.tracks?.[0]?.keyframes?.[1]?.value === 8));
+  const ae0OffsetY = ae0?.OFFSET_Y;
+  ok("motion animations.effects[\"0\"].OFFSET_Y track", !!(ae0OffsetY && ae0OffsetY.duration === 0.6 && ae0OffsetY.tracks?.[0]?.keyframes?.[1]?.value === 8));
   ok("motion indexed collections follow the scalar fields", JSON.stringify(Object.keys(mt)) === '["TRANSLATION_X","fills","strokes","effects"]' &&
     JSON.stringify(Object.keys(an)) === '["ROTATION","fills","strokes","effects"]');
 
   // --- sharedData (cross-plugin, e.g. Tokens Studio applied tokens) is OPT-IN ---
   ok("sharedData off by default", tree.sharedData === undefined);
   const sel4 = await sandbox.collectSelection({ sharedData: true });
-  const tree4 = sel4.screen.nodes[0];
+  const tree4 = must(sel4.screen.nodes[0], "sel4.screen.nodes[0]");
   ok("sharedData: Tokens Studio applied tokens captured (opt-in)", !!(tree4.sharedData && tree4.sharedData.tokens && tree4.sharedData.tokens.fill === "color.primary" && tree4.sharedData.tokens.borderRadius === "radius.md"));
 
   // --- parametric shape intent: ellipse arc/donut, star/polygon points, boolean op ---
@@ -819,7 +832,7 @@ const sandbox = context as unknown as Sandbox;
   };
   const hero = await sandbox.serialize(heroFrame, 0, false);
   ok("image-backed container NOT flattened (no asset)", hero.asset === undefined);
-  ok("image-backed container keeps children (text survives)", Array.isArray(hero.children) && hero.children.length === 1 && hero.children[0].text === "Welcome");
+  ok("image-backed container keeps children (text survives)", Array.isArray(hero.children) && hero.children.length === 1 && hero.children[0]?.text === "Welcome");
   ok("image-backed container keeps image as background fill", Array.isArray(hero.fills) && hero.fills.some((f) => flatPaint(f).hash === "abc123"));
   // A childless image node (a plain image rectangle) still rasterizes to a PNG asset as before.
   const imageRect = { type: "RECTANGLE", name: "Photo", visible: true, id: "img:1",
@@ -843,20 +856,20 @@ const sandbox = context as unknown as Sandbox;
 
   const skipRun = await sandbox.collectSelection({ skipAssets: true });
   const skipCalls = exportCalls;
-  const skipNode = skipRun.screen.nodes[0];
+  const skipNode = must(skipRun.screen.nodes[0], "skipRun.screen.nodes[0]");
   ok("[RD-noassets] no asset is emitted when skipping", skipNode.asset === undefined);
   // The per-ROOT reference screenshot is deliberately still taken: it's one render per exported root
   // (the self-correction image), not the O(nodes) pass that caused the hang. So the contract is
   // "no PER-NODE asset export", not "no exportAsync at all" — pin that precisely.
   ok("[RD-noassets] the per-node asset export does not run (only the 1 reference render)", skipCalls <= 1);
-  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipRun.screen.nodes[0].reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
+  ok("[RD-noassets] the reference screenshot IS still produced", typeof skipNode.reference === "string" || skipRun.assets.some((a) => a.kind === "reference"));
   ok("[RD-noassets] the skip is COUNTED, not silent", skipRun.screen.manifest.assetsSkipped >= 1);
   ok("[RD-noassets] and warned — a missing `asset` must not read as 'no graphic here'",
     skipRun.screen.manifest.warnings.some((w) => /--no-assets/.test(w) && /skipped/.test(w)));
 
   const normalRun = await sandbox.collectSelection({});
   ok("[RD-noassets] DEFAULT is unchanged — the asset still exports",
-    typeof normalRun.screen.nodes[0].asset === "string");
+    typeof must(normalRun.screen.nodes[0], "normalRun.screen.nodes[0]").asset === "string");
 
   // --- [RD-noassets-shape] a FLATTENED CONTAINER must stay flattened when skipping ---
   // The case above is a childless RECTANGLE — a leaf either way, so it cannot catch the real bug:
@@ -877,8 +890,8 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.currentPage.selection = [iconSheet];
   const iconNormal = await sandbox.collectSelection({});
   const iconSkipped = await sandbox.collectSelection({ skipAssets: true });
-  const nNode = must(iconNormal.screen.nodes[0].children, "iconNormal tree children")[0];
-  const sNode = must(iconSkipped.screen.nodes[0].children, "iconSkipped tree children")[0];
+  const nNode = must(must(must(iconNormal.screen.nodes[0], "iconNormal.screen.nodes[0]").children, "iconNormal tree children")[0], "iconNormal tree children[0]");
+  const sNode = must(must(must(iconSkipped.screen.nodes[0], "iconSkipped.screen.nodes[0]").children, "iconSkipped tree children")[0], "iconSkipped tree children[0]");
 
   ok("[RD-noassets-shape] normally the icon container flattens to one asset leaf",
     typeof nNode.asset === "string" && !nNode.children);
@@ -924,7 +937,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[ASSET-DEDUPE] and both node ids are recorded on the file that survived",!!(
     (() => { const a = must(icons.find((x) => x.file === "element-4.svg"), "icons element-4.svg"); return a.from && a.from.indexOf("I1:2:3") !== -1 && a.from.indexOf("I9:8:7") !== -1; })()));
   ok("[ASSET-DEDUPE] the deduped node's tree path points at that same one file",
-    named.screen.nodes[0].children?.[1]?.asset === "assets/element-4.svg");
+    named.screen.nodes[0]?.children?.[1]?.asset === "assets/element-4.svg");
   ok("[ASSET-NAME] two DIFFERENT icons sharing a leaf name both survive, told apart by content",!!(
     (() => { const f = fileOf("misc/Diploma"); return f && f !== "Diploma.svg" && /^Diploma-[0-9a-f]{6}\.svg$/.test(f); })()));
   ok("[ASSET-NAME] every filename is still separator-free and ends in its format",
@@ -968,11 +981,11 @@ const sandbox = context as unknown as Sandbox;
     width: 100, height: 100, getCSSAsync: async () => ({ display: "block" }), children: bigKids };
   sandbox.figma.currentPage.selection = [bigFrame];
   const selBig = await sandbox.collectSelection();
-  ok("css stays OFF for large single selection (>cap)", selBig.screen.nodes[0].css === undefined);
+  ok("css stays OFF for large single selection (>cap)", must(selBig.screen.nodes[0], "selBig.screen.nodes[0]").css === undefined);
   // explicit css:false always wins, even on a small tree.
   sandbox.figma.currentPage.selection = [scrollFrame];
   const selNoCss = await sandbox.collectSelection({ css: false });
-  ok("explicit css:false wins over auto-enable", selNoCss.screen.nodes[0].css === undefined);
+  ok("explicit css:false wins over auto-enable", must(selNoCss.screen.nodes[0], "selNoCss.screen.nodes[0]").css === undefined);
 
   // ---- LIBRARY (remote) variables ----
   // getLocalVariablesAsync returns ONLY this file's variables, but node bindings resolve remote ones
@@ -1000,7 +1013,7 @@ const sandbox = context as unknown as Sandbox;
   ok("library var values keyed by readable mode names", !!(libDump && libDump.values && libDump.values.Light === "#ff6600"));
   ok("library var's collection is emitted (default mode for :root)", libSel.variables.collections.some((c) => c.name === "Library/Brand" && c.default === "Light"));
   ok("library pull is reported in hygiene (never silent)", libSel.variables.hygiene.some((h) => /published LIBRARY/.test(h)));
-  ok("node still resolves the library token by name", !!(libSel.screen.nodes[0].tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent"));
+  ok("node still resolves the library token by name", !!(libSel.screen.nodes[0]?.tokens && libSel.screen.nodes[0].tokens.fills === "brand/accent"));
   // An UNreferenced library variable must NOT be dragged in — the dump stays scoped to what's used.
   ok("unreferenced library vars are not pulled in", !libSel.variables.variables.some((v) => v.name === "unused/never"));
 
@@ -1168,7 +1181,7 @@ const sandbox = context as unknown as Sandbox;
   // ---- an unreadable page degrades, it does not abort ----
   // PageNode.children THROWS on a page that isn't current and wasn't loaded (dynamic-page access).
   // A failed loadAllPagesAsync used to warn "may miss pages" and then abort the whole export here.
-  const goodPage = sandbox.figma.root.children[0];
+  const goodPage = must(sandbox.figma.root.children[0], "sandbox.figma.root.children[0]");
   const badPage = { name: "Locked Page", get children(): FakeNode[] { throw new Error("page not loaded"); },
     findAllWithCriteria: () => { throw new Error("page not loaded"); } };
   const prevRootChildren = sandbox.figma.root.children;
@@ -1201,7 +1214,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIST] reports the file name", listed.file === "My File");
   ok("[LIST] lists every page", listed.pages.length === sandbox.figma.root.children.length);
   ok("[LIST] marks the current page", listed.pages.some((p) => p.current === true));
-  const lf = listed.pages[0].frames;
+  const lf = must(listed.pages[0], "listed.pages[0]").frames;
   ok("[LIST] top-level frames carry id/name/type", Array.isArray(lf) && lf.length > 0 && lf.every((f) => f.id && f.name && f.type));
   const lfFrames = must(lf, "listed.pages[0].frames");
   ok("[LIST] frames carry size", lfFrames.every((f) => typeof f.w === "number" && typeof f.h === "number"));
@@ -1228,7 +1241,7 @@ const sandbox = context as unknown as Sandbox;
   ok("[LIST] depth 2 loads each page individually, NOT loadAllPagesAsync",
     loadCalls === 0 && perPageLoads === sandbox.figma.root.children.length);
   // A page that fails to load must cost only ITSELF — the whole reason for loading one at a time.
-  const flaky = sandbox.figma.root.children[0];
+  const flaky = must(sandbox.figma.root.children[0], "sandbox.figma.root.children[0]");
   const prevFlakyLoad = flaky.loadAsync;
   flaky.loadAsync = async () => { throw new Error("nope"); };
   const listFlaky = await sandbox.listPages({ depth: 2 });
@@ -1308,7 +1321,7 @@ const sandbox = context as unknown as Sandbox;
   };
   sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:other" ? otherPage : null);
   const pageKids = await sandbox.listChildren("page:other");
-  ok("[CHILDREN] a non-current page is loaded before its children are read", pageKids.children.length === 1 && pageKids.children[0].id === "opf:1");
+  ok("[CHILDREN] a non-current page is loaded before its children are read", pageKids.children.length === 1 && pageKids.children[0]?.id === "opf:1");
 
   // The CURRENT page is not exempt either — the migration guide is explicit: "If you are accessing the
   // current page using an expression like figma.root.children[x], then you will be required to call
@@ -1326,7 +1339,7 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:current" ? fakeCurrentPage : null);
   const currentKids = await sandbox.listChildren("page:current");
   ok("[CHILDREN] the current page is still loaded (not skipped) before its children are read",
-    currentPageLoadCalls === 1 && currentKids.children.length === 1 && currentKids.children[0].id === "cpf:1");
+    currentPageLoadCalls === 1 && currentKids.children.length === 1 && currentKids.children[0]?.id === "cpf:1");
   sandbox.figma.currentPage = prevCurrentPage4;
 
   // listChildren("0:0") — the DOCUMENT node: its children are PageNodes, and reading `hasChildren` on
@@ -1463,9 +1476,9 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.getNodeByIdAsync = async (id: string) => { const nodes: Record<string, FakeNode> = { "t:1": textTarget, "r:1": rectTarget, "g:1": groupTarget }; return nodes[id] || prevGetNode(id); };
 
   const wOk = await sandbox.applyWrites([{ op: "createFrame", name: "Card", fill: "#ff0000" }, { op: "setText", nodeId: "t:1", text: "new" }]);
-  ok("write: successful batch -> ok:true + applied ids", wOk.ok === true && wOk.applied.length === 2 && wOk.applied[0].id === "new:frame");
+  ok("write: successful batch -> ok:true + applied ids", wOk.ok === true && wOk.applied.length === 2 && wOk.applied[0]?.id === "new:frame");
   ok("write: setText actually mutated the node", textTarget.characters === "new");
-  ok("write: setFill applies a parsed hex", (await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00ff00" }])).ok === true && Math.round(rectTarget.fills[0].color.g) === 1);
+  ok("write: setFill applies a parsed hex", (await sandbox.applyWrites([{ op: "setFill", nodeId: "r:1", color: "#00ff00" }])).ok === true && Math.round(rectTarget.fills[0]?.color.g ?? NaN) === 1);
 
   // A missing node must FAIL, not silently report {id} — the old behaviour told the agent it worked.
   const wMissing = await sandbox.applyWrites([{ op: "setFill", nodeId: "nope:1", color: "#fff" }]);
@@ -1512,7 +1525,7 @@ const sandbox = context as unknown as Sandbox;
   };
 
   const pOk = await sandbox.applyWrites([{ op: "createFrame", name: "Child", parentId: "c:1" }]);
-  ok("write: valid parentId -> ok:true and the node lands on that parent", pOk.ok === true && parentKids.length === 1 && parentKids[0].id === "new:frame");
+  ok("write: valid parentId -> ok:true and the node lands on that parent", pOk.ok === true && parentKids.length === 1 && parentKids[0]?.id === "new:frame");
   ok("write: valid parentId did NOT fall through to currentPage", parentKids[0] === created[created.length - 1]);
 
   const beforeOrphan = created.length;
@@ -1556,7 +1569,9 @@ const sandbox = context as unknown as Sandbox;
     fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("inv", [invisibleVec, zeroAreaVec])];
   const invRun = await sandbox.collectSelection({ css: false });
-  const [invNode, zeroNode] = must(invRun.screen.nodes[0].children, "invRun tree children");
+  const invRunChildren = must(must(invRun.screen.nodes[0], "invRun.screen.nodes[0]").children, "invRun tree children");
+  const invNode = must(invRunChildren[0], "invRun tree children[0]");
+  const zeroNode = must(invRunChildren[1], "invRun tree children[1]");
 
   ok("[AUDIT-1] a vector with no visible paint is skipped (no asset, no geometry)",
     invNode.asset === undefined && invNode.geometry === undefined);
@@ -1580,7 +1595,7 @@ const sandbox = context as unknown as Sandbox;
     exportAsync: boom };
   sandbox.figma.currentPage.selection = [vecHost("geo", [brokenVec])];
   const geoRun = await sandbox.collectSelection({ css: false });
-  const geoNode = must(geoRun.screen.nodes[0].children, "geoRun tree children")[0];
+  const geoNode = must(must(must(geoRun.screen.nodes[0], "geoRun.screen.nodes[0]").children, "geoRun tree children")[0], "geoRun tree children[0]");
   ok("[AUDIT-1] a real export failure falls back to fillGeometry", !!(geoNode.geometry && geoNode.geometry.fills?.[0] === "M0 0h24v24H0z"));
   ok("[AUDIT-1] strokeGeometry comes along when present", geoNode.geometry?.strokes?.[0] === "M2 2h20");
   // Without w/h the path data has no coordinate space — a consumer cannot build a viewBox from it.
@@ -1609,8 +1624,9 @@ const sandbox = context as unknown as Sandbox;
     isAsset: true, children: [oddNameVec], findOne: () => null, exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [oddNameFrame];
   const isAssetRun = await sandbox.collectSelection({});
+  const isAssetNode0 = must(isAssetRun.screen.nodes[0], "isAssetRun.screen.nodes[0]");
   ok("[isAsset] a container Figma flags as an asset flattens even with a non-matching name",
-    typeof isAssetRun.screen.nodes[0].asset === "string" && !isAssetRun.screen.nodes[0].children);
+    typeof isAssetNode0.asset === "string" && !isAssetNode0.children);
 
   const oddNameFrameWithText = { type: "FRAME", name: "Group 43", visible: true, id: "oa:2", width: 20, height: 20,
     isAsset: true, children: [{ type: "TEXT", name: "t", visible: true, id: "oa:t1" }],
@@ -1619,7 +1635,7 @@ const sandbox = context as unknown as Sandbox;
   sandbox.figma.currentPage.selection = [oddNameFrameWithText];
   const isAssetTextRun = await sandbox.collectSelection({});
   ok("[isAsset] isAsset:true is still overridden by a real TEXT descendant — never flatten real content",
-    Array.isArray(isAssetTextRun.screen.nodes[0].children));
+    Array.isArray(isAssetTextRun.screen.nodes[0]?.children));
 
   // ---- [2026-08-13, fixed 2026-09-24] variableWidthStrokeProperties: tapered strokes ----
   // Real shape per https://developers.figma.com/docs/plugins/api/VariableWidthStrokeProperties/ and
@@ -1633,12 +1649,12 @@ const sandbox = context as unknown as Sandbox;
     fills: [], exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [taperedNode];
   const taperedRun = await sandbox.collectSelection({});
-  const taperedStroke = taperedRun.screen.nodes[0].strokes;
+  const taperedStroke = must(taperedRun.screen.nodes[0], "taperedRun.screen.nodes[0]").strokes;
   ok("[variableWidth] a CUSTOM tapered stroke's profile is captured",
     !!taperedStroke && !!taperedStroke.variableWidth && taperedStroke.variableWidth.profile === "custom");
   const taperedPoints = must(taperedStroke?.variableWidth?.points, "taperedStroke.variableWidth.points");
   ok("[variableWidth] and its points, with position+width",
-    taperedPoints.length === 3 && taperedPoints[1].pos === 0.5 && taperedPoints[1].width === 4);
+    taperedPoints.length === 3 && taperedPoints[1]?.pos === 0.5 && taperedPoints[1]?.width === 4);
 
   const presetNode = { type: "VECTOR", name: "wedge", visible: true, id: "vw:3", width: 40, height: 4,
     strokes: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
@@ -1647,7 +1663,7 @@ const sandbox = context as unknown as Sandbox;
     fills: [], exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [presetNode];
   const presetRun = await sandbox.collectSelection({});
-  const presetStroke = presetRun.screen.nodes[0].strokes;
+  const presetStroke = must(presetRun.screen.nodes[0], "presetRun.screen.nodes[0]").strokes;
   ok("[variableWidth] a preset (WEDGE) stroke carries only a profile, no points",
     !!presetStroke && !!presetStroke.variableWidth && presetStroke.variableWidth.profile === "wedge" && presetStroke.variableWidth.points === undefined);
 
@@ -1656,8 +1672,9 @@ const sandbox = context as unknown as Sandbox;
     strokeWeight: 2, fills: [], exportAsync: async () => "<svg/>" };
   sandbox.figma.currentPage.selection = [plainStrokeNode];
   const plainRun = await sandbox.collectSelection({});
+  const plainStroke = must(plainRun.screen.nodes[0], "plainRun.screen.nodes[0]").strokes;
   ok("[variableWidth] a normal stroke with no profile emits no variableWidth key",
-    !plainRun.screen.nodes[0].strokes || plainRun.screen.nodes[0].strokes.variableWidth === undefined);
+    !plainStroke || plainStroke.variableWidth === undefined);
 
   // ---- [AUDIT-6c] the warnings manifest is aggregated by kind, not one entry per node ----
   // A real export produced 896 warnings, ~800 asset failures + 80 identical missingFont sentences.
@@ -1673,15 +1690,16 @@ const sandbox = context as unknown as Sandbox;
   const fontLines = aggWarnings.filter((w) => /missing font/.test(w));
 
   ok("[AUDIT-6c] 12 missing-font nodes produce ONE warning, not 12", fontLines.length === 1);
-  ok("[AUDIT-6c] the summary carries the real count", /12 node\(s\)/.test(fontLines[0]));
-  ok("[AUDIT-6c] and example nodes, so it stays actionable", /Label1 \(mf:1\)/.test(fontLines[0]));
+  const fontLine0 = must(fontLines[0], "fontLines[0]");
+  ok("[AUDIT-6c] the summary carries the real count", /12 node\(s\)/.test(fontLine0));
+  ok("[AUDIT-6c] and example nodes, so it stays actionable", /Label1 \(mf:1\)/.test(fontLine0));
   ok("[AUDIT-6c] examples are capped (~10) and the remainder is stated, not silently dropped",
-    /\(\+2 more\)/.test(fontLines[0]) && (fontLines[0].match(/mf:/g) || []).length === 10);
+    /\(\+2 more\)/.test(fontLine0) && (fontLine0.match(/mf:/g) || []).length === 10);
   // Backward compatibility: the skill's "read warnings first" step reads a plain list of strings.
   ok("[AUDIT-6c] the manifest is still a flat array of strings", Array.isArray(aggWarnings) && aggWarnings.every((w) => typeof w === "string"));
   // Per-node flags are untouched — aggregation is about the MANIFEST, not about hiding the signal.
   ok("[AUDIT-6c] every affected node still carries its own missingFont flag",
-    must(aggRun.screen.nodes[0].children, "aggRun tree children").every((c) => c.missingFont === true));
+    must(must(aggRun.screen.nodes[0], "aggRun.screen.nodes[0]").children, "aggRun tree children").every((c) => c.missingFont === true));
   sandbox.figma.currentPage.selection = prevSel2;
 
   // ---- [AUDIT-6a] box.x/y is page-space and must not survive inside an auto-layout parent ----
@@ -1694,7 +1712,9 @@ const sandbox = context as unknown as Sandbox;
     layoutMode: "VERTICAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
     absoluteBoundingBox: { x: 5, y: 6, width: 100, height: 100 }, children: [flowKid, absKid] };
   const stack = await sandbox.serialize(autoParent, 0, false);
-  const [flowOut, absOut] = must(stack.children, "stack.children");
+  const stackChildren = must(stack.children, "stack.children");
+  const flowOut = must(stackChildren[0], "stack.children[0]");
+  const absOut = must(stackChildren[1], "stack.children[1]");
   ok("[AUDIT-6a] a flow child of an auto-layout parent keeps w/h", flowOut.box?.w === 100 && flowOut.box?.h === 20);
   ok("[AUDIT-6a] but drops box.x/y — the container decides placement", flowOut.box !== undefined && flowOut.box.x === undefined && flowOut.box.y === undefined);
   // The exceptions have to survive, or absolutely-positioned overlays lose their only placement data.
@@ -1702,7 +1722,7 @@ const sandbox = context as unknown as Sandbox;
   const looseParent = { type: "FRAME", name: "Canvas", visible: true, id: "bx:l", width: 100, height: 100,
     layoutMode: "NONE", children: [boxed("loose")] };
   const loose = await sandbox.serialize(looseParent, 0, false);
-  const looseBox = must(loose.children, "loose.children")[0].box;
+  const looseBox = must(must(loose.children, "loose.children")[0], "loose.children[0]").box;
   ok("[AUDIT-6a] a child of a NON-auto-layout parent keeps box.x/y", looseBox?.x === 40 && looseBox?.y === 80);
   // The export ROOT has no parent in the doc, so its own page-space origin is the only anchor there is.
   ok("[AUDIT-6a] an export ROOT keeps its own box.x/y", stack.box?.x === 5 && stack.box?.y === 6);
@@ -1731,10 +1751,10 @@ const sandbox = context as unknown as Sandbox;
       { format: "SVG", suffix: "", constraint: { type: "SCALE", value: 1 } },
       { format: "PNG", suffix: "@3x", constraint: { type: "SCALE", value: 3 } },
     ] }, 0, false);
-  ok("[AUDIT-5] exportSettings captured, format lowercased", Array.isArray(exportNode.exportSettings) && exportNode.exportSettings[0].format === "svg");
+  ok("[AUDIT-5] exportSettings captured, format lowercased", Array.isArray(exportNode.exportSettings) && exportNode.exportSettings[0]?.format === "svg");
   const es = must(exportNode.exportSettings, "exportNode.exportSettings");
-  ok("[AUDIT-5] the density suffix + scale survive", es[1].suffix === "@3x" && es[1].constraint?.value === 3);
-  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", es[0].constraint === undefined);
+  ok("[AUDIT-5] the density suffix + scale survive", es[1]?.suffix === "@3x" && es[1]?.constraint?.value === 3);
+  ok("[AUDIT-5] the SCALE-1 default carries no intent and is omitted", must(es[0], "es[0]").constraint === undefined);
   ok("[AUDIT-5] a node with no presets emits nothing", plainFrame.exportSettings === undefined);
 
   // ---- [AUDIT-5] skew: the sheared transform the decomposition used to throw away ----
@@ -1752,8 +1772,8 @@ const sandbox = context as unknown as Sandbox;
 
   // ---- [AUDIT-4] index size hints: the skill says "read ONLY that file", so say how big it is ----
   const sized = await sandbox.collectFull({ css: false });
-  const entry = sized.layersDoc.index[0];
-  const layerTree = sized.layersDoc.layers[0].tree;
+  const entry = must(must(sized.layersDoc.index, "sized.layersDoc.index")[0], "sized.layersDoc.index[0]");
+  const layerTree = must(must(sized.layersDoc.layers, "sized.layersDoc.layers")[0], "sized.layersDoc.layers[0]").tree;
   const countTree = (t: IrNode): number => 1 + (Array.isArray(t.children) ? t.children.reduce((a: number, c) => a + countTree(c), 0) : 0);
   ok("[AUDIT-4] index entries carry a subtree node count", entry.nodes === countTree(layerTree));
   ok("[AUDIT-4] and an approximate serialized byte size", typeof entry.bytes === "number" && entry.bytes > 100);
@@ -1832,14 +1852,16 @@ const sandbox = context as unknown as Sandbox;
   // The getter THROWS on a variant — the fallback must engage, and must SAY it did.
   ok("[LIB] throwing componentPropertyDefinitions falls back to instances", btnLibC.derivedFrom === "instances");
   const btnProps = must(btnLibC.props, "btnLib.props");
-  const btnSizeObserved = must(btnProps.Size.observed, "btnLib.props.Size.observed");
+  const btnSizeProp = must(btnProps.Size, "btnLib.props.Size");
+  const btnSizeObserved = must(btnSizeProp.observed, "btnLib.props.Size.observed");
   ok("[LIB] observed variant values aggregated across instances", btnSizeObserved.indexOf("md") !== -1 && btnSizeObserved.indexOf("lg") !== -1);
   ok("[LIB] repeated values are uniqued, not appended per instance", btnSizeObserved.length === 2);
-  ok("[LIB] non-variant props are observed too, keyed by the stripped name", btnProps.Label && btnProps.Label.key === "Label#1:0");
+  ok("[LIB] non-variant props are observed too, keyed by the stripped name", !!(btnProps.Label && btnProps.Label.key === "Label#1:0"));
   // The whole point of derivedFrom: an inferred sample must never be mistaken for a complete enum.
   const cardProps = must(cardLibC.props, "cardLib.props");
-  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLibC.derivedFrom === "definitions" && must(cardProps.Tone.options, "cardLib.props.Tone.options").length === 2);
-  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnProps.Size.options === undefined && cardProps.Tone.observed === undefined);
+  const cardToneProp = must(cardProps.Tone, "cardLib.props.Tone");
+  ok("[LIB] readable definitions are used verbatim and flagged as such", cardLibC.derivedFrom === "definitions" && must(cardToneProp.options, "cardLib.props.Tone.options").length === 2);
+  ok("[LIB] an inferred entry uses 'observed', a defined one uses 'options'", btnSizeProp.options === undefined && cardToneProp.observed === undefined);
   ok("[LIB] every entry is flagged remote", libComps.every((c) => c.remote === true));
   // There is NO API mapping a component key to its library — unattributed must read as unknown.
   ok("[LIB] unattributed remote components are 'unknown-library', never guessed", libComps.every((c) => c.source === "unknown-library"));
@@ -1888,7 +1910,7 @@ const sandbox = context as unknown as Sandbox;
   const dsOn = await sandbox.collectDesignSystemOnly({ variantVisuals: true });
   const tagOn = dsOn.designSystem.components.find((c) => c.id === "set:tag");
   const soloOn = dsOn.designSystem.components.find((c) => c.id === "c:solo");
-  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", !!(soloOn && soloOn.node && soloOn.node.fills && flatPaint(soloOn.node.fills[0]).color === "#ff0000" && soloOn.node.radius === 8));
+  ok("[VARIANTVIS] on: a standalone COMPONENT gets its own node tree under entry.node", !!(soloOn && soloOn.node && soloOn.node.fills && flatPaint(must(soloOn.node.fills[0], "soloOn.node.fills[0]")).color === "#ff0000" && soloOn.node.radius === 8));
   ok("[VARIANTVIS] on: a standalone COMPONENT never gets a variants[] array (that's the SET shape)", !!(soloOn && soloOn.variants === undefined));
   ok("[VARIANTVIS] on: the set entry itself is otherwise unchanged", !!(tagOn && tagOn.visuals && flatPaint(must(tagOn.visuals.fills?.[0], "tagOn.visuals.fills[0]")).color === "#9947ff"));
   ok("[VARIANTVIS] on: two variants captured, keyed by id/name/key", !!(tagOn && Array.isArray(tagOn.variants) && tagOn.variants.length === 2 &&
@@ -1899,9 +1921,9 @@ const sandbox = context as unknown as Sandbox;
   ok("[VARIANTVIS] variant values parsed from the name when variantProperties is absent", !!(va && va.values && va.values.Type === "Default" && va.values.Status === "Default"));
   ok("[VARIANTVIS] variant values read from variantProperties when present", !!(vb && vb.values && vb.values.Status === "Hover"));
   ok("[VARIANTVIS] each variant's REAL fills/radius captured (the master-component source of truth)",!!(
-    va && va.node && va.node.fills && flatPaint(va.node.fills[0]).color === "#009900" && va.node.radius === 16));
+    va && va.node && va.node.fills && flatPaint(must(va.node.fills[0], "va.node.fills[0]")).color === "#009900" && va.node.radius === 16));
   ok("[VARIANTVIS] a variant whose own componentPropertyDefinitions throws still gets its node captured, not dropped",!!(
-    vb && vb.node && vb.node.fills && flatPaint(vb.node.fills[0]).color === "#006600"));
+    vb && vb.node && vb.node.fills && flatPaint(must(vb.node.fills[0], "vb.node.fills[0]")).color === "#006600"));
   ok("[VARIANTVIS] no per-variant props (componentPropertyDefinitions throws on a variant; set-level props stay authoritative)",!!(
     va && va.node && va.node.props === undefined));
   sandbox.figma.root.children = kidsBeforeVariantPage;
@@ -1986,8 +2008,8 @@ const sandbox = context as unknown as Sandbox;
     // asked from a consuming file or a branch.
     const btn = d.components.find((c) => c.name === "Button");
     ok("[LIB-FILE] component carries publish status", !!(btn && btn.publish === "current"));
-    const paint = d.styles.paint[0];
-    ok("[LIB-FILE] style carries publish status", paint && paint.publish === "changed");
+    const paint = must(d.styles.paint[0], "d.styles.paint[0]");
+    ok("[LIB-FILE] style carries publish status", paint.publish === "changed");
     ok("[LIB-FILE] hygiene states the catalog is complete", d.hygiene.some((h) => /COMPLETE local catalog of 'NERA'/.test(h)));
     ok("[LIB-FILE] hygiene admits the published snapshot is unlistable", d.hygiene.some((h) => /last PUBLISHED snapshot/.test(h)));
     ok("[LIB-FILE] does NOT claim the false design-system caveat", !d.hygiene.some((h) => /prior\/no page walk referenced/.test(h)));
@@ -2001,7 +2023,7 @@ const sandbox = context as unknown as Sandbox;
     const dsPlain = (await sandbox.collectDesignSystemOnly({})).designSystem;
     ok("[LIB-FILE] default design-system pull emits NO publish status", !dsPlain.components.some((c) => c.publish) && !dsPlain.styles.paint.some((s) => s.publish));
     ok("[LIB-FILE] default design-system pull emits NO source block", dsPlain.source === undefined);
-    ok("[LIB-FILE] but the style key fix applies there too", dsPlain.styles.paint[0].key === "paintkey123");
+    ok("[LIB-FILE] but the style key fix applies there too", dsPlain.styles.paint[0]?.key === "paintkey123");
   }
 
   // ---------- [PROGRESS] / [CANCEL] a long export must be watchable AND stoppable ----------
@@ -2023,9 +2045,9 @@ const sandbox = context as unknown as Sandbox;
     const run = await sandbox.serializeRun(() => sandbox.collectFull({ allPages: true, css: false }), { source: "ui", label: "test-full" });
     ok("[PROGRESS] the export itself is unaffected — it still returns its layers", run.layersDoc.layers.length > 0);
     ok("[PROGRESS] the run is bracketed by run-begin … run-end",
-      posted[0].type === "run-begin" && posted[posted.length - 1].type === "run-end");
+      posted[0]?.type === "run-begin" && posted[posted.length - 1]?.type === "run-end");
     ok("[PROGRESS] run-begin names WHO asked (so a bridge pull isn't mistaken for your own click)",
-      posted[0].source === "ui" && posted[0].label === "test-full");
+      posted[0]?.source === "ui" && posted[0]?.label === "test-full");
     const pageFrames = posted.filter((m) => m.type === "progress" && m.phase === "pages" && m.page);
     // Page boundaries are the frames that must NEVER be dropped by the throttle — a missed one leaves
     // the status line naming a page the walk already finished.
@@ -2064,7 +2086,7 @@ const sandbox = context as unknown as Sandbox;
     ok("[CANCEL] the bridge-triggered run was visible in the plugin window, and for whom",
       posted.some((m) => m.type === "run-begin" && m.source === "bridge" && m.label === "exportFull"));
     ok("[CANCEL] the run is still closed out, so the UI cannot hang on a cancelled export",
-      posted[posted.length - 1].type === "run-end");
+      posted[posted.length - 1]?.type === "run-end");
 
     // ---- cancel INSIDE the component-catalog walk ----
     // The one place a run flips a GLOBAL Figma toggle (skipInvisibleInstanceChildren). Its `finally`
