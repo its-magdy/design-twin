@@ -19,7 +19,7 @@
 // or check them with `satisfies`. Do NOT add `as unknown as <T>` to force a fixture into a type — that
 // is exactly how fixtures drifted from the IR (a missing `tier`, a map entry with no `figma.name`) while
 // the types said otherwise. A deliberately MALFORMED input goes through fixtures.ts `malformed()`, which
-// says so at the call site.
+// says so at the call site. `npm run lint:any` (test/lint-any.ts rule 4) fails on any that comes back.
 
 let pass = 0;
 let total = 0;

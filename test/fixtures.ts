@@ -1,5 +1,5 @@
-// fixtures.ts — typed builders for the design-to-code tests' hand-made inputs, and runtime-asserting
-// readers for the emitters' outputs.
+// fixtures.ts — typed builders for the tests' hand-made inputs (design-to-code documents, bridge
+// replies), and runtime-asserting readers for the emitters' outputs.
 //
 // A test fixture used to be an object literal forced into its type with `as unknown as TokensDoc`. That
 // hid how far the fixtures had drifted from what the producer writes: 36 variables with no `tier`, 30
@@ -20,6 +20,10 @@ import type {
   DtcgColor, DtcgDimension, DtcgFigmaExtension, DtcgGroup, DtcgLeaf, DtcgLeafValue, ResolverDoc, ResolverModifier,
 } from "../design-to-code/tokens.ts";
 import type { BooleanPropMap, EnumPropMap, InstancePropMap, StringPropMap } from "../design-to-code/types.ts";
+import type { Asset, VariablesDoc } from "../bridge/src/doc-types.ts";
+import type { ScreenReply } from "../bridge/src/commands.ts";
+import type { Stamped } from "../bridge/src/write-out.ts";
+import type { ClientRow } from "../bridge/src/server-core.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { readJson } from "../design-to-code/read-json.ts";
 
@@ -108,6 +112,34 @@ export function node(n: NodeInput): IrNode {
 }
 export function screenExport(nodes: NodeInput[], meta: Omit<ScreenExport, "nodes"> = {}): ScreenExport {
   return { ...meta, nodes: nodes.map(node) };
+}
+
+// ------------------------------------------------------------------ bridge replies / rows (bridge.test.ts)
+
+/** A single-screen pull reply as a test writes it: `variables`/`assets` optional, the screen's nodes as
+ *  NodeInput and its manifest partial. */
+export type ScreenReplyInput = Omit<Stamped<ScreenReply>, "screen" | "variables" | "assets"> & {
+  screen: Omit<ScreenExport, "nodes" | "manifest"> & { nodes: NodeInput[]; manifest?: Partial<Manifest> | undefined };
+  variables?: VariablesDoc;
+  assets?: Asset[];
+};
+/** figma-plugin/src/collect.ts screenResult: the screen always carries a manifest, the reply always a
+ *  variables dump (all three arrays, empty for a screen that binds none) and an assets array. */
+export function screenReply(r: ScreenReplyInput): Stamped<ScreenReply> {
+  const { screen, variables, assets, ...rest } = r;
+  const { nodes, manifest: m, ...meta } = screen;
+  return {
+    ...rest,
+    screen: { ...meta, nodes: nodes.map(node), manifest: manifest(m) },
+    variables: variables ?? { collections: [], variables: [], hygiene: [] },
+    assets: assets ?? [],
+  };
+}
+
+/** A connected-client row (server-core.ts listClients): nothing known until given — a client that has
+ *  not identified itself, and a plugin that has not reported its version. */
+export function clientRow(r: Partial<ClientRow> = {}): ClientRow {
+  return { connId: "c0", file: null, fileKey: null, page: null, instanceId: null, connectedAt: 0, uptimeMs: 0, identified: false, pluginVersion: null, pluginStale: null, ...r };
 }
 
 // ------------------------------------------------------------------ readers over the emitters' output

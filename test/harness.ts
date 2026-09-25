@@ -368,7 +368,19 @@ vm.runInContext(src, context);
 // read API on a namespaced global; lift those onto the sandbox so the assertions below read as before.
 Object.assign(context, context.__designExport || {});
 // The one VM boundary: what code.js put on its global is untyped to this realm (see DesignExportApi).
-const sandbox = context as unknown as Sandbox;
+// Narrowed by a runtime check — every API member present as a function, `figma` the fake passed in —
+// so a bundle that stopped exporting a method fails here by name, not as a TypeError at first use.
+const API_MEMBERS: Record<keyof DesignExportApi, true> = {
+  serialize: true, collectSelection: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
+  buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
+  applyWrites: true, serializeRun: true, requestCancel: true,
+};
+const missingApi = (c: Record<string, unknown>): string[] => Object.keys(API_MEMBERS).filter((k) => typeof c[k] !== "function");
+function isSandbox(c: Record<string, unknown>): c is Record<string, unknown> & Sandbox {
+  return c.figma === figma && missingApi(c).length === 0;
+}
+if (!isSandbox(context)) throw new Error(`code.js did not expose the export API: missing ${missingApi(context).join(", ") || "the fake figma global"}`);
+const sandbox: Sandbox = context;
 
 // ---- run + assert ----
 (async () => {
@@ -1330,13 +1342,14 @@ const sandbox = context as unknown as Sandbox;
   // figma.currentPage (a no-op there, but the call must still happen).
   let currentPageLoadCalls = 0;
   const currentPageFrame = { id: "cpf:1", name: "Current Frame", type: "FRAME", width: 10, height: 10 };
-  const fakeCurrentPage = {
+  const fakeCurrentPage: FakeFigma["currentPage"] = {
     type: "PAGE", id: "page:current", name: "Current Page",
     loadAsync: async () => { currentPageLoadCalls++; },
     children: [currentPageFrame],
+    selection: [],
   };
   const prevCurrentPage4 = sandbox.figma.currentPage;
-  sandbox.figma.currentPage = fakeCurrentPage as unknown as typeof sandbox.figma.currentPage;
+  sandbox.figma.currentPage = fakeCurrentPage;
   sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "page:current" ? fakeCurrentPage : null);
   const currentKids = await sandbox.listChildren("page:current");
   ok("[CHILDREN] the current page is still loaded (not skipped) before its children are read",
