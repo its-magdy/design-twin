@@ -160,9 +160,9 @@ console.log("verify-screen — text:");
     { nodeId: "2:3", styles: { text: "Nothing here yet." } },
   ]));
   const t = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
-  ok("[text] a copy change is a HIGH-severity delta", t("2:1").length === 1 && t("2:1")[0].severity === "high");
+  ok("[text] a copy change is a HIGH-severity delta", t("2:1").length === 1 && must(t("2:1")[0], "t('2:1')[0]").severity === "high");
   ok("[text] a case-only difference is LOW and names text-transform as the likely cause",
-    t("2:2").length === 1 && t("2:2")[0].severity === "low" && /text-transform/.test(must(t("2:2")[0].note, "t('2:2')[0].note")));
+    (() => { const d = must(t("2:2")[0], "t('2:2')[0]"); return t("2:2").length === 1 && d.severity === "low" && /text-transform/.test(must(d.note, "t('2:2')[0].note")); })());
   ok("[text] a designed non-breaking space is surfaced rather than silently normalised",
     rep.deltas.some((d) => d.nodeId === "2:3" && /non-breaking space/.test(d.note || "")));
   ok("[text] …and printed as an ESCAPE, so the row is not two identical-looking strings",
@@ -185,15 +185,15 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
   const rep = compare(exp, measured([], { components: [{ setName: "Button" }], interactions: [] }));
   ok("[cover] instance sets the probe could not point at are named — as TAG COVERAGE, not as 'never built'",
     rep.untaggedInstanceSets.length === 2 && rep.missingComponents === undefined && !rep.why.some((w) => /never built/.test(w)));
-  ok("[cover] and each one says how many instances it stands for", rep.untaggedInstanceSets[0].instances === 1);
+  ok("[cover] and each one says how many instances it stands for", must(rep.untaggedInstanceSets[0], "rep.untaggedInstanceSets[0]").instances === 1);
   ok("[cover] a designed interaction nobody exercised is 'not-probed', never silently passed",
-    rep.interactions.length === 1 && rep.interactions[0].result === "not-probed");
+    rep.interactions.length === 1 && must(rep.interactions[0], "rep.interactions[0]").result === "not-probed");
   ok("[cover] missing tags alone do not FAIL a screen (a .map() row and a shared shell leave gaps by design — 107/139/169)",
     rep.verdict === "incomplete" && rep.summary.componentsAbsent === 0);
   ok("[cover] a component the probe reports ABSENT (present:false) does fail it",
     (() => {
       const r = compare(exp, measured([], { components: [{ setName: "Button" }, { setName: "Date range", present: false, detail: "no date filter in the toolbar" }] }));
-      return r.verdict === "fail" && r.componentsAbsent.length === 1 && r.componentsAbsent[0].setName === "Date range";
+      return r.verdict === "fail" && r.componentsAbsent.length === 1 && must(r.componentsAbsent[0], "r.componentsAbsent[0]").setName === "Date range";
     })());
   ok("[cover] and untested interactions alone make it INCOMPLETE rather than a pass",
     (() => {
@@ -206,7 +206,8 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
         components: [{ setName: "Date range" }, { setName: "Segmented Control" }, { setName: "Button" }],
         interactions: [{ nodeId: "3:3", trigger: "on_click", ok: false, detail: "clicking opened nothing" }],
       }));
-      return r.verdict === "fail" && r.interactions[0].result === "fail" && /opened nothing/.test(must(r.interactions[0].detail, "r.interactions[0].detail"));
+      const interaction0 = must(r.interactions[0], "r.interactions[0]");
+      return r.verdict === "fail" && interaction0.result === "fail" && /opened nothing/.test(must(interaction0.detail, "r.interactions[0].detail"));
     })());
 }
 
@@ -339,7 +340,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   {
     const m = clone(jrMeasured);
     const pg = m.nodes?.find((n) => n.nodeId === "20173:142142");
-    Object.assign(must(pg, "pg node 20173:142142"), { y: pos["20173:142142"].y, height: pos["20173:142142"].height });
+    const posPg = must(pos["20173:142142"], "pos['20173:142142']");
+    Object.assign(must(pg, "pg node 20173:142142"), { y: posPg.y, height: posPg.height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
     ok("[lt3-xy] Job Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
@@ -350,7 +352,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     const m = clone(gpMeasured);
     const st = m.nodes?.find((n) => n.nodeId === "18580:60861");
     const stNode = must(st, "st node 18580:60861");
-    must(stNode.styles, "st.styles").textBox = { ...ifDefined("x", pos["18580:60861"].textBoxX) };
+    must(stNode.styles, "st.styles").textBox = { ...ifDefined("x", must(pos["18580:60861"], "pos['18580:60861']").textBoxX) };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
     ok("[lt3-xy] Global Policies pre-fix: the Status header is +18.94px right of the design (1296.81 → 1315.75)",
@@ -391,11 +393,11 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     () => jrRep.interactions.some((i) => i.nodeId === "I20173:137670;2006:22479" && i.result === "fail") &&
     ["20173:142081", "20173:142086", "20173:142091"].every((id) => jrRep.interactions.some((i) => i.nodeId === id && i.result === "fail")) && jrRep.verdict === "fail");
   ok("[lt3-int] ok:true with no selector is not a pass (finding 187's evidence rule)",
-    () => gpRep.interactions[0].nodeId === "18580:60879" && gpRep.interactions[0].result === "not-probed" && /without evidence/.test(must(gpRep.interactions[0].detail, "gpRep.interactions[0].detail")));
+    () => { const gp0 = must(gpRep.interactions[0], "gpRep.interactions[0]"); return gp0.nodeId === "18580:60879" && gp0.result === "not-probed" && /without evidence/.test(must(gp0.detail, "gpRep.interactions[0].detail")); });
   ok("[lt3-int] ok:true naming the selector it drove and a match count ≥1 is a pass",
-    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1" }] }); return r.interactions[0].result === "pass" && r.interactions[0].selector && r.coverage.interactionsPassed === 1; })());
+    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1" }] }); const r0 = must(r.interactions[0], "r.interactions[0]"); return r0.result === "pass" && r0.selector && r.coverage.interactionsPassed === 1; })());
   ok("[lt3-int] a selector that matched 0 elements is not a pass",
-    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="1359:21364"]', selectorCount: 0 }] }); return r.interactions[0].result === "not-probed"; })());
+    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="1359:21364"]', selectorCount: 0 }] }); return must(r.interactions[0], "r.interactions[0]").result === "not-probed"; })());
 
   console.log("verify-screen — livetest-3: none of the eight false-positive families is a high delta (128/161/194):");
   // Before: 4 of 4 highs on the real GP probe were wrong, and 2 of 2 on JR.
@@ -522,7 +524,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // The CLI always runs the on-disk artifact check, so every artifact row is an ArtifactCheck.
   ok("[lt3-cli] artifacts that do not exist on disk are flagged: no screenshot, no pass (166/190)", () => (rep1.why || []).some((w) => /no screenshot/.test(w)) && (rep1.artifacts || []).every((a) => typeof a === "object" && a.exists === false));
   ok("[lt3-cli] the stdout headline is the coverage line", () => c1.status === 1 && /^INCOMPLETE — .*nodes measured \d+\/\d+/m.test(c1.stderr));
-  const edited = clone(gpDoc); edited.nodes[0].children = (edited.nodes[0].children || []).slice(0, 2);
+  const edited = clone(gpDoc); must(edited.nodes[0], "edited.nodes[0]").children = (must(edited.nodes[0], "edited.nodes[0]").children || []).slice(0, 2);
   fs.writeFileSync(path.join(cwd, "edited.json"), JSON.stringify(edited));
   const r3 = run("--expect", "edited.json", "--out", "design/verify/GlobalPolicies");
   ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
