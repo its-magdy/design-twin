@@ -45,7 +45,7 @@ node test/audit.test.ts                # expect: 101/101 checks passed, exit 0
 node test/verify-build.test.ts         # expect: 134/134 checks passed, exit 0 — the build-screen Stop-hook gate
                                        # (stdin only when fd 0 is not a TTY, 1s silent-pipe / 60s hard cutoff,
                                        # computed --status never stored), and that claude-plugin/scripts/ is in
-                                       # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.js)
+                                       # sync with design-to-code/ (stale? run: node claude-plugin/build-scripts.ts)
 node test/plan-skeleton.test.ts        # expect: 31/31 checks passed, exit 0 — the shared plan shape/visibility
                                        # helpers (visibility, rootsOf) every skill and verify-build.js walk with
 node test/ui.test.ts                   # expect: 14/14 checks passed, exit 0 — the plugin window's script against a fake

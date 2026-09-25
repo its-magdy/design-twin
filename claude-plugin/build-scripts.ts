@@ -15,21 +15,21 @@
 // built on its own, and in every OTHER design-to-code module the plugin rewrites `import.meta.main` to
 // `false` before esbuild sees it; only the entry keeps a live guard (exactly one per bundle).
 //
-// Run from the repo root:  node claude-plugin/build-scripts.js [outDir]
+// Run from the repo root:  node claude-plugin/build-scripts.ts [outDir]
 // test/verify-build.test.ts rebuilds into a temp dir and fails if scripts/ is stale — the same
 // committed-artifact gate figma-plugin/code.js has.
 import path from "node:path";
 import fs from "node:fs";
 // esbuild is a devDependency of the bridge/ and figma-plugin/ workspaces, hoisted to the repo-root
 // node_modules — the bare specifier resolves there.
-import esbuild from "esbuild";
+import esbuild, { type BuildResult, type Plugin } from "esbuild";
 
 const SRC = path.join(import.meta.dirname, "..", "design-to-code");
 // The CLI entry points. kinds.ts / catalog-input.ts are libraries — they get inlined, not shipped.
-const ENTRIES = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
+const ENTRIES: readonly string[] = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
 
 // Rewrites `import.meta.main` to `false` in every design-to-code module except `entry` (see header).
-function inlinedCliGuard(entry) {
+function inlinedCliGuard(entry: string): Plugin {
   return {
     name: "inlined-cli-guard",
     setup(b) {
@@ -41,7 +41,7 @@ function inlinedCliGuard(entry) {
   };
 }
 
-function build(outDir) {
+function build(outDir: string): Promise<BuildResult[]> {
   fs.mkdirSync(outDir, { recursive: true });
   return Promise.all(ENTRIES.map((n) => {
     const entry = path.resolve(SRC, n + ".ts");
@@ -55,6 +55,7 @@ function build(outDir) {
       format: "esm",
       platform: "node",
       target: "node24",
+      // Part of every committed scripts/*.js, so it still names build-scripts.js (the pre-TS name).
       banner: { js: "// GENERATED from design-to-code/ by claude-plugin/build-scripts.js — edit the source, then rebuild.\n" },
       plugins: [inlinedCliGuard(entry)],
       logLevel: "silent",
@@ -68,5 +69,5 @@ if (import.meta.main) {
   const outDir = path.resolve(process.argv[2] || path.join(import.meta.dirname, "scripts"));
   build(outDir)
     .then(() => console.log(`[build-scripts] wrote ${ENTRIES.length} scripts to ${outDir}`))
-    .catch((e) => { console.error(e); process.exit(1); });
+    .catch((e: unknown) => { console.error(e); process.exit(1); });
 }

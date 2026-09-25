@@ -301,7 +301,7 @@ npm run build
 ```
 
 That runs each workspace's own build — `tsc` → `bridge/dist/` for the bridge, esbuild →
-`figma-plugin/code.js` for the plugin — and then `node claude-plugin/build-scripts.js` to re-bundle
+`figma-plugin/code.js` for the plugin — and then `node claude-plugin/build-scripts.ts` to re-bundle
 `claude-plugin/scripts/`.
 
 CI fails if the committed build output doesn't match what the sources produce.

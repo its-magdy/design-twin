@@ -12,7 +12,7 @@ import { checkPlan, computeStatus, colorLiterals, arbitraryPx, colorKey, isStale
 import { blockerIds } from "../design-to-code/audit.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/content-hash.ts";
-import { build, ENTRIES } from "../claude-plugin/build-scripts.js";
+import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
 import type { CodeConnectMap, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -779,7 +779,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-scripts-"));
 // An unhandled rejection here still fails the run (Node exits non-zero); nothing awaits this chain.
 void build(tmp).then(async () => {
   const stale = ENTRIES.filter((n) => fs.readFileSync(path.join(tmp, n + ".js"), "utf8") !== fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"));
-  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.js)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
+  check("claude-plugin/scripts/ is in sync with design-to-code/ (else: node claude-plugin/build-scripts.ts)" + (stale.length ? " — STALE: " + stale.join(", ") : ""), stale.length === 0);
   check("a bundle runs from outside the repo", (() => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-plugin-"));
     fs.copyFileSync(path.join(SCRIPTS, "drift-lint.js"), path.join(out, "drift-lint.js"));
