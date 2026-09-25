@@ -111,10 +111,14 @@ function fontObj(src: TextStyleSource): FontSpec {
 // to the paragraph." `textWrapStyle: TextWrapStyle`) is requested so a node whose node-level value is
 // figma.mixed yields one segment per wrap style (the typings' own example, L10122-10137). Requesting it
 // cannot split a node whose paragraphs all share one wrap style, so every other node's segments — and
-// output — are unchanged. The same holds for the last four: `fontStyle` (L5496), `paragraphIndent`
-// (L5560), `paragraphSpacing` (L5564) and `textStyleOverrides` (L5588). fontStyle and the overrides only
-// differ where the font / link / decoration already differ (fields requested above), and the two
-// paragraph fields only split a node whose node-level value is figma.mixed (L10027 / L10084).
+// output — are unchanged. Of the last four, three are proven the same way: `fontStyle` (L5496) is a
+// function of the already-requested fontName (Figma has no faux italic), and `paragraphIndent` (L5560) /
+// `paragraphSpacing` (L5564) can only differ across a node whose node-level value is figma.mixed
+// (L10027 / L10084). `textStyleOverrides` (L5588) is NOT proven: each member means "overridden relative
+// to the text style" (developers.figma.com/docs/plugins/api/TextStyleOverrides/), and nothing documents
+// whether that flag is a live comparison with the style or a sticky "was set by hand" bit. If it is
+// sticky, two adjacent ranges with the same font/weight/link/decoration but a different override list
+// would now be two runs where they were one. Untested offline — the §5.2 live check on a styled range.
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
