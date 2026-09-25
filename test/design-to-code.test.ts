@@ -118,12 +118,17 @@ check("[R3] multi-mode collection -> modifier with both contexts + spec-valid de
   return Object.keys(m.contexts).sort().join(",") === "Dark,Light" && m.default === "Light" && Object.keys(m.contexts).includes(m.default);
 })());
 check("[R4] single-mode collection contributes a set but NO modifier", rz.sets.Primitives !== undefined && (rz.modifiers || {}).Primitives === undefined);
-check("[R5] default-mode context is the empty array (nothing differs), no file written", Array.isArray(modifierOf(rz, "Semantic").contexts.Light) && modifierOf(rz, "Semantic").contexts.Light.length === 0);
-const darkSet = fileAt(rzFiles, modifierOf(rz, "Semantic").contexts.Dark[0].$ref);
+const semanticMod = modifierOf(rz, "Semantic");
+const semanticLightCtx = must(semanticMod.contexts.Light, "Semantic modifier Light context");
+const semanticDarkCtx = must(semanticMod.contexts.Dark, "Semantic modifier Dark context");
+check("[R5] default-mode context is the empty array (nothing differs), no file written", Array.isArray(semanticLightCtx) && semanticLightCtx.length === 0);
+const darkSet = fileAt(rzFiles, must(semanticDarkCtx[0], "Semantic Dark context[0]").$ref);
 check("[R6] context set holds ONLY the differing token (same dedup as toCSS)", nodeAt(darkSet, "color.primary") !== undefined && nodeAt(darkSet, "color.muted") === undefined);
-check("[R7] aliases preserved as {a.b} references in set files (resolved only at resolution time)", leafAt(darkSet, "color.primary").$value === "{blue.300}" && leafAt(fileAt(rzFiles, rz.sets.Semantic.sources[0].$ref), "color.primary").$value === "{blue.600}");
-check("[R8] dimensions keep the 2025.10 object form inside set files", (() => { const base = fileAt(rzFiles, rz.sets.Primitives.sources[0].$ref); return leafAt(base, "space.md").$type === "dimension" && asDimension(leafAt(base, "space.md").$value).value === 16 && asDimension(leafAt(base, "space.md").$value).unit === "px"; })());
-check("[R9] set files carry no $extensions.modes (the resolver IS the mode mechanism)", leafAt(fileAt(rzFiles, rz.sets.Semantic.sources[0].$ref), "color.primary").$extensions === undefined);
+const primitivesSet = must(rz.sets.Primitives, "resolver set 'Primitives'");
+const semanticSet = must(rz.sets.Semantic, "resolver set 'Semantic'");
+check("[R7] aliases preserved as {a.b} references in set files (resolved only at resolution time)", leafAt(darkSet, "color.primary").$value === "{blue.300}" && leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$value === "{blue.600}");
+check("[R8] dimensions keep the 2025.10 object form inside set files", (() => { const base = fileAt(rzFiles, must(primitivesSet.sources[0], "Primitives set sources[0]").$ref); return leafAt(base, "space.md").$type === "dimension" && asDimension(leafAt(base, "space.md").$value).value === 16 && asDimension(leafAt(base, "space.md").$value).unit === "px"; })());
+check("[R9] set files carry no $extensions.modes (the resolver IS the mode mechanism)", leafAt(fileAt(rzFiles, must(semanticSet.sources[0], "Semantic set sources[0]").$ref), "color.primary").$extensions === undefined);
 check("[R10] resolutionOrder refs resolve in-document, sets before modifiers", (() => {
   const ptrs = rz.resolutionOrder.map((r) => r.$ref);
   const idx = ptrs.findIndex((p) => p.startsWith("#/modifiers/"));
@@ -144,7 +149,7 @@ check("[R13] filename collision after sanitizing -> warned + disambiguated, neve
   const w: string[] = [];
   const r = toResolver(tokens({ collections: [{ name: "C", modes: ["Light", "light", "LIGHT"], default: "Light" }], variables: [
     { name: "bg", type: "COLOR", collection: "C", values: { Light: "#111111", light: "#222222", LIGHT: "#333333" } }] }), w);
-  const refs = ["light", "LIGHT"].map((m) => modifierOf(r.resolver, "C").contexts[m][0].$ref);
+  const refs = ["light", "LIGHT"].map((m) => must(must(modifierOf(r.resolver, "C").contexts[m], `context '${m}'`)[0], `context '${m}'[0]`).$ref);
   return refs[0] !== refs[1] && new Set(refs).size === 2 && Object.keys(r.files).length === 3
     && asColor(leafAt(fileAt(r.files, refs[0]), "bg").$value).hex === "#222222" && asColor(leafAt(fileAt(r.files, refs[1]), "bg").$value).hex === "#333333"
     && w.some((m) => /collides/.test(m));
@@ -155,7 +160,7 @@ check("[R14] `__proto__` mode name neither pollutes nor vanishes", (() => {
   if (!isTokensDoc(parsed)) return false;
   const r = toResolver(parsed);
   const ctx = modifierOf(r.resolver, "C").contexts;
-  const ref = Object.prototype.hasOwnProperty.call(ctx, "__proto__") ? ctx["__proto__"][0].$ref : undefined;
+  const ref = Object.prototype.hasOwnProperty.call(ctx, "__proto__") ? must(must(ctx["__proto__"], "context '__proto__'")[0], "context '__proto__'[0]").$ref : undefined;
   const reparsed: unknown = JSON.parse(JSON.stringify(r.resolver));
   return ref !== undefined && asColor(leafAt(fileAt(r.files, ref), "bg").$value).hex === "#222222" && bag({}).bg === undefined
     && isJsonObject(reparsed) && isJsonObject(reparsed.modifiers) && isJsonObject(reparsed.modifiers.C) && isJsonObject(reparsed.modifiers.C.contexts)
@@ -163,13 +168,13 @@ check("[R14] `__proto__` mode name neither pollutes nor vanishes", (() => {
 })());
 check("[R15] round-trip: base + context in resolutionOrder reproduces $extensions.modes exactly", (() => {
   const d = toDTCG(ds);
-  const flat = (tree: DtcgGroup, prefix: string, out: Record<string, unknown>): Record<string, unknown> => { for (const k of Object.keys(tree)) { const n = tree[k]; const p = prefix ? prefix + "." + k : k; if ("$value" in n) out[p] = n.$value; else flat(n, p, out); } return out; };
+  const flat = (tree: DtcgGroup, prefix: string, out: Record<string, unknown>): Record<string, unknown> => { for (const k of Object.keys(tree)) { const n = must(tree[k], `DTCG node '${k}'`); const p = prefix ? prefix + "." + k : k; if ("$value" in n) out[p] = n.$value; else flat(n, p, out); } return out; };
   const modes = ["Light", "Dark"];
   return modes.every((mode) => {
     const merged: Record<string, unknown> = {};
     for (const item of rz.resolutionOrder) { // spec ordering: later entries override earlier ones
-      if (item.$ref.startsWith("#/sets/")) { const s = rz.sets[item.$ref.slice(7)]; for (const src of s.sources) Object.assign(merged, flat(fileAt(rzFiles, src.$ref), "", {})); }
-      else { const m = modifierOf(rz, item.$ref.slice(12)); const ctx = m.contexts[mode] || m.contexts[m.default]; for (const src of ctx) Object.assign(merged, flat(fileAt(rzFiles, src.$ref), "", {})); }
+      if (item.$ref.startsWith("#/sets/")) { const setName = item.$ref.slice(7); const s = must(rz.sets[setName], `resolver set '${setName}'`); for (const src of s.sources) Object.assign(merged, flat(fileAt(rzFiles, src.$ref), "", {})); }
+      else { const m = modifierOf(rz, item.$ref.slice(12)); const ctx = must(m.contexts[mode] || m.contexts[m.default], `context for mode '${mode}'`); for (const src of ctx) Object.assign(merged, flat(fileAt(rzFiles, src.$ref), "", {})); }
     }
     const expected = flat(d, "", {});
     for (const p of Object.keys(expected)) {
@@ -270,15 +275,16 @@ check("[stale-10] checkFreshness's returned warning matches what it pushed into 
   const warnings: DriftFinding[] = [];
   const push: Parameters<typeof checkFreshness>[1] = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
   const w = checkFreshness({ exportedAt: new Date(Date.now() - 30 * 3600000).toISOString() }, push, warnings, {});
-  return w !== undefined && w.code === "stale-snapshot" && warnings.length === 1 && warnings[0].code === w.code && warnings[0].message === w.message;
+  const w0 = warnings[0];
+  return w !== undefined && w.code === "stale-snapshot" && warnings.length === 1 && w0 !== undefined && w0.code === w.code && w0.message === w.message;
 })());
 
 // ---------- bootstrap (A1..A7, M3, M4) ----------
 console.log("bootstrap:");
 const boot = bootstrap(dsCat);
 check("component keyed by publish key + needs-review", !!boot.components.KEY_BTN && boot.components.KEY_BTN.status === "needs-review");
-check("[M4] export PascalCased from multi-word name", bootstrap(catalog([{ key: "K", name: "Icon Button", type: "COMPONENT" }])).components.K.code.export === "IconButton");
-check("[A7] slash-namespaced name keeps namespace in export", bootstrap(catalog([{ key: "K", name: "Button/Primary/Danger", type: "COMPONENT" }])).components.K.code.export === "ButtonPrimaryDanger");
+check("[M4] export PascalCased from multi-word name", must(bootstrap(catalog([{ key: "K", name: "Icon Button", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "IconButton");
+check("[A7] slash-namespaced name keeps namespace in export", must(bootstrap(catalog([{ key: "K", name: "Button/Primary/Danger", type: "COMPONENT" }])).components.K, "component 'K'").code.export === "ButtonPrimaryDanger");
 check("VARIANT -> enum identity + default/omitDefault", anyProp(boot, "KEY_BTN", "Variant").kind === "enum" && enumProp(boot, "KEY_BTN", "Variant").values?.Primary === "Primary" && enumProp(boot, "KEY_BTN", "Variant").default === "Primary" && enumProp(boot, "KEY_BTN", "Variant").omitDefault === true);
 check("[M3] BOOLEAN -> boolean prop with default+omitDefault", anyProp(boot, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(boot, "KEY_BTN", "Disabled").codeProp === "disabled" && boolProp(boot, "KEY_BTN", "Disabled").default === false && boolProp(boot, "KEY_BTN", "Disabled").omitDefault === true);
 check("TEXT named Label -> children", anyProp(boot, "KEY_BTN", "Label").codeProp === "children");
@@ -286,18 +292,21 @@ check("INSTANCE_SWAP -> instance slot", anyProp(boot, "KEY_BTN", "Icon").kind ==
 check("bootstrap output passes validation", validateMap(boot).ok);
 // [A3] catalog component with no name -> still valid output.
 const a3 = bootstrap(malformed<ComponentsCatalog>({ components: [{ key: "K1", type: "COMPONENT" }] })); // no name, on purpose
-check("[A3] missing component name -> figma.name is a string, output valid", typeof a3.components.K1.figma.name === "string" && validateMap(a3).ok);
+check("[A3] missing component name -> figma.name is a string, output valid", typeof must(a3.components.K1, "component 'K1'").figma.name === "string" && validateMap(a3).ok);
 // [A1] confirmed entry whose component is absent from catalog is PRESERVED, not dropped.
 check("[A1] confirmed entry absent from catalog is preserved", "GONE" in bootstrap(dsCat, codeMap({ GONE: { figma: { key: "GONE", name: "Gone" }, code: { module: "@/hand", export: "Hand" }, status: "active" } })).components);
 // [A2] re-run does NOT clobber in-progress needs-review edits; DOES add new props.
 const a2existing = codeMap({ KEY_BTN: { figma: { key: "KEY_BTN", name: "Button" }, code: { module: "@/half/Done", export: "MyButton" }, status: "needs-review", props: { Variant: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } });
 const a2 = bootstrap(dsCat, a2existing);
-check("[A2] needs-review human edits preserved (module/export/prop)", a2.components.KEY_BTN.code.module === "@/half/Done" && a2.components.KEY_BTN.code.export === "MyButton" && anyProp(a2, "KEY_BTN", "Variant").codeProp === "kind" && enumProp(a2, "KEY_BTN", "Variant").values?.Primary === "solid");
-check("[A2] re-run adds newly-appeared props", a2.components.KEY_BTN.props?.Disabled !== undefined && a2.components.KEY_BTN.props?.Icon !== undefined);
+const a2KeyBtn = must(a2.components.KEY_BTN, "component 'KEY_BTN'");
+check("[A2] needs-review human edits preserved (module/export/prop)", a2KeyBtn.code.module === "@/half/Done" && a2KeyBtn.code.export === "MyButton" && anyProp(a2, "KEY_BTN", "Variant").codeProp === "kind" && enumProp(a2, "KEY_BTN", "Variant").values?.Primary === "solid");
+check("[A2] re-run adds newly-appeared props", a2KeyBtn.props?.Disabled !== undefined && a2KeyBtn.props?.Icon !== undefined);
 // [A5] existing argument not mutated.
 const a5existing = codeMap({ KEEP: { figma: { key: "KEEP", name: "Old" }, code: { module: "@/x", export: "X" }, status: "active" } });
 const a5 = bootstrap(catalog([{ key: "KEEP", name: "New", id: "9:9", type: "COMPONENT" }]), a5existing);
-check("[A5] existing arg not mutated; output refreshes metadata + keeps code", a5existing.components.KEEP.figma.name === "Old" && a5.components.KEEP.figma.name === "New" && a5.components.KEEP.code.export === "X");
+const a5existingKeep = must(a5existing.components.KEEP, "component 'KEEP'");
+const a5Keep = must(a5.components.KEEP, "component 'KEEP'");
+check("[A5] existing arg not mutated; output refreshes metadata + keeps code", a5existingKeep.figma.name === "Old" && a5Keep.figma.name === "New" && a5Keep.code.export === "X");
 
 // ================= SECOND-ROUND: regressions from the fix pass + closed test gaps =================
 console.log("tokens — 2nd round:");
@@ -327,10 +336,10 @@ const a1out = bootstrap(catalog([]), a1ex);
 check("[A1] orphan preserved with FULL content (deep-equal) + valid", JSON.stringify(a1out.components.GONE) === JSON.stringify(a1ex.components.GONE) && validateMap(a1out).ok);
 const r4out = bootstrap(catalog([{ key: "K", id: "1:1", name: "Btn", type: "COMPONENT" }]), codeMap({ "1:1": { figma: { id: "1:1", name: "Btn" }, code: { module: "@/kept", export: "Btn" }, status: "active" } }));
 check("[R4] component gaining a key does NOT duplicate + keeps human code", Object.keys(r4out.components).length === 1 && !!r4out.components.K && !r4out.components["1:1"] && r4out.components.K.code.module === "@/kept");
-check("[R1t] prop whose Figma type changed is regenerated", (bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Size: { type: "BOOLEAN", default: false } } }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active", props: { Size: { kind: "enum", codeProp: "size", values: { a: "A" } } } } }))).components.K.props?.Size?.kind === "boolean");
-check("[NEW3] stub with human export+prop edits preserved even under TODO module (no wholesale regen)", (() => { const n = bootstrap(catalog([{ key: "K", name: "Right", type: "COMPONENT", props: { V: { type: "VARIANT", options: ["Primary", "Secondary"] } } }]), codeMap({ K: { figma: { key: "K", name: "Wrong" }, code: { module: "TODO: import path", export: "MyName" }, status: "needs-review", props: { V: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } })); return n.components.K.code.export === "MyName" && anyProp(n, "K", "V").codeProp === "kind" && enumProp(n, "K", "V").values?.Primary === "solid"; })());
+check("[R1t] prop whose Figma type changed is regenerated", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Size: { type: "BOOLEAN", default: false } } }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active", props: { Size: { kind: "enum", codeProp: "size", values: { a: "A" } } } } })).components.K, "component 'K'").props?.Size?.kind === "boolean");
+check("[NEW3] stub with human export+prop edits preserved even under TODO module (no wholesale regen)", (() => { const n = bootstrap(catalog([{ key: "K", name: "Right", type: "COMPONENT", props: { V: { type: "VARIANT", options: ["Primary", "Secondary"] } } }]), codeMap({ K: { figma: { key: "K", name: "Wrong" }, code: { module: "TODO: import path", export: "MyName" }, status: "needs-review", props: { V: { kind: "enum", codeProp: "kind", values: { Primary: "solid" } } } } })); return must(n.components.K, "component 'K'").code.export === "MyName" && anyProp(n, "K", "V").codeProp === "kind" && enumProp(n, "K", "V").values?.Primary === "solid"; })());
 check("[A2t] added prop has correct kind+codeProp (not just presence)", anyProp(a2, "KEY_BTN", "Disabled").kind === "boolean" && anyProp(a2, "KEY_BTN", "Disabled").codeProp === "disabled");
-check("[M1t] non-label TEXT -> camelCase codeProp (not children)", (bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Placeholder: { type: "TEXT" } } }]))).components.K.props?.Placeholder?.codeProp === "placeholder");
+check("[M1t] non-label TEXT -> camelCase codeProp (not children)", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Placeholder: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Placeholder?.codeProp === "placeholder");
 
 console.log("validator — 2nd round (negative coverage):");
 check("[V] version 2 rejected", !ok({ version: 2, components: {} }));
@@ -440,7 +449,7 @@ check("[V] figma.key non-string rejected", !ok({ version: 1, components: { K: { 
 check("[V] enum values object value rejected", !ok({ version: 1, components: { K: { figma: { name: "B" }, code: { module: "m", export: "E" }, props: { P: { kind: "enum", codeProp: "p", values: { a: {} } } } } } }));
 
 console.log("bootstrap — 3rd round:");
-check("[boot-unstable] fresh unpublished component flagged unstable", bootstrap(catalog([{ id: "9:9", name: "Loose", type: "COMPONENT" }])).components["9:9"].figma.unstable === true);
+check("[boot-unstable] fresh unpublished component flagged unstable", must(bootstrap(catalog([{ id: "9:9", name: "Loose", type: "COMPONENT" }])).components["9:9"], "component '9:9'").figma.unstable === true);
 
 // ================= FOURTH-ROUND: close proven survivors + the map-side ambiguity symmetry ==========
 console.log("tokens — 4th round:");
@@ -463,10 +472,10 @@ check("[V] figma as array rejected", !ok({ version: 1, components: { K: { figma:
 
 console.log("bootstrap — 4th round:");
 check("[cset-boot] COMPONENT_SET bootstrapped as enum", (() => { const b = bootstrap(catalog([{ key: "SET", name: "Btn", type: "COMPONENT_SET", props: { Variant: { type: "VARIANT", options: ["a", "b"] } } }])); return b.components.SET !== undefined && anyProp(b, "SET", "Variant").kind === "enum"; })());
-check("[text-title] TEXT prop named Title -> children", (bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Title: { type: "TEXT" } } }]))).components.K.props?.Title?.codeProp === "children");
+check("[text-title] TEXT prop named Title -> children", must(bootstrap(catalog([{ key: "K", name: "B", type: "COMPONENT", props: { Title: { type: "TEXT" } } }])).components.K, "component 'K'").props?.Title?.codeProp === "children");
 check("[boot-bool-coerce] non-boolean BOOLEAN default coerced to real boolean + valid", (() => { const m = bootstrap(malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: { D: { key: "D", type: "BOOLEAN", default: 1 } } }] })); return boolProp(m, "K", "D").default === true && validateMap(m).ok; })());
-check("[boot-id-refresh] preserve path refreshes figma.id from catalog", bootstrap(catalog([{ key: "K", id: "5:5", name: "B", type: "COMPONENT" }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active" } })).components.K.figma.id === "5:5");
-check("[boot-unstable-preserve] preserve path flags unpublished as unstable", bootstrap(catalog([{ id: "7:7", name: "Loose", type: "COMPONENT" }]), codeMap({ "7:7": { figma: { id: "7:7", name: "Loose" }, code: { module: "@/k", export: "L" }, status: "active" } })).components["7:7"].figma.unstable === true);
+check("[boot-id-refresh] preserve path refreshes figma.id from catalog", must(bootstrap(catalog([{ key: "K", id: "5:5", name: "B", type: "COMPONENT" }]), codeMap({ K: { figma: { key: "K", name: "B" }, code: { module: "@/k", export: "B" }, status: "active" } })).components.K, "component 'K'").figma.id === "5:5");
+check("[boot-unstable-preserve] preserve path flags unpublished as unstable", must(bootstrap(catalog([{ id: "7:7", name: "Loose", type: "COMPONENT" }]), codeMap({ "7:7": { figma: { id: "7:7", name: "Loose" }, code: { module: "@/k", export: "L" }, status: "active" } })).components["7:7"], "component '7:7'").figma.unstable === true);
 
 console.log("security — reserved-key hardening:");
 // Token maps are semi-trusted third-party dumps; a name like "__proto__/x" must NOT pollute Object.prototype.
@@ -480,7 +489,7 @@ check("[sec-proto-warns] reserved-key token is skipped with a warning", (() => {
 })());
 check("[sec-boot-proto-key] component keyed '__proto__' is kept, not dropped", (() => {
   const m = bootstrap(catalog([{ key: "__proto__", name: "Weird", type: "COMPONENT" }]));
-  return Object.keys(m.components).includes("__proto__") && m.components["__proto__"].figma.name === "Weird";
+  return Object.keys(m.components).includes("__proto__") && must(m.components["__proto__"], "component '__proto__'").figma.name === "Weird";
 })());
 check("[sec-boot-figma-proto] existing entry.figma with an own '__proto__' property does not repoint the merged figma object", (() => {
   // JSON.parse (unlike an object literal) creates a real own "__proto__" data property — exactly what a
@@ -489,7 +498,7 @@ check("[sec-boot-figma-proto] existing entry.figma with an own '__proto__' prope
   const existingRaw: unknown = JSON.parse('{"version":1,"components":{"K":{"figma":{"key":"K","name":"Old","__proto__":{"polluted":1}},"code":{"module":"@/k","export":"B"},"status":"active"}}}');
   const existing = malformed<CodeConnectMap>(existingRaw);
   const m = bootstrap(catalog([{ key: "K", name: "New", type: "COMPONENT" }]), existing);
-  const figma: unknown = m.components.K.figma;
+  const figma: unknown = must(m.components.K, "component 'K'").figma;
   return Object.getPrototypeOf(figma) === Object.prototype && !("polluted" in (figma as object)) && JSON.stringify(figma) === JSON.stringify({ key: "K", name: "New" });
 })());
 check("[sec-boot-prop-proto-key] catalog prop named '__proto__' does not corrupt props", (() => {
@@ -500,7 +509,7 @@ check("[sec-boot-prop-proto-key] catalog prop named '__proto__' does not corrupt
   const defs = { ["__proto__"]: { key: "__proto__", type: "BOOLEAN" } as ComponentPropDef };
   const cat = malformed<ComponentsCatalog>({ components: [{ key: "K", name: "B", type: "COMPONENT", props: defs }] });
   const m = bootstrap(cat);
-  const props: unknown = m.components.K.props;
+  const props: unknown = must(m.components.K, "component 'K'").props;
   return props !== undefined && Object.keys(props as object).includes("__proto__") && (props as Record<string, { kind?: string }>)["__proto__"]?.kind === "boolean";
 })());
 check("[boot-safeassign-no-figma] a prior entry lacking `figma` does not throw (safeAssign tolerates undefined/null sources like Object.assign)", (() => {
@@ -510,7 +519,7 @@ check("[boot-safeassign-no-figma] a prior entry lacking `figma` does not throw (
   const existingRaw: unknown = JSON.parse('{"version":1,"components":{"K":{"code":{"module":"@/k","export":"B"},"status":"active"}}}');
   const existing = malformed<CodeConnectMap>(existingRaw);
   const m = bootstrap(catalog([{ key: "K", name: "New", type: "COMPONENT" }]), existing);
-  return m.components.K.figma.name === "New";
+  return must(m.components.K, "component 'K'").figma.name === "New";
 })());
 check("[sec-lint-proto-key] prop named '__proto__' is compared, not silently skipped", (() => {
   // Maps load via JSON.parse, which (unlike an object literal) creates a real own "__proto__" key.
@@ -547,13 +556,13 @@ const strTok = (v: string) => tokens({ collections: [{ name: "C", modes: ["light
   { name: "after", type: "COLOR", collection: "C", values: { light: "#2563eb" } }] });
 const survives = (v: string) => toCSS(strTok(v)).includes("--after");
 const unclosedComment = (v: string) => { const c = toCSS(strTok(v)); return (c.match(/\/\*/g) || []).length !== (c.match(/\*\//g) || []).length; };
-for (const [label, v] of [["comment-open", "Inter /*"], ["comment-close", "a */ b"], ["semicolon", "a;color:red"], ["brace", "a}"], ["unbalanced-paren", "cubic-bezier(0.4,0,0.2,1"], ["unbalanced-quote", '"Inter, sans-serif']]) {
+for (const [label, v] of [["comment-open", "Inter /*"], ["comment-close", "a */ b"], ["semicolon", "a;color:red"], ["brace", "a}"], ["unbalanced-paren", "cubic-bezier(0.4,0,0.2,1"], ["unbalanced-quote", '"Inter, sans-serif']] satisfies [string, string][]) {
   check(`[sec-css-${label}] token after the payload still survives`, survives(v) && !unclosedComment(v));
   check(`[sec-css-${label}] rewrite is reported by lintTokens`, lintTokens(strTok(v)).some((w) => /CSS-structural/.test(w)));
 }
 // Legitimate values contain parens/quotes/slashes and must pass through byte-for-byte — an escaper
 // that mangled these would break every easing token and font stack in a real design system.
-for (const [label, v] of [["easing", "cubic-bezier(0.4, 0, 0.2, 1)"], ["font-stack", '"Inter", sans-serif'], ["url", "url(/img.png)"], ["math", "2 * 4 / 2"]]) {
+for (const [label, v] of [["easing", "cubic-bezier(0.4, 0, 0.2, 1)"], ["font-stack", '"Inter", sans-serif'], ["url", "url(/img.png)"], ["math", "2 * 4 / 2"]] satisfies [string, string][]) {
   check(`[css-legit-${label}] passes through unescaped`, toCSS(strTok(v)).includes(`--t: ${v};`));
   check(`[css-legit-${label}] not reported as rewritten`, !lintTokens(strTok(v)).some((w) => /CSS-structural/.test(w)));
 }
@@ -618,10 +627,10 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     ],
   });
   const css = toCSS(twins);
-  const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1];
+  const root = (css.match(/:root \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   check("[dup-css] three IDENTICAL variables sharing a name emit ONE :root declaration, not three",
     (root.match(/--Schemes-On-Primary/g) || []).length === 1);
-  const dark = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  const dark = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   check("[dup-css] and one per mode block too", (dark.match(/--Schemes-On-Primary/g) || []).length === 1);
   check("[dup-css] the identical twins are reported as such (naming the keys), not silently swallowed",
     lintTokens(twins).some((w) => /share the name 'Schemes\/On Primary'.*resolve identically in every mode — emitted ONCE/.test(w) && /aaa1/.test(w) && /ccc3/.test(w)));
@@ -676,7 +685,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
     /--color-figma-bg-side-menu: var\(--color-figma-gray-900\);/.test(tw.text));
   check("[tw] the file imports tailwind and opens a @theme block", /^@import "tailwindcss";/.test(tw.text) && /@theme \{/.test(tw.text));
   // @theme cannot be nested in a selector, so non-default modes reassign the same properties outside it.
-  const modeBlock = (tw.text.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  const modeBlock = (tw.text.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   check("[tw] a non-default mode reassigns the same custom properties OUTSIDE @theme",
     /--color-figma-color-primary: #381e72;/.test(modeBlock) && tw.text.indexOf("@theme") < tw.text.indexOf('[data-theme="Dark"]'));
   check("[tw] a value identical across modes is not repeated in the mode block", !/--spacing-figma-space-md/.test(modeBlock));
@@ -701,7 +710,7 @@ check("[css-legit-mode] and is not reported as rewritten", !lintTokens(modeDs("D
   // livetest-3 #183: `--radius-xl: 16px` in @theme REPLACED Tailwind's own rounded-xl (12px).
   check("[tw] no generated variable can shadow Tailwind's own scale — radius XL/L/S/Full land under figma- (livetest-3 #183)", (() => {
     const d = toTailwind(tokens({ collections: [{ name: "Border Radius", modes: ["Mode 1"], default: "Mode 1" }], variables: ["S", "L", "XL", "Full"].map((n, i) => (
-      { name: n, key: "r" + i, type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS", "FONT_VARIATIONS"], values: { "Mode 1": [4, 12, 16, 1000000000][i] } })) }));
+      { name: n, key: "r" + i, type: "FLOAT", collection: "Border Radius", scopes: ["CORNER_RADIUS", "FONT_VARIATIONS"], values: { "Mode 1": must([4, 12, 16, 1000000000][i], `radius value at index ${i}`) } })) }));
     return !/^ {2}--radius-(xl|l|s|full):/m.test(d.text) && /--radius-figma-xl: 16px;/.test(d.text) && /--radius-figma-l: 12px;/.test(d.text);
   })());
   check("[tw] Figma's 1e9 'fully rounded' sentinel is emitted as 9999px, never as 1000000000px (livetest-3 #96)", (() => {
@@ -902,7 +911,9 @@ console.log("tokens — opacity FLOATs are percentages:");
     { name: "fx/fade", type: "FLOAT", collection: "Fx", scopes: ["OPACITY"], values: { Calm: 40, Loud: 80 } },
     { name: "fx/gap", type: "FLOAT", collection: "Fx", scopes: ["GAP"], values: { Calm: 4, Loud: 8 } }] });
   const { resolver: or, files: of } = toResolver(opModes);
-  const oBase = fileAt(of, or.sets.Fx.sources[0].$ref), oLoud = fileAt(of, modifierOf(or, "Fx").contexts.Loud[0].$ref);
+  const fxSet = must(or.sets.Fx, "resolver set 'Fx'");
+  const fxLoudCtx = must(modifierOf(or, "Fx").contexts.Loud, "Fx modifier Loud context");
+  const oBase = fileAt(of, must(fxSet.sources[0], "Fx set sources[0]").$ref), oLoud = fileAt(of, must(fxLoudCtx[0], "Fx Loud context[0]").$ref);
   check("[pct] resolver base set: the opacity leaf is {$type number, $value 40, $extensions figma.com unit percent}",
     JSON.stringify(leafAt(oBase, "fx.fade")) === JSON.stringify({ $type: "number", $value: 40, $extensions: { "figma.com": { unit: "percent" } } }));
   check("[pct] resolver mode context (Loud): 80 with the same unit; the GAP dimension gets no $extensions",
@@ -967,12 +978,14 @@ console.log("tokens — composed colours:");
   check("[composed] neither token is skipped as non-scalar", !w.some((m) => /overlay\/scrim|text\/muted/.test(m)));
   check("[composed] a COLOR_OPACITY-scoped FLOAT stays a unitless number", leafAt(d, "opacity.60").$type === "number" && leafAt(d, "opacity.60").$value === 60);
   const { resolver: cr, files: cf } = toResolver(composed);
-  const base = fileAt(cf, cr.sets.Theme.sources[0].$ref), dark = fileAt(cf, modifierOf(cr, "Theme").contexts.Dark[0].$ref);
+  const themeSet = must(cr.sets.Theme, "resolver set 'Theme'");
+  const themeDarkCtx = must(modifierOf(cr, "Theme").contexts.Dark, "Theme modifier Dark context");
+  const base = fileAt(cf, must(themeSet.sources[0], "Theme set sources[0]").$ref), dark = fileAt(cf, must(themeDarkCtx[0], "Theme Dark context[0]").$ref);
   check("[composed] resolver set files carry the opacity with the value they pick (default mode and Dark context)",
     leafAt(base, "text.muted").$value === "{ink}" && figmaExt(leafAt(base, "text.muted")).opacity === 50
     && leafAt(dark, "text.muted").$value === "{ink}" && figmaExt(leafAt(dark, "text.muted")).opacity === "{opacity.60}");
   const css = toCSS(composed);
-  const darkBlock = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1];
+  const darkBlock = (css.match(/\[data-theme="Dark"\] \{([\s\S]*?)\}/) || ["", ""])[1] ?? "";
   // color-mix(in srgb, <colour> <N%>, transparent): MDN color-mix, "adding transparency".
   check("[composed] tokens.css: colour alias + number opacity -> color-mix(in srgb, var(--ink) 50%, transparent)",
     !css.includes("[object Object]") && css.includes("--text-muted: color-mix(in srgb, var(--ink) 50%, transparent);"));

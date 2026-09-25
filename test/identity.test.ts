@@ -112,11 +112,19 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
   const base = read<VariablesDoc>("variables.json");
   const bump = (key: string, f: (v: Variable) => void) => { const d = clone(base); for (const v of must(d.variables, "d.variables")) if (v.key === key) f(v); return d; };
   const d1 = dd && dd.diffTokens(base, bump(K24, (v) => { v.values = { "Mode 1": 25 }; }));
-  ok("[211] changing ONLY the 24-valued Space 4 reports exactly one change, named with its key",
-    !!d1 && d1.changed.length === 1 && /e26d506e/.test(d1.changed[0].name) && d1.changed[0].modes[0].before === "24" && d1.changed[0].modes[0].after === "25");
+  ok("[211] changing ONLY the 24-valued Space 4 reports exactly one change, named with its key", (() => {
+    if (!d1 || d1.changed.length !== 1) return false;
+    const c0 = must(d1.changed[0], "d1.changed[0]");
+    const m0 = must(c0.modes[0], "d1.changed[0].modes[0]");
+    return /e26d506e/.test(c0.name) && m0.before === "24" && m0.after === "25";
+  })());
   const d2 = dd && dd.diffTokens(base, bump(K16, (v) => { v.values = Object.assign({}, v.values, { Desktop: 17 }); }));
-  ok("[211] a change to the OTHER Space 4 is seen too (it used to be shadowed)",
-    !!d2 && d2.changed.length === 1 && /64928e3a/.test(d2.changed[0].name) && d2.changed[0].modes[0].mode === "Desktop");
+  ok("[211] a change to the OTHER Space 4 is seen too (it used to be shadowed)", (() => {
+    if (!d2 || d2.changed.length !== 1) return false;
+    const c0 = must(d2.changed[0], "d2.changed[0]");
+    const m0 = must(c0.modes[0], "d2.changed[0].modes[0]");
+    return /64928e3a/.test(c0.name) && m0.mode === "Desktop";
+  })());
   const rev = clone(base); must(rev.variables, "rev.variables").reverse();
   const d3 = dd && dd.diffTokens(base, rev);
   ok("[211] re-ordering the rows reports NOTHING (it used to report a false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
@@ -172,19 +180,20 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
   for (const [k, screenRel, min] of [["job-roles", POS, 26], ["global-policies", GP, 23]] as const) {
     const res = cc(screenRel);
     const props = res.componentProposals || [];
-    const refRows = ref[k].names;
+    const refEntry = must(ref[k], `mapping.reference.json['${k}']`);
+    const refRows = refEntry.names;
     const refMatched = Object.entries(refRows).filter(([, r]) => r.match);
     const refResidual = Object.entries(refRows).filter(([, r]) => !r.match);
     ok(`[226] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed), not catalog-covers-nothing`,
       blockerOn(res, "catalog-rekeyed") && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
     ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
     ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
-      refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => refRows[p.name] && refRows[p.name].match === p.catalog?.id));
+      refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => { const row = refRows[p.name]; return row && row.match === p.catalog?.id; }));
     ok(`[226] ${k}: the same ${refResidual.length}-name residual, with the same first reason`,
       (res.componentResidual || []).length === refResidual.length &&
         refResidual.every(([n, r]) => (res.componentResidual || []).some((x) => x.name === n && x.reasons[0] === r.firstReason)));
     ok(`[226] ${k}: every proposal waits for a person — none is pre-confirmed`, props.length > 0 && props.every((p) => p.confirmed === false));
-    ok(`[226] ${k}: counts are over VISIBLE instances (${ref[k].instances}), like the build`, !!(res.coverage && res.coverage.instances === ref[k].instances));
+    ok(`[226] ${k}: counts are over VISIBLE instances (${refEntry.instances}), like the build`, !!(res.coverage && res.coverage.instances === refEntry.instances));
   }
   // Tie-breaks the reference needed, checked individually.
   const byName = (res: CcResult) => new Map<string, ComponentProposal>((res.componentProposals || []).map((p) => [p.name, p]));
@@ -242,15 +251,16 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const yes = node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map, "--from-proposals", report0]);
   const m: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   const btn: Pick<ComponentProposal, "instanceKeys" | "catalog"> = (rep.componentProposals || []).find((p) => p.name === "Button") || { instanceKeys: [], catalog: null };
+  const btnKey0 = must(btn.instanceKeys[0], "btn.instanceKeys[0]");
   ok("[226] stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
-    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog?.key);
+    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btnKey0] && must(m.components[btnKey0], "m.components[btnKey0]").figma.key === btn.catalog?.key);
   ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
   const m2: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   // The catalog key must exist for the second half to test anything (a `?? ""` fallback would pass on any map).
   const btnCatalogKey = btn.catalog?.key;
   ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
-    btnCatalogKey !== undefined && !!m2.components[btn.instanceKeys[0]] && !m2.components[btnCatalogKey]);
+    btnCatalogKey !== undefined && !!m2.components[btnKey0] && !m2.components[btnCatalogKey]);
   const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 

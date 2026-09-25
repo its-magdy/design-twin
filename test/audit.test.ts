@@ -46,7 +46,7 @@ check("#bbbbbb on white is low contrast", onNode(ios, "low-contrast", "1:4") && 
 check("#111 28px bold on white passes", !onNode(ios, "low-contrast", "1:3"));
 check("white text on #4f46e6 footer passes (real ancestor bg, not assumed white)", !onNode(ios, "low-contrast", "1:11"));
 check("text over an image fill → manual contrast check", onNode(ios, "contrast-manual", "1:14"));
-check("missing font is a blocker", codes(ios, "missing-font").length === 1 && codes(ios, "missing-font")[0].severity === "blocker");
+check("missing font is a blocker", codes(ios, "missing-font").length === 1 && must(codes(ios, "missing-font")[0], "missing-font finding").severity === "blocker");
 check("detached instance flagged", onNode(ios, "detached-instance", "1:12"));
 check("no-auto-layout frame flagged", onNode(ios, "no-auto-layout", "1:12"));
 check("crop image scale mode flagged", onNode(ios, "image-scale-mode", "1:13"));
@@ -88,16 +88,18 @@ check("android: corner smoothing flagged (no native squircle)", onNode(android, 
 check("unknown platform falls back to web", audit(screen, { platform: "watchos" }).platform === "web");
 
 console.log("audit — input shapes + manifest gates:");
-const bare = audit(screen.nodes[0], { platform: "ios" });
+const screenRoot = must(screen.nodes[0], "screen.nodes[0]");
+const bare = audit(screenRoot, { platform: "ios" });
 check("bare layer tree accepted", bare.screens[0] === "Login" && onNode(bare, "fake-status-bar", "1:2"));
-check("{tree} wrapper accepted", audit({ name: "Login", id: screen.nodes[0].id, tree: screen.nodes[0] }, { platform: "ios" }).findings.length === bare.findings.length);
+check("{tree} wrapper accepted", audit({ name: "Login", id: screenRoot.id, tree: screenRoot }, { platform: "ios" }).findings.length === bare.findings.length);
 check("no catalog → component states unknown, not invented", bare.components.find((c) => c.name === "Button")?.known === false);
 const truncated = audit(Object.assign({}, screen, { manifest: { truncated: 2, assetsFailed: 1 } }), { platform: "ios" });
-check("truncated export is a blocker", codes(truncated, "export-truncated")[0].severity === "blocker");
-check("failed assets are a blocker", codes(truncated, "assets-failed")[0].severity === "blocker");
-check("blockers sort first", truncated.findings[0].severity === "blocker");
+check("truncated export is a blocker", must(codes(truncated, "export-truncated")[0], "export-truncated finding").severity === "blocker");
+check("failed assets are a blocker", must(codes(truncated, "assets-failed")[0], "assets-failed finding").severity === "blocker");
+check("blockers sort first", must(truncated.findings[0], "truncated.findings[0]").severity === "blocker");
 const drawnStates = structuredClone(screen);
-must(drawnStates.nodes[0].children, "the login root's children").push({ type: "FRAME", name: "Skeleton", id: "3:1", hidden: true }, { type: "FRAME", name: "Error toast", id: "3:2", hidden: true });
+const drawnStatesRoot = must(drawnStates.nodes[0], "drawnStates.nodes[0]");
+must(drawnStatesRoot.children, "the login root's children").push({ type: "FRAME", name: "Skeleton", id: "3:1", hidden: true }, { type: "FRAME", name: "Error toast", id: "3:2", hidden: true });
 const ds = audit(drawnStates, { platform: "ios" });
 check("hidden 'Skeleton' / 'Error toast' count as designed states", ds.screenStates.loading === "designed" && ds.screenStates.error === "designed" && ds.screenStates.empty === "not-found");
 check("garbage input doesn't throw", audit(null).findings.length === 0 && audit(malformed<AuditInput[]>([{}, 42])).screens.length === 0);
@@ -107,10 +109,10 @@ const styled = audit({ nodes: [{ type: "FRAME", name: "S", id: "9:1", children: 
   { type: "INSTANCE", name: "Delete", id: "9:2", component: "Button", mainComponent: { name: "Type=Danger", key: "K", setKey: "KS", setName: "Button" }, box: { w: 120, h: 44 } },
   { type: "TEXT", name: "T", id: "9:3", text: "x", autoResize: "height", font: { size: 14, color: "#111111" }, fills: [{ type: "solid", color: "#111111" }] },
 ] }] }, { platform: "ios", catalog: catalog1([{ name: "Button", type: "COMPONENT_SET", key: "KS", props: { Variant: { type: "VARIANT", options: ["Primary", "Danger", "Destructive"] } } }]) });
-check("'Danger'/'Destructive' style variants are not an error state", !styled.components[0].present.includes("error"));
+check("'Danger'/'Destructive' style variants are not an error state", !must(styled.components[0], "styled.components[0]").present.includes("error"));
 check("TEXT node fills not double-counted as a second color", styled.tokenBinding.color.total === 1);
 const stroked = audit({ type: "FRAME", name: "Search", id: "8:1", strokes: { colors: ["#d4d4d8"], weight: 1, align: "outside" } }, { platform: "web" });
-check("outside stroke flagged with the web border/outline note", onNode(stroked, "stroke-align", "8:1") && /outline/.test(codes(stroked, "stroke-align")[0].message));
+check("outside stroke flagged with the web border/outline note", onNode(stroked, "stroke-align", "8:1") && /outline/.test(must(codes(stroked, "stroke-align")[0], "stroke-align finding").message));
 check("inside stroke (the Figma default for borders) not flagged", !onNode(ios, "stroke-align", "1:6"));
 
 console.log("markdown:");
@@ -166,7 +168,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   check("[platform-assumed] an UNKNOWN platform string is a guess too, not silently honoured",
     audit([{ doc, label: "login" }], { platform: "windows" }).platformAssumed === true);
   const md = toMarkdown(guessed);
-  const head = md.split("## Token binding")[0];
+  const head = must(md.split("## Token binding")[0], "markdown before '## Token binding'");
   check("[platform-assumed] the markdown says so at the TOP, above the findings, not in a question list",
     /\(ASSUMED — not given\)/.test(head) && /assumed `web`/.test(head) && /--platform ios\|android/.test(head));
   check("[platform-assumed] a given platform gets no banner", !/ASSUMED/.test(toMarkdown(given)));
@@ -178,7 +180,7 @@ check("CLI rejects an unknown --platform with exit 2", badExit === 2);
   check("[states-scope] a single-frame audit says so in the result, not only in prose",
     one.screenStatesScope.rootsAudited === 1 && one.screenStatesScope.singleFrame === true);
   const md = toMarkdown(one);
-  const block = md.split("## Screen states")[1].split("##")[0];
+  const block = must(must(md.split("## Screen states")[1], "'## Screen states' section").split("##")[0], "block before next '##'");
   check("[states-scope] the markdown reads 'not in this frame', with the caveat above it",
     /not in this frame — ask/.test(block) && /does not/.test(block) && !/\*\*not found — ask\*\*/.test(block));
   const two = audit([{ doc: screen, label: "a" }, { doc: screen, label: "b" }]);
@@ -237,7 +239,7 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 // "the build uses these values EXACTLY".
 (() => {
   const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "verify");
-  for (const [file, label] of [["positions___7314_87192.json", "Job Roles"], ["System_Configurations__1359_21337.json", "Global Policies"]]) {
+  for (const [file, label] of [["positions___7314_87192.json", "Job Roles"], ["System_Configurations__1359_21337.json", "Global Policies"]] satisfies [string, string][]) {
     const doc = readFixture(path.join(FX, file), isScreenExport);
     // independent walk — the prompt's own snippet, not hidden.js
     const hidden = new Set<string | undefined>();
@@ -326,11 +328,11 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const withDefault = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens } });
   check("[grid] the default (no --grid given) is recorded as assumed", withDefault.gridAssumed === true && withDefault.grid === 4);
   check("[grid] an 8px design-system spacing scale is detected and reported as a mismatch", withDefault.gridMismatch === 8);
-  check("[grid] the markdown headline names the real step and suggests --grid 8", /grid 4px .*8px.*--grid 8/.test(toMarkdown(withDefault).split("\n")[2]));
+  check("[grid] the markdown headline names the real step and suggests --grid 8", /grid 4px .*8px.*--grid 8/.test(must(toMarkdown(withDefault).split("\n")[2], "markdown headline line")));
 
   const withExplicit = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens }, grid: 8 });
   check("[grid] passing --grid explicitly turns gridAssumed off and reports no mismatch", withExplicit.gridAssumed === false && withExplicit.gridMismatch === null);
-  check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(toMarkdown(withExplicit).split("\n")[2]));
+  check("[grid] the markdown headline carries no '(default'/'ASSUMED' grid note when --grid was given", !/grid 8px \*/.test(must(toMarkdown(withExplicit).split("\n")[2], "markdown headline line")));
 }
 
 // ---------- livetest-3 #311: the audit's gate judges token collisions on the screen's OWN slice ----------
