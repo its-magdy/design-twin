@@ -3176,6 +3176,23 @@ void (async () => {
     ws1.close();
     b.close();
   }
+  {
+    // The disarm is a frame COUNT, not a clock. A client that CONNECTED in the same millisecond as the
+    // send — no hello, nothing since — has shown no life since the send and must still stall. The
+    // timestamp compare this replaced (`lastActivity >= sentAt`, with lastActivity set at connect) read
+    // that connect as life and never fired; the [stall] blocks above and the [cancel] stall check below
+    // needed a hello + a sleep before their request for exactly that reason. Here the request goes out
+    // in the same tick the connect resolved in, and the client never sends a frame.
+    const { bridge: b, client: ws1 } = await connectedBridge();
+    let err: Error | undefined;
+    const start = Date.now();
+    try { await b.request("exportFull", {}, 60000, undefined, 300); }
+    catch (e) { err = asErr(e); }
+    ok("[stall] a client that connected in the same instant as the send and sent nothing since still stalls (frame count, not clock)",
+      !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
+    ws1.close();
+    b.close();
+  }
 
   // ---------------------------------------------------------------- cancel frames (live finding 2026-09-25)
   // Whenever the bridge gives up on a request it already sent — the stall check, the per-command
