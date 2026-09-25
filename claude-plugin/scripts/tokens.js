@@ -540,9 +540,10 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
       }
       L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
       for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
+      const active = c.modes.find((m) => m.name !== c.default) ?? m1;
       L.push(
         "",
-        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([(m0.id !== c.defaultId ? m0 : m1).id])}) { \u2026 }`,
+        `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { \u2026 }`,
         `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`
       );
     }
