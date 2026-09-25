@@ -47,7 +47,7 @@ console.log("resolve-screen — title/texts derivation over the REAL export:");
 const readRoot = (dir: string): PagesRootIndex => readFixture(path.join(dir, "pages", "index.json"), isPagesRootIndex);
 
 function screenRoot(pageDir: string, file: string, base?: string): TextWalkNode {
-  return readFixture(path.join(FIXTURE, base || "pages", pageDir, file), isScreenExport).nodes[0];
+  return must(readFixture(path.join(FIXTURE, base || "pages", pageDir, file), isScreenExport).nodes[0], "a root node");
 }
 
 ok("[title] `positions ` (trailing space, layer name) visibly reads 'Job Roles' — deriveTitle finds it, not the sidebar nav item",
@@ -146,7 +146,7 @@ ok("[index] acceptance criterion 2: exactly one row's `title` is 'Job Roles', an
   (() => {
     const root = readRoot(FIXTURE);
     const hits = (root.layers || []).filter((l) => l.title === "Job Roles");
-    return hits.length === 1 && hits[0].id === "7314:87192";
+    return hits.length === 1 && hits[0]?.id === "7314:87192";
   })());
 
 console.log("\nresolve-screen — round 2: text search never auto-resolves, and a title-less export says so:");

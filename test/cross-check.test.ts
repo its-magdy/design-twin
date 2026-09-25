@@ -341,8 +341,9 @@ console.log("cross-check — contrast of a TRANSLUCENT text colour (WCAG 2.2 on 
   const frame = node({ type: "FRAME", id: "1:1", name: "Card", resolvedModes: { Sem: "Dark" }, tokens: { fills: "Surface" }, children: [text("2:1", "Inter", null, "Label")] });
   const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [frame] }, label: "S" }], variables: vars });
   const f = res.findings.find((x) => x.code === "derived-mode-contrast");
+  const pair0 = f?.pairs?.[0];
   ok("[contrast-alpha] black at 50% on white, composited: ratio 3.98 in mode 'Light' (21 if alpha were ignored)",
-    !!f && f.mode === "Light" && f.pairs?.length === 1 && f.pairs[0].ratio === 3.98 && f.pairs[0].fg === "Label" && f.pairs[0].bg === "Surface");
+    !!f && f.mode === "Light" && f.pairs?.length === 1 && pair0?.ratio === 3.98 && pair0?.fg === "Label" && pair0?.bg === "Surface");
   ok("[contrast-alpha] the message carries the composited ratio", !!f && f.message.includes("'Label' on 'Surface' = 3.98:1"));
 }
 
@@ -365,8 +366,9 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
   ok("[screen-cov] a map covering the whole catalog can still cover 0% of the screen",
     cov.distinct === 1 && cov.inMap === 0 && cov.mapPct === 0);
   ok("[screen-cov] instances are counted separately from distinct components", cov.instances === 2);
+  const unmapped0 = cov.unmapped[0];
   ok("[screen-cov] the unmapped list names the component and how often it appears",
-    cov.unmapped.length === 1 && cov.unmapped[0].setName === "Widget" && cov.unmapped[0].instances === 2);
+    cov.unmapped.length === 1 && unmapped0?.setName === "Widget" && unmapped0?.instances === 2);
 }
 {
   const map = codeMap({ Button: { figma: { key: "ds-btn", name: "Button" } } });
@@ -473,7 +475,8 @@ console.log("drift-lint — coverage of the screen, not of the catalog:");
     for (const r of doc.nodes) w(r, false);
     return { visible: vis.size, hiddenOnly: [...all].filter((k) => !vis.has(k)).length };
   };
-  for (const [label, rel] of [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]]) {
+  const labeledFixtures: [string, string][] = [["Job Roles", "pages/__Organization_management_/positions___7314_87192.json"], ["Global Policies", "pages/__Organization_management_/System_Configurations__1359_21337.json"]];
+  for (const [label, rel] of labeledFixtures) {
     const res = run(rel), truth = sets(rel);
     const b: Partial<Record<CoverageBucket, number>> = res.coverage?.buckets || {};
     const sum = Object.values(b).reduce((n: number, x: number) => n + x, 0);
