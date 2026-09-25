@@ -9,6 +9,7 @@ import path from "node:path";
 import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
+import { getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -3174,6 +3175,202 @@ void (async () => {
       !!err && Date.now() - start < 5000 && /no response from the Figma plugin/.test(err.message));
     ws1.close();
     b.close();
+  }
+
+  // ---------------------------------------------------------------- cancel frames (live finding 2026-09-25)
+  // Whenever the bridge gives up on a request it already sent — the stall check, the per-command
+  // timeout, close(), the caller's AbortSignal, or (through the daemon) the daemon's own client going
+  // away — the plugin must be told with `{ type: "cancel", id }`, or it keeps walking the export for
+  // nobody and queues every later command behind it. Each check below drives the REAL socket path
+  // with a fake plugin that records every frame it receives and never answers.
+  console.log("\nserver-core / daemon — cancel frames to the plugin when a request is abandoned:");
+  {
+    type Seen = { id?: string; cmd?: string; type?: string };
+    const record = (ws: WebSocket, into: Array<Seen | "socket-closed">) => {
+      ws.on("message", (d: RawData) => {
+        const v = JSON.parse(d.toString()) as unknown;
+        if (v !== null && typeof v === "object") into.push(v); // any object is a Seen: every field is optional and read defensively
+      });
+      ws.on("close", () => into.push("socket-closed"));
+    };
+    const frames = (into: Array<Seen | "socket-closed">) => into.filter((f): f is Seen => f !== "socket-closed");
+    const cmdFrames = (into: Array<Seen | "socket-closed">) => frames(into).filter((f) => typeof f.cmd === "string");
+    const cancelsFor = (into: Array<Seen | "socket-closed">, id: string | undefined) =>
+      frames(into).filter((f) => f.type === "cancel" && f.id === id && f.cmd === undefined);
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+    // (a) the stall check. Pre-change server-core.ts (the stall interval, ~line 797-808) deleted the
+    // request and rejected without a word to the plugin — no cancel frame ever reached it.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen: Array<Seen | "socket-closed"> = [];
+      record(ws1, seen);
+      // Same setup as the [stall] blocks above: identified, then quiet. Sending in the SAME millisecond
+      // as the connect would read the connect itself as "life since send" and disarm the check.
+      ws1.send(JSON.stringify({ type: "hello", instanceId: "cancel-stall", file: "Cancel File" }));
+      await b.waitForIdentified(1000);
+      await sleep(20);
+      let err: Error | undefined;
+      try { await b.request("exportNode", { nodeId: "1:2" }, 10000, undefined, 300); } catch (e) { err = asErr(e); }
+      await sleep(100); // the frame was sent BEFORE the rejection; give it its trip over loopback
+      const sent = cmdFrames(seen)[0];
+      ok("[cancel] stall check fires → the plugin gets { type: \"cancel\", id } for the request it was sent",
+        !!err && /no response from the Figma plugin/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+      ws1.close();
+      b.close();
+    }
+    // (b) the per-command timeout. Pre-change (the setTimeout in requestWithClient, ~line 772-784)
+    // likewise rejected silently.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen: Array<Seen | "socket-closed"> = [];
+      record(ws1, seen);
+      let err: Error | undefined;
+      try { await b.request("exportFull", {}, 400); } catch (e) { err = asErr(e); }
+      await sleep(100);
+      const sent = cmdFrames(seen)[0];
+      ok("[cancel] per-command timeout fires → the plugin gets the cancel frame for that id",
+        !!err && /did not answer 'exportFull'/.test(err.message) && !!sent && cancelsFor(seen, sent.id).length === 1);
+      ws1.close();
+      b.close();
+    }
+    // (c) close() with a request pending. Pre-change close() (~line 866-869) rejected "bridge closed"
+    // and closed the socket; the plugin saw a close and no cancel for the exact request.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen: Array<Seen | "socket-closed"> = [];
+      record(ws1, seen);
+      let err: Error | undefined;
+      const inflight = b.request("exportFull", {}, 20000).catch((e: unknown) => { err = asErr(e); });
+      await sleep(60); // let the command land before the close
+      b.close();
+      await inflight;
+      await sleep(300); // the socket's closing handshake
+      const sent = cmdFrames(seen)[0];
+      const cancelAt = seen.findIndex((f) => f !== "socket-closed" && f.type === "cancel" && !!sent && f.id === sent.id);
+      const closedAt = seen.indexOf("socket-closed");
+      ok("[cancel] close() with a request pending → the cancel frame arrives BEFORE the socket closes",
+        err?.message === "bridge closed" && cancelAt > 0 && closedAt > cancelAt);
+    }
+    // (d) the caller's AbortSignal. Pre-change request()/requestWithClient() had no `signal` parameter:
+    // the extra argument was ignored, the command stayed pending until its timeout, nothing was cancelled.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen: Array<Seen | "socket-closed"> = [];
+      record(ws1, seen);
+      // Answers only ping, so the same bridge can prove a request after the abort still round-trips.
+      ws1.on("message", (d: RawData) => {
+        const f = JSON.parse(d.toString()) as CommandFrame;
+        if (f.cmd === "ping") ws1.send(JSON.stringify({ id: f.id, ok: true, result: { pong: true, page: "P", file: "F" } }));
+      });
+      const ac = new AbortController();
+      let err: Error | undefined;
+      const start = Date.now();
+      const inflight = b.request("exportFull", {}, 20000, undefined, undefined, undefined, ac.signal).catch((e: unknown) => { err = asErr(e); });
+      await sleep(60);
+      ac.abort();
+      await inflight;
+      await sleep(100);
+      const sent = cmdFrames(seen)[0];
+      ok("[cancel] signal aborted while pending → cancel frame sent, rejects \"request aborted by the caller\" at once",
+        err?.message === "request aborted by the caller" && Date.now() - start < 2000 && !!sent && cancelsFor(seen, sent.id).length === 1);
+      // An Error reason of the caller's own is passed through (the daemon names its departed client).
+      const ac2 = new AbortController();
+      let err2: Error | undefined;
+      const inflight2 = b.request("exportFull", {}, 20000, undefined, undefined, undefined, ac2.signal).catch((e: unknown) => { err2 = asErr(e); });
+      await sleep(30);
+      ac2.abort(new Error("caller-specific reason"));
+      await inflight2;
+      ok("[cancel] an Error given as the abort reason is the rejection itself", err2?.message === "caller-specific reason");
+      // A settled request removes its abort listener (no leak on a long-lived signal), and the bridge
+      // still answers the next request after the aborted ones.
+      const ac3 = new AbortController();
+      // One listener while in flight (pre-change: none — the signal was never read), none once settled.
+      const pinging = b.request("ping", {}, 2000, undefined, undefined, undefined, ac3.signal);
+      const listening = getEventListeners(ac3.signal, "abort").length;
+      const pong = await pinging;
+      ok("[cancel] after aborts the bridge still round-trips, and the settled request left no abort listener behind",
+        pong.pong === true && listening === 1 && getEventListeners(ac3.signal, "abort").length === 0);
+      // Aborted BEFORE the call: nothing is sent at all.
+      const before = cmdFrames(seen).length;
+      const pre = new AbortController();
+      pre.abort();
+      let err3: Error | undefined;
+      try { await b.request("exportFull", {}, 20000, undefined, undefined, undefined, pre.signal); } catch (e) { err3 = asErr(e); }
+      await sleep(100);
+      ok("[cancel] a signal aborted before the call rejects \"request aborted before it was sent\" and sends no command frame",
+        err3?.message === "request aborted before it was sent" && cmdFrames(seen).length === before);
+      ws1.close();
+      b.close();
+    }
+    // (d, timers) An aborted request leaves no timer armed: a child process with a 60 s request that it
+    // aborts must exit on its own right away. Pre-change the 60 s timer (and the request) stayed live.
+    {
+      const port = nextPort++;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-abort-"));
+      const script = path.join(dir, "abort.mjs");
+      fs.writeFileSync(script, [
+        'process.env.FIGMA_BRIDGE_TOKEN = "t";',
+        `const { createBridge } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../bridge/src/server-core.ts")).href)});`,
+        `const { default: WebSocket } = await import(${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../node_modules/ws/wrapper.mjs")).href)});`,
+        `const bridge = createBridge(${port});`,
+        `const ws = new WebSocket("ws://127.0.0.1:${port}/?token=t", { origin: "null" });`,
+        'await new Promise((res, rej) => { ws.on("open", res); ws.on("error", rej); });',
+        "const ac = new AbortController();",
+        'const p = bridge.request("exportFull", {}, 60000, undefined, undefined, undefined, ac.signal).catch((e) => console.log("REJECTED:" + e.message));',
+        "setTimeout(() => ac.abort(), 50);",
+        "await p;",
+        // Closed only AFTER the request settled, so close() finds nothing pending to clear: a timer the
+        // abort failed to clear would still hold the loop open for its full 60 s.
+        "ws.terminate();",
+        "bridge.close();",
+      ].join("\n"));
+      const t0 = Date.now();
+      const r = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 20000 });
+      ok("[cancel] an aborted request leaves no timer behind — the process exits on its own promptly",
+        r.status === 0 && /REJECTED:request aborted by the caller/.test(r.stdout) && Date.now() - t0 < 10000);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    // (e) the daemon. A real server-core bridge + a fake plugin behind a real daemon socket.
+    // Pre-change daemon.ts ignored its client's disconnect entirely: the in-flight request ran to its
+    // timeout with no cancel, and a queued one was forwarded once the one ahead of it finished.
+    {
+      const { bridge: b, client: ws1 } = await connectedBridge();
+      const seen: Array<Seen | "socket-closed"> = [];
+      record(ws1, seen);
+      const C_PORT = 19791; // a socket name only (the bridge above has its own TCP port)
+      const { shutdown } = await daemon.serve(b, { port: C_PORT, signals: false, crashHandlers: false });
+      const openRaw = (frame: object) => new Promise<net.Socket>((resolve, reject) => {
+        const c = net.createConnection(daemon.sockPath(C_PORT));
+        c.on("error", reject);
+        c.on("connect", () => { c.write(JSON.stringify(frame) + "\n"); resolve(c); });
+      });
+      // In flight: sent, plugin silent, client destroys its socket → the plugin gets the cancel frame.
+      const c1 = await openRaw({ cmd: "exportFull", args: {}, timeoutMs: 20000 });
+      await sleep(150); // forwarded to the plugin
+      const sent = cmdFrames(seen)[0];
+      c1.destroy();
+      await sleep(200);
+      ok("[cancel-daemon] a client that disconnects while its request is in flight → the plugin gets the cancel frame",
+        !!sent && sent.cmd === "exportFull" && cancelsFor(seen, sent.id).length === 1);
+      // Queued: A (short timeout) in flight on one client, B queued behind it on another that then
+      // disconnects. When A times out, B must NOT be forwarded. Pre-change B went to the plugin as soon
+      // as A's 500 ms timeout released the queue.
+      const beforeQ = cmdFrames(seen).length;
+      const cA = await openRaw({ cmd: "listPages", args: { depth: 1 }, timeoutMs: 500 });
+      await sleep(60);
+      const cB = await openRaw({ cmd: "exportDesignSystem", args: {}, timeoutMs: 20000 });
+      await sleep(60);
+      cB.destroy();
+      await sleep(1000); // A's timeout has passed; the queue has moved on
+      const afterQ = cmdFrames(seen).slice(beforeQ).map((f) => f.cmd);
+      ok("[cancel-daemon] a request still QUEUED when its client disconnects is never forwarded to the plugin",
+        afterQ.join(",") === "listPages");
+      cA.destroy();
+      shutdown();
+      ws1.close();
+    }
   }
 
   // ---------------------------------------------------------------- P5: write-out.js asset clobbering (findings 23/104/124/125/28/30)

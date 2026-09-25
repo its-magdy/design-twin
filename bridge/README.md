@@ -597,6 +597,11 @@ Behaviour worth knowing:
 - Requests are **serialized**. The plugin is single-threaded and its heavy commands mutate shared
   per-run state (`serializeRun` in `bridge.ts`), so the daemon runs one at a time, in arrival order —
   exactly like a sequence of one-shot runs.
+- An **abandoned request is cancelled in the plugin**: when a command times out, when the one-shot
+  stall check gives up, when the bridge shuts down, or when the client that asked (a Ctrl-C'd CLI, an
+  ended MCP session) disconnects from the daemon before its reply, the bridge tells the plugin to stop
+  that work rather than leaving it to finish for nobody — and a request still queued for a departed
+  client is dropped without ever reaching the plugin.
 - `--serve` / `--stop` / `--daemon-status` each own the whole invocation; combining one with a pull or
   a read option is refused rather than silently dropping the export you typed.
 - A stale socket left by a crashed daemon reads as "no daemon" and is replaced, rather than making

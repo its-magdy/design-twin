@@ -749,15 +749,36 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // here is a promise the runtime keeps rather than a cast.
   // `onProgress` (optional, last) receives every progress tick the chosen connection sends while this
   // request is in flight — the plugin relays them during a bridge-triggered export.
-  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<Commands[C]["reply"]> {
-    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress).then((o) => o.reply);
+  // `signal` (optional, last): the caller's way to give up on the request — the daemon aborts it when
+  // ITS client disconnects. See requestWithClient for what an abort does on the wire.
+  function request<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<Commands[C]["reply"]> {
+    return requestWithClient(cmd, args, timeoutMs, target, stallMs, onProgress, signal).then((o) => o.reply);
+  }
+
+  // CANCEL (live finding 2026-09-25). Whenever this side gives up on a request it has already sent —
+  // the per-command timeout, the stall check, close(), or the caller's `signal` — the plugin is told,
+  // or it keeps walking the export for nobody and queues every later command behind it. The frame is
+  // `{ type: "cancel", id }` (no `cmd`): best-effort, sent only on an OPEN socket, and nothing is ever
+  // awaited back. A plugin that already finished, or never heard of `id`, ignores it; so does an older
+  // plugin bundle that predates the frame (it reads a frame without `cmd` as nothing to run). A
+  // duplicate for the same id is equally harmless. A socket that CLOSES is itself a cancel on the
+  // plugin side, which is why the one-shot CLI (whose exit closes the socket) needs nothing more.
+  function cancelOnWire(client: ClientEntry, id: string): void {
+    if (client.ws.readyState !== WebSocket.OPEN) return;
+    try { client.ws.send(JSON.stringify({ type: "cancel", id })); } catch { /* socket went away — closing it is a cancel too */ }
   }
 
   // The same, also answering WHICH connected file the command went to — the client resolveClient
   // picked for `target`, described exactly as listClients() would. figma-pull.ts stamps that onto a
   // screen export as `sourceFile` (P4 #33); it used to re-implement the matching rules to find out.
-  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<RequestOutcome<C>> {
+  //
+  // `signal` (optional, last — every existing call site is unchanged): already aborted → rejects at once
+  // and nothing is sent; aborted while pending → the cancel frame goes to the plugin, the request is
+  // forgotten, and the promise rejects with the signal's reason when that is an Error of the caller's
+  // own (the daemon passes one naming its departed client), else "request aborted by the caller".
+  function requestWithClient<C extends Cmd>(cmd: C, args: Commands[C]["args"], timeoutMs: number = TIMEOUTS.command, target?: string | null, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<RequestOutcome<C>> {
     return new Promise<RequestOutcome<C>>((resolve, reject) => {
+      if (signal?.aborted) return reject(new Error("request aborted before it was sent"));
       let client: ClientEntry;
       try {
         client = resolveClient(target);
@@ -765,9 +786,16 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         return reject(e);
       }
       const id = "r" + ++seq;
+      // Removed on settle (every path below goes through `unlisten`), so a long-lived signal shared by
+      // many requests never accumulates listeners.
+      let onAbort: (() => void) | null = null;
+      const unlisten = () => { if (signal && onAbort) signal.removeEventListener("abort", onAbort); onAbort = null; };
       const timer = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
+          if (stallTimer) clearInterval(stallTimer);
+          unlisten();
+          cancelOnWire(client, id);
           // We only get here AFTER isConnected() passed and the command was sent, so the socket is
           // up and the file IS open — never blame those. The real causes are a slow export (big
           // file / --all-pages) or a plugin-side throw, which surfaces in the plugin window, not here.
@@ -798,6 +826,8 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
           clearTimeout(timer);
+          unlisten();
+          cancelOnWire(client, id);
           const nodeId = "nodeId" in args && typeof args.nodeId === "string" ? args.nodeId : "";
           const node = nodeId ? ` (node ${nodeId})` : "";
           reject(new Error(
@@ -820,9 +850,23 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
         connId: client.connId,
         cmd,
         ...ifDefined("onProgress", onProgress),
-        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); settle(v); },
-        reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); reject(e); },
+        resolve: (v) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); settle(v); },
+        reject: (e) => { clearTimeout(timer); if (stallTimer) clearInterval(stallTimer); unlisten(); reject(e); },
       });
+      if (signal) {
+        const sig = signal;
+        onAbort = () => {
+          const p = pending.get(id);
+          if (!p) return; // settled already
+          pending.delete(id);
+          cancelOnWire(client, id);
+          const r: unknown = sig.reason;
+          // A bare abort() carries a DOMException "AbortError" (itself an Error in Node) — that names
+          // nothing, so it gets the fixed text; an Error the caller built is passed through as-is.
+          p.reject(r instanceof Error && !(r instanceof DOMException) ? r : new Error("request aborted by the caller"));
+        };
+        sig.addEventListener("abort", onAbort, { once: true });
+      }
       client.ws.send(JSON.stringify({ id, cmd, args }));
     });
   }
@@ -865,6 +909,13 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
   // that keeps the whole payload; the WS server is what was holding the loop open, so it has to go.
   function close(): void {
     clearInterval(heartbeat);
+    // Cancel frames FIRST, while the sockets are still open: every request still pending here is work
+    // the plugin would otherwise finish for nobody (see cancelOnWire). The socket close below is a
+    // cancel on the plugin side too; the explicit frame names the exact request and costs nothing.
+    for (const [id, p] of pending) {
+      const c = clients.get(p.connId);
+      if (c) cancelOnWire(c, id);
+    }
     for (const p of pending.values()) p.reject(new Error("bridge closed"));
     pending.clear();
     // Close EVERY client, not just the one that used to be `socket` — otherwise a second connected

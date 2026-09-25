@@ -154,8 +154,10 @@ export interface DaemonBridge {
   request(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined): Promise<unknown>;
   /** The same, also naming the client the command went to (server-core has it; a fake may not).
    *  `stallMs` is server-core's own opt-in (the daemon never passes it); `onProgress` receives every
-   *  tick the chosen connection sends while the request is in flight — the source of progress frames. */
-  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void): Promise<{ reply: unknown; client: ClientRow }>;
+   *  tick the chosen connection sends while the request is in flight — the source of progress frames.
+   *  `signal` is aborted when the daemon's client disconnects (or the daemon shuts down) before the
+   *  reply; server-core then sends the plugin a cancel frame for the request. */
+  requestWithClient?(cmd: Cmd, args: Commands[Cmd]["args"] | undefined, timeoutMs: number | undefined, target: string | null | undefined, stallMs?: number, onProgress?: (tick: ProgressTick) => void, signal?: AbortSignal): Promise<{ reply: unknown; client: ClientRow }>;
   /** Waits (bounded) for a named target to match a live client; never throws (server-core has it; a fake may not). */
   waitForClient?(target: string, timeoutMs: number): Promise<void>;
   close(): void;
@@ -302,11 +304,27 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
     }
 
     let queue: Promise<void> = Promise.resolve();
+    // CANCEL (live finding 2026-09-25): every forwarded request, queued or in flight, has an
+    // AbortController here AND in its connection's own set. A client that goes away before its reply
+    // (Ctrl-C on a CLI, an MCP session ending) aborts its own requests: an in-flight one makes
+    // server-core send the plugin `{ type: "cancel", id }` — the daemon's socket to the plugin stays
+    // open, so without the frame the plugin would walk the export for nobody and hold every later
+    // command behind it — and a queued one is simply never forwarded. shutdown() aborts all of them.
+    const outstanding = new Set<AbortController>();
     const server = net.createServer((conn) => {
       conn.setEncoding("utf8");
+      const mine = new Set<AbortController>();
+      // 'end' counts too: net.Server's default allowHalfOpen:false ends our side as soon as the peer
+      // ends its own, so no reply could be written after it anyway.
+      const abandon = () => {
+        for (const ac of mine) ac.abort(new Error("the daemon's client disconnected before the reply"));
+        mine.clear();
+      };
+      conn.on("close", abandon);
+      conn.on("end", abandon);
       // A client that dies mid-export must not take the daemon with it: the write below would emit
       // EPIPE on a dead socket, which is an unhandled 'error' event => process exit.
-      conn.on("error", () => {});
+      conn.on("error", abandon);
       conn.on("data", framer((line) => {
         touch(); // any client contact counts as activity, including the probe
         let parsed: unknown;
@@ -320,8 +338,19 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
         // Chain onto the queue so requests run one at a time, in arrival order.
         inFlight++; // counted OUTSIDE the queue: work that is queued but not yet started still
                     // counts as activity, so a backlog can't be reaped as idleness.
+        const ac = new AbortController();
+        mine.add(ac);
+        outstanding.add(ac);
+        // Aborted before it reached the plugin: never forwarded. No reply to a departed client (its
+        // socket is gone); a client still connected (the shutdown case) is told why.
+        const abandoned = (): boolean => {
+          if (!ac.signal.aborted) return false;
+          if (!conn.destroyed && conn.writable) reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(ac.signal.reason) });
+          return true;
+        };
         queue = queue.then(async () => {
           try {
+            if (abandoned()) return;
             // A connect window that runs out is not the error: the request below then fails in the
             // bridge's own resolveClient with "Figma plugin not connected. Open the file in Figma and
             // run the plugin." — the text every other path prints — instead of waitForConnection's
@@ -346,8 +375,9 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
             const onProgress = msg.progress === true
               ? (tick: ProgressTick) => { send(conn, id === undefined ? { progress: tick } : { id, progress: tick }); }
               : undefined;
+            if (abandoned()) return; // the client left during the connect waits above
             if (typeof bridge.requestWithClient === "function") {
-              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress);
+              const o = await bridge.requestWithClient(msg.cmd, msg.args, msg.timeoutMs, msg.client, undefined, onProgress, ac.signal);
               reply(conn, { ok: true, ...ifDefined("id", msg.id), result: o.reply, client: o.client });
             } else {
               const result = await bridge.request(msg.cmd, msg.args, msg.timeoutMs, msg.client);
@@ -356,6 +386,8 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
           } catch (e) {
             reply(conn, { ok: false, ...ifDefined("id", msg.id), error: errMsg(e) });
           } finally {
+            mine.delete(ac);
+            outstanding.delete(ac);
             inFlight--;
             touch(); // the idle clock starts when work FINISHES, not when it was requested
           }
@@ -397,6 +429,12 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
       try { server.close(); } catch { /* already closed */ }
       try { fs.unlinkSync(sock); } catch { /* already gone */ }
       if (forgetExit) { forgetExit(); forgetExit = null; }
+      // Abort every outstanding request BEFORE the bridge closes. This fires first: each in-flight
+      // abort makes server-core send its cancel frame and drop the request from `pending`, so
+      // bridge.close() below finds nothing left to cancel for it (were one sent twice, the plugin
+      // ignores the second). The reason keeps the text a caller saw before: "bridge closed".
+      for (const ac of outstanding) ac.abort(new Error("bridge closed"));
+      outstanding.clear();
       bridge.close();
       if (log) log("daemon stopped.");
     }
