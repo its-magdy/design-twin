@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ok, report } from "./assert.ts";
+import { must } from "./fixtures.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ProgressNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -82,7 +83,7 @@ void (async () => {
     const dry = await client.callTool({ name: "figma_write", arguments: { dryRun: true, ops: [{ op: "createFrame", name: "Card" }, { op: "setFill", nodeId: "1:2", color: "#ff0000" }, { op: "setText", nodeId: "1:3" }] } });
     const preview = JSON.parse(firstText(dry)) as WritePreview;
     ok("dryRun previews without a plugin connected, and applies nothing", !dry.isError && preview.dryRun === true && preview.applied === false);
-    ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1].target === "1:2" && /missing text/.test(preview.steps[2].invalid ?? ""));
+    ok("dryRun separates creates from overwrites and flags an invalid op", preview.creates === 1 && preview.overwrites === 2 && preview.invalid === 1 && preview.steps[1]?.target === "1:2" && /missing text/.test(preview.steps[2]?.invalid ?? ""));
 
     const bad = await client.callTool({ name: "figma_write", arguments: { ops: [{ op: "deleteEverything" }] } }).catch((e: unknown) => ({ isError: true, thrown: String(e instanceof Error ? e.message : e) }));
     ok("an op outside the four implemented ones is rejected at the schema boundary", bad.isError === true);
@@ -120,7 +121,7 @@ void (async () => {
       if (ticks && !burst) setTimeout(answer, 50); else answer();
     });
     const small = await client.callTool({ name: "figma_export_selection", arguments: {} });
-    ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0].children?.length === 3);
+    ok("a small export still comes back INLINE", !small.isError && (JSON.parse(firstText(small)) as ScreenReply).screen.nodes[0]?.children?.length === 3);
     kids = 1500; // ~200 KB of indented JSON — far past the 25k-token default
     const big = await client.callTool({ name: "figma_export_selection", arguments: {} });
     const idx = JSON.parse(firstText(big)) as WrittenExport;
@@ -134,8 +135,10 @@ void (async () => {
     ticks = 2;
     const seen: Progress[] = [];
     const withProgress = await client.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen.push(p) });
+    const p0 = must(seen[0], "first progress notification");
+    const p1 = must(seen[1], "second progress notification");
     ok("export tools forward the plugin's progress as notifications/progress (increasing, with a message)",
-      !withProgress.isError && seen.length === 2 && seen[0].progress < seen[1].progress && seen[1].message === "pages, page 2 of 2 (P2), 20 nodes");
+      !withProgress.isError && seen.length === 2 && p0.progress < p1.progress && p1.message === "pages, page 2 of 2 (P2), 20 nodes");
     // Wire order under the worst timing: the raw frames the client transport hands up, in order.
     // Before withProgress held the result back, the last notification was written AFTER the result
     // (fire-and-forget sendNotification vs. the reply resolving in the same turn) — and a
@@ -174,9 +177,11 @@ void (async () => {
       await client2.connect(transport2);
       const seen2: Progress[] = [];
       const via = await client2.callTool({ name: "figma_export_selection", arguments: {} }, undefined, { onprogress: (p) => seen2.push(p) });
+      const s0b = must(seen2[0], "first daemon-routed progress notification");
+      const s1b = must(seen2[1], "second daemon-routed progress notification");
       ok("a DAEMON-ROUTED export (a second session sharing this one's bridge) forwards the plugin's progress as notifications/progress too",
-        !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0].children?.length === 3
-        && seen2.length === 2 && seen2[0].progress < seen2[1].progress && seen2[1].message === "pages, page 2 of 2 (P2), 20 nodes");
+        !via.isError && (JSON.parse(firstText(via)) as ScreenReply).screen.nodes[0]?.children?.length === 3
+        && seen2.length === 2 && s0b.progress < s1b.progress && s1b.message === "pages, page 2 of 2 (P2), 20 nodes");
       burst = true;
       const wire2: string[] = [];
       const prev2 = transport2.onmessage;

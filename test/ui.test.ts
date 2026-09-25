@@ -9,7 +9,8 @@ import { check, report } from "./assert.ts";
 import { must } from "./fixtures.ts";
 
 const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
-const script = must(/<script>([\s\S]*)<\/script>/.exec(html), "<script> in ui.html")[1];
+const scriptMatch = must(/<script>([\s\S]*)<\/script>/.exec(html), "<script> in ui.html");
+const script = must(scriptMatch[1], "<script> capture group in ui.html");
 const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8")) as { networkAccess: { allowedDomains: string[] } };
 
 // Fake DOM element / WebSocket / timer shapes — only what ui.html's script touches.
@@ -47,14 +48,14 @@ function boot() {
     parent: { postMessage: (m: { pluginMessage: PluginMsg }) => posted.push(m.pluginMessage) },
     WebSocket: FakeWS,
     setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
-    clearTimeout: (id: number) => { if (timers[id - 1]) timers[id - 1].fn = null; },
+    clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.fn = null; },
     encodeURIComponent, JSON, String, Math, Uint8Array, console,
   };
   ctx.window = ctx; // the script assigns window.onmessage / window.onerror
   vm.runInNewContext(script, ctx);
   const msg = (m: PluginMsg) => ctx.onmessage?.({ data: { pluginMessage: m } });
   const runTimers = () => { const due = timers.splice(0); for (const t of due) if (t.fn) t.fn(); };
-  return { el, sockets, posted, timers, msg, runTimers, last: () => sockets[sockets.length - 1] };
+  return { el, sockets, posted, timers, msg, runTimers, last: () => must(sockets[sockets.length - 1], "last socket") };
 }
 const openIt = (s: FakeSocket) => { s.readyState = 1; s.onopen?.(); };
 const closeIt = (s: FakeSocket, code: number) => { s.readyState = 3; s.onclose?.({ code }); };
@@ -66,13 +67,15 @@ check("the token input has a real <label for>, not just a placeholder", /<label[
 check("status and banner are live regions (a finished export is announced)", /id="status"[^>]*aria-live/.test(html) && /id="banner"[^>]*role="alert"/.test(html));
 check("the connection section is a <details> that is NOT open by default", /<details id="connect">/.test(html));
 check("the ports the UI dials are exactly the ports the manifest allows", (() => {
-  const dialled = JSON.parse(must(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script), "BRIDGE_PORTS match in script")[1]) as number[];
+  const bridgePortsMatch = must(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script), "BRIDGE_PORTS match in script");
+  const dialled = JSON.parse(must(bridgePortsMatch[1], "BRIDGE_PORTS capture group")) as number[];
   const allowed = manifest.networkAccess.allowedDomains.map((d) => Number(d.split(":").pop()));
   return JSON.stringify(dialled) === JSON.stringify(allowed);
 })());
 
 console.log("theming:");
-const css = must(/<style>([\s\S]*)<\/style>/.exec(html), "<style> in ui.html")[1].replace(/\/\*[\s\S]*?\*\//g, "");
+const styleMatch = must(/<style>([\s\S]*)<\/style>/.exec(html), "<style> in ui.html");
+const css = must(styleMatch[1], "<style> capture group in ui.html").replace(/\/\*[\s\S]*?\*\//g, "");
 check("no color is hardcoded without going through a Figma theme variable", (() => {
   const bare = css.split("\n").filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l.replace(/var\(--figma-color-[a-z-]+,\s*#[0-9a-fA-F]{3,8}\)/g, "")));
   if (bare.length) console.log("    bare literals:", bare.map((l) => l.trim()));
