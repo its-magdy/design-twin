@@ -11,7 +11,7 @@
 //   dtwin serve | stop | status      = --serve | --stop | --daemon-status
 //   dtwin token [status|show|rotate|forget]  = --token-status | --show-token | --rotate-token | --forget-token
 //   dtwin help | version             = --help | --version
-//   dtwin doctor | init | mcp        → their own entry points (routed in figma-pull.ts)
+//   dtwin doctor | init | mcp | seed → their own entry points (routed in figma-pull.ts)
 //
 // A verb is only recognised as the FIRST argument. `dtwin design` still means "pull into ./design":
 // an outDir that happens to be spelled like a verb is written `dtwin pull list` or `dtwin ./list`.
@@ -27,7 +27,7 @@ const LIST: Record<ListSub, string> = { "": "--list", frames: "--list", pages: "
 const TOKEN: Record<TokenSub, string> = { "": "--token-status", status: "--token-status", show: "--show-token", rotate: "--rotate-token", forget: "--forget-token" };
 const SIMPLE: Record<SimpleVerb, string> = { whoami: "--whoami", serve: "--serve", stop: "--stop", status: "--daemon-status", help: "--help", version: "--version" };
 const has = <K extends string>(table: Record<K, string>, word: string): word is K => Object.prototype.hasOwnProperty.call(table, word);
-export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "help", "version"];
+export const VERBS: string[] = ["pull", "list", "whoami", "screenshot", "serve", "stop", "status", "token", "doctor", "init", "mcp", "seed", "help", "version"];
 
 // Words people (and agents) reach for first that are NOT verbs. Left alone they were a positional
 // outDir: `dtwin export` created ./export and then waited for a plugin, looking exactly like a pull
@@ -43,7 +43,24 @@ const isFlag = (a: unknown): boolean => typeof a === "string" && a.startsWith("-
 // the verb's own argument check ran before the global --help handler (live finding 5) — a help probe
 // is the one thing that must never be answered with an error. Every verb with real sub-structure gets
 // a real answer here; the rest fall through to the full `dtwin --help`.
+// `dtwin seed` answers its own --help (it is routed before verbHelp runs), and so does
+// `node bridge/src/seed-components.ts --help` — both print this one string.
+export const SEED_HELP =
+  "dtwin seed [codeRoot] [outDir] [--dry-run]\n\n" +
+  "  Pre-populate <outDir>/components.json from the Code Connect files already in your codebase —\n" +
+  "  template files (`// url=` + `// component=` headers), `figma.connect(...)` calls, and\n" +
+  "  `@FigmaConnect` (SwiftUI/Compose). It only reads source files: no bridge, no plugin, no token,\n" +
+  "  never the network.\n\n" +
+  "  codeRoot   where to look (default .); node_modules, .git, dist, build and the like are skipped\n" +
+  "  outDir     where components.json lives (default design)\n" +
+  "  --dry-run  scan and report what it would add; write nothing\n\n" +
+  "  Merges fill-missing-only: an existing entry's hand-authored fields are never overwritten. A\n" +
+  "  mapping that carries only a node id is named through <outDir>/design-system.json when one is\n" +
+  "  there (export it first); without it, such a mapping is skipped. Fill in each entry's \"import\"\n" +
+  "  and \"props\" by hand afterwards.";
+
 export const HELP: Record<string, string> = {
+  seed: SEED_HELP,
   screenshot:
     "dtwin screenshot <id|figma-url> [outDir] [--scale N] [--client <file>]\n\n" +
     "  Render ONE node to a reference PNG and write it to <outDir>/assets/<id>_ref.png.\n" +
@@ -115,7 +132,7 @@ export function translate(argv: string[], exists: (p: string) => boolean = () =>
   // Not a verb: a positional outDir, exactly as before — unless it is a near-miss of one. `dtwin whomai`
   // used to start a full pull into ./whomai; a bare word one or two edits from a verb is far likelier
   // a typo than a folder. A path (`./serv`), an existing folder (`exists`), or `dtwin pull serv` opts out.
-  if (VERBS.includes(verb)) return argv; // doctor | init | mcp: routed by figma-pull.ts, not translated here
+  if (VERBS.includes(verb)) return argv; // doctor | init | mcp | seed: routed by figma-pull.ts, not translated here
   const alias = ALIASES[verb.toLowerCase()];
   if (alias && !/[\\/.]/.test(verb) && !exists(verb))
     throw new VerbError(`unknown command \`${verb}\` — did you mean \`dtwin ${alias}\`? (to export into a folder named "${verb}": dtwin pull ${verb})`);

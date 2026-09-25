@@ -279,7 +279,7 @@ style system), `components.local.json` / `components.library.json`, `hygiene.jso
 
 ### Component-map seeding (optional, tested separately)
 
-`node bridge/src/seed-components.ts [codeRoot] [outDir]` scans the codebase for Code Connect files
+`dtwin seed [codeRoot] [outDir] [--dry-run]` (= `node bridge/src/seed-components.ts …`) scans the codebase for Code Connect files
 (`figma.connect(...)`, `@FigmaConnect`, or `// url=`/`// component=`/`// source=` templates) and seeds
 `design/components.json`. Verify it finds your mappings and fills `component`/`source`/`nodeId` without
 clobbering hand-authored fields.
@@ -382,7 +382,7 @@ and the `figma_list_libraries` tool schema + multi-client routing + `--whoami`/`
 | `node bridge/src/figma-pull.ts design --as-library "<name>"` | Live pull of the COMPLETE catalog of a LIBRARY file — run with the LIBRARY open, writes `design/export/libraries/<slug>-<fileKey8>/` |
 | `node --check figma-plugin/code.js` | Syntax check the exporter |
 | `node --check design-to-code/*.ts` | Syntax check the tooling scripts |
-| `node bridge/src/seed-components.ts . design` | Seed components.json from Code Connect files (code side) |
+| `dtwin seed . design` (or `node bridge/src/seed-components.ts . design`) | Seed components.json from Code Connect files (code side); `--dry-run` reports only |
 | `node design-to-code/map-bootstrap.ts design/export/design-system/components.local.json --out design/codeconnect.local.json` | Scaffold design/codeconnect.local.json from the Figma catalog (re-running merges into it) |
 | `node design-to-code/drift-lint.ts design/codeconnect.local.json design/export/design-system/components.local.json` | Fail on map↔Figma drift (CI/pre-commit) |
 | `node design-to-code/get-component.ts design/export/design-system/components.local.json <key\|id\|name>` | Resolve one COMPONENT_SET or standalone COMPONENT, follow its `variantsFile`/`nodeFile`, print the full node tree(s) |

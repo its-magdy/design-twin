@@ -182,6 +182,58 @@ const viaInline = runSeed(
 ok("[seed-inline-catalog] pre-split inline components array still resolves",
   !!viaInline && !!viaInline.Chip && viaInline.Chip.nodeId === "3:4");
 
+console.log("\nseed-components — `dtwin seed` (routed by figma-pull.ts before server-core loads):");
+{
+  // Driven through the real CLI entry: `dtwin seed` must need no bridge, no token and no plugin, and
+  // must be the SAME command as the script run directly. The token env is removed and the config dir
+  // pointed at an empty temp dir, so a token minted as a side effect would show up as a file there.
+  const pullCli = path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts");
+  const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "seed-cfg-"));
+  const env: Record<string, string | undefined> = { ...process.env, DESIGNTWIN_CONFIG_DIR: cfgDir };
+  delete env.FIGMA_BRIDGE_TOKEN;
+  delete env.FIGMA_BRIDGE_TOKEN_FILE;
+  const viaDtwin = (cwd: string, args: string[]) => spawnSync(process.execPath, [pullCli, "seed", ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
+  const direct = (cwd: string, args: string[]) => spawnSync(process.execPath, [seed, ...args], { cwd, env, encoding: "utf8", timeout: 10000 });
+  // A project root with ONE Code Connect template under src/.
+  const project = (name: string) => {
+    const root = path.join(tmp, name);
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "button.figma.tsx"), tpl("Button", "1-2", "Button.tsx"));
+    return root;
+  };
+
+  const helpDir = fs.mkdtempSync(path.join(tmp, "help-"));
+  const help = viaDtwin(helpDir, ["--help"]);
+  ok("[seed-cli] `dtwin seed --help` exits 0 and prints the seed usage",
+    help.status === 0 && help.stdout.startsWith("dtwin seed [codeRoot] [outDir] [--dry-run]") && /Code Connect/.test(help.stdout) && /--dry-run/.test(help.stdout));
+  ok("[seed-cli] and has no side effects: no design/ dir, no file, no token minted, no bridge",
+    fs.readdirSync(helpDir).length === 0 && fs.readdirSync(cfgDir).length === 0 && !help.stderr.includes("[bridge]"));
+  ok("[seed-cli] the script run directly answers --help with the same text", direct(helpDir, ["-h"]).stdout === help.stdout && fs.readdirSync(helpDir).length === 0);
+
+  const rootA = project("same-a"), rootB = project("same-b");
+  const a = direct(rootA, ["src", "design"]);
+  const b = viaDtwin(rootB, ["src", "design"]);
+  ok("[seed-cli] `dtwin seed <codeRoot> <outDir>` = the script run directly: same exit, same stderr, byte-identical components.json",
+    a.status === 0 && b.status === 0 && a.stderr === b.stderr && /1 mapping\(s\) from 1 scanned file\(s\)/.test(b.stderr)
+    && fs.readFileSync(path.join(rootA, "design", "components.json"), "utf8") === fs.readFileSync(path.join(rootB, "design", "components.json"), "utf8"));
+  ok("[seed-cli] and it needed no token (none minted)", fs.readdirSync(cfgDir).length === 0 && !b.stderr.includes("[bridge]"));
+
+  const rootDry = project("dry");
+  const dry = viaDtwin(rootDry, ["src", "design", "--dry-run"]);
+  ok("[seed-cli] --dry-run writes nothing and says so on both summary lines",
+    dry.status === 0 && !fs.existsSync(path.join(rootDry, "design"))
+    && dry.stderr.split("\n").filter((l) => l.startsWith("[seed-components] (dry run, nothing written) ")).length === 2
+    && /1 mapping\(s\) from 1 scanned file\(s\)/.test(dry.stderr));
+
+  const rootBad = project("bogus");
+  const bad = viaDtwin(rootBad, ["--bogus"]);
+  ok("[seed-cli] an unknown flag exits 2 with a one-line error, and writes nothing",
+    bad.status === 2 && /^\[seed-components\] error: unknown flag --bogus/.test(bad.stderr) && bad.stderr.trim().split("\n").length === 1
+    && !fs.existsSync(path.join(rootBad, "design")));
+  ok("[seed-cli] the script run directly refuses it the same way", (() => { const r = direct(rootBad, ["src", "--bogus"]); return r.status === 2 && r.stderr === bad.stderr; })());
+  fs.rmSync(cfgDir, { recursive: true, force: true });
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 // ------------------------------------------------- server-core: post-connect request timeout
@@ -2621,6 +2673,13 @@ void (async () => {
     verbErr("screenshot") instanceof VerbError && verbErr("screenshot", "--scale") instanceof VerbError
     && verbErr("list", "children") instanceof VerbError && verbErr("list", "children", "--json") instanceof VerbError);
   ok("[verbs] doctor / init / mcp are left for figma-pull.js to route", tr("doctor", "--json") === "doctor --json" && VERBS.includes("doctor"));
+  ok("[verbs] seed is a verb, left for figma-pull.ts to route untranslated",
+    VERBS.includes("seed") && tr("seed") === "seed" && tr("seed", "src", "design", "--dry-run") === "seed src design --dry-run");
+  // `seed` is a SHORT verb, so (like `list`/`stop`) only a dropped or extra last letter is a near-miss:
+  // `seeds`/`see` get the suggestion, while `feed`/`need`/`sed` stay ordinary outDirs.
+  ok("[verbs] a near-miss of `seed` gets a did-you-mean, other one-edit words do not",
+    /did you mean `dtwin seed`\?/.test(verbErr("seeds")?.message ?? "") && /did you mean `dtwin seed`\?/.test(verbErr("see")?.message ?? "")
+    && tr("feed") === "feed" && tr("need") === "need" && tr("sed") === "sed" && translate(["seeds"], () => true).join(" ") === "seeds");
 
   // End to end: the verb and the flag it stands for must be the SAME command.
   ok("[verbs-cli] `dtwin token status` = `dtwin --token-status`",

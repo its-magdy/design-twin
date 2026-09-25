@@ -133,6 +133,7 @@ dtwin list                        # what is in the file: pages + top-level frame
 dtwin pull --page Screens  # export ONE page into ./design/export
 dtwin screenshot 12:34            # a reference PNG of one node
 dtwin doctor                      # something not working? start here
+dtwin seed                        # components.json from the Code Connect files in your code (offline)
 ```
 
 Every command is shorthand for a flag, and **the flags keep working unchanged** — the rest of this
@@ -148,10 +149,30 @@ README documents the flags, and either spelling is fine everywhere:
 | `dtwin serve` · `stop` · `status` | `--serve` · `--stop` · `--daemon-status` |
 | `dtwin token` · `token show` · `token rotate` · `token forget` | `--token-status` · `--show-token` · `--rotate-token` · `--forget-token` |
 | `dtwin help` | `--help` |
-| `dtwin doctor` · `dtwin init` · `dtwin mcp` | their own entry points (no flag form) |
+| `dtwin doctor` · `dtwin init` · `dtwin mcp` · `dtwin seed` | their own entry points (no flag form) |
 
 A command is only recognised as the **first** argument, so `dtwin design` still means "pull into
 `./design`". For an output directory spelled like a command, write `dtwin pull list` or `dtwin ./list`.
+
+## Seed the component map from Code Connect: `dtwin seed`
+
+If the project you are building already has Code Connect files, they are the Figma-component →
+code-component map you would otherwise write by hand. `dtwin seed` reads them — template files
+(`// url=` + `// component=` + `// source=` headers), `figma.connect(...)` calls, and `@FigmaConnect`
+(SwiftUI/Compose) — and fills `components.json`:
+
+```
+dtwin seed                     # scan . and merge into design/components.json
+dtwin seed src design          # [codeRoot] [outDir]
+dtwin seed --dry-run           # scan and report what it would add; write nothing
+```
+
+It only reads source files: no bridge, plugin or token, and never the network. The merge is
+fill-missing-only — an existing entry's hand-authored fields are never overwritten — and each new
+entry leaves `import` and `props` for you to fill in. A mapping that carries only a node id (no
+component name) is named through `<outDir>/design-system.json`, so export the design system first;
+without it such mappings are skipped and the run says so. In a clone of this repo the same script
+also runs directly: `node bridge/src/seed-components.ts [codeRoot] [outDir] [--dry-run]`.
 
 ## Something not working: `dtwin doctor`
 

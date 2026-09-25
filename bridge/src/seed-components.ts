@@ -12,7 +12,8 @@
 //   3) SwiftUI/Compose — `FigmaConnect` with `let component = Button.self` / `component = Button::class`.
 //
 // Usage:
-//   node bridge/src/seed-components.ts [codeRoot=.] [outDir=design]
+//   dtwin seed [codeRoot=.] [outDir=design] [--dry-run]              (routed by figma-pull.ts)
+//   node bridge/src/seed-components.ts [codeRoot=.] [outDir=design] [--dry-run]   (the same, run directly)
 //
 // Merges into design/components.json fill-missing-only (never clobbers hand-authored fields) and, for
 // forms that carry only a node-id, resolves it to the Figma component NAME via design/design-system.json.
@@ -22,9 +23,7 @@ import path from "node:path";
 import { ID, parseNodeId } from "./node-id.ts";
 import { ifDefined, nullProto } from "./json-util.ts";
 import { isMainFallback } from "./is-main.ts"; // import.meta.main is undefined before Node 24.2
-
-const codeRoot = process.argv[2] || ".";
-const outDir = process.argv[3] || "design";
+import { SEED_HELP } from "./verbs.ts"; // the one help text, shared with `dtwin seed --help`
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "out", "vendor", "Pods", ".build"]);
 const CODE_EXT = /\.(tsx?|jsx?|mjs|cjs|swift|kt|kts)$/;
@@ -147,7 +146,31 @@ function loadIdToName(dir: string): Map<string, string> {
 /** One components.json entry (hand-authored or seeded). */
 export interface ComponentsEntry { component?: unknown; source?: unknown; nodeId?: unknown; import?: unknown; props?: unknown }
 
-function main(): void {
+interface SeedOptions { codeRoot: string; outDir: string; dryRun: boolean }
+
+// argv is everything AFTER the command: `process.argv.slice(2)` when run directly, `argv.slice(1)` of
+// `dtwin seed …`. Positions are unchanged from the original script: [codeRoot=.] [outDir=design], with
+// an empty string falling back to the default exactly as `argv[n] || default` always did. A help probe
+// wins over everything else and has no side effects; an unknown flag is refused instead of being taken
+// as a codeRoot spelled `--something`.
+export function main(argv: string[]): void {
+  if (argv.some((a) => a === "--help" || a === "-h")) {
+    console.log(SEED_HELP);
+    process.exit(0);
+  }
+  let dryRun = false;
+  const positional: string[] = [];
+  for (const a of argv) {
+    if (a === "--dry-run") dryRun = true;
+    else if (a.startsWith("-") && a !== "-") {
+      console.error(`[seed-components] error: unknown flag ${a} — use: dtwin seed [codeRoot] [outDir] [--dry-run]`);
+      process.exit(2);
+    } else positional.push(a);
+  }
+  run({ codeRoot: positional[0] || ".", outDir: positional[1] || "design", dryRun });
+}
+
+function run({ codeRoot, outDir, dryRun }: SeedOptions): void {
   const idToName = loadIdToName(outDir);
 
   const files: string[] = [];
@@ -200,13 +223,17 @@ function main(): void {
     }
   }
 
-  fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(outPath, JSON.stringify(existing, null, 2));
-  console.error(`[seed-components] ${found.length} mapping(s) from ${files.length} scanned file(s) → ${outPath}`);
-  console.error(`[seed-components] ${added} new entr(ies), ${filled} field(s) filled. Fill in each entry's "import" and "props".`);
+  // --dry-run: everything above only READ; the merge result is computed in memory and dropped here.
+  const dry = dryRun ? "(dry run, nothing written) " : "";
+  if (!dryRun) {
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify(existing, null, 2));
+  }
+  console.error(`[seed-components] ${dry}${found.length} mapping(s) from ${files.length} scanned file(s) → ${outPath}`);
+  console.error(`[seed-components] ${dry}${added} new entr(ies), ${filled} field(s) filled. Fill in each entry's "import" and "props".`);
   if (!idToName.size) console.error("[seed-components] tip: export design-system.json first so node-id-only mappings resolve to real component names.");
 }
 
-// Only when RUN (it is a CLI, driven by the tests as a subprocess). Nothing imports this module, so
-// the guard changes nothing for the subprocess; it only keeps an import from scanning the tree.
-if (import.meta.main ?? isMainFallback(import.meta.url)) main();
+// Only when RUN directly (it is a CLI, driven by the tests as a subprocess). `dtwin seed` imports this
+// module and calls main() itself, so the guard is what keeps that import from also scanning the tree.
+if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
