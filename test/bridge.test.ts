@@ -2076,7 +2076,7 @@ void (async () => {
   fakeBridge.isConnected = wasConnected;
   fakeBridge.waitForConnection = wasWait;
   ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
-    calls[0] === "waitConn" && calls.includes("whoami") && afterWindow === "answered");
+    calls[0] === "waitConn" && calls[1] === "wait:NERA Library:50" && calls.includes("whoami") && afterWindow === "answered");
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
