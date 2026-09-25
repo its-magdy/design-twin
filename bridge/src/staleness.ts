@@ -24,7 +24,11 @@ function parseVersion(v: unknown): Version | null {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 function versionOlder(a: Version, b: Version): boolean {
-  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] < b[i]; }
+  const [aMajor, aMinor, aPatch] = a;
+  const [bMajor, bMinor, bPatch] = b;
+  if (aMajor !== bMajor) return aMajor < bMajor;
+  if (aMinor !== bMinor) return aMinor < bMinor;
+  if (aPatch !== bPatch) return aPatch < bPatch;
   return false;
 }
 // `null` means "nothing to warn about" — the plugin reported a version, and it isn't older than this

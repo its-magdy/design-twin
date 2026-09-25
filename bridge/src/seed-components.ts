@@ -52,7 +52,9 @@ function walk(dir: string, hits: string[]): void {
 }
 
 /** One Code Connect mapping found in a source file. */
-interface Mapping { identifier?: string; url: string; source?: string }
+// `| undefined`: an optional regex capture (JS_CONNECT_RE's identifier) or a `(match || [])[1]` read is
+// assigned straight in; every reader tests these fields for truthiness, so undefined and absent read alike.
+interface Mapping { identifier?: string | undefined; url: string; source?: string | undefined }
 
 // Extract { identifier?, url, source? } mappings from one file's text, across all three shapes.
 function extractMappings(text: string): Mapping[] {
@@ -67,17 +69,26 @@ function extractMappings(text: string): Mapping[] {
     const win = text.slice(Math.max(0, m.index - 600), m.index + 600); // comments cluster together
     const comp = (win.match(/\/\/\s*component=([^\s]+)/) || [])[1];
     const src = (win.match(/\/\/\s*source=([^\s]+)/) || [])[1];
-    push({ identifier: comp, url: m[1], source: src });
+    const url = m[1];
+    if (url === undefined) continue; // cannot happen: group 1 is not optional, so a match always sets it
+    push({ identifier: comp, url, source: src });
   }
 
   // 2) Legacy React call form.
-  while ((m = JS_CONNECT_RE.exec(text))) push({ identifier: m[1], url: m[2] });
+  while ((m = JS_CONNECT_RE.exec(text))) {
+    const url = m[2];
+    if (url === undefined) continue; // cannot happen: group 2 is not optional (group 1, the identifier, is)
+    push({ identifier: m[1], url });
+  }
 
   // 3) SwiftUI / Compose: the real component is `component = X.self` / `X::class`, NOT the wrapper type.
   if (/FigmaConnect/.test(text)) {
     const comps: Array<{ name: string; index: number }> = [];
     let c: RegExpExecArray | null;
-    while ((c = NATIVE_COMP_RE.exec(text))) comps.push({ name: c[1], index: c.index });
+    while ((c = NATIVE_COMP_RE.exec(text))) {
+      const name = c[1];
+      if (name !== undefined) comps.push({ name, index: c.index }); // always set: group 1 is not optional
+    }
     while ((m = NATIVE_URL_RE.exec(text))) {
       // nearest `component = X.self` to this URL; fall back to the enclosing type name.
       let best: string | undefined, bestD = Infinity;
@@ -87,7 +98,9 @@ function extractMappings(text: string): Mapping[] {
         const t = (before.match(/(?:struct|class|object)\s+([A-Za-z0-9_]+)/g) || []).pop();
         if (t) best = t.split(/\s+/).pop();
       }
-      push({ ...ifDefined("identifier", best), url: m[1] });
+      const url = m[1];
+      if (url === undefined) continue; // cannot happen: group 1 is not optional
+      push({ ...ifDefined("identifier", best), url });
     }
   }
   return out;

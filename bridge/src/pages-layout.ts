@@ -228,7 +228,12 @@ export function buildPageLayout(layersDoc: LayersDoc | null | undefined, sep: st
     // so both the per-page index and the root index (below) carry the same values for the same layer.
     const title = l.tree ? deriveTitle(l.tree) : undefined;
     const texts = l.tree ? collectTexts(l.tree) : undefined;
-    bucket.entries.push({ ...((index || [])[i]), title, texts, ...src, file: join(bucket.dir, base) });
+    // The collector pushes `layers` and `index` in lockstep (collect.ts), so row i exists. If a
+    // hand-built layersDoc ever runs short, the row is undefined and the entry is written without its
+    // name/id, exactly as the spread of undefined always did. Object.assign (not a spread) because it
+    // keeps that runtime while its typing (`{} & (Row | undefined) & …`) drops the undefined branch;
+    // same keys, same order, same values as `{ ...row, title, texts, ...src, file }`.
+    bucket.entries.push(Object.assign({}, (index || [])[i], { title, texts, ...src, file: join(bucket.dir, base) }));
   });
   // `pageId` is what makes two same-named entries tellable apart by a consumer — without it the only
   // difference between them would be the disambiguating "_2" on a directory name, which is a

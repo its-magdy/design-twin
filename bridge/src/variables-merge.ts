@@ -151,13 +151,15 @@ export function mergeVariablesDoc(prevRaw: unknown, next: VariablesDoc | null | 
   for (const c of Array.isArray(nextDoc.collections) ? nextDoc.collections : []) {
     const id = collId(c);
     const at = collIndex.get(id);
-    if (at === undefined) {
+    // `was` is always set when `at` is: collIndex only ever holds indexes of pushed (object) entries.
+    const was = at === undefined ? undefined : collections[at];
+    if (at === undefined || was === undefined) {
       collIndex.set(id, collections.length);
       collections.push(Object.assign({}, c));
       continue;
     }
-    const merged: VariableCollection = Object.assign({}, collections[at], c);
-    merged.modes = mergeModes(collections[at].modes, c.modes);
+    const merged: VariableCollection = Object.assign({}, was, c);
+    merged.modes = mergeModes(was.modes, c.modes);
     collections[at] = merged;
   }
 
@@ -173,13 +175,14 @@ export function mergeVariablesDoc(prevRaw: unknown, next: VariablesDoc | null | 
   for (const v of Array.isArray(nextDoc.variables) ? nextDoc.variables : []) {
     const id = varId(v);
     const at = varIndex.get(id);
-    if (at === undefined) {
+    // `before` is always set when `at` is: varIndex only ever holds indexes of pushed entries.
+    const before = at === undefined ? undefined : variables[at];
+    if (at === undefined || before === undefined) {
       varIndex.set(id, variables.length);
       variables.push(v);
       stats.added++;
       continue;
     }
-    const before: Variable = variables[at];
     if (sameValue(before, v)) {
       // Same token, same resolution — keep the richer record rather than the newer one, so a slice
       // that happened to read fewer scopes cannot strip fields an earlier slice captured.
@@ -256,11 +259,13 @@ export function sameNameConflicts(variables: Variable[], slices: SliceEntry[] | 
   for (const members of groups.values()) {
     if (members.size < 2) continue;
     const list = [...members.values()];
+    const [first] = list;
+    if (first === undefined) continue; // cannot happen: members.size >= 2
     out.push({
       kind: "same-name",
-      name: list[0].name,
-      ...ifDefined("collection", list[0].collection),
-      sameValue: list.every((v) => resolvesAlike(v, list[0])),
+      name: first.name,
+      ...ifDefined("collection", first.collection),
+      sameValue: list.every((v) => resolvesAlike(v, first)),
       variants: list.map((v) => ({
         ...ifDefined("key", v.key),
         values: v.values,

@@ -117,7 +117,7 @@ const bridge = {
 };
 
 // ---- result helpers ----
-function textResult(obj: unknown) {
+function textResult(obj: unknown): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text" as const, text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] };
 }
 // Takes the thrown value, not a pre-stringified message: every call site was writing the same

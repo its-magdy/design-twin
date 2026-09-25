@@ -222,7 +222,11 @@ function usageText(): string {
   const lines = fs.readFileSync(import.meta.filename, "utf8").split("\n");
   const start = lines.findIndex((l) => l.startsWith("// Usage:"));
   const out: string[] = [];
-  for (let i = start; i < lines.length && lines[i].startsWith("//"); i++) out.push(lines[i].replace(/^\/\/ ?/, ""));
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === undefined || !line.startsWith("//")) break;
+    out.push(line.replace(/^\/\/ ?/, ""));
+  }
   return "dtwin — pull a design out of a running Figma file (Design Twin plugin) onto disk.\n\n" + out.join("\n");
 }
 
@@ -336,6 +340,7 @@ function takeValues(args: string[], flag: string, missingMsg: string): string[] 
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === undefined) continue; // cannot happen: i < args.length
     if (a === flag) {
       const next = args[i + 1];
       if (next === undefined || next.startsWith("--")) throw new UsageError(missingMsg);
@@ -458,8 +463,11 @@ const unknown = args.filter((a, i) => a.startsWith("-") && a !== "-h" && !consum
 if (unknown.length) {
   // "Did you mean": the nearest known flag by edit distance, offered only when it is a plausible typo.
   const hints = unknown.map((u) => {
-    const name = u.split("=")[0];
-    const best = KNOWN_FLAGS.map((f) => [distance(name, f), f] as const).sort((x, y) => x[0] - y[0])[0];
+    const eqAt = u.indexOf("=");
+    const name = eqAt === -1 ? u : u.slice(0, eqAt); // u.split("=")[0]
+    // The FIRST nearest flag in KNOWN_FLAGS order — what the stable `sort(...)[0]` picked. reduce()
+    // without a seed needs a non-empty array; KNOWN_FLAGS is a non-empty literal list.
+    const best = KNOWN_FLAGS.map((f) => [distance(name, f), f] as const).reduce((x, y) => (y[0] < x[0] ? y : x));
     return best[0] <= 2 ? `${u} (did you mean ${best[1]}?)` : u;
   });
   throw new UsageError(`unknown flag${unknown.length > 1 ? "s" : ""}: ${hints.join(", ")}. Run dtwin --help for the full list.`);
@@ -637,7 +645,8 @@ function formatClients(rows: unknown): string {
   // Rows from this process's own bridge, or relayed by a daemon (possibly an older one — see the
   // daemon-staleness note below), or hand-built by the test suite: every field is optional here.
   const list: Array<Partial<ClientRow>> = isUnknownArray(rows) ? rows.filter(isClientRowLike) : [];
-  if (!list.length) {
+  const first = list[0];
+  if (first === undefined) {
     return "No Figma files are connected to the bridge.\n" +
       "  Open a file in Figma and run \"Design Twin\" (Plugins → Development). The plugin\n" +
       "  auto-connects and announces itself. You can open it in SEVERAL files at once — each one\n" +
@@ -665,7 +674,6 @@ function formatClients(rows: unknown): string {
     if (daemonStale) lines.push("        ! " + daemonStale);
   }
   lines.push("");
-  const first = list[0];
   lines.push("Address one with --client <connId | fileKey | part of the file name>, e.g. --client " +
     (first.file ? JSON.stringify(first.file.split(/\s+/)[0]) : first.connId) + ".");
   lines.push("Note: c1/c2 are reconnect-order LABELS for this bridge's current lifetime, not stable ids —" +

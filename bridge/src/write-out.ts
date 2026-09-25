@@ -509,7 +509,9 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
 function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; paths: number } {
   const colors = new Set<string>();
   for (const m of String(text).matchAll(/(?:fill|stroke)\s*=\s*"([^"]+)"/g)) {
-    const v = m[1].trim().toLowerCase();
+    const raw = m[1];
+    if (raw === undefined) continue; // cannot happen: group 1 is not optional
+    const v = raw.trim().toLowerCase();
     if (v === "none" || v === "transparent" || v === "currentcolor" || v.startsWith("url(")) continue;
     colors.add(v);
   }

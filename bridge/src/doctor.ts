@@ -165,7 +165,7 @@ function connectedDetail(clients: ClientRowLike[] | null | undefined, prefix: st
   if (stale.length) nexts.push(...new Set(stale));
   if (daemonStale.length) nexts.push(...daemonStale);
   return {
-    detail: bits.length ? bits[0] : detail,
+    detail: bits[0] ?? detail,
     ...(nexts.length ? { next: nexts.join("; ") } : {}),
   };
 }
@@ -511,6 +511,7 @@ async function main(argv: string[]): Promise<void> {
   const usage = "Usage: dtwin doctor [--wait <seconds>] [--json]";
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (a === undefined) continue; // cannot happen: i < argv.length
     if (a === "--json") json = true;
     else if (a === "--help" || a === "-h") {
       console.log("dtwin doctor [--wait <seconds>] [--json]\n\n  Checks the whole setup and says what to do next: Node version, bridge token, daemon, port,\n  whether the Figma plugin can connect (and whether it has the right token), and the project in\n  the current directory. Changes nothing: no token is created, no file is written.\n  --wait N   seconds to wait for the plugin to connect (default 10; it retries every 3s)\n  --json     machine output: { ok, checks: [{ id, title, status, detail, next }] }\n\n  Exit code 1 only when a check is ✗ (a note, !, is not a failure).");
