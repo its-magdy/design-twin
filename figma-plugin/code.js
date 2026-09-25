@@ -144,7 +144,10 @@
     return typeof n === "number" ? Math.round(n * 100) / 100 : n;
   }
   var lower = (s) => s.toLowerCase();
-  var propName = (k) => k.split("#")[0];
+  var propName = (k) => {
+    const hash = k.indexOf("#");
+    return hash === -1 ? k : k.slice(0, hash);
+  };
   var propType = (t) => t;
   var nonEmpty = (o) => Object.keys(o).length ? o : void 0;
   function putNonEmpty(o, key, v) {
@@ -205,8 +208,8 @@
     let out = "";
     let chunk = "";
     for (let i = 0; i < n; i += 3) {
-      const t = bytes[i] << 16 | (bytes[i + 1] || 0) << 8 | (bytes[i + 2] || 0);
-      chunk += B64[t >> 18 & 63] + B64[t >> 12 & 63] + (i + 1 < n ? B64[t >> 6 & 63] : "=") + (i + 2 < n ? B64[t & 63] : "=");
+      const t = (bytes[i] || 0) << 16 | (bytes[i + 1] || 0) << 8 | (bytes[i + 2] || 0);
+      chunk += B64.charAt(t >> 18 & 63) + B64.charAt(t >> 12 & 63) + (i + 1 < n ? B64.charAt(t >> 6 & 63) : "=") + (i + 2 < n ? B64.charAt(t & 63) : "=");
       if (chunk.length >= B64_CHUNK) {
         out += chunk;
         chunk = "";
@@ -422,7 +425,8 @@
     const key = file.toLowerCase();
     const taken = byName.get(key);
     if (taken !== void 0 && taken !== hash) {
-      file = base + "-" + hash.split("-")[0].slice(0, 6) + "." + fmt;
+      const [head = ""] = hash.split("-");
+      file = base + "-" + head.slice(0, 6) + "." + fmt;
     }
     byName.set(file.toLowerCase(), hash);
     const asset = { ...a, file, hash };
@@ -1005,7 +1009,8 @@
       const val = bound[key];
       if (Array.isArray(val)) {
         const names = (await Promise.all(val.map(resolveVar))).filter((x) => !!x);
-        if (names.length) out[key] = names.length === 1 ? names[0] : names;
+        const [first2, ...rest] = names;
+        if (first2 !== void 0) out[key] = rest.length ? names : first2;
       } else {
         const n = await resolveVar(val);
         if (n) out[key] = n;
@@ -1046,9 +1051,8 @@
   async function resolveModeMap(raw, skipSingleMode) {
     if (!raw || !Object.keys(raw).length) return void 0;
     const out = {};
-    for (const collectionId of Object.keys(raw)) {
+    for (const [collectionId, modeId] of Object.entries(raw)) {
       const c = await getCollection(collectionId);
-      const modeId = raw[collectionId];
       if (!c || !Array.isArray(c.modes)) {
         out[collectionId] = modeId;
         continue;
@@ -1144,7 +1148,7 @@
     const hygiene = [];
     const aliasTargets = (v) => {
       const out = [];
-      for (const modeId of Object.keys(v.valuesByMode || {})) out.push(...aliasIds(v.valuesByMode[modeId]));
+      for (const value of Object.values(v.valuesByMode || {})) out.push(...aliasIds(value));
       return out;
     };
     const remoteVars = [];
@@ -1173,16 +1177,13 @@
     for (const v of localVars.concat(remoteVars)) {
       const values = {};
       let hasAlias = false;
-      const modeIds = Object.keys(v.valuesByMode);
-      const resolved = await Promise.all(modeIds.map((modeId) => resolveModeValue(v.valuesByMode[modeId], v.resolvedType)));
-      for (let i = 0; i < modeIds.length; i++) {
-        const modeId = modeIds[i];
-        const raw = v.valuesByMode[modeId];
+      const modes = await Promise.all(Object.entries(v.valuesByMode).map(async ([modeId, raw]) => ({ modeId, raw, value: await resolveModeValue(raw, v.resolvedType) })));
+      for (const { modeId, raw, value } of modes) {
         if (isVariableAlias(raw) || toComposed(raw)) hasAlias = true;
         for (const id of isVariableAlias(raw) ? [raw.id] : aliasIds(raw)) {
           if (!resolvedIds.has(id)) hygiene.push("broken alias in '" + v.name + "' \u2014 target " + id + " could not be resolved");
         }
-        values[modeName[modeId] || modeId] = resolved[i];
+        values[modeName[modeId] || modeId] = value;
       }
       const rec = {
         name: v.name,
@@ -1210,17 +1211,17 @@
     }
     if (pendingPublish.length) {
       const st = await Promise.all(pendingPublish.map((p) => publishOf2(p.obj)));
-      for (let i = 0; i < pendingPublish.length; i++) {
+      for (const [i, p] of pendingPublish.entries()) {
         const s = st[i];
-        if (s) pendingPublish[i].rec.publish = s;
+        if (s) p.rec.publish = s;
       }
     }
     const collPublish = {};
     if (asLibrary) {
       const st = await Promise.all(allCollections.map((c) => publishOf2(c)));
-      for (let i = 0; i < allCollections.length; i++) {
+      for (const [i, c] of allCollections.entries()) {
         const s = st[i];
-        if (s) collPublish[allCollections[i].id] = s;
+        if (s) collPublish[c.id] = s;
       }
     }
     return {
@@ -1312,8 +1313,8 @@
     if (!props || typeof props !== "object") return;
     const out = {};
     const tokens = {};
-    for (const defId of Object.keys(props)) {
-      const v = await shaderValue(props[defId], defId, tokens);
+    for (const [defId, pv] of Object.entries(props)) {
+      const v = await shaderValue(pv, defId, tokens);
       if (v !== void 0) out[defId] = v;
     }
     putNonEmpty(o, "properties", out);
@@ -1608,7 +1609,8 @@
       segs = void 0;
     }
     let font;
-    if (segs && segs.length > 1) {
+    const s0 = segs && segs[0];
+    if (segs && segs.length > 1 && s0) {
       const wrapMixed = "textWrapStyle" in node && node.textWrapStyle === figma.mixed;
       out.runs = await Promise.all(
         segs.map(async (s) => {
@@ -1622,9 +1624,8 @@
           return r;
         })
       );
-      font = out.font = fontObj(segs[0]);
+      font = out.font = fontObj(s0);
     } else {
-      const s0 = segs && segs[0];
       font = out.font = fontObj(s0 ? s0 : node);
       const bv = await resolveBoundMap(s0 ? s0.boundVariables : void 0);
       if (bv) out.textTokens = bv;
@@ -1827,8 +1828,7 @@
       const defs = main.componentPropertyDefinitions;
       if (!defs || !Object.keys(defs).length) return void 0;
       const props = {};
-      for (const k of Object.keys(defs)) {
-        const d = defs[k];
+      for (const [k, d] of Object.entries(defs)) {
         const p = { key: k, type: propType(d.type) };
         if (d.type === "VARIANT" && Array.isArray(d.variantOptions)) p.options = d.variantOptions;
         if (d.defaultValue !== void 0) p.default = d.defaultValue;
@@ -1870,7 +1870,7 @@
     const mains = await Promise.all(instances.map((i) => mainOf(i)));
     const byKey = /* @__PURE__ */ new Map();
     let unkeyed = 0;
-    for (let i = 0; i < instances.length; i++) {
+    for (const [i, inst] of instances.entries()) {
       const main = mains[i];
       if (!main) continue;
       if (!main.remote) continue;
@@ -1880,8 +1880,8 @@
         continue;
       }
       const bucket = byKey.get(key);
-      if (bucket) bucket.instances.push(instances[i]);
-      else byKey.set(key, { main, instances: [instances[i]] });
+      if (bucket) bucket.instances.push(inst);
+      else byKey.set(key, { main, instances: [inst] });
     }
     if (unkeyed) sink(unkeyed + " remote component instance(s) have a main component with no publish key \u2014 omitted from the library catalog");
     const out = [];
@@ -1939,8 +1939,7 @@
         }
       })
     );
-    for (let i = 0; i < collections.length; i++) {
-      const c = collections[i];
+    for (const [i, c] of collections.entries()) {
       const lib = c.libraryName || UNKNOWN_LIBRARY;
       const entry = { key: c.key, name: c.name };
       const count = counts[i];
@@ -1991,8 +1990,9 @@
     for (const [libName, collections] of varsByLibrary) {
       seenSources.add(libName);
       const componentCount = compBySource.get(libName);
+      const firstCollection = collections[0];
       libraries.push({
-        key: collections.length ? collections[0].key : libName,
+        key: firstCollection ? firstCollection.key : libName,
         // libraries themselves have no key — a collection key is the closest stable handle
         name: libName,
         kind: "library",
@@ -2164,11 +2164,9 @@
               const props = {};
               entry.props = props;
               let variantCombos = 1;
-              const keys = Object.keys(defs);
-              const boundPerKey = await Promise.all(keys.map((k) => resolveBoundMap(defs[k].boundVariables)));
-              for (let i = 0; i < keys.length; i++) {
-                const k = keys[i];
-                const d = defs[k];
+              const defEntries = Object.entries(defs);
+              const boundPerKey = await Promise.all(defEntries.map(([, d]) => resolveBoundMap(d.boundVariables)));
+              for (const [i, [k, d]] of defEntries.entries()) {
                 const p = { key: k, type: propType(d.type) };
                 if (d.type === "VARIANT") {
                   if (d.variantOptions !== void 0) p.options = d.variantOptions;
@@ -2249,9 +2247,9 @@
     }
     if (pendingPublish.length) {
       const statuses = await Promise.all(pendingPublish.map((p) => publishOf(p.node)));
-      for (let i = 0; i < pendingPublish.length; i++) {
+      for (const [i, p] of pendingPublish.entries()) {
         const s = statuses[i];
-        if (s) pendingPublish[i].entry.publish = s;
+        if (s) p.entry.publish = s;
       }
     }
     return components;
@@ -2641,11 +2639,10 @@
     if (node.type === "INSTANCE" && node.componentProperties) {
       const props = {};
       const propTokens = {};
-      const componentProperties = node.componentProperties;
-      const keys = Object.keys(componentProperties);
-      const bound = await Promise.all(keys.map((k) => resolveBoundMap(componentProperties[k].boundVariables)));
-      keys.forEach((k, i) => {
-        props[propName(k)] = componentProperties[k].value;
+      const propEntries = Object.entries(node.componentProperties);
+      const bound = await Promise.all(propEntries.map(([, cp]) => resolveBoundMap(cp.boundVariables)));
+      propEntries.forEach(([k, cp], i) => {
+        props[propName(k)] = cp.value;
         const bv = bound[i];
         if (bv && bv.value) propTokens[propName(k)] = bv.value;
       });
@@ -2959,12 +2956,12 @@
   function resolvePages(wanted, all) {
     const avail = () => all.map((p) => `${p.id} ${JSON.stringify(p.name)}`).join("\n  ");
     const pick = (sel, matches, how) => {
-      if (matches.length === 1) return matches[0];
+      var _a;
       if (matches.length > 1) {
         throw new Error(`page name ${JSON.stringify(sel)} is ambiguous (${matches.length} pages ${how}) \u2014 use its id. Available pages:
   ${avail()}`);
       }
-      return null;
+      return (_a = matches[0]) != null ? _a : null;
     };
     const resolveOne = (sel) => {
       const byId = all.find((p) => p.id === sel);
@@ -3008,7 +3005,7 @@
   function isDefaultBg(f) {
     if (!f) return true;
     const only = f[0];
-    return f.length === 1 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
+    return f.length === 1 && only !== void 0 && only.type === "solid" && DEFAULT_PAGE_BG.indexOf(only.color) !== -1;
   }
   async function pageBackground(page2) {
     const out = {};
@@ -3049,14 +3046,15 @@
   async function collectSelection(opts) {
     resetRun();
     const sel = figma.currentPage.selection;
-    if (!sel.length) throw new Error("Select at least one frame first.");
-    applyOpts(sel.length === 1 ? autoCss(opts, sel[0]) : opts);
+    const first2 = sel[0];
+    if (!first2) throw new Error("Select at least one frame first.");
+    applyOpts(sel.length === 1 ? autoCss(opts, first2) : opts);
     const nodes = [];
     for (const nd of sel) {
       const tree = await rootTree(nd);
       if (tree) nodes.push(tree);
     }
-    return screenResult(sel.length === 1 ? sel[0].name : "selection", sel[0].name, nodes, { page: figma.currentPage, nodeId: sel[0].id });
+    return screenResult(sel.length === 1 ? first2.name : "selection", first2.name, nodes, { page: figma.currentPage, nodeId: first2.id });
   }
   function pageOf(node) {
     let n = node;
@@ -3202,6 +3200,7 @@
     return { designSystem };
   }
   async function collectFull(opts) {
+    var _a;
     resetRun();
     applyOpts(opts);
     const allPages = !!(opts && opts.allPages);
@@ -3273,7 +3272,7 @@
       // never exported (the named page is loaded, NOT made current — so figma.currentPage is still
       // whatever the user happens to be looking at).
       scope: allPages ? "all-pages" : wanted.length ? "page" : "current-page",
-      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : pages[0].name),
+      ...ifDefined("page", allPages || pages.length !== 1 ? void 0 : (_a = pages[0]) == null ? void 0 : _a.name),
       ...ifDefined("pages", allPages || pages.length > 1 ? pages.map((p) => p.name) : void 0),
       ...ifDefined("flows", flows.length ? flows : void 0),
       ...ifDefined("pageSettings", pageSettings.length ? pageSettings : void 0),
@@ -3373,23 +3372,24 @@
     const list = Array.isArray(ops) ? ops : [];
     const applied = [];
     if (list.length && figma.editorType === "dev") {
+      const first2 = list[0];
       return {
         ok: false,
         applied,
         failedAt: 0,
-        failedOp: list[0] && list[0].op,
+        ...ifDefined("failedOp", first2 && first2.op),
         error: "the file is open in Dev Mode, which is read-only for plugins \u2014 switch to Design mode (Shift+D) and re-run the plugin to write. Reads and exports work in Dev Mode."
       };
     }
-    for (let i = 0; i < list.length; i++) {
+    for (const [i, op] of list.entries()) {
       try {
-        applied.push(await applyWrite(list[i]));
+        applied.push(await applyWrite(op));
       } catch (e) {
         return {
           ok: false,
           applied,
           failedAt: i,
-          failedOp: list[i] && list[i].op,
+          failedOp: op && op.op,
           error: errMsg(e)
         };
       }
@@ -3574,7 +3574,8 @@
   });
   function notifySelection() {
     const sel = figma.currentPage.selection;
-    figma.ui.postMessage({ type: "selection", count: sel.length, name: sel.length ? sel[0].name : null });
+    const first2 = sel[0];
+    figma.ui.postMessage({ type: "selection", count: sel.length, name: first2 ? first2.name : null });
   }
   figma.ui.onmessage = async (raw) => {
     if (!isUIToMain(raw)) return;

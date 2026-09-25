@@ -91,8 +91,10 @@ function simplifyTrack(t: GridTrackSize): GridTrack {
   return o;
 }
 
-// Grid child cell alignment (justify-self / align-self analog): MIN|CENTER|MAX|AUTO.
-export const GRID_SELF: { [k: string]: "start" | "center" | "end" } = { MIN: "start", CENTER: "center", MAX: "end" };
+// Grid child cell alignment (justify-self / align-self analog): MIN|CENTER|MAX|AUTO. Keyed by the
+// non-AUTO members of GridChildrenMixin.gridChildHorizontalAlign / gridChildVerticalAlign
+// (plugin-api.d.ts 1.139.0 L8523, L8534: 'MIN' | 'CENTER' | 'MAX' | 'AUTO'); AUTO is never looked up.
+export const GRID_SELF: Record<"MIN" | "CENTER" | "MAX", "start" | "center" | "end"> = { MIN: "start", CENTER: "center", MAX: "end" };
 
 // The auto-layout/grid-shaped fields layout() reads, on top of a real SceneNode — the plugin manifest
 // targets `documentAccess: "dynamic-page"`, so not every SceneNode variant carries these (hence the

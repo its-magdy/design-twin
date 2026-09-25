@@ -17,6 +17,8 @@
     // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (see ifDefined in
     // bridge/src/json-util.ts for leaving a key off instead).
     "exactOptionalPropertyTypes": true,
+    // `arr[i]` / `record[key]` are `T | undefined`: the element is tested before use.
+    "noUncheckedIndexedAccess": true,
     // esbuild transpiles one file at a time; this flags type-only re-exports it can't see through.
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,

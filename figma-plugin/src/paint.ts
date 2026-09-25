@@ -104,8 +104,8 @@ export async function putShaderProperties(
   if (!props || typeof props !== "object") return;
   const out: Record<string, IrShaderPropValue> = {};
   const tokens: TokenMap = {};
-  for (const defId of Object.keys(props)) {
-    const v = await shaderValue(props[defId], defId, tokens);
+  for (const [defId, pv] of Object.entries(props)) {
+    const v = await shaderValue(pv, defId, tokens);
     if (v !== undefined) out[defId] = v;
   }
   putNonEmpty(o, "properties", out);
