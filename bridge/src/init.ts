@@ -35,7 +35,22 @@ export interface McpEntry {
 /** The part of .mcp.json init (and doctor) reads: `mcpServers`, when present, must be an object. A
  *  `null`, array or string there used to crash init or be spread character-by-character into the
  *  rewritten file. Loose: every other key passes the check and is carried through untouched. */
-const McpJsonSchema = z.looseObject({ mcpServers: z.record(z.string(), z.unknown()).optional() });
+// A JSON value's kind, for a message a person reads ("not a string", not zod's "received string").
+const jsonKind = (x: unknown): string => (x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : "a " + typeof x);
+const McpJsonSchema = z.looseObject(
+  { mcpServers: z.record(z.string(), z.unknown(), { error: (iss) => `\`mcpServers\` must be an object of server entries, not ${jsonKind(iss.input)}` }).optional() },
+  { error: (iss) => `must be a JSON object, not ${jsonKind(iss.input)}` },
+);
+const isPlainObject = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+/** Check a parsed .mcp.json. On success, `doc` and `servers` are the user's OWN objects, not zod's
+ *  copies: zod moves the keys it knows to the front and drops a key named "__proto__", and init
+ *  rewrites this file — it must keep its key order and every entry. `error` is one line. */
+function readMcpJson(raw: unknown): { doc: Record<string, unknown>; servers: Record<string, unknown> } | { error: string } {
+  const r = McpJsonSchema.safeParse(raw);
+  if (!r.success || !isPlainObject(raw)) return { error: r.success ? "must be a JSON object" : r.error.issues.map((i) => i.message).join("; ") };
+  return { doc: raw, servers: isPlainObject(raw.mcpServers) ? raw.mcpServers : {} };
+}
 
 /** One step of init's plan (see `plan`), discriminated on `kind`: the file-touching kinds carry their
  *  `path`, "write" its `content` (and `merge` for the one write allowed onto an existing file). */
@@ -143,8 +158,6 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
-    // The user's document, spread (not zod's output) into the rewrite below: zod moves the keys it
-    // knows to the front, and the rewrite must keep the file's own key order.
     let doc: object = {};
     let servers: Record<string, unknown> = {};
     let bad: string | null = null;
@@ -152,9 +165,9 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
       let raw: unknown;
       try { raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown; } catch { bad = "exists but is not valid JSON"; }
       if (bad === null) {
-        const r = McpJsonSchema.safeParse(raw);
-        if (!r.success || typeof raw !== "object" || raw === null) bad = "is not an .mcp.json object" + (r.success ? "" : " (" + z.prettifyError(r.error).replace(/\n\s*/g, " ") + ")");
-        else { doc = raw; servers = r.data.mcpServers || {}; }
+        const r = readMcpJson(raw);
+        if ("error" in r) bad = r.error;
+        else { doc = r.doc; servers = r.servers; }
       }
     }
     if (bad !== null) actions.push({ kind: "skip", path: rel(file), note: bad + " — fix it, then re-run with --mcp" });
@@ -268,4 +281,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, McpJsonSchema };
+export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson };

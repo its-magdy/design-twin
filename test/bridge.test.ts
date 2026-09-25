@@ -723,8 +723,14 @@ void (async () => {
         const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
         init.apply(d, plan, () => {});
         return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before
-          && plan.some((a) => a.kind === "skip" && a.path === ".mcp.json" && /is not an \.mcp\.json object/.test(a.note) && /re-run with --mcp/.test(a.note));
+          && plan.some((a) => a.kind === "skip" && a.path === ".mcp.json" && /must be (a JSON object|an object of server entries), not (null|a string|an array)/.test(a.note) && /re-run with --mcp/.test(a.note));
       });
+    })());
+    ok("[init] --mcp keeps a server literally keyed \"__proto__\" (zod's record drops that key; the rewrite must not)", (() => {
+      const d = mk({ ".mcp.json": '{"mcpServers":{"__proto__":{"command":"odd"},"other":{"command":"x"}}}' });
+      init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      const text = fs.readFileSync(path.join(d, ".mcp.json"), "utf8");
+      return /"__proto__": \{\s*"command": "odd"/.test(text) && /"other"/.test(text) && /"designtwin"/.test(text);
     })());
     ok("[init] --mcp keeps the file's own key order and every unknown key when it merges", (() => {
       const d = mk({ ".mcp.json": '{"a":1,"mcpServers":{"other":{"command":"x"}},"b":{"c":[2]}}' });
@@ -2973,8 +2979,8 @@ void (async () => {
     fs.writeFileSync(path.join(mcpDir, ".mcp.json"), '{"mcpServers":"abc"}');
     const m2 = byId(doctor.checkProject(mcpDir), "mcp");
     ok("[doctor] a well-formed JSON .mcp.json of the wrong shape is reported as such — not as 'not valid JSON', not as 'not registered'",
-      m1.status === "warn" && /not an \.mcp\.json object/.test(m1.detail) && !/not valid JSON/.test(m1.detail)
-      && m2.status === "warn" && /mcpServers/.test(m2.detail));
+      m1.status === "warn" && /must be a JSON object, not null/.test(m1.detail) && !/not valid JSON/.test(m1.detail)
+      && m2.status === "warn" && /`mcpServers` must be an object of server entries, not a string/.test(m2.detail));
   }
 
   // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be
