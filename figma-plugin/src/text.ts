@@ -118,7 +118,8 @@ function fontObj(src: TextStyleSource): FontSpec {
 // to the text style" (developers.figma.com/docs/plugins/api/TextStyleOverrides/), and nothing documents
 // whether that flag is a live comparison with the style or a sticky "was set by hand" bit. If it is
 // sticky, two adjacent ranges with the same font/weight/link/decoration but a different override list
-// would now be two runs where they were one. Untested offline — the §5.2 live check on a styled range.
+// would now be two runs where they were one. Untested offline — the §5.2 live check on a styled range
+// (sticky-vs-live: still open; the runtime SHAPE is settled — see `styleOverrides` below).
 const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start" | "end">> = [
   "fontName", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textCase", "textDecoration",
   "textDecorationStyle", "textDecorationColor", "textDecorationThickness", "textDecorationOffset",
@@ -133,10 +134,26 @@ const TEXT_SEG_FIELDS: Array<keyof Omit<StyledTextSegment, "characters" | "start
 // defines every member as "if the text range has a style which has been overridden to …", so the list
 // is only meaningful on a range that HAS a text style: emitted (lower-cased, in API order) only when
 // non-empty AND the segment's textStyleId is set; otherwise undefined -> absent.
-function styleOverrides(s: { textStyleId?: string; textStyleOverrides?: TextStyleOverrideType[] }): string[] | undefined {
+// LIVE (Figma Desktop, 2026-09-25, §5.2 check on a page with a hand-bolded styled range): the runtime
+// returns each member as a bare STRING (`["SEMANTIC_WEIGHT"]`) — the shape of the example on that same
+// docs page (`"textStyleOverrides": ["SEMANTIC_WEIGHT"]`), NOT the `{ type }` object its declaration and
+// plugin-api.d.ts 1.139.0 L5465-5467 state. Reading `.type` off a string threw "cannot read property
+// 'toLowerCase' of undefined" inside the sandbox and aborted the whole page export. Both shapes are read
+// (the typings may catch up with the runtime, or vice versa); anything else is skipped, not thrown on.
+function overrideName(o: unknown): string | undefined {
+  if (typeof o === "string") return o;
+  if (o !== null && typeof o === "object" && "type" in o && typeof o.type === "string") return o.type;
+  return undefined;
+}
+function styleOverrides(s: { textStyleId?: string; textStyleOverrides?: readonly unknown[] }): string[] | undefined {
   const ov = s.textStyleOverrides;
   if (!s.textStyleId || !Array.isArray(ov) || !ov.length) return undefined;
-  return ov.map((o) => lower(o.type));
+  const names: string[] = [];
+  for (const o of ov) {
+    const n = overrideName(o);
+    if (n !== undefined) names.push(n.toLowerCase());
+  }
+  return names.length ? names : undefined;
 }
 
 // Hyperlink / list / indent live on a styled-text SEGMENT or, for uniform text, on the node itself —
