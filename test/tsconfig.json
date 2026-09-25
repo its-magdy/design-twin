@@ -15,11 +15,6 @@
     // `k?: T` means absent-or-T; an undefined value must be spelled `T | undefined` (as in bridge/tsconfig.json)
     "exactOptionalPropertyTypes": true,
     "noEmit": true,
-    // Every bridge/ and design-to-code/ module is TypeScript now. allowJs remains ONLY because
-    // test/verify-build.test.ts imports the JS build script claude-plugin/build-scripts.js (build
-    // scripts stay JS by design — see docs/ts-port-handoff.md), and strict TS rejects an untyped JS
-    // import without it. checkJs stays off: the script is imported, not type-checked.
-    "allowJs": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
