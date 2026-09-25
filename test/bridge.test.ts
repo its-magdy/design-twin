@@ -2012,6 +2012,19 @@ void (async () => {
   calls.length = 0;
   await dcli.requestWithClient({ cmd: "whoami", client: "c2", timeoutMs: 5000, waitForConnection: 90000 }, 5000);
   ok("[daemon] a bare connId target never waits", !calls.some((c) => c.startsWith("wait:")) && calls.includes("client:c2"));
+  // A connect window that runs out with NOTHING connected is not the daemon's error to report: the
+  // request still runs, so the bridge's own resolveClient text ("Figma plugin not connected. Open the
+  // file in Figma and run the plugin.") is what every path prints — not waitForConnection's "timed out
+  // waiting for the plugin to connect" (review of 223c829: the MCP's named `client` now sends a window).
+  calls.length = 0;
+  const wasConnected = fakeBridge.isConnected, wasWait = fakeBridge.waitForConnection;
+  fakeBridge.isConnected = () => false;
+  fakeBridge.waitForConnection = async () => { calls.push("waitConn"); throw new Error("timed out waiting for the plugin to connect"); };
+  const afterWindow = await dcli.requestWithClient({ cmd: "whoami", client: "NERA Library", timeoutMs: 5000, waitForConnection: 50 }, 5000).then(() => "answered", (e: unknown) => asErr(e).message);
+  fakeBridge.isConnected = wasConnected;
+  fakeBridge.waitForConnection = wasWait;
+  ok("[daemon] a connect window that runs out falls through to the request (the bridge's own not-connected text), not the daemon's timeout text",
+    calls[0] === "waitConn" && calls.includes("whoami") && afterWindow === "answered");
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",

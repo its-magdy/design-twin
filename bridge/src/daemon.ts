@@ -322,7 +322,12 @@ export function serve(bridge: DaemonBridge, { port, log, idleMin, signals = true
                     // counts as activity, so a backlog can't be reaped as idleness.
         queue = queue.then(async () => {
           try {
-            if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection);
+            // A connect window that runs out is not the error: the request below then fails in the
+            // bridge's own resolveClient with "Figma plugin not connected. Open the file in Figma and
+            // run the plugin." — the text every other path prints — instead of waitForConnection's
+            // "timed out waiting for the plugin to connect" (which said what the daemon did, not what
+            // the caller should do). Same fall-through as figma-pull.ts's listClients wait.
+            if (msg.waitForConnection && !bridge.isConnected()) await bridge.waitForConnection(msg.waitForConnection).catch(() => {});
             // A named client (not a c<N> connId) whose window has not redialled yet: same bounded wait
             // as the CLI's own bridge path (figma-pull.ts), so `--client <name>` under a daemon does
             // not fail on the first file that happened to reconnect after a Figma restart.
