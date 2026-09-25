@@ -133,10 +133,10 @@ const forms = must(runSeed("forms", {
   "c.figma.tsx": tpl("ColonRaw", "5:6", "c.tsx"),
   "d.figma.tsx": tpl("Nested", "I7-8;9-10", "d.tsx"),
 }), "components.json (seeding these templates always writes it)");
-ok("[id-dash] node-id=1-2 -> 1:2", forms.DashForm && forms.DashForm.nodeId === "1:2");
-ok("[id-encoded] node-id=3%3A4 -> 3:4", forms.ColonEnc && forms.ColonEnc.nodeId === "3:4");
-ok("[id-colon] node-id=5:6 -> 5:6", forms.ColonRaw && forms.ColonRaw.nodeId === "5:6");
-ok("[id-nested] instance path I7-8;9-10 -> I7:8;9:10", forms.Nested && forms.Nested.nodeId === "I7:8;9:10");
+ok("[id-dash] node-id=1-2 -> 1:2", forms.DashForm?.nodeId === "1:2");
+ok("[id-encoded] node-id=3%3A4 -> 3:4", forms.ColonEnc?.nodeId === "3:4");
+ok("[id-colon] node-id=5:6 -> 5:6", forms.ColonRaw?.nodeId === "5:6");
+ok("[id-nested] instance path I7-8;9-10 -> I7:8;9:10", forms.Nested?.nodeId === "I7:8;9:10");
 
 console.log("\nseed-components — reserved-key hardening:");
 // A component literally named "__proto__" used to resolve to Object.prototype: its entry vanished
@@ -148,12 +148,13 @@ const poisoned = must(runSeed(
   { Widget: { component: "Widget", import: "@/ui", props: {} } }
 ), "components.json (the merge always writes it)");
 ok("[sec-seed-proto-kept] '__proto__' entry is a real own key, not dropped",
-  Object.prototype.hasOwnProperty.call(poisoned, "__proto__") && poisoned["__proto__"].source === "evil.tsx");
+  Object.prototype.hasOwnProperty.call(poisoned, "__proto__") && poisoned["__proto__"]?.source === "evil.tsx");
+const widget = must(poisoned.Widget, "poisoned.Widget entry");
 ok("[sec-seed-no-starve] unrelated entry still backfilled after a '__proto__' entry",
-  poisoned.Widget.source === "widget.tsx" && poisoned.Widget.nodeId === "5:5");
+  widget.source === "widget.tsx" && widget.nodeId === "5:5");
 ok("[sec-seed-no-pollute] Object.prototype was not mutated",
   ({} as Record<string, unknown>).source === undefined && ({} as Record<string, unknown>).nodeId === undefined);
-ok("[seed-preserves-human-fields] hand-authored import survives the merge", poisoned.Widget.import === "@/ui");
+ok("[seed-preserves-human-fields] hand-authored import survives the merge", widget.import === "@/ui");
 
 console.log("\nseed-components — node-id -> name via the split catalog:");
 // A Code Connect template that carries a node-id but NO `component=` can only be named by looking the
@@ -456,9 +457,11 @@ void (async () => {
     await b.request("ping", {}, 2000, null, undefined, (t) => ticks.push(t));
     console.log("\nserver-core — progress listener:");
     ok("[progress] every tick sent while the request was in flight reaches onProgress", ticks.length === 2);
+    const tick0 = must(ticks[0], "first progress tick");
+    const tick1 = must(ticks[1], "second progress tick");
     ok("[progress] the tick carries the plugin's phase/page/counters",
-      ticks[0].phase === "pages" && ticks[0].page?.index === 1 && ticks[0].page.of === 2 && ticks[0].page.name === "Home" && ticks[0].nodes === 40);
-    ok("[progress] a non-numeric counter and an absent page read as null", ticks[0].assets === null && ticks[1].page === null && ticks[1].nodes === null);
+      tick0.phase === "pages" && tick0.page?.index === 1 && tick0.page?.of === 2 && tick0.page?.name === "Home" && tick0.nodes === 40);
+    ok("[progress] a non-numeric counter and an absent page read as null", tick0.assets === null && tick1.page === null && tick1.nodes === null);
     c.close();
     b.close();
   }
@@ -491,9 +494,10 @@ void (async () => {
 
     console.log("\nserver-core — multi-client routing (the two-files question):");
     const one = bridge.listClients();
-    ok("[multi] a lone client is listed", one.length === 1 && one[0].connId === "c1");
-    ok("[multi] the hello announcement is recorded", one[0].file === "App — Base" && one[0].fileKey === "KEYBASE");
-    ok("[multi] and it is marked identified", one[0].identified === true);
+    const one0 = must(one[0], "first listed client");
+    ok("[multi] a lone client is listed", one.length === 1 && one0.connId === "c1");
+    ok("[multi] the hello announcement is recorded", one0.file === "App — Base" && one0.fileKey === "KEYBASE");
+    ok("[multi] and it is marked identified", one0.identified === true);
     // With ONE client, an unaddressed request must still work — every existing call site relies on it.
     const soloRes = await bridge.request("ping", {}, 5000);
     ok("[multi] an unaddressed request resolves when only one file is connected", soloRes.file === "base");
@@ -695,13 +699,13 @@ void (async () => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"other":{"command":"x"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
-      return m.other.command === "x" && m.designtwin.args?.[0] === "/abs/figma-mcp.mjs";
+      return m.other?.command === "x" && m.designtwin?.args?.[0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp registers as \"designtwin\" BESIDE Figma's own \"figma\" server, never in its place", (() => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"figma":{"type":"http","url":"https://mcp.figma.com/mcp"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
-      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args?.[0] === "/abs/figma-mcp.mjs";
+      return m.figma?.url === "https://mcp.figma.com/mcp" && m.designtwin?.args?.[0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
       const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
@@ -714,7 +718,7 @@ void (async () => {
       const a = mk({ ".mcp.json": '{"mcpServers":{"designtwin":{"command":"keep"}}}' }), b = mk({ ".mcp.json": "{not json" });
       init.apply(a, init.plan(a, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
-      return (JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
+      return (JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin?.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
     ok("[init] warns when .gitignore would swallow the hand-authored maps, and names the narrower pattern",
     (() => {
@@ -1096,7 +1100,7 @@ void (async () => {
     // that makes this a table rather than JSON with extra steps.
     const rows = libOut.split("\n").filter((l: string) => /^ {2}(KIND|local|library) /.test(l));
     const nameAt = rows.map((l: string) => ["This file", "NERA Design System", "NAME"].reduce((n, s) => (l.includes(s) ? l.indexOf(s) : n), -1));
-    return rows.length === 3 && new Set(nameAt).size === 1 && nameAt[0] > 0;
+    return rows.length === 3 && new Set(nameAt).size === 1 && (nameAt[0] ?? -1) > 0;
   })());
 
   // The MCP twin. Checked against the server's own source, src/figma-mcp.ts — the file Node runs from a
@@ -1111,7 +1115,7 @@ void (async () => {
   // workflow depends on, and every tool `dtwin mcp --help` promises (a renamed tool must not leave the
   // help naming one that no longer exists).
   {
-    const registered = [...libMcpSrc.matchAll(/registerTool\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const registered = [...libMcpSrc.matchAll(/registerTool\(\s*"([a-z_]+)"/g)].map((m) => must(m[1], "registerTool name capture"));
     const pullSrcForHelp = fs.readFileSync(path.join(import.meta.dirname, "..", "bridge", "src", "figma-pull.ts"), "utf8");
     const helpStart = pullSrcForHelp.indexOf('"dtwin mcp\\n\\n"');
     const helpText = helpStart === -1 ? "" : pullSrcForHelp.slice(helpStart, pullSrcForHelp.indexOf("process.exit(0)", helpStart));
@@ -1277,10 +1281,11 @@ void (async () => {
     layers: [{ name: "A", id: "1:1", page: "Screens", tree: {} as unknown as IrNode }, { name: "B", id: "2:2", page: "Screens", tree: {} as unknown as IrNode }],
   });
   const oldIndex = readJson<PagesRootIndex>(oldDir, "pages", "index.json");
+  const oldPageDir0 = must(oldIndex.pageDirs[0], "old export's pageDirs[0]");
   ok("[wp] a pre-pageId export still groups by name (one bucket) rather than splitting per layer",
-    oldIndex.pageDirs.length === 1 && oldIndex.pageDirs[0].layers === 2);
+    oldIndex.pageDirs.length === 1 && oldPageDir0.layers === 2);
   ok("[wp] and OMITS pageId rather than emitting a null — absence means 'export predates page ids'",
-    !("pageId" in oldIndex.pageDirs[0]));
+    !("pageId" in oldPageDir0));
   fs.rmSync(oldDir, { recursive: true, force: true });
 
   // ---------------------------------------------------------------- stdout is not truncated on exit
@@ -1459,12 +1464,12 @@ void (async () => {
     } as unknown as ExportFixture, undefined);
     const rootIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "index.json"), "utf8")) as PagesRootIndex;
     const pageIdx = JSON.parse(fs.readFileSync(path.join(sdir, "pages", "__Organization_management_", "index.json"), "utf8")) as PageIndex;
+    const rootRow0 = must(rootIdx.layers?.[0], "rootIdx.layers[0]");
     ok("[write-screen] the ROOT index row carries the visible title, not just the Figma layer name",
       Array.isArray(rootIdx.layers) && rootIdx.layers.length === 1 &&
-      rootIdx.layers[0].name === "positions " && rootIdx.layers[0].title === "Job Roles");
+      rootRow0.name === "positions " && rootRow0.title === "Job Roles");
     ok("[write-screen] the PAGE index row carries the same title",
-      pageIdx.layers.length === 1 && pageIdx.layers[0].title === "Job Roles");
-    const rootRow0 = must(rootIdx.layers, "rootIdx.layers")[0];
+      pageIdx.layers.length === 1 && pageIdx.layers[0]?.title === "Job Roles");
     ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
       Array.isArray(rootRow0.texts) && rootRow0.texts.length > 0 &&
       new Set(rootRow0.texts).size === rootRow0.texts.length);
@@ -1491,7 +1496,7 @@ void (async () => {
     const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
     ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
-    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0].sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0]?.sourceFile === "TeamSmart (Copy)");
     fs.rmSync(sdir2, { recursive: true, force: true });
 
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
@@ -1543,18 +1548,18 @@ void (async () => {
     ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source?.role === "library");
 
     const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8")) as ComponentsCatalog;
-    ok("[lib-layout] a component from ANOTHER library is not claimed by this one", comps.components.length === 1 && comps.components[0].name === "Button");
+    ok("[lib-layout] a component from ANOTHER library is not claimed by this one", comps.components.length === 1 && comps.components[0]?.name === "Button");
     const hyg = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "hygiene.json"), "utf8")) as HygieneDoc;
     ok("[lib-layout] and the drop is reported, not silent", hyg.hygiene.some((h) => /ANOTHER library were dropped/.test(h)));
 
     const idx = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "index.json"), "utf8")) as LibraryManifest;
     ok("[lib-layout] the directory self-describes via index.json", !!(idx.files && idx.files.tokens && idx.counts.variables === 1));
-    ok("[lib-layout] index summarises publish status", idx.publish && idx.publish.current >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
+    ok("[lib-layout] index summarises publish status", idx.publish && (idx.publish.current ?? 0) >= 1 && idx.publish.changed === undefined ? true : !!idx.publish);
 
     // LibrariesIndex types carried-through rows as unknown[]; every row here was written by this run, so read them as rows.
     type LibrariesIndexView = LibrariesIndex & { libraries: LibrariesIndexRow[] };
     const root = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
-    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0].libraryName === "NERA");
+    ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0]?.libraryName === "NERA");
     // A second library must not erase the first: each is a separate plugin run in a separate file.
     const second = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
     second.file = "Icons";
@@ -1660,7 +1665,8 @@ void (async () => {
       return p.length === 1 && Array.isArray(t) && t.length === 0 && Array.isArray(e) && Array.isArray(g); })());
   ok("[ds-split] components.local.json holds only real nodes in this file (id/page/pageId)",
     (() => { const c = readDS<ComponentsCatalog>("components.local.json").components;
-      return c.length === 3 && c[0].key === "k1" && !!c[0].id && !!c[0].pageId; })());
+      const c0 = must(c[0], "components.local.json components[0]");
+      return c.length === 3 && c0.key === "k1" && !!c0.id && !!c0.pageId; })());
 
   // --- component detail split (variants[].node stripped into design-system/components/) --------
   ok("[component-split] the COMPONENT_SET with exported node trees gets a variantsFile pointer",
@@ -1668,14 +1674,15 @@ void (async () => {
       return !!c && !!c.variantsFile && c.variantsFile === "design-system/components/Badge__2_9.json"; })());
   ok("[component-split] its variants in the catalog keep id/name/key/values but lose .node",
     (() => { const c = readDS<ComponentsCatalog>("components.local.json").components.find((x) => x.key === "k3");
-      const v = c?.variants; return !!v && v.length === 2 && v[0].id === "2:10" && v[0].values?.Size === "Small" && !("node" in v[0]); })());
+      const v = c?.variants; const v0 = v?.[0];
+      return !!v && v.length === 2 && !!v0 && v0.id === "2:10" && v0.values?.Size === "Small" && !("node" in v0); })());
   ok("[component-split] a COMPONENT_SET with no exported node trees gets NO pointer (absence = not exported)",
     (() => { const c = readDS<ComponentsCatalog>("components.local.json").components.find((x) => x.key === "k4");
       return !!c && !("variantsFile" in c) && c.variants?.length === 1; })());
   ok("[component-split] the detail file carries the full node trees + stamp + set identity",
     (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8")) as ComponentDetailFile;
       return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants?.length === 2 &&
-        d.variants?.[0].node?.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
+        d.variants?.[0]?.node?.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
   ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).files.componentsDir === "design-system/components");
   // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
@@ -1689,7 +1696,8 @@ void (async () => {
     })());
   ok("[ds-split] components.library.json holds only remote:true entries — inferred from instances, not nodes here",
     (() => { const c = readDS<ComponentsCatalog>("components.library.json").components;
-      return c.length === 1 && c[0].key === "k2" && c[0].remote === true && c[0].id === undefined; })());
+      const c0 = must(c[0], "components.library.json components[0]");
+      return c.length === 1 && c0.key === "k2" && c0.remote === true && c0.id === undefined; })());
   ok("[ds-split] hygiene.json is the lint report on its own", readDS<HygieneDoc>("hygiene.json").hygiene.length === 1);
   ok("[ds-split] every split file repeats the freshness stamp, so drift-lint/figma_status work off any of them",
     ["tokens.json", "styles.paint.json", "styles.text.json", "styles.effect.json", "styles.grid.json",
@@ -1770,8 +1778,9 @@ void (async () => {
       return (JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "Flows", "index.json"), "utf8")) as PageIndex).layers.length === 3;
     })());
   const rootIdx = JSON.parse(fs.readFileSync(path.join(wdir, "sel", "pages", "index.json"), "utf8")) as PagesRootIndex;
+  const rootPageDir0 = must(rootIdx.pageDirs[0], "rootIdx.pageDirs[0]");
   ok("[write-out] the root pages/index.json points at the page dir with a live layer count",
-    rootIdx.pageDirs.length === 1 && rootIdx.pageDirs[0].layers === 3 && rootIdx.pageDirs[0].index === "pages/Flows/index.json");
+    rootIdx.pageDirs.length === 1 && rootPageDir0.layers === 3 && rootPageDir0.index === "pages/Flows/index.json");
   // An export written before the plugin emitted page identity still has to land somewhere predictable.
   OUT.writeAny(path.join(wdir, "sel"), { screenName: "Legacy", nodeId: "9:9", screen: { nodes: [] }, assets: [] } as unknown as ExportFixture);
   ok("[write-out] a page-less export files under _unfiled rather than guessing a page",
@@ -1799,8 +1808,9 @@ void (async () => {
   // two byte-identical entries under two DIFFERENT names ("I1_2_3.svg"/"I4_5_6.svg") collapse to ONE
   // file on disk instead of two — `duplicates` is now empty because there is no longer a duplicate
   // FILE for it to find; both manifest rows correctly point at the one file that was actually written.
+  const aFile0 = must(aIdx.files[0], "aIdx.files[0]"), aFile1 = must(aIdx.files[1], "aIdx.files[1]");
   ok("[write-out] byte-identical entries under different names are deduped at WRITE time, not just reported after the fact",
-    aIdx.files[0].file === aIdx.files[1].file && aIdx.duplicates.length === 0);
+    aFile0.file === aFile1.file && aIdx.duplicates.length === 0);
   ok("[write-out] the returned summary agrees — no duplicate count to report", withAssets.wrote.assetIndex?.duplicates === 0);
 
   // Which icons are safe to recolour. Figma exports the frame as it LOOKS, so a Dark-mode glyph
@@ -2081,12 +2091,12 @@ void (async () => {
   // The connected-file listing is only visible to the daemon (it owns the bridge), so __status carries it.
   const cstat = await daemon.status(D_PORT);
   ok("[daemon] status reports the connected files so --list-clients works behind a daemon",
-    Array.isArray(cstat?.clients) && cstat.clients.length === 2 && cstat.clients[0].connId === "c1");
+    Array.isArray(cstat?.clients) && cstat.clients.length === 2 && cstat.clients[0]?.connId === "c1");
 
   // Newline-delimited framing has to survive a payload that arrives in many chunks — a real export is
   // megabytes, and reassembling it wrongly would corrupt every large pull.
   const big = await dcli.request({ cmd: "exportFull", args: { allPages: true }, timeoutMs: 30000 }, 30000);
-  ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.designSystem.hygiene?.[0].length === 4e6);
+  ok("[daemon] a multi-megabyte reply is reassembled intact across chunks", big.designSystem.hygiene?.[0]?.length === 4e6);
   // The daemon client re-checks the relayed reply's shape (an older daemon build may not have): a
   // bridge answering `listChildren` with a listPages-shaped reply is a named error, not a typed lie.
   let shapeErr: Error | undefined;
@@ -2125,6 +2135,7 @@ void (async () => {
       { phase: "pages", page: { index: 1, of: 2, name: "P1" }, nodes: 10, assets: null },
       { phase: "assets", page: null, nodes: null, assets: 3 },
     ];
+    const TICK0 = must(TICKS[0], "TICKS[0]"), TICK1 = must(TICKS[1], "TICKS[1]");
     const row: ClientRow = { connId: "c1", file: "App — Base", fileKey: "KEYBASE", page: "Home", instanceId: "fig-a", connectedAt: 1, uptimeMs: 1000, identified: true, pluginVersion: null, pluginStale: null };
     const listeners: string[] = []; // whether each forwarded request carried a listener
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -2140,9 +2151,9 @@ void (async () => {
         if (cmd === "ping") { for (const t of TICKS) onProgress?.(t); return { reply: { pong: true, page: "P", file: "ticked" }, client: row }; }
         // whoami: 4 ticks 150 ms apart, reply at ~600 ms — longer than the client's 400 ms guard, so it
         // only succeeds if each tick re-arms that guard (the silence-budget decision in daemon.ts).
-        if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICKS[0]); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
+        if (cmd === "whoami") { for (let i = 0; i < 4; i++) { await sleep(150); onProgress?.(TICK0); } return { reply: { instanceId: "fig-a", file: "slow" }, client: row }; }
         // listPages: one tick, then 1.5 s of silence — past the client's 400 ms guard.
-        await sleep(10); onProgress?.(TICKS[1]); await sleep(1500);
+        await sleep(10); onProgress?.(TICK1); await sleep(1500);
         return { reply: { exportedAt: "2026-09-24T00:00:00.000Z", file: "late", depth: 2, pages: [], manifest: { pages: 0, warnings: [] } }, client: row };
       },
     };
@@ -3031,12 +3042,12 @@ void (async () => {
     // Not yet identified (no `hello` sent) — waitForIdentified must wait for it rather than return
     // instantly, which is exactly the race finding 216 describes ("the plugin's identified message
     // has not arrived yet").
-    const before = b.listClients()[0];
-    ok("[identify] freshly connected client starts unidentified", before && before.identified === false);
+    const before = must(b.listClients()[0], "freshly connected client row");
+    ok("[identify] freshly connected client starts unidentified", before.identified === false);
     setTimeout(() => ws1.send(JSON.stringify({ type: "hello", instanceId: "i1", file: "App — Base" })), 60);
     await b.waitForIdentified(2000);
-    const after = b.listClients()[0];
-    ok("[identify] waitForIdentified waits for the hello, then returns", after && after.identified === true && after.file === "App — Base");
+    const after = must(b.listClients()[0], "client row after waitForIdentified");
+    ok("[identify] waitForIdentified waits for the hello, then returns", after.identified === true && after.file === "App — Base");
     ws1.close();
     b.close();
   }
@@ -3060,9 +3071,9 @@ void (async () => {
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "old-1", file: "Old Bundle File", pluginVersion: "0.0.1" }));
     await b.waitForIdentified(1000);
-    const row = b.listClients()[0];
-    ok("[version] a hello's pluginVersion is recorded and surfaced on the client row", row && row.pluginVersion === "0.0.1");
-    ok("[version] an old plugin's row carries the staleness note", row && typeof row.pluginStale === "string" && /0\.0\.1/.test(row.pluginStale));
+    const row = must(b.listClients()[0], "old-plugin client row");
+    ok("[version] a hello's pluginVersion is recorded and surfaced on the client row", row.pluginVersion === "0.0.1");
+    ok("[version] an old plugin's row carries the staleness note", typeof row.pluginStale === "string" && /0\.0\.1/.test(row.pluginStale));
     ws1.close();
     b.close();
   }
@@ -3072,9 +3083,9 @@ void (async () => {
     const { bridge: b, client: ws1 } = await connectedBridge();
     ws1.send(JSON.stringify({ type: "hello", instanceId: "noversion-1", file: "No Version File" }));
     await b.waitForIdentified(1000);
-    const row = b.listClients()[0];
+    const row = must(b.listClients()[0], "no-version client row");
     ok("[version] a hello with no pluginVersion at all records null AND is treated as stale (this is the live bug this round fixes, not a crash)",
-      row && row.pluginVersion === null && typeof row.pluginStale === "string" && /predates version reporting/.test(row.pluginStale));
+      row.pluginVersion === null && typeof row.pluginStale === "string" && /predates version reporting/.test(row.pluginStale));
     ws1.close();
     b.close();
   }
