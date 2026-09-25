@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import type { ClientOptions, RawData } from "ws";
 import { ok, report } from "./assert.ts";
+import { must } from "./fixtures.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import type { Baseline } from "../design-to-code/design-diff.ts";
 import type {
@@ -125,12 +126,12 @@ function runSeed(name: string, files: Record<string, string>, existingMap?: obje
 const tpl = (comp: string, id: string, src: string) => `// url=https://figma.com/design/x?node-id=${id}\n// component=${comp}\n// source=${src}\n`;
 
 console.log("\nseed-components — node-id forms:");
-const forms = runSeed("forms", {
+const forms = must(runSeed("forms", {
   "a.figma.tsx": tpl("DashForm", "1-2", "a.tsx"),
   "b.figma.tsx": tpl("ColonEnc", "3%3A4", "b.tsx"),
   "c.figma.tsx": tpl("ColonRaw", "5:6", "c.tsx"),
   "d.figma.tsx": tpl("Nested", "I7-8;9-10", "d.tsx"),
-})!; // non-null: seeding these templates always writes components.json
+}), "components.json (seeding these templates always writes it)");
 ok("[id-dash] node-id=1-2 -> 1:2", forms.DashForm && forms.DashForm.nodeId === "1:2");
 ok("[id-encoded] node-id=3%3A4 -> 3:4", forms.ColonEnc && forms.ColonEnc.nodeId === "3:4");
 ok("[id-colon] node-id=5:6 -> 5:6", forms.ColonRaw && forms.ColonRaw.nodeId === "5:6");
@@ -140,11 +141,11 @@ console.log("\nseed-components — reserved-key hardening:");
 // A component literally named "__proto__" used to resolve to Object.prototype: its entry vanished
 // from components.json AND the backfills landed on the prototype, after which no OTHER entry could
 // be filled either (their `=== undefined` checks became false). Both halves are asserted here.
-const poisoned = runSeed(
+const poisoned = must(runSeed(
   "poison",
   { "a.figma.tsx": tpl("__proto__", "1-2", "evil.tsx"), "z.figma.tsx": tpl("Widget", "5-5", "widget.tsx") },
   { Widget: { component: "Widget", import: "@/ui", props: {} } }
-)!; // non-null: the merge always writes components.json
+), "components.json (the merge always writes it)");
 ok("[sec-seed-proto-kept] '__proto__' entry is a real own key, not dropped",
   Object.prototype.hasOwnProperty.call(poisoned, "__proto__") && poisoned["__proto__"].source === "evil.tsx");
 ok("[sec-seed-no-starve] unrelated entry still backfilled after a '__proto__' entry",
@@ -641,13 +642,13 @@ void (async () => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"other":{"command":"x"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
-      return m.other.command === "x" && m.designtwin.args![0] === "/abs/figma-mcp.mjs";
+      return m.other.command === "x" && m.designtwin.args?.[0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp registers as \"designtwin\" BESIDE Figma's own \"figma\" server, never in its place", (() => {
       const d = mk({ ".mcp.json": '{"mcpServers":{"figma":{"type":"http","url":"https://mcp.figma.com/mcp"}}}' });
       init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       const m = (JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8")) as McpJsonView).mcpServers;
-      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args![0] === "/abs/figma-mcp.mjs";
+      return m.figma.url === "https://mcp.figma.com/mcp" && m.designtwin.args?.[0] === "/abs/figma-mcp.mjs";
     })());
     ok("[init] --mcp does not add a SECOND copy when ours is already there under the legacy \"figma\" key (two would fight over 8787)", (() => {
       const before = '{"mcpServers":{"figma":{"command":"node","args":["/old/clone/bridge/figma-mcp.mjs"]}}}';
@@ -1410,9 +1411,10 @@ void (async () => {
       rootIdx.layers[0].name === "positions " && rootIdx.layers[0].title === "Job Roles");
     ok("[write-screen] the PAGE index row carries the same title",
       pageIdx.layers.length === 1 && pageIdx.layers[0].title === "Job Roles");
+    const rootRow0 = must(rootIdx.layers, "rootIdx.layers")[0];
     ok("[write-screen] the row also carries a texts[] fingerprint, deduped and non-empty",
-      Array.isArray(rootIdx.layers![0].texts) && rootIdx.layers![0].texts.length > 0 &&
-      new Set(rootIdx.layers![0].texts).size === rootIdx.layers![0].texts.length);
+      Array.isArray(rootRow0.texts) && rootRow0.texts.length > 0 &&
+      new Set(rootRow0.texts).size === rootRow0.texts.length);
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 
@@ -1436,7 +1438,7 @@ void (async () => {
     const screenDoc = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "__Organization_management_", "positions___7314_87192.json"), "utf8")) as ScreenExport;
     const rootIdx2 = JSON.parse(fs.readFileSync(path.join(sdir2, "pages", "index.json"), "utf8")) as PagesRootIndex;
     ok("[write-screen sourceFile] lands on the screen doc's own top level", screenDoc.sourceFile === "TeamSmart (Copy)");
-    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers![0].sourceFile === "TeamSmart (Copy)");
+    ok("[write-screen sourceFile] lands on the root index row too", rootIdx2.layers?.[0].sourceFile === "TeamSmart (Copy)");
     fs.rmSync(sdir2, { recursive: true, force: true });
 
     // No sourceFile given (an unresolved/ambiguous client, or a caller that never asked) — the field
@@ -1485,7 +1487,7 @@ void (async () => {
     ok("[lib-layout] tokens.json carries a top-level variables array", Array.isArray(tok.variables) && tok.variables.length === 1);
     ok("[lib-layout] tokens.json carries collections for the mode join", Array.isArray(tok.collections));
     ok("[lib-layout] every split file repeats the freshness stamp", tok.exportedAt === libDoc.exportedAt && tok.file === "NERA DS");
-    ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source!.role === "library");
+    ok("[lib-layout] and carries source so a consumer knows it is a library", tok.source?.role === "library");
 
     const comps = JSON.parse(fs.readFileSync(path.join(base, "libraries", dirName, "components.json"), "utf8")) as ComponentsCatalog;
     ok("[lib-layout] a component from ANOTHER library is not claimed by this one", comps.components.length === 1 && comps.components[0].name === "Button");
@@ -1502,7 +1504,9 @@ void (async () => {
     ok("[lib-layout] libraries/index.json lists the library", root.libraries.length === 1 && root.libraries[0].libraryName === "NERA");
     // A second library must not erase the first: each is a separate plugin run in a separate file.
     const second = JSON.parse(JSON.stringify(libDoc)) as DesignSystemDoc;
-    second.file = "Icons"; second.source!.libraryName = "Icons"; second.source!.fileKey = "ZZZZZZZZ999";
+    second.file = "Icons";
+    const secondSource = must(second.source, "second.source");
+    secondSource.libraryName = "Icons"; secondSource.fileKey = "ZZZZZZZZ999";
     OUT.writeExport(path.join(ldir, "design"), { designSystem: second }, () => {});
     const root2 = JSON.parse(fs.readFileSync(path.join(base, "libraries", "index.json"), "utf8")) as LibrariesIndexView;
     ok("[lib-layout] a second library is ADDED, not substituted", root2.libraries.length === 2);
@@ -1596,7 +1600,7 @@ void (async () => {
   ok("[ds-split] tokens.json carries the collections + variables, and nothing else's payload",
     // de-any: styles/components are asserted ABSENT from tokens.json — they are not fields of TokensDoc, so they are named here.
     (() => { const t = readDS<TokensDoc & { styles?: unknown; components?: unknown }>("tokens.json");
-      return t.collections!.length === 1 && t.variables!.length === 1 && !t.styles && !t.components; })());
+      return t.collections?.length === 1 && t.variables?.length === 1 && !t.styles && !t.components; })());
   ok("[ds-split] styles are split one file per type — styles.paint.json/text/effect/grid",
     (() => { const p = readDS<PaintStylesDoc>("styles.paint.json").styles, t = readDS<TextStylesDoc>("styles.text.json").styles,
         e = readDS<EffectStylesDoc>("styles.effect.json").styles, g = readDS<GridStylesDoc>("styles.grid.json").styles;
@@ -1617,8 +1621,8 @@ void (async () => {
       return !!c && !("variantsFile" in c) && c.variants?.length === 1; })());
   ok("[component-split] the detail file carries the full node trees + stamp + set identity",
     (() => { const d = JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system", "components", "Badge__2_9.json"), "utf8")) as ComponentDetailFile;
-      return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants!.length === 2 &&
-        d.variants![0].node!.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
+      return d.setId === "2:9" && d.setKey === "k3" && d.name === "Badge" && d.variants?.length === 2 &&
+        d.variants?.[0].node?.type === "COMPONENT" && d.exportedAt === "2026-08-12T00:00:00.000Z"; })());
   ok("[component-split] design-system.json's manifest points at the components/ dir when one was written",
     (JSON.parse(fs.readFileSync(path.join(wdir, "design", "design-system.json"), "utf8")) as DesignSystemManifest).files.componentsDir === "design-system/components");
   // …and OMITS the key when it was not. A pointer that resolves to nothing is worse than an absent
@@ -1761,9 +1765,9 @@ void (async () => {
   ok("[write-out] a single-coloured glyph is marked monochrome — safe to swap for currentColor",
     gIdx.monochrome.length === 1 && gIdx.monochrome[0] === "assets/arrow-down.svg");
   ok("[write-out] a two-coloured glyph is NOT, because its colour may be semantic",
-    gIdx.files.find((f) => f.file === "assets/trash.svg")!.monochrome === false);
+    gIdx.files.find((f) => f.file === "assets/trash.svg")?.monochrome === false);
   ok("[write-out] and fill=\"none\" is not counted as a colour",
-    gIdx.files.find((f) => f.file === "assets/trash.svg")!.colors!.length === 2);
+    gIdx.files.find((f) => f.file === "assets/trash.svg")?.colors?.length === 2);
   ok("[write-out] the index says outright not to edit an exported asset in place", /re-pull will overwrite/.test(gIdx.note));
 
   // ------------------------------------------------ variables.json MERGES across single-screen pulls
@@ -1806,7 +1810,7 @@ void (async () => {
   ok("[write-out/vars] each pull's raw slice is kept verbatim beside its screen",
     fs.existsSync(path.join(vdir, "pages", "P", "Job_roles__1_1.vars.json")) && fs.existsSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json")));
   ok("[write-out/vars] a slice file holds ONLY that screen's variables",
-    (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables!.length === 2);
+    (JSON.parse(fs.readFileSync(path.join(vdir, "pages", "P", "Filter__2_2.vars.json"), "utf8")) as TokensDoc).variables?.length === 2);
 
   // A token that resolves differently in two screens is a REAL disagreement between two libraries
   // (finding 69) — the newest wins, but it is recorded rather than silently applied.

@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffDocs, markdown, snapshotPath } from "../design-to-code/design-diff.ts";
 import { check, report } from "./assert.ts";
-import { malformed, manifest, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
+import { malformed, manifest, must, parseAs, readFixture, tokens, variable } from "./fixtures.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
 import { isTextStylesDoc } from "../design-to-code/doc-guards.ts";
 // design-diff --json: the diff result; only its kind/summary/warnings/against/changed are read here.
@@ -34,7 +34,7 @@ const screen = (): FxScreen => ({ name: "Login", id: "1:1", exportedAt: "2026-01
 ] } });
 
 console.log("screen diff:");
-check("identical exports → nothing, even with a new exportedAt/manifest", (() => { const b = screen(); b.exportedAt = "2026-09-21"; b.manifest.nodes = 9; const s = diffScreens(screen(), b).summary; return s.added + s.removed + s.changed + s.reordered! + s.positionOnly! === 0; })());
+check("identical exports → nothing, even with a new exportedAt/manifest", (() => { const b = screen(); b.exportedAt = "2026-09-21"; b.manifest.nodes = 9; const s = diffScreens(screen(), b).summary; return s.added + s.removed + s.changed + must(s.reordered, "summary.reordered") + must(s.positionOnly, "summary.positionOnly") === 0; })());
 check("a text edit is ONE change, categorised, with before → after", (() => {
   const b = screen(); b.tree.children[0].text = "Welcome back";
   const d = diffScreens(screen(), b);
@@ -43,7 +43,8 @@ check("a text edit is ONE change, categorised, with before → after", (() => {
 check("inserting a row reports the row, NOT every node that moved down because of it", (() => {
   const b = screen();
   b.tree.children.splice(1, 0, { id: "9:9", name: "Banner", type: "FRAME", box: { w: 342, h: 40, x: 24, y: 128 }, children: [{ id: "9:10", name: "Banner text", type: "TEXT", text: "New", box: { w: 30, h: 16, x: 30, y: 140 } }] });
-  for (const n of [b.tree.children[2], b.tree.children[2].children![0], b.tree.children[3]]) n.box.y += 56;
+  const cardChildren = must(b.tree.children[2].children, "b.tree.children[2].children");
+  for (const n of [b.tree.children[2], cardChildren[0], b.tree.children[3]]) n.box.y += 56;
   const d = diffScreens(screen(), b);
   return d.added.length === 1 && d.added[0].id === "9:9" && d.changed.length === 0 && d.summary.positionOnly === 3 && d.reordered.length === 0;
 })());
@@ -55,7 +56,8 @@ check("size counts on a FIXED node, not on a hug node (whose size only echoes it
   return d.changed.length === 1 && d.changed[0].id === "1:5" && d.changed[0].fields[0].field === "size" && d.changed[0].fields[0].after === "342×56";
 })());
 check("reordered children and a variant swap are both caught", (() => {
-  const b = screen(); b.tree.children.reverse(); b.tree.children[0].props!.Variant = "secondary";
+  const b = screen(); b.tree.children.reverse();
+  must(b.tree.children[0].props, "b.tree.children[0].props").Variant = "secondary";
   const d = diffScreens(screen(), b);
   return d.reordered.length === 1 && d.reordered[0].after[0] === "Button" && d.changed.some((c) => c.id === "1:5" && c.categories.includes("component"));
 })());
@@ -285,7 +287,7 @@ check("styles.text.json: a real design-system file is recognised and diffs clean
 })());
 check("styles.text.json: a changed field on an existing style is reported, keyed by style key", (() => {
   const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a);
-  b.styles[0].size = b.styles[0].size! + 8;
+  b.styles[0].size = must(b.styles[0].size, "b.styles[0].size") + 8;
   const d = diffStyles(a, b);
   return d.summary.changed === 1 && d.changed[0].key === a.styles[0].key && d.changed[0].fields.some((f) => f.field === "size");
 })());
@@ -298,7 +300,8 @@ check("styles.text.json: a removed style and an added one are both seen", (() =>
 })());
 check("styles.effect.json: an effect array change is a field diff, not a blob", (() => {
   const a = readFix("styles.effect.json", isStyleSheet), b = clone(a);
-  bag(b.styles[0].effects![0]).radius = 999;
+  const effects = must(b.styles[0].effects, "b.styles[0].effects");
+  bag(effects[0]).radius = 999;
   const d = diffStyles(a, b);
   return d.summary.changed === 1 && d.changed[0].fields.some((f) => /effects/.test(f.field));
 })());
@@ -321,7 +324,8 @@ check("hygiene.json: a new warning line is 'added', a resolved one is 'removed' 
   return d.added.length === 1 && d.added[0].includes("Brand New Variable") && d.removed.length === 1 && d.removed[0] === resolved;
 })());
 check("markdown renders styles/hygiene kinds without throwing, and names the right sections", (() => {
-  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a); b.styles[0].size! += 1;
+  const a = readFix("styles.text.json", isTextStylesDoc), b = clone(a);
+  b.styles[0].size = must(b.styles[0].size, "b.styles[0].size") + 1;
   const md1 = markdown(diffStyles(a, b), "styles.text.json");
   const h = readFix("hygiene.json", isHygieneDoc), hb = clone(h); hb.hygiene.push("new line");
   const md2 = markdown(diffHygiene(h, hb), "hygiene.json");

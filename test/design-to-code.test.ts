@@ -88,8 +88,8 @@ check("[fixtures-null] asColor(null) throws a FixtureError ('not a DTCG colourâ€
 
 // ---------- tokens: color hardening ----------
 console.log("tokens â€” color:");
-check("[H2] shorthand #fff -> full color object", (() => { const v = hexToColorValue("#fff")!; return v.hex === "#ffffff" && near(v.components[0], 1) && near(v.components[2], 1); })());
-check("[H4] alpha in `alpha` field, hex fallback stays 6-digit (DTCG 2025.10)", (() => { const v = hexToColorValue("#00000080")!; return v.hex === "#000000" && near(v.alpha, 0.502); })());
+check("[H2] shorthand #fff -> full color object", (() => { const v = must(hexToColorValue("#fff"), "hexToColorValue('#fff')"); return v.hex === "#ffffff" && near(v.components[0], 1) && near(v.components[2], 1); })());
+check("[H4] alpha in `alpha` field, hex fallback stays 6-digit (DTCG 2025.10)", (() => { const v = must(hexToColorValue("#00000080"), "hexToColorValue('#00000080')"); return v.hex === "#000000" && near(v.alpha, 0.502); })());
 check("malformed hex -> null (caller can guard)", hexToColorValue("#12345") === null);
 check("P3 profile -> display-p3", hexToColorValue("#2563eb", "display-p3")?.colorSpace === "display-p3");
 

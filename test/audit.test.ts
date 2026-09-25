@@ -25,11 +25,11 @@ const codes = (res: { findings: AuditFinding[] }, code: FindingCode) => res.find
 const onNode = (res: { findings: AuditFinding[] }, code: FindingCode, id: string) => codes(res, code).some((f) => f.nodeId === id);
 
 console.log("color math:");
-check("parseHex reads 6- and 8-digit hex", parseHex("#ff0000")!.r === 255 && Math.abs(parseHex("#0000001a")!.a - 26 / 255) < 1e-9);
+check("parseHex reads 6- and 8-digit hex", parseHex("#ff0000")?.r === 255 && Math.abs((parseHex("#0000001a")?.a ?? NaN) - 26 / 255) < 1e-9);
 check("parseHex rejects junk", parseHex("red") === null && parseHex(undefined) === null);
-check("contrast black/white = 21:1", Math.abs(contrastRatio(parseHex("#000000")!, parseHex("#ffffff")!) - 21) < 0.01);
-check("contrast #767676 on white ≈ 4.54 (the AA boundary)", Math.abs(contrastRatio(parseHex("#767676")!, parseHex("#ffffff")!) - 4.54) < 0.02);
-check("ΔE of near-identical colors < 3, distinct colors > 3", deltaE(parseHex("#4f46e5")!, parseHex("#4f46e6")!) < 3 && deltaE(parseHex("#4f46e5")!, parseHex("#e54f46")!) > 3);
+check("contrast black/white = 21:1", Math.abs(contrastRatio(must(parseHex("#000000"), "parseHex('#000000')"), must(parseHex("#ffffff"), "parseHex('#ffffff')")) - 21) < 0.01);
+check("contrast #767676 on white ≈ 4.54 (the AA boundary)", Math.abs(contrastRatio(must(parseHex("#767676"), "parseHex('#767676')"), must(parseHex("#ffffff"), "parseHex('#ffffff')")) - 4.54) < 0.02);
+check("ΔE of near-identical colors < 3, distinct colors > 3", deltaE(must(parseHex("#4f46e5"), "parseHex('#4f46e5')"), must(parseHex("#4f46e6"), "parseHex('#4f46e6')")) < 3 && deltaE(must(parseHex("#4f46e5"), "parseHex('#4f46e5')"), must(parseHex("#e54f46"), "parseHex('#e54f46')")) > 3);
 check("controlKind classifies common names", controlKind("Text Field") === "input" && controlKind("Primary Button") === "button" && controlKind("Toggle") === "toggle" && controlKind("Tabs") === "tab" && controlKind("Avatar") === null);
 
 console.log("audit — ios:");
@@ -55,7 +55,7 @@ check("corner smoothing NOT flagged on iOS (native continuous corners)", !onNode
 const formGrid = codes(ios, "off-grid-spacing").find((f) => f.nodeId === "1:5");
 check("off-grid spacing: gap 10 + padding 13 reported on Form", !!formGrid && /gap=10/.test(formGrid.message) && /paddingTop=13/.test(formGrid.message));
 check("auto-layout parent: siblings are NOT treated as a text backdrop", !onNode(ios, "contrast-manual", "1:4"));
-check("on-grid root spacing (16/24/34?) — 34 IS off-grid, reported", onNode(ios, "off-grid-spacing", "1:1") && /paddingBottom=34/.test(codes(ios, "off-grid-spacing").find((f) => f.nodeId === "1:1")!.message));
+check("on-grid root spacing (16/24/34?) — 34 IS off-grid, reported", onNode(ios, "off-grid-spacing", "1:1") && /paddingBottom=34/.test(String(codes(ios, "off-grid-spacing").find((f) => f.nodeId === "1:1")?.message)));
 check("near-duplicate raw colors #4f46e6 not paired with bound #4f46e5 (only unbound are clustered)", codes(ios, "near-duplicate-colors").every((f) => !(f.colors || []).includes("#4f46e5")));
 check("annotations collected verbatim", ios.annotations.some((a) => a.label === "Email must be validated on blur" && a.nodeId === "1:1"));
 
