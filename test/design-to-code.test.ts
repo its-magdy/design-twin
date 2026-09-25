@@ -923,6 +923,19 @@ console.log("tokens — opacity FLOATs are percentages:");
     opKt.warnings.includes("fx/over (mode M): opacity 120 is outside Figma's 0–100 range; clamped to 100 (as Figma does) and written as 1")
     && opKt.warnings.includes("fx/under (mode M): opacity -5 is outside Figma's 0–100 range; clamped to 0 (as Figma does) and written as 0")
     && !opKt.warnings.some((m) => /fx\/half/.test(m)));
+  // The Compose "active mode" hint names the first mode whose NAME differs from the default's (review of
+  // 1a18ecf: picking by id emitted `Light2` here instead of `Dark`). doc-guards.ts accepts repeated mode
+  // names, so a collection like ["Light", "Light", "Dark"] is a reachable input.
+  const dupModes = tokens({ collections: [{ name: "Theme", modes: ["Light", "Light", "Dark"], default: "Light" }], variables: [
+    { name: "fx/gap", type: "FLOAT", collection: "Theme", scopes: ["GAP"], values: { Light: 4, Dark: 8 } }] });
+  const dupKt = toNative(dupModes, "compose").text;
+  check("[modes] Compose hint: with repeated mode names the active mode is still the first DIFFERENTLY named one (Dark, not the second Light)",
+    dupKt.includes("CompositionLocalProvider(LocalThemeTokens provides ThemeTokensDark) { … }"));
+  const sameModes = tokens({ collections: [{ name: "Theme", modes: ["Light", "Light"], default: "Light" }], variables: [
+    { name: "fx/gap", type: "FLOAT", collection: "Theme", scopes: ["GAP"], values: { Light: 4 } }] });
+  const sameKt = toNative(sameModes, "compose").text;
+  check("[modes] Compose hint: every mode named like the default (formerly a TypeError) falls back to the second mode by id",
+    sameKt.includes("CompositionLocalProvider(LocalThemeTokens provides ThemeTokensLight2) { … }"));
 }
 
 // ---------- tokens: COMPOSED colour variables (Figma Update 139: colour + separate opacity, one or both aliases) ----------

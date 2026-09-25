@@ -304,9 +304,11 @@ function compose(cols: NativeCollection[], opts?: NativeOpts): string {
     }
     L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
-    // First non-default mode. Mode ids are unique (modeIds above), so with 2+ modes one of m0/m1 is not the
-    // default; with unique mode names this is the old `modes.find((m) => m.name !== c.default)`.
-    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([(m0.id !== c.defaultId ? m0 : m1).id])}) { … }`,
+    // The first mode whose NAME is not the default's (the hint names a theme the way a designer would). If
+    // every mode shares the default's name — a shape doc-guards.ts does not reject — fall back to the
+    // second mode by id (ids are unique, modeIds above) instead of the TypeError this used to be.
+    const active = c.modes.find((m) => m.name !== c.default) ?? m1;
+    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([active.id])}) { … }`,
       `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`);
   }
   return L.join("\n") + "\n";
