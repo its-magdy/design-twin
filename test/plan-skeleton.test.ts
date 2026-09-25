@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { visibility, buildTokens } from "../design-to-code/plan-skeleton.ts";
 import { check, report } from "./assert.ts";
-import { malformed, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
+import { malformed, must, node, parseAs, readFixture, screenExport, tokens } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { isPlan } from "../design-to-code/doc-guards.ts";
 import type { DocGuard } from "../design-to-code/doc-guards.ts";
@@ -52,7 +52,7 @@ check(`51 visible instances (scripts-test/out/components/mapping.md: 51) — got
 check(`0 hidden ids in anchors{} (of ${hid.size} hidden nodes in the export)`, hid.size === 129 && Object.keys(plan.anchors).filter((id) => hid.has(id)).length === 0);
 check("anchors{} holds EVERY visible node — 254 = 383 nodes − 129 hidden — each with mapModule empty",
   Object.keys(plan.anchors).length === 254 && Object.values(plan.anchors).every((a) => a.mapModule === "" && a.name !== undefined && a.type));
-check("0 hidden instances in components[] (the export has 112 instances, 61 of them hidden)", plan.components.every((c) => !hid.has(c.nodeId!)));
+check("0 hidden instances in components[] (the export has 112 instances, 61 of them hidden)", plan.components.every((c) => !hid.has(must(c.nodeId, "component.nodeId"))));
 check("hidden[] lists the roots of the hidden subtrees, and they account for all 129 hidden nodes",
   plan.hidden.length > 0 && plan.hidden.every((h) => hid.has(h.id)) && plan.hidden.reduce((a, h) => a + h.nodes, 0) === 129);
 check("stderr states the counts", /45 bound token\(s\) \(33 on visible nodes\), 51 visible instance\(s\), 254 visible node anchor slot\(s\), 129 hidden node\(s\) excluded/.test(r.stderr));
@@ -87,7 +87,7 @@ check("screenName / nodeId / file are written; route is left for the builder",
 check("--route fills it", planOf(run([screen(JR), vars(JR), DS, "--route", "/job-roles"]).stdout).route === "/job-roles");
 
 console.log("tokens[] — keyed by Figma key, valued in the frame's own mode:");
-const tok = (n: string) => plan.tokens.find((t) => t.figmaName === n)!;
+const tok = (n: string) => must(plan.tokens.find((t) => t.figmaName === n), `plan.tokens with figmaName '${n}'`);
 check("`Space 4` is key e26d506e… = 24 (the screen's own variable — NOT the 16 a name lookup in the merged file gives)",
   /^e26d506e/.test(String(tok("Space 4").key)) && tok("Space 4").value === 24 && tok("Space 4").kind === "spacing");
 check("an aliased colour resolves through its alias in the frame's mode (Backgrounds/Side menu → #121319, Dark)",
@@ -112,7 +112,7 @@ check("each row carries key/setKey/name/variant/props and an empty mapModule/ver
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-skel-"));
   const map = path.join(dir, "codeconnect.local.json");
-  fs.writeFileSync(map, JSON.stringify({ version: 1, components: { [first.key!]: { figma: { key: first.key, name: "Component 1" }, code: { module: "app/src/layout/Sidebar.tsx", export: "Sidebar" }, status: "active" } } }));
+  fs.writeFileSync(map, JSON.stringify({ version: 1, components: { [must(first.key, "first.key")]: { figma: { key: first.key, name: "Component 1" }, code: { module: "app/src/layout/Sidebar.tsx", export: "Sidebar" }, status: "active" } } }));
   const p = planOf(run([screen(JR), vars(JR), DS, "--map", map]).stdout);
   check("--map: an instance whose key is mapped in codeconnect.local.json gets that module pre-filled",
     p.components[0].mapped?.module === "app/src/layout/Sidebar.tsx" && p.components[0].mapModule === "app/src/layout/Sidebar.tsx");
@@ -125,8 +125,9 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   const out = path.join(dir, "plan.json");
   run([screen(JR), vars(JR), DS, "--out", out]);
   const filled = read(out, isSkeletonPlan);
-  filled.tokens.find((t) => t.figmaName === "Space 4")!.codeToken = "spacing-figma-space-4";
-  filled.tokens.find((t) => t.figmaName === "Space 4")!.verdict = "exact";
+  const filledSpace4 = must(filled.tokens.find((t) => t.figmaName === "Space 4"), "filled.tokens 'Space 4'");
+  filledSpace4.codeToken = "spacing-figma-space-4";
+  filledSpace4.verdict = "exact";
   filled.components[0].mapModule = "app/src/layout/Sidebar.tsx";
   filled.anchors["7314:87192"].mapModule = "app/src/features/job-roles/screens/JobRolesScreen.tsx";
   filled.files = ["app/src/features/job-roles/screens/JobRolesScreen.tsx"];
@@ -136,7 +137,7 @@ check("byte-identical output on the same input (no timestamps of its own)", run(
   const again = run([screen(JR), vars(JR), DS, "--out", out]);
   const m = read(out, isSkeletonPlan);
   check("re-running --out MERGES: every filled field and every top-level field it does not own survives",
-    again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")!.codeToken === "spacing-figma-space-4"
+    again.status === 0 && /merged into/.test(again.stderr) && m.tokens.find((t) => t.figmaName === "Space 4")?.codeToken === "spacing-figma-space-4"
     && m.components[0].mapModule === "app/src/layout/Sidebar.tsx" && m.anchors["7314:87192"].mapModule?.endsWith("JobRolesScreen.tsx") === true
     && m.files?.length === 1 && m.route === "/job-roles" && m.verification?.mode === "static-only" && m.tokens.length === 45);
   fs.writeFileSync(out, "{ not json");

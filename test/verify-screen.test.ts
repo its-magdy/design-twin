@@ -58,16 +58,16 @@ console.log("verify-screen — the spec as data:");
     ]),
   ]);
   ok("[expect] one row per node that actually carries a checkable value", exp.nodes.length === 2);
-  const title = exp.nodes.find((n) => n.nodeId === "2:1")!;
+  const title = must(exp.nodes.find((n) => n.nodeId === "2:1"), "exp.nodes '2:1'");
   ok("[expect] a text node's spec carries family/size/weight/line-height/colour",
     title.fontFamily === "Poppins" && title.fontSize === 18 && title.fontWeight === 500 && title.lineHeight === 22 && title.color === "#ffffffff");
   ok("[expect] a TEXT node's fill is its COLOUR, never a background", title.backgroundColor === undefined);
-  const card = exp.nodes.find((n) => n.nodeId === "2:2")!;
+  const card = must(exp.nodes.find((n) => n.nodeId === "2:2"), "exp.nodes '2:2'");
   ok("[expect] a frame's fill IS a background", card.backgroundColor === "#121319ff");
   ok("[expect] radius, gap, padding and size come through as numbers",
     card.borderRadius === 20 && card.gap === 16 && card.padding?.join(",") === "32,32,32,32" && card.width === 400);
   ok("[expect] a field the export does not state is ABSENT, not defaulted", !("fontWeight" in card) && !("color" in card));
-  ok("[expect] the file says out loud not to retype these numbers", /do NOT retype/i.test(exp.note!));
+  ok("[expect] the file says out loud not to retype these numbers", /do NOT retype/i.test(must(exp.note, "exp.note")));
 }
 {
   // primaryAxisAlignItems SPACE_EVENLY/SPACE_AROUND distribute the frame's free space along the
@@ -77,14 +77,14 @@ console.log("verify-screen — the spec as data:");
     doc([{ type: "FRAME", id: "3:1", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-evenly" }, box: { w: 300, h: 40 },
       children: [{ type: "FRAME", id: "3:11", name: "a" }, { type: "FRAME", id: "3:12", name: "b" }] }]),
   ]);
-  const evenlyRow = evenlyExp.nodes.find((n) => n.nodeId === "3:1")!;
+  const evenlyRow = must(evenlyExp.nodes.find((n) => n.nodeId === "3:1"), "evenlyExp.nodes '3:1'");
   ok("[expect] space-evenly: the stored gap is excluded, not treated as a real gap",
     !("gap" in evenlyRow) && evenlyExp.notComparable.some((n) => n.nodeId === "3:1" && n.field === "gap"));
   const aroundExp = buildExpectation([
     doc([{ type: "FRAME", id: "3:2", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-around" }, box: { w: 300, h: 40 },
       children: [{ type: "FRAME", id: "3:21", name: "a" }, { type: "FRAME", id: "3:22", name: "b" }] }]),
   ]);
-  const aroundRow = aroundExp.nodes.find((n) => n.nodeId === "3:2")!;
+  const aroundRow = must(aroundExp.nodes.find((n) => n.nodeId === "3:2"), "aroundExp.nodes '3:2'");
   ok("[expect] space-around: the stored gap is excluded, not treated as a real gap",
     !("gap" in aroundRow) && aroundExp.notComparable.some((n) => n.nodeId === "3:2" && n.field === "gap"));
 }
@@ -122,17 +122,17 @@ console.log("verify-screen — the mismatches three 'pass' verdicts let through:
     { nodeId: "2:3", styles: { backgroundColor: "#121319", borderRadius: 20 } },
     { nodeId: "2:4", styles: { backgroundColor: "rgba(0,0,0,0)", borderRadius: 100 } },
   ]));
-  const at = (id: string, field: string) => rep.deltas.find((d) => d.nodeId === id && d.field === field)!; // ts-port: callers guard with !!at(…) first
-  ok("[diff] a heading rendered two sizes up is caught", !!at("2:1", "font-size") && at("2:1", "font-size").expected === 18 && at("2:1", "font-size").actual === 20);
+  const at = (id: string, field: string) => rep.deltas.find((d) => d.nodeId === id && d.field === field); // callers guard with !!at(…) first, then read via ?.
+  ok("[diff] a heading rendered two sizes up is caught", !!at("2:1", "font-size") && at("2:1", "font-size")?.expected === 18 && at("2:1", "font-size")?.actual === 20);
   ok("[diff] …and so is its weight, because 500 vs 600 is never a rendering artifact", !!at("2:1", "font-weight"));
   ok("[diff] a wrong-but-plausible colour token is caught exactly, with no perceptual slack", !!at("2:2", "color"));
   ok("[diff] radius 20 against a spec of 12 is caught", !!at("2:3", "border-radius"));
   ok("[diff] a chip whose fill was never applied is caught as a transparent background",
-    !!at("2:4", "background") && at("2:4", "background").actual === "transparent");
+    !!at("2:4", "background") && at("2:4", "background")?.actual === "transparent");
   ok("[diff] the mismatch names the TOKEN behind the value, so a reader knows where to look",
-    at("2:4", "background").token === "Success/green BG");
+    at("2:4", "background")?.token === "Success/green BG");
   ok("[diff] font/colour misses are graded high, geometry medium",
-    at("2:1", "font-size").severity === "high" && at("2:3", "border-radius").severity === "medium");
+    at("2:1", "font-size")?.severity === "high" && at("2:3", "border-radius")?.severity === "medium");
   ok("[diff] the verdict is FAIL, and it is computed, not asserted", rep.verdict === "fail");
   ok("[diff] and the report says in words why it is not a pass", rep.why.some((w) => /high-severity/.test(w)));
 }
@@ -162,7 +162,7 @@ console.log("verify-screen — text:");
   const t = (id: string) => rep.deltas.filter((d) => d.nodeId === id && d.field === "text");
   ok("[text] a copy change is a HIGH-severity delta", t("2:1").length === 1 && t("2:1")[0].severity === "high");
   ok("[text] a case-only difference is LOW and names text-transform as the likely cause",
-    t("2:2").length === 1 && t("2:2")[0].severity === "low" && /text-transform/.test(t("2:2")[0].note!));
+    t("2:2").length === 1 && t("2:2")[0].severity === "low" && /text-transform/.test(must(t("2:2")[0].note, "t('2:2')[0].note")));
   ok("[text] a designed non-breaking space is surfaced rather than silently normalised",
     rep.deltas.some((d) => d.nodeId === "2:3" && /non-breaking space/.test(d.note || "")));
   ok("[text] …and printed as an ESCAPE, so the row is not two identical-looking strings",
@@ -206,7 +206,7 @@ console.log("verify-screen — a screen can match every pixel and still be a dea
         components: [{ setName: "Date range" }, { setName: "Segmented Control" }, { setName: "Button" }],
         interactions: [{ nodeId: "3:3", trigger: "on_click", ok: false, detail: "clicking opened nothing" }],
       }));
-      return r.verdict === "fail" && r.interactions[0].result === "fail" && /opened nothing/.test(r.interactions[0].detail!);
+      return r.verdict === "fail" && r.interactions[0].result === "fail" && /opened nothing/.test(must(r.interactions[0].detail, "r.interactions[0].detail"));
     })());
 }
 
@@ -298,7 +298,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     () => jrExp.instances.length === 51 && gpExp.instances.length === 42);
   ok("[lt3-hidden] the expectation lists the hidden ids so --compare can refuse credit for them", () => jrExp.hidden.ids.length === jrHidden.size && gpExp.hidden.ids.length === gpHidden.size);
   ok("[lt3-determinism] --expect stays byte-deterministic on the real export (finding 154)",
-    () => JSON.stringify(buildExpectation([{ doc: jrDoc, label: "positions___7314_87192" }])) === JSON.stringify(jrExp) && !/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?!\.000Z)/.test(JSON.stringify(jrExp).replace(jrDoc.exportedAt!, "")));
+    () => JSON.stringify(buildExpectation([{ doc: jrDoc, label: "positions___7314_87192" }])) === JSON.stringify(jrExp) && !/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?!\.000Z)/.test(JSON.stringify(jrExp).replace(must(jrDoc.exportedAt, "jrDoc.exportedAt"), "")));
 
   console.log("verify-screen — livetest-3: --compare filters hidden layers too (157/187/188):");
   const gpRep = compare(gpExp, gpMeasured);
@@ -320,10 +320,10 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const asRadius = (r: unknown): MeasuredStyles["borderRadius"] => (typeof r === "number" || typeof r === "string" ? r : Array.isArray(r) && r.every((x) => typeof x === "number") ? r.map(Number) : undefined);
   for (const n of renamed.nodes || []) { if ("radius" in n) { const br = asRadius(n.radius); if (br === undefined) delete n.borderRadius; else n.borderRadius = br; delete n.radius; } }
   const jrRad = compare(jrExp, renamed);
-  const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`)!; // ts-port: callers guard with rd(…) && first
+  const rd = (id: string, corner: string) => jrRad.deltas.find((d) => d.nodeId === id && d.field === `border-radius (${corner})`); // callers guard with rd(…) && first, then read via ?.
   ok("[lt3-radius] with the canonical key, the four dropped Job Roles radii are deltas: 20173:142077 tl/tr and 20173:142137 bl/br, 12 → 0",
-    () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c).expected === 12 && rd("20173:142077", c).actual === 0) &&
-    ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c).expected === 12 && rd("20173:142137", c).actual === 0));
+    () => ["top-left", "top-right"].every((c) => rd("20173:142077", c) && rd("20173:142077", c)?.expected === 12 && rd("20173:142077", c)?.actual === 0) &&
+    ["bottom-left", "bottom-right"].every((c) => rd("20173:142137", c) && rd("20173:142137", c)?.expected === 12 && rd("20173:142137", c)?.actual === 0));
   ok("[lt3-radius] a bottom-only radius ({bl,br}) is specified at all — the old code read radius.tl only",
     () => JSON.stringify(jrExp.nodes.find((n) => n.nodeId === "20173:142137")?.radiusCorners) === JSON.stringify({ tl: 0, tr: 0, br: 12, bl: 12 }));
   ok("[lt3-radius] the Global Policies card that ships 16 where the design says 12 is caught (finding 183)",
@@ -335,11 +335,11 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const optNum = (v: unknown): boolean => v === undefined || typeof v === "number";
   const pos = load("prefix-positions.json", (x: unknown): x is Positions => isJsonObject(x) && Object.values(x).every((p) => isJsonObject(p) && optNum(p.y) && optNum(p.height) && optNum(p.textBoxX)));
   ok("[lt3-xy] FIELDS carries x and y", () => FIELDS.some((f) => f.key === "x") && FIELDS.some((f) => f.key === "y"));
-  ok("[lt3-xy] the expectation states its coordinate convention", () => /FRAME-RELATIVE/.test(jrExp.coordinates!) && jrExp.frame.w === 1440 && jrExp.frame.h === 1236);
+  ok("[lt3-xy] the expectation states its coordinate convention", () => /FRAME-RELATIVE/.test(must(jrExp.coordinates, "jrExp.coordinates")) && jrExp.frame.w === 1440 && jrExp.frame.h === 1236);
   {
     const m = clone(jrMeasured);
     const pg = m.nodes?.find((n) => n.nodeId === "20173:142142");
-    Object.assign(pg!, { y: pos["20173:142142"].y, height: pos["20173:142142"].height });
+    Object.assign(must(pg, "pg node 20173:142142"), { y: pos["20173:142142"].y, height: pos["20173:142142"].height });
     const r = compare(jrExp, m);
     const place = r.deltas.find((d) => d.nodeId === "20173:142142" && d.field === "placement");
     ok("[lt3-xy] Job Roles pre-fix: the pagination bar is reported OUTSIDE the frame, high severity (bottom edge 1366 > 1236)",
@@ -349,7 +349,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   {
     const m = clone(gpMeasured);
     const st = m.nodes?.find((n) => n.nodeId === "18580:60861");
-    st!.styles!.textBox = { ...ifDefined("x", pos["18580:60861"].textBoxX) };
+    const stNode = must(st, "st node 18580:60861");
+    must(stNode.styles, "st.styles").textBox = { ...ifDefined("x", pos["18580:60861"].textBoxX) };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
     ok("[lt3-xy] Global Policies pre-fix: the Status header is +18.94px right of the design (1296.81 → 1315.75)",
@@ -374,7 +375,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     // The row measured hovered but NOT repainting (#121319 still): a real background delta, and its
     // token must be the fill's — the old code said "Space 4".
     const m = clone(jrMeasured);
-    m.nodes!.find((n) => n.nodeId === "20173:142096")!.states = { hover: { backgroundColor: "#121319ff" } };
+    must(must(m.nodes, "m.nodes").find((n) => n.nodeId === "20173:142096"), "m.nodes '20173:142096'").states = { hover: { backgroundColor: "#121319ff" } };
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142096" && x.field === "background");
     ok("[lt3-token] a background delta on 20173:142096 carries token 'Backgrounds/Row Hover', not 'Space 4'", () => !!d && d.token === "Backgrounds/Row Hover" && d.measuredIn === "hover");
   }
@@ -390,7 +391,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     () => jrRep.interactions.some((i) => i.nodeId === "I20173:137670;2006:22479" && i.result === "fail") &&
     ["20173:142081", "20173:142086", "20173:142091"].every((id) => jrRep.interactions.some((i) => i.nodeId === id && i.result === "fail")) && jrRep.verdict === "fail");
   ok("[lt3-int] ok:true with no selector is not a pass (finding 187's evidence rule)",
-    () => gpRep.interactions[0].nodeId === "18580:60879" && gpRep.interactions[0].result === "not-probed" && /without evidence/.test(gpRep.interactions[0].detail!));
+    () => gpRep.interactions[0].nodeId === "18580:60879" && gpRep.interactions[0].result === "not-probed" && /without evidence/.test(must(gpRep.interactions[0].detail, "gpRep.interactions[0].detail")));
   ok("[lt3-int] ok:true naming the selector it drove and a match count ≥1 is a pass",
     () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1" }] }); return r.interactions[0].result === "pass" && r.interactions[0].selector && r.coverage.interactionsPassed === 1; })());
   ok("[lt3-int] a selector that matched 0 elements is not a pass",
@@ -470,7 +471,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     // A shared AppShell tagged with the OTHER frame's instance ids (finding 185): the real Job Roles
     // measurement of the sidebar item, fed to Global Policies.
     const jrItem = jrMeasured.nodes?.find((n) => n.nodeId === "I10970:111588;1910:23337");
-    const m = clone(gpMeasured); m.nodes?.push(clone(jrItem!));
+    const m = clone(gpMeasured); m.nodes?.push(clone(must(jrItem, "jrItem (I10970:111588;1910:23337)")));
     const r = compare(gpExp, m);
     ok("[lt3-comp] one implementation, two frames: I10970:111588;1910:23337 counts for I10970:109860;1910:23337 via the component path",
       () => r.coverage.nodesMatchedByComponentPath >= 1 && r.coverage.instanceSetsWithEvidence > gpRep.coverage.instanceSetsWithEvidence);
@@ -481,7 +482,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     // that draws the 380x36 field. The real input measurement, attached to the Text Input frame's id.
     const m = clone(jrMeasured);
     const input = m.nodes?.find((n) => n.nodeId === "I20173:142047;885:2724");
-    m.nodes?.push(Object.assign(clone(input!), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
+    m.nodes?.push(Object.assign(clone(must(input, "input (I20173:142047;885:2724)")), { nodeId: "I20173:142047;885:2724;880:3724", tag: "input" }));
     const r = compare(jrExp, m);
     ok("[lt3-leaf] 170: a FRAME's id on a leaf <input> is not graded as the frame (no size/fill/radius/padding deltas), and says why", () =>
       r.deltas.filter((d) => d.nodeId === "I20173:142047;885:2724;880:3724").length === 0 &&
@@ -491,10 +492,10 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   console.log("verify-screen — livetest-3: text and pseudo-elements (163/177):");
   {
     const m = clone(jrMeasured);
-    const th = m.nodes?.find((n) => n.nodeId === "20173:142078")!;
+    const th = must(m.nodes?.find((n) => n.nodeId === "20173:142078"), "m.nodes '20173:142078'");
     th.text = "Job Role▲";
     const d = compare(jrExp, m).deltas.find((x) => x.nodeId === "20173:142078" && x.field === "text");
-    ok("[lt3-text] 'Job Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(d.note!));
+    ok("[lt3-text] 'Job Role▲' (a th with a sort caret) is compared — low, naming the extra glyph, not a copy change", () => !!d && d.severity === "low" && /▲/.test(must(d.note, "d.note")));
     th.text = null;
     ok("[lt3-text] text: null from a probe that skips elements with children is a named gap", () => compare(jrExp, m).fieldsNotMeasured.some((f) => f.nodeId === "20173:142078" && /text: null/.test(f.why)));
   }

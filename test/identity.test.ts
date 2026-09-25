@@ -16,6 +16,7 @@ import path from "node:path";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { ok, report } from "./assert.ts";
+import { must } from "./fixtures.ts";
 import type {
   VariablesDoc, Variable, VariableConflict, ComponentsCatalog, ComponentPropDef, IrNode, CrossCheckReport,
   ComponentProposal, CodeConnectMap, CrossCheckCoverage,
@@ -65,7 +66,7 @@ console.log("tokens.js on the merged variables.json:");
       && /positions___7314_87192/.test(warnings) && /Create_Activity_Type__18411_84111/.test(warnings) && !/later definition wins/.test(warnings));
   ok("[44] tokens.css and tokens.dtcg.json keep both too, and the DTCG leaf carries its Figma key",
     /--Space-4-e26d506e: 24px;/.test(css) && /--Space-4-64928e3a: 16px;/.test(css)
-      && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions!["figma.com"].key === K24);
+      && !!dtcg["Space-4-e26d506e"] && dtcg["Space-4-e26d506e"].$extensions?.["figma.com"].key === K24);
   ok("[94] `Space 3` (16) and `(Space 3)` (12) are two reachable properties in theme.css, not one",
     /--spacing-figma-space-3: 16px;/.test(theme) && /--spacing-figma-space-3-a96c665b: 12px;/.test(theme));
   ok("[94] and the run WARNS about that pair (it used to fold them silently)", /'Space 3', '\(Space 3\)'/.test(warnings) && /a96c665b/.test(warnings));
@@ -73,7 +74,7 @@ console.log("tokens.js on the merged variables.json:");
     (theme.match(/--spacing-figma-space-2(-[a-z0-9]+)?: /g) || []).length === 1 && /share the name 'Space 2'.*resolve identically/.test(warnings));
 
   // Order must not decide anything: the old emitters kept "the later one".
-  const rev = clone(read<VariablesDoc>("variables.json")); rev.variables!.reverse();
+  const rev = clone(read<VariablesDoc>("variables.json")); must(rev.variables, "rev.variables").reverse();
   const revDir = tmp(); fs.writeFileSync(path.join(revDir, "v.json"), JSON.stringify(rev));
   node("tokens.ts", [path.join(revDir, "v.json"), revDir, "--web", "tailwind", "--also-generic"]);
   const decls = (t: string) => new Set((t.match(/^ {2}--[^\n]+$/gm) || []));
@@ -109,14 +110,14 @@ console.log("design-diff.js — tokens are keyed by Figma key:");
 {
   const dd = await tryImport<DesignDiffModule>(path.join(D2C, "design-diff.ts"));
   const base = read<VariablesDoc>("variables.json");
-  const bump = (key: string, f: (v: Variable) => void) => { const d = clone(base); for (const v of d.variables!) if (v.key === key) f(v); return d; };
+  const bump = (key: string, f: (v: Variable) => void) => { const d = clone(base); for (const v of must(d.variables, "d.variables")) if (v.key === key) f(v); return d; };
   const d1 = dd && dd.diffTokens(base, bump(K24, (v) => { v.values = { "Mode 1": 25 }; }));
   ok("[211] changing ONLY the 24-valued Space 4 reports exactly one change, named with its key",
     !!d1 && d1.changed.length === 1 && /e26d506e/.test(d1.changed[0].name) && d1.changed[0].modes[0].before === "24" && d1.changed[0].modes[0].after === "25");
   const d2 = dd && dd.diffTokens(base, bump(K16, (v) => { v.values = Object.assign({}, v.values, { Desktop: 17 }); }));
   ok("[211] a change to the OTHER Space 4 is seen too (it used to be shadowed)",
     !!d2 && d2.changed.length === 1 && /64928e3a/.test(d2.changed[0].name) && d2.changed[0].modes[0].mode === "Desktop");
-  const rev = clone(base); rev.variables!.reverse();
+  const rev = clone(base); must(rev.variables, "rev.variables").reverse();
   const d3 = dd && dd.diffTokens(base, rev);
   ok("[211] re-ordering the rows reports NOTHING (it used to report a false 24 → 16)", !!d3 && d3.summary.added + d3.summary.removed + d3.summary.changed === 0);
 }
@@ -126,9 +127,10 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
 {
   const vm = await tryImport<VariablesMergeModule>(path.join(SRC, "bridge", "src", "variables-merge.ts"));
   const merged = read<MergedVariablesDoc>("variables.json");
+  const vmMod = must(vm, "variables-merge module (tryImport)");
   let acc: MergedVariablesDoc | null = null;
-  for (const s of merged._slices) acc = vm!.mergeVariablesDoc(acc, read<VariablesDoc>(s.file!.replace(/\.json$/, ".vars.json")), { screen: s.screen, ...(s.file === undefined ? {} : { file: s.file }), at: s.at }).doc;
-  const doc = acc!;
+  for (const s of merged._slices) acc = vmMod.mergeVariablesDoc(acc, read<VariablesDoc>(must(s.file, `slice '${s.screen}' file`).replace(/\.json$/, ".vars.json")), { screen: s.screen, ...(s.file === undefined ? {} : { file: s.file }), at: s.at }).doc;
+  const doc = must(acc, "merged variables doc (acc)");
   // a same-name conflict by name (a value-only conflict of that name is not the record these checks want)
   const sameName = (c: VariableConflict | undefined) => (c && c.kind === "same-name" ? c : undefined);
   const space4 = sameName((doc._conflicts || []).find((c) => c.name === "Space 4"));
@@ -136,8 +138,8 @@ console.log("variables-merge.js — same name, different key, is a conflict:");
   ok("[21] `_conflicts` is no longer empty: the two `Space 4` are recorded, both keys, both values",
     !!space4 && space4.kind === "same-name" && space4.sameValue === false && space4.variants.map((v) => v.key).sort().join() === [K16, K24].sort().join());
   ok("[21] …with the screens each came from (64928e3a only from the two Create Activity Type pulls)",
-    !!space4 && space4.variants.find((v) => v.key === K16)!.screens.join() === "Create_Activity_Type__18411_84111,Create_Activity_Type__18411_84502"
-      && space4.variants.find((v) => v.key === K24)!.screens.includes("positions___7314_87192"));
+    !!space4 && space4.variants.find((v) => v.key === K16)?.screens.join() === "Create_Activity_Type__18411_84111,Create_Activity_Type__18411_84502"
+      && (space4.variants.find((v) => v.key === K24)?.screens.includes("positions___7314_87192") ?? false));
   ok("[21] and mirrored into `hygiene`, the other place both skills say to read",
     doc.hygiene.some((h) => /CONFLICT/.test(h) && /'Space 4'/.test(h) && /e26d506e/.test(h) && /64928e3a/.test(h)));
   const space2 = sameName((doc._conflicts || []).find((c) => c.name === "Space 2"));
@@ -177,7 +179,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
       blockerOn(res, "catalog-rekeyed") && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
     ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
     ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
-      refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog!.id === r.match)) && props.every((p) => refRows[p.name] && refRows[p.name].match === p.catalog!.id));
+      refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => refRows[p.name] && refRows[p.name].match === p.catalog?.id));
     ok(`[226] ${k}: the same ${refResidual.length}-name residual, with the same first reason`,
       (res.componentResidual || []).length === refResidual.length &&
         refResidual.every(([n, r]) => (res.componentResidual || []).some((x) => x.name === n && x.reasons[0] === r.firstReason)));
@@ -221,7 +223,7 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
   const r2 = node("cross-check.ts", [path.join(FX, POS + ".json"), "--design-system", ds, "--json"]);
   let res2: Partial<CrossCheckReport> = {}; try { res2 = JSON.parse(r2.stdout) as CrossCheckReport; } catch (e) { /* stays empty */ }
   ok("[226] control: when the keys DO match, it is key coverage, not a re-key proposal",
-    Array.isArray(res2.findings) && !res2.findings.some((f) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && res2.coverage!.matchedByLocalKey > 0);
+    Array.isArray(res2.findings) && !res2.findings.some((f) => f.code === "catalog-rekeyed" || f.code === "catalog-covers-nothing") && (res2.coverage?.matchedByLocalKey ?? 0) > 0);
 }
 
 // ------------------------------------------------------------------ map-bootstrap / drift-lint (226, 103)
@@ -241,12 +243,12 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const m: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   const btn: Pick<ComponentProposal, "instanceKeys" | "catalog"> = (rep.componentProposals || []).find((p) => p.name === "Button") || { instanceKeys: [], catalog: null };
   ok("[226] stubs ONLY the 3 confirmed, filed under the screen's own instance key, pointing at the catalog key",
-    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog!.key);
+    yes.status === 0 && Object.keys(m.components).length === 3 && !!m.components[btn.instanceKeys[0]] && m.components[btn.instanceKeys[0]].figma.key === btn.catalog?.key);
   ok("[226] the stub map is schema-valid", node("map-validate.ts", [map]).status === 0);
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", map]);
   const m2: Pick<CodeConnectMap, "components"> = fs.existsSync(map) ? JSON.parse(fs.readFileSync(map, "utf8")) as CodeConnectMap : { components: {} };
   ok("[226] a later plain map-bootstrap keeps the confirmed entry under the instance key (it would otherwise unmap the screen again)",
-    !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog!.key!]);
+    !!m2.components[btn.instanceKeys[0]] && !m2.components[btn.catalog?.key ?? ""]);
   const dl = node("drift-lint.ts", [map, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
   ok("[226] drift-lint now resolves those instances through the map (screen coverage > 0)", /SCREEN COVERAGE: [1-9]\d*\//.test(dl.stderr));
 

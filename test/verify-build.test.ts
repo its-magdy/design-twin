@@ -16,7 +16,7 @@ import { build, ENTRIES } from "../claude-plugin/build-scripts.js";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
 import type { CodeConnectMap, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { codeMap, parseAs, readFixture } from "./fixtures.ts";
+import { codeMap, must, parseAs, readFixture } from "./fixtures.ts";
 import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isCodeConnectMap } from "../design-to-code/map-validate.ts";
@@ -478,13 +478,13 @@ console.log("P2b [131] a reused component resolves by module path, not by substr
     "../../../components/SquareButton": "app/src/components/SquareButton.tsx", "../../../components/DataTable": "app/src/components/DataTable.tsx",
     "../../../components/Icon": "app/src/components/Icon.tsx", "../../../components/Modal": "app/src/components/Modal.tsx" };
   let rewritten = 0;
-  for (const c of plan.components!) if (c.mapModule && repo[c.mapModule]) { c.mapModule = repo[c.mapModule]; rewritten++; }
+  for (const c of must(plan.components, "plan.components")) if (c.mapModule && repo[c.mapModule]) { c.mapModule = repo[c.mapModule]; rewritten++; }
   plan.files = ["app/src/features/global-policies/screens/GlobalPoliciesScreen.tsx"];
   const root = liveProject({ [GP]: plan });
   const r = checkLive(root, GP);
   check(`[131] the live Global Policies plan with ${rewritten} honest repo-path mapModules: no import warning, and nothing about components blocks`,
     rewritten === 6 && !r.warnings.some((w) => /imports that module/.test(w)) && !r.blocking.some((b) => /component/.test(b)));
-  plan.components![2].mapModule = "app/src/components/Tooltip.tsx";
+  must(plan.components, "plan.components")[2].mapModule = "app/src/components/Tooltip.tsx";
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(plan));
   const r2 = checkLive(root, GP);
   check("[131] a genuinely un-imported reuse is a WARNING, not a block", r2.warnings.some((w) => /Tooltip/.test(w)) && !r2.blocking.some((b) => /Tooltip/.test(b)));
@@ -510,7 +510,7 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
   const b = r.blocking.filter((m) => /no anchor in the plan/.test(m));
   check("[anchors] the live Global Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(b[0]) && /^3 visible/.test(b[0]));
   const fixed = fxPlan(GP);
-  fixed.anchors!["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
+  must(fixed.anchors, "fixed.anchors")["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));
   check("[anchors] …and `{omitted: \"<why>\"}` on it clears the block", checkLive(root, GP).blocking.length === 0);
 }
@@ -537,7 +537,7 @@ console.log("P2b [155/189] acceptance 6 — the live plans and reports: neither 
     && fs.readFileSync(planFile(JR), "utf8") === JSON.stringify(after.jr, null, 2) + "\n");
   // make GP pass its hook: status must STILL not be verified, because its report says fail
   const gpFixed = readFixture(planFile(GP), isPlan);
-  gpFixed.anchors!["1359:21457"] = { omitted: "duplicate footer" };
+  must(gpFixed.anchors, "gpFixed.anchors")["1359:21457"] = { omitted: "duplicate footer" };
   fs.writeFileSync(planFile(GP), JSON.stringify(gpFixed, null, 2));
   spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: root }), encoding: "utf8" });
   const gp2 = st(GP);
@@ -577,7 +577,7 @@ console.log("P2b end to end — plan-skeleton.js writes the plan, the hook check
   check("…its header is complete except the route, and its unfilled token rows are ONE warning, not 33",
     /plan header is missing `route`/.test(r1.stderr) && (r1.stderr.match(/have no token and no recorded decision/g) || []).length === 1 && /33 token row\(s\)/.test(r1.stderr));
   const p = readFixture(path.join(root, planRel), isPlan);
-  p.anchors!["7314:87192"].mapModule = "app/src/layout/Header.tsx";
+  must(p.anchors, "p.anchors")["7314:87192"].mapModule = "app/src/layout/Header.tsx";
   p.files = ["app/src/layout/Header.tsx"];
   p.route = "/job-roles";
   fs.writeFileSync(path.join(root, planRel), JSON.stringify(p, null, 2));
@@ -624,7 +624,7 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   check("[314] the real no-change re-pull pair: the files differ (exportedAt), the export content hash does not",
     rawB !== rawA && exportContentSha256(parseAs(rawB, isScreenExport, "the export")) === exportContentSha256(parseAs(rawA, isScreenExport, "the export")));
   check("[314] …while a real design edit (one layer renamed) does change it", (() => {
-    const d = parseAs(rawA, isScreenExport, "the export"); d.nodes[0].children![0].name += " (edited)";
+    const d = parseAs(rawA, isScreenExport, "the export"); must(d.nodes[0].children, "d.nodes[0].children")[0].name += " (edited)";
     return exportContentSha256(d) !== exportContentSha256(parseAs(rawA, isScreenExport, "the export"));
   })());
   check("[314] `_slices[].at` (variables-merge provenance) is stripped too, the rest of a slice is not", (() => {
@@ -676,7 +676,7 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   check(`[314] a no-change re-pull + re-run --expect: --expect says only exportedAt changed, and the screen stays verified (got ${s2.status}; before: unverified)`,
     /only exportedAt changed/.test(x2.stderr) && !/PREVIOUS expectation/.test(x2.stderr) && s2.status === "verified");
   // a real design change
-  const edited = parseAs(rawA, isScreenExport, "the export"); edited.nodes[0].children![0].name += " (edited)";
+  const edited = parseAs(rawA, isScreenExport, "the export"); must(edited.nodes[0].children, "edited.nodes[0].children")[0].name += " (edited)";
   fs.writeFileSync(exportFile, JSON.stringify(edited));
   const s3 = st();
   check(`[314] a real design change → unverified, naming the content hash change (got ${s3.status})`, s3.status === "unverified" && /the design changed since/.test(s3.reasons.join(" ")));

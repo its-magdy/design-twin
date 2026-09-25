@@ -6,9 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { check, report } from "./assert.ts";
+import { must } from "./fixtures.ts";
 
 const html = fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "ui.html"), "utf8");
-const script = /<script>([\s\S]*)<\/script>/.exec(html)![1];
+const script = must(/<script>([\s\S]*)<\/script>/.exec(html), "<script> in ui.html")[1];
 const manifest = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "..", "figma-plugin", "manifest.json"), "utf8")) as { networkAccess: { allowedDomains: string[] } };
 
 // Fake DOM element / WebSocket / timer shapes — only what ui.html's script touches.
@@ -51,12 +52,12 @@ function boot() {
   };
   ctx.window = ctx; // the script assigns window.onmessage / window.onerror
   vm.runInNewContext(script, ctx);
-  const msg = (m: PluginMsg) => ctx.onmessage!({ data: { pluginMessage: m } });
+  const msg = (m: PluginMsg) => ctx.onmessage?.({ data: { pluginMessage: m } });
   const runTimers = () => { const due = timers.splice(0); for (const t of due) if (t.fn) t.fn(); };
   return { el, sockets, posted, timers, msg, runTimers, last: () => sockets[sockets.length - 1] };
 }
-const openIt = (s: FakeSocket) => { s.readyState = 1; s.onopen!(); };
-const closeIt = (s: FakeSocket, code: number) => { s.readyState = 3; s.onclose!({ code }); };
+const openIt = (s: FakeSocket) => { s.readyState = 1; s.onopen?.(); };
+const closeIt = (s: FakeSocket, code: number) => { s.readyState = 3; s.onclose?.({ code }); };
 
 console.log("markup the script depends on:");
 const ids = ["status", "banner", "progress", "bar", "run-sel", "run-full", "cancel", "downloads", "layers", "assets", "lcount", "acount", "connect", "pill", "token", "save-token", "bridge"];
@@ -65,13 +66,13 @@ check("the token input has a real <label for>, not just a placeholder", /<label[
 check("status and banner are live regions (a finished export is announced)", /id="status"[^>]*aria-live/.test(html) && /id="banner"[^>]*role="alert"/.test(html));
 check("the connection section is a <details> that is NOT open by default", /<details id="connect">/.test(html));
 check("the ports the UI dials are exactly the ports the manifest allows", (() => {
-  const dialled = JSON.parse(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script)![1]) as number[];
+  const dialled = JSON.parse(must(/BRIDGE_PORTS = (\[[^\]]+\])/.exec(script), "BRIDGE_PORTS match in script")[1]) as number[];
   const allowed = manifest.networkAccess.allowedDomains.map((d) => Number(d.split(":").pop()));
   return JSON.stringify(dialled) === JSON.stringify(allowed);
 })());
 
 console.log("theming:");
-const css = /<style>([\s\S]*)<\/style>/.exec(html)![1].replace(/\/\*[\s\S]*?\*\//g, "");
+const css = must(/<style>([\s\S]*)<\/style>/.exec(html), "<style> in ui.html")[1].replace(/\/\*[\s\S]*?\*\//g, "");
 check("no color is hardcoded without going through a Figma theme variable", (() => {
   const bare = css.split("\n").filter((l) => /#[0-9a-fA-F]{3,8}\b/.test(l.replace(/var\(--figma-color-[a-z-]+,\s*#[0-9a-fA-F]{3,8}\)/g, "")));
   if (bare.length) console.log("    bare literals:", bare.map((l) => l.trim()));
@@ -100,7 +101,7 @@ check("nothing listening → walks every allowed port, THEN says 'not running' (
   closeIt(w.last(), 1006); const afterOne = w.el("pill").textContent; w.runTimers();
   closeIt(w.last(), 1006); w.runTimers();
   closeIt(w.last(), 1006);
-  const ports = w.sockets.map((s) => /:(\d+)\//.exec(s.url)![1]).join(",");
+  const ports = w.sockets.map((s) => must(/:(\d+)\//.exec(s.url), `port in socket url '${s.url}'`)[1]).join(",");
   return afterOne === "connecting…" && ports === "8787,8788,8789" && w.el("pill").textContent === "not running" && w.el("bridge").className === ""
     && /dtwin --serve/.test(w.el("bridge").textContent) && w.el("connect").open === false;
 })());
@@ -111,7 +112,7 @@ check("a bridge that WAS connected and went away → 'waiting', worded as normal
 check("saving a new token after a rejection reconnects at once, not after the 15s retry", (() => {
   const w = boot(); w.msg({ type: "token", token: "stale" }); closeIt(w.last(), 4401);
   const before = w.sockets.length;
-  w.el("token").value = "fresh"; w.el("save-token").onclick!();
+  w.el("token").value = "fresh"; w.el("save-token").onclick?.();
   return w.sockets.length === before + 1 && /token=fresh/.test(w.last().url) && w.posted.some((p) => p.type === "set-token" && p.token === "fresh");
 })());
 check("only ONE reconnect is ever pending, however many closes arrive", (() => {
