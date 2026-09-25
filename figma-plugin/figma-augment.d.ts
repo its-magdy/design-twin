@@ -4,7 +4,7 @@
 // property you have grepped for in node_modules/@figma/plugin-typings/plugin-api.d.ts and not found,
 // citing the developers.figma.com page — never widen a type to make a read compile.
 
-// Baked in by esbuild's `define` (build.js) from figma-plugin/package.json's version — see the
+// Baked in by esbuild's `define` (build.ts) from figma-plugin/package.json's version — see the
 // comment there (finding 327). Declared here, not in bridge.ts, so any file may reference it.
 // `declare global` is required, not just `declare const`: this file ends in `export {}`, which makes
 // it a MODULE, and a bare ambient declaration in a module file is scoped to that module only.
