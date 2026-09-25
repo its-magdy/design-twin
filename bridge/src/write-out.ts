@@ -144,9 +144,12 @@ function writeLibrary(dir: string, designSystem: DesignSystemDoc | null | undefi
   for (const f of built.files) writeJson(dir, f.path, f.data, false, log);
 
   const orphans: string[] = [];
-  if (prevIndexDoc && prevIndexDoc.files) {
+  // `files` is the pointer map ({kind: path}); anything else (a string, an array) is a corrupt index —
+  // walking it would report its characters/entries as orphans.
+  const prevFiles = prevIndexDoc && prevIndexDoc.files;
+  if (prevFiles && typeof prevFiles === "object" && !Array.isArray(prevFiles)) {
     const now = new Set(built.files.map((f) => f.path));
-    for (const p of Object.values(prevIndexDoc.files)) {
+    for (const p of Object.values(prevFiles)) {
       if (typeof p === "string" && !now.has(p) && fs.existsSync(path.join(dir, p))) orphans.push(p);
     }
   }

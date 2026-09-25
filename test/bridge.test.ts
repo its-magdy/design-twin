@@ -717,6 +717,21 @@ void (async () => {
       init.apply(b, init.plan(b, { mcp: true, mcpEntry: entry, token: tok }), () => {});
       return (JSON.parse(fs.readFileSync(path.join(a, ".mcp.json"), "utf8")) as McpJsonView).mcpServers.designtwin?.command === "keep" && fs.readFileSync(path.join(b, ".mcp.json"), "utf8") === "{not json";
     })());
+    ok("[init] --mcp skips a well-formed JSON .mcp.json of the wrong shape and leaves it untouched (null crashed; a string mcpServers was spread char-by-char into the rewrite)", (() => {
+      return ["null", '{"mcpServers":"abc"}', "[1]", '{"mcpServers":[]}', '{"mcpServers":null}'].every((before) => {
+        const d = mk({ ".mcp.json": before });
+        const plan = init.plan(d, { mcp: true, mcpEntry: entry, token: tok });
+        init.apply(d, plan, () => {});
+        return fs.readFileSync(path.join(d, ".mcp.json"), "utf8") === before
+          && plan.some((a) => a.kind === "skip" && a.path === ".mcp.json" && /is not an \.mcp\.json object/.test(a.note) && /re-run with --mcp/.test(a.note));
+      });
+    })());
+    ok("[init] --mcp keeps the file's own key order and every unknown key when it merges", (() => {
+      const d = mk({ ".mcp.json": '{"a":1,"mcpServers":{"other":{"command":"x"}},"b":{"c":[2]}}' });
+      init.apply(d, init.plan(d, { mcp: true, mcpEntry: entry, token: tok }), () => {});
+      const doc: unknown = JSON.parse(fs.readFileSync(path.join(d, ".mcp.json"), "utf8"));
+      return JSON.stringify(doc) === JSON.stringify({ a: 1, mcpServers: { other: { command: "x" }, designtwin: entry }, b: { c: [2] } });
+    })());
     ok("[init] warns when .gitignore would swallow the hand-authored maps, and names the narrower pattern",
     (() => {
       const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
@@ -1586,6 +1601,12 @@ void (async () => {
     ok("[lib-layout] an orphaned file is reported", (res2.wrote.orphans ?? []).some((o) => /ghost\.json$/.test(o)));
     ok("[lib-layout] and it is NOT deleted", fs.existsSync(path.join(base, "libraries", dirName, "ghost.json")));
     ok("[lib-layout] the orphan warning reaches the user", logged.some((m) => /STALE:/.test(m)));
+    // `files` is the pointer map; a corrupt index holding an ARRAY there is not walked as one (its
+    // entries used to be reported as orphans even though no export ever mapped them).
+    fs.writeFileSync(idxPath, JSON.stringify({ ...idxDoc, files: ["libraries/" + dirName + "/ghost.json"] }));
+    logged = [];
+    const res3: WriteView = OUT.writeExport(path.join(ldir, "design"), { designSystem: shrunk }, (m) => logged.push(m));
+    ok("[lib-layout] a non-object `files` in the previous index reports no orphans", (res3.wrote.orphans ?? []).length === 0 && !logged.some((m) => /STALE:/.test(m)));
   }
 
 
@@ -2916,6 +2937,44 @@ void (async () => {
       /design system from 'Design System - NERA \(Copy\)'/.test(exp3.detail));
     ok("[doctor] exportSourceCounts: never attributes the screens to the design-system file",
       !new RegExp(`5 screen\\(s\\) from 'Design System`).test(exp3.detail));
+  }
+
+  // A corrupt or wrong-shaped export index is SAID, not silently counted as "no screens" (a
+  // `pageDirs: 5` used to throw inside one try and drop every screen without a word).
+  {
+    const badDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-badindex-"));
+    const exp = path.join(badDir, "design", "export");
+    fs.mkdirSync(path.join(exp, "pages", "PageA"), { recursive: true });
+    const at = new Date().toISOString();
+    fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: "DS File" }));
+    fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: 5 }));
+    const c1 = doctor.checkProject(badDir).filter((c) => c.id === "export");
+    ok("[doctor] a wrong-shaped pages/index.json is a warn naming the file and the field; the summary line stays first",
+      c1.length === 2 && c1[0]?.status === "ok" && /DS File/.test(c1[0]?.detail ?? "")
+      && c1[1]?.status === "warn" && /pages\/index\.json is not the expected shape: .*pageDirs/.test(c1[1]?.detail ?? ""));
+    fs.writeFileSync(path.join(exp, "pages", "index.json"), JSON.stringify({ pageDirs: [{ index: "pages/PageA/index.json" }] }));
+    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), "{truncated");
+    const c2 = doctor.checkProject(badDir).filter((c) => c.id === "export");
+    ok("[doctor] a truncated per-page index is a warn naming THAT file",
+      c2.some((c) => c.status === "warn" && /pages\/PageA\/index\.json is not valid JSON/.test(c.detail)));
+    fs.writeFileSync(path.join(exp, "pages", "PageA", "index.json"), JSON.stringify({ layers: [null, { file: "pages/PageA/S1.json", exportedAt: at }] }));
+    const c3 = doctor.checkProject(badDir).filter((c) => c.id === "export");
+    ok("[doctor] a valid index (a null row is still skipped, as before) adds no warn and counts the screen",
+      c3.length === 1 && /1 screen\(s\)/.test(c3[0]?.detail ?? ""));
+    fs.writeFileSync(path.join(exp, "design-system.json"), JSON.stringify({ exportedAt: at, file: { name: "x" } }));
+    const c4 = doctor.checkProject(badDir).filter((c) => c.id === "export");
+    ok("[doctor] a non-string design-system `file` is a warn, never printed as [object Object]",
+      c4.some((c) => /design-system\.json is not the expected shape: .*file/.test(c.detail)) && !c4.some((c) => /\[object Object\]/.test(c.detail)));
+  }
+  {
+    const mcpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-doctor-mcpshape-"));
+    fs.writeFileSync(path.join(mcpDir, ".mcp.json"), "null");
+    const m1 = byId(doctor.checkProject(mcpDir), "mcp");
+    fs.writeFileSync(path.join(mcpDir, ".mcp.json"), '{"mcpServers":"abc"}');
+    const m2 = byId(doctor.checkProject(mcpDir), "mcp");
+    ok("[doctor] a well-formed JSON .mcp.json of the wrong shape is reported as such — not as 'not valid JSON', not as 'not registered'",
+      m1.status === "warn" && /not an \.mcp\.json object/.test(m1.detail) && !/not valid JSON/.test(m1.detail)
+      && m2.status === "warn" && /mcpServers/.test(m2.detail));
   }
 
   // P4 #203: a "not checked" warn means a check that should have run, didn't — the roll-up must be

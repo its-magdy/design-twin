@@ -97,6 +97,31 @@ void (async () => {
     const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json" } });
     ok("design_drift_lint rejects an invalid map as a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
 
+    // design_get_component follows design-system.json's files.componentsLocal pointer: a wrong-shaped
+    // manifest is a tool error that says so (not "Cannot read properties of null" / a path.join
+    // TypeError), and a pointer that leaves the server's directory is refused before anything is read.
+    {
+      const dsx = path.join(CWD, "dsx");
+      fs.mkdirSync(dsx, { recursive: true });
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-mcp-outside-"));
+      fs.writeFileSync(path.join(outside, "components.local.json"), JSON.stringify({ components: [{ key: "k1", id: "1:1", name: "Btn" }] }));
+      const get = async (manifest: string) => {
+        fs.writeFileSync(path.join(dsx, "design-system.json"), manifest);
+        const r = await client.callTool({ name: "design_get_component", arguments: { handle: "Btn", exportDir: "dsx" } });
+        return { isError: r.isError === true, text: firstText(r) };
+      };
+      const nul = await get("null");
+      const num = await get(JSON.stringify({ files: { componentsLocal: 5 } }));
+      const esc = await get(JSON.stringify({ files: { componentsLocal: path.relative(dsx, path.join(outside, "components.local.json")) } }));
+      fs.writeFileSync(path.join(dsx, "components.local.json"), JSON.stringify({ components: [{ key: "k1", id: "1:1", name: "Btn" }] }));
+      const good = await get(JSON.stringify({ files: { componentsLocal: "components.local.json" } }));
+      ok("design_get_component: a null / non-string-pointer manifest is a tool error naming it as not a manifest",
+        nul.isError && /is not a design-system manifest/.test(nul.text) && num.isError && /is not a design-system manifest/.test(num.text) && /componentsLocal/.test(num.text));
+      ok("design_get_component: a componentsLocal pointer that leaves the server directory is refused",
+        esc.isError && /files\.componentsLocal must stay inside the directory this server was started in/.test(esc.text));
+      ok("design_get_component: a valid manifest still resolves (control)", !good.isError && /"k1"/.test(good.text));
+    }
+
     // ---- the inline size guard, end to end, with a fake plugin answering the export.
     const plugin = new WebSocket("ws://127.0.0.1:8789/?token=smoke-test-token", { origin: "null" });
     await new Promise((res, rej) => { plugin.on("open", res); plugin.on("error", rej); });

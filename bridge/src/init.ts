@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import * as tokenStore from "./token-store.ts";
 import type { ResolvedToken } from "./token-store.ts";
 import * as LAYOUT from "./project-layout.ts";
@@ -31,11 +32,10 @@ export interface McpEntry {
   args: string[];
 }
 
-/** The part of .mcp.json init reads and merges into; every other key is carried through untouched. */
-interface McpJson {
-  [key: string]: unknown;
-  mcpServers?: Record<string, unknown>;
-}
+/** The part of .mcp.json init (and doctor) reads: `mcpServers`, when present, must be an object. A
+ *  `null`, array or string there used to crash init or be spread character-by-character into the
+ *  rewritten file. Loose: every other key passes the check and is carried through untouched. */
+const McpJsonSchema = z.looseObject({ mcpServers: z.record(z.string(), z.unknown()).optional() });
 
 /** One step of init's plan (see `plan`), discriminated on `kind`: the file-touching kinds carry their
  *  `path`, "write" its `content` (and `merge` for the one write allowed onto an existing file). */
@@ -143,14 +143,24 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
-    let doc: McpJson = {};
-    let bad = false;
-    if (fs.existsSync(file)) { try { doc = JSON.parse(fs.readFileSync(file, "utf8")) as McpJson; } catch { bad = true; } }
-    if (bad) actions.push({ kind: "skip", path: rel(file), note: "exists but is not valid JSON — fix it, then re-run with --mcp" });
+    // The user's document, spread (not zod's output) into the rewrite below: zod moves the keys it
+    // knows to the front, and the rewrite must keep the file's own key order.
+    let doc: object = {};
+    let servers: Record<string, unknown> = {};
+    let bad: string | null = null;
+    if (fs.existsSync(file)) {
+      let raw: unknown;
+      try { raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown; } catch { bad = "exists but is not valid JSON"; }
+      if (bad === null) {
+        const r = McpJsonSchema.safeParse(raw);
+        if (!r.success || typeof raw !== "object" || raw === null) bad = "is not an .mcp.json object" + (r.success ? "" : " (" + z.prettifyError(r.error).replace(/\n\s*/g, " ") + ")");
+        else { doc = raw; servers = r.data.mcpServers || {}; }
+      }
+    }
+    if (bad !== null) actions.push({ kind: "skip", path: rel(file), note: bad + " — fix it, then re-run with --mcp" });
     else {
       // Registered as "designtwin", never "figma": that is the name Figma's own MCP server is usually
       // given, and Claude Code loads only one server per name — sharing it would silently drop one.
-      const servers = doc.mcpServers || {};
       // Ours under ANY key (older inits wrote "figma"): a second entry would start a second server
       // and the two would fight over port 8787.
       const mine = Object.keys(servers).find((k) => isOurMcpEntry(servers[k]));
@@ -258,4 +268,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry };
+export { detectProfile, plan, apply, main, isOurMcpEntry, McpJsonSchema };

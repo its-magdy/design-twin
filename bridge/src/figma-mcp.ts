@@ -766,24 +766,40 @@ function isCatalogLike(x: unknown): x is ComponentsCatalog {
 }
 const driftLintLayer = () => loadLayer<DriftLintModule>("drift-lint.ts", "design_drift_lint");
 
+// The one field of design-system.json this server reads. Loose: the rest of the manifest is not checked.
+const dsManifestShape = z.looseObject({ files: z.looseObject({ componentsLocal: z.string().optional() }).optional() });
+
 // Follow design-system.json's `files.componentsLocal` pointer rather than guessing the split layout's
 // filenames — the manifest is the ONE place that records where the export actually landed.
 function componentsLocalPath(exportDir?: string): string {
   const dir = assertInsideCwd(exportDir, "exportDir");
   const manifestPath = path.join(dir, "design-system.json");
-  // The slim design-system.json manifest (untyped JSON from disk): only its componentsLocal pointer is read.
-  let manifest: { files?: { componentsLocal?: string } };
+  // The slim design-system.json manifest (JSON from disk — an older export or a hand edit): only its
+  // componentsLocal pointer is read, and it is checked before it is followed.
+  let text: string;
   try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { files?: { componentsLocal?: string } };
+    text = fs.readFileSync(manifestPath, "utf8");
   } catch {
     throw new Error(
       `No design export found at ${manifestPath}. Run an export first (figma_export_design_system with ` +
         `writeToDisk:true, or the dtwin CLI), or pass exportDir.`
     );
   }
-  const rel = manifest.files && manifest.files.componentsLocal;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text) as unknown;
+  } catch (e) {
+    throw new Error(`${manifestPath} is not valid JSON (${errMsg(e)}) — re-export with a current dtwin.`);
+  }
+  const manifest = dsManifestShape.safeParse(raw);
+  if (!manifest.success) {
+    throw new Error(`${manifestPath} is not a design-system manifest (${z.prettifyError(manifest.error).replace(/\n\s*/g, " ")}) — re-export with a current dtwin.`);
+  }
+  const rel = manifest.data.files?.componentsLocal;
   if (!rel) throw new Error(`${manifestPath} has no files.componentsLocal pointer — re-export with a current dtwin.`);
-  return path.join(dir, rel);
+  // The pointer comes from a file on disk: held to the same boundary as exportDir, so a '../..' in it
+  // cannot point these read tools outside the project.
+  return assertInsideCwd(path.join(dir, rel), `${manifestPath} files.componentsLocal`);
 }
 
 const exportDirShape = {
