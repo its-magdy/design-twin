@@ -401,7 +401,7 @@ check("DTWIN_PLAN_STALE_HOURS=0 disables the cutoff", (() => {
 
 // ---------------------------------------------------------------- P2b — livetest-3 regressions
 // Driven by test/fixtures/livetest3/plan/ — the real plans, reports, export and app sources from the
-// live run, pruned by its build.js (nothing hand-written).
+// live run, pruned by its build.ts (nothing hand-written).
 const FX = path.join(import.meta.dirname, "fixtures", "livetest3", "plan");
 const JR = "positions___7314_87192", GP = "System_Configurations__1359_21337";
 const fxPlan = (s: string) => readFixture(path.join(FX, "plan", s + ".json"), isPlan);

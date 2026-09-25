@@ -2,7 +2,7 @@
 // hidden-layer and comparison regressions). Nothing here is hand-typed except where a number exists
 // only in the run's prose report; those carry the file:line they were copied from.
 //
-//   node test/fixtures/livetest3/verify/build.js [/path/to/design-twin-livetest-3]
+//   node test/fixtures/livetest3/verify/build.ts [/path/to/design-twin-livetest-3]
 //
 // 1. The two screen exports, EVERY node kept (the hidden-layer counts depend on the whole tree), with
 //    only the fields no verifier/audit reads dropped. The build asserts that verify-screen --expect
@@ -14,27 +14,39 @@
 //    (scripts-test/out/phase6/global-policies/measured-independent.json — tag, x/y, svgFill,
 //    ::placeholder colour, hover state, row gap), trimmed to what the tests read.
 // 4. prefix-positions.json: two positions that exist only in the run's reports.
-const fs = require("fs");
-const path = require("path");
+import fs from "node:fs";
+import path from "node:path";
+import type { JsonObject, JsonValue } from "../../../../bridge/src/doc-types.ts";
+import { isJsonObject } from "../../../../design-to-code/types.ts";
+import { isScreenExport } from "../../../../design-to-code/export-shape.ts";
+import { buildExpectation } from "../../../../design-to-code/verify-screen.ts";
+import { audit } from "../../../../design-to-code/audit.ts";
+
 const L = process.argv[2] || "/Users/mohamedomarwork/design-twin-livetest-3";
-const OUT = __dirname;
+const OUT = import.meta.dirname;
 const P = path.join(L, "design/export/pages/__Organization_management_");
 const SCREENS = ["positions___7314_87192", "System_Configurations__1359_21337"];
 const DROP = new Set(["overrides", "propRefs", "exposedInstances", "pin", "gridColumnStart", "gridRowStart", "exportSettings", "layoutGrids", "flipped", "aspectRatio", "strokesInLayout"]);
-const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
-const write = (f, v) => { fs.writeFileSync(path.join(OUT, f), JSON.stringify(v) + "\n"); console.log("wrote", f, fs.statSync(path.join(OUT, f)).size, "bytes"); };
+const read = (f: string): JsonObject => {
+  const v: unknown = JSON.parse(fs.readFileSync(f, "utf8"));
+  if (!isJsonObject(v)) throw new Error(`${f}: not a JSON object`);
+  return v;
+};
+const list = (x: JsonValue | undefined): JsonValue[] => { if (!Array.isArray(x)) throw new Error("expected an array"); return x; };
+const objects = (x: JsonValue | undefined): JsonObject[] => list(x).map((o) => { if (!isJsonObject(o)) throw new Error("expected an object"); return o; });
+const write = (f: string, v: unknown): void => { fs.writeFileSync(path.join(OUT, f), JSON.stringify(v) + "\n"); console.log("wrote", f, fs.statSync(path.join(OUT, f)).size, "bytes"); };
 
-const prune = (n) => {
-  const o = {};
+const prune = (x: JsonValue): JsonObject => {
+  const n = isJsonObject(x) ? x : {};
+  const o: JsonObject = {};
   for (const [k, v] of Object.entries(n)) if (!DROP.has(k) && k !== "children") o[k] = v;
   if (Array.isArray(n.children)) o.children = n.children.map(prune);
   return o;
 };
-const { buildExpectation } = require("../../../../design-to-code/verify-screen.ts");
-const { audit } = require("../../../../design-to-code/audit.ts");
 for (const s of SCREENS) {
   const full = read(path.join(P, s + ".json"));
-  const pruned = { exportedAt: full.exportedAt, screen: full.screen, page: full.page, pageId: full.pageId, nodeId: full.nodeId, manifest: full.manifest, nodes: full.nodes.map(prune) };
+  const pruned = { exportedAt: full.exportedAt, screen: full.screen, page: full.page, pageId: full.pageId, nodeId: full.nodeId, manifest: full.manifest, nodes: list(full.nodes).map(prune) };
+  if (!isScreenExport(full) || !isScreenExport(pruned)) throw new Error(`${s}: not a screen export`);
   const a = JSON.stringify(buildExpectation([{ doc: full, label: s }]));
   const b = JSON.stringify(buildExpectation([{ doc: pruned, label: s }]));
   if (a !== b) throw new Error(`${s}: pruning changed the expectation`);
@@ -53,7 +65,7 @@ for (const s of ["JobRoles", "GlobalPolicies"]) {
 const ind = read(path.join(L, "scripts-test/out/phase6/global-policies/measured-independent.json"));
 write("GlobalPolicies.dom.json", {
   source: "scripts-test/out/phase6/global-policies/measured-independent.json (livetest-3, Playwright 1440x1236, frame at the viewport origin)",
-  checks: ind.checks.map((c) => ({ designId: c.designId, sel: c.sel, measured: c.measured })),
+  checks: objects(ind.checks).map((c) => ({ designId: c.designId, sel: c.sel, measured: c.measured })),
   hoverState: ind.hoverState,
   measuredRowGap: ind.measuredRowGap,
 });
