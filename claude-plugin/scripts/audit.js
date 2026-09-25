@@ -94,6 +94,15 @@ function ifDefined(key, v) {
   return o;
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
@@ -200,8 +209,7 @@ function matchByNameAndSignature(instances, catalog, library) {
   const comps = catalog && catalog.components || [];
   const byName = /* @__PURE__ */ new Map();
   comps.forEach((c, i) => {
-    if (!byName.has(c.name)) byName.set(c.name, []);
-    byName.get(c.name).push(Object.assign({ _order: i }, c));
+    getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c));
   });
   const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
   const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
@@ -265,7 +273,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
-  const proposals = rows.filter((r) => r.match && !r.byKey);
+  const proposals = rows.filter((r) => !!r.match && !r.byKey);
   return {
     rows,
     proposals,
@@ -625,21 +633,18 @@ function crossCheck(input) {
     for (const root of screenRoots(s.doc)) {
       if (root && root.resolvedModes) {
         for (const [coll, mode] of Object.entries(root.resolvedModes)) {
-          if (!resolvedModes.has(coll)) resolvedModes.set(coll, /* @__PURE__ */ new Set());
-          resolvedModes.get(coll).add(mode);
+          getOrInit(resolvedModes, coll, () => /* @__PURE__ */ new Set()).add(mode);
         }
       }
       walk(root, (n) => {
         for (const [field, name] of Object.entries(n.tokens || {})) {
           if (typeof name !== "string") continue;
-          if (!usedTokenNames.has(name)) usedTokenNames.set(name, []);
-          usedTokenNames.get(name).push({ screen: label, nodeId: n.id, field });
+          getOrInit(usedTokenNames, name, () => []).push({ screen: label, nodeId: n.id, field });
         }
         for (const f of n.fills || []) {
           const t = f && f.tokens && f.tokens.color;
           if (typeof t === "string") {
-            if (!usedTokenNames.has(t)) usedTokenNames.set(t, []);
-            usedTokenNames.get(t).push({ screen: label, nodeId: n.id, field: "fills" });
+            getOrInit(usedTokenNames, t, () => []).push({ screen: label, nodeId: n.id, field: "fills" });
           }
         }
         if (n.font && n.font.family) fonts.set(n.font.family, (fonts.get(n.font.family) || 0) + 1);
@@ -703,7 +708,10 @@ function crossCheck(input) {
     screenVars = none.concat(...own);
   } else if (variables && sliceSources && sliceSources.size) {
     varScope = "union-by-source";
-    screenVars = (variables && variables.variables || []).filter((v) => !v.key || !sliceSources.has(v.key) || sliceSources.get(v.key).some((sc) => labels.includes(sc)));
+    screenVars = (variables && variables.variables || []).filter((v) => {
+      const from = v.key ? sliceSources.get(v.key) : void 0;
+      return !from || from.some((sc) => labels.includes(sc));
+    });
   } else {
     varScope = "union";
     screenVars = variables && variables.variables || [];
@@ -762,8 +770,7 @@ function crossCheck(input) {
     const dsByNorm = /* @__PURE__ */ new Map();
     for (const [dname, dv] of dsVarByName) {
       const k = norm(dname);
-      if (!dsByNorm.has(k)) dsByNorm.set(k, []);
-      dsByNorm.get(k).push({ name: dname, v: dv });
+      getOrInit(dsByNorm, k, () => []).push({ name: dname, v: dv });
     }
     for (const [name, list] of screenVarsByName) {
       if (dsVarByName.has(name)) continue;
@@ -791,8 +798,7 @@ function crossCheck(input) {
       const unionByName = /* @__PURE__ */ new Map();
       for (const v of variables && variables.variables || []) {
         if (!v || !v.name || !v.key) continue;
-        if (!unionByName.has(v.name)) unionByName.set(v.name, /* @__PURE__ */ new Map());
-        unionByName.get(v.name).set(v.key, v);
+        getOrInit(unionByName, v.name, () => /* @__PURE__ */ new Map()).set(v.key, v);
       }
       for (const [name, byKey] of unionByName) {
         if (byKey.size < 2) continue;
@@ -805,7 +811,7 @@ function crossCheck(input) {
         push(
           "info",
           "token-name-collision-elsewhere",
-          `'${name}' is ${all.length} different variables in the merged variables.json \u2014 ` + all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " + (ours.length ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => sliceSources && sliceSources.get(v.key) || []))].join(", ") || "another screen"} \u2014 do not change this screen's value to match it.` : `THIS screen carries none of them.`) + ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
+          `'${name}' is ${all.length} different variables in the merged variables.json \u2014 ` + all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " + (ours.length ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => sliceSources && v.key && sliceSources.get(v.key) || []))].join(", ") || "another screen"} \u2014 do not change this screen's value to match it.` : `THIS screen carries none of them.`) + ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
           { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
         );
       }
@@ -849,14 +855,12 @@ function crossCheck(input) {
     for (const c of catalog) {
       if (c.key) byKey.set(c.key, c);
       const k = norm(c.name);
-      if (!byName.has(k)) byName.set(k, []);
-      byName.get(k).push(c);
+      getOrInit(byName, k, () => []).push(c);
     }
     const distinct = /* @__PURE__ */ new Map();
     for (const i of instances) {
       const id = i.setKey || i.key || "name:" + norm(i.setName);
-      if (!distinct.has(id)) distinct.set(id, Object.assign({ count: 0 }, i));
-      distinct.get(id).count++;
+      getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
     }
     coverage.distinct = distinct.size;
     for (const i of distinct.values()) {
@@ -900,9 +904,10 @@ function crossCheck(input) {
     coverage.pct = Math.round(coverage.matchedByKey / coverage.distinct * 100);
     coverage.localPct = Math.round(coverage.matchedByLocalKey / coverage.distinct * 100);
     rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
-    const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
+    const rekeyedBy = rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey) ? rekey : null;
+    const rekeyed = !!rekeyedBy;
     coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;
-    const proposedNames = new Set(rekeyed ? rekey.proposals.map((r) => r.name) : []);
+    const proposedNames = new Set(rekeyedBy ? rekeyedBy.proposals.map((r) => r.name) : []);
     const buckets = { localKey: 0, libraryKey: 0, proposed: 0, nameOnly: 0, ambiguous: 0, newWork: 0 };
     for (const e of coverage.entries) {
       const b = e.matchedBy === "key" ? e.scope === "local" ? "localKey" : "libraryKey" : proposedNames.has(e.setName) ? "proposed" : e.matchedBy === "name" ? "nameOnly" : e.ambiguous ? "ambiguous" : "newWork";
@@ -922,9 +927,9 @@ function crossCheck(input) {
     };
     for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
     coverage.hiddenOnly = hiddenOnly.size;
-    if (rekeyed) {
-      const s = rekey.summary, props = rekey.proposals;
-      const residual = rekey.rows.filter((r) => !r.match);
+    if (rekeyedBy) {
+      const s = rekeyedBy.summary, props = rekeyedBy.proposals;
+      const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
         "blocker",
         "catalog-rekeyed",
@@ -1157,8 +1162,8 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
         const fg = n.tokens && (n.tokens.fills || n.tokens.textRangeFills) || (n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean);
         if (!fg || typeof fg !== "string") return;
         const key = fg + "|" + bgToken;
-        if (!pairs.has(key)) pairs.set(key, { fg, bg: bgToken, nodes: [], sample: n.name });
-        if (pairs.get(key).nodes.length < 4) pairs.get(key).nodes.push(n.id);
+        const pair = getOrInit(pairs, key, () => ({ fg, bg: bgToken, nodes: [], sample: n.name }));
+        if (pair.nodes.length < 4) pair.nodes.push(n.id);
       });
     }
   }
@@ -1177,8 +1182,7 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   if (!failures.length) return;
   const byMode = /* @__PURE__ */ new Map();
   for (const f of failures) {
-    if (!byMode.has(f.mode)) byMode.set(f.mode, []);
-    byMode.get(f.mode).push(f);
+    getOrInit(byMode, f.mode, () => []).push(f);
   }
   for (const [mode, list] of byMode) {
     push(
@@ -1330,7 +1334,10 @@ function labelledRoots(doc, label) {
   return screenRoots(doc).map((tree) => ({ tree, label: exp && exp.screen || tree.name || label, ...ifDefined("manifest", manifest) }));
 }
 var r1 = (v) => Math.round(v * 100) / 100;
-var hasTok = (node, ...keys) => !!(node.tokens && keys.some((k) => node.tokens[k] != null));
+var hasTok = (node, ...keys) => {
+  const t = node.tokens;
+  return !!(t && keys.some((k) => t[k] != null));
+};
 var unwrap = (d, i) => !d || isScreenDoc(d) ? { doc: d || null, label: `input${i}`, vars: null } : { doc: d.doc || null, label: d.label || `input${i}`, vars: d.vars || null };
 function audit(input, opts = {}) {
   const givenPlatform = opts.platform;
@@ -1431,7 +1438,7 @@ function audit(input, opts = {}) {
         const delta = expectedH === null ? 0 : expectedH - node.box.h;
         const overflow = expectedH !== null && delta > 1;
         const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1;
-        if (overflow || hugMismatch) {
+        if (expectedH !== null && (overflow || hugMismatch)) {
           const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
           const why = heightMode === "hug" ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}` : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;
           add("warning", "self-inconsistent-geometry", `'${node.name}' declares box.h=${node.box.h} (heightMode:${JSON.stringify(heightMode)}) \u2014 ${why}: ${padTop}+${how}+${padBottom} = ${expectedH}. The export contradicts itself \u2014 decide which number to trust before building.`, node, here, { statedH: node.box.h, expectedH, heightMode });

@@ -304,6 +304,15 @@ function screenRoots(doc) {
   return [];
 }
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
   const out = [];
@@ -410,8 +419,7 @@ function matchByNameAndSignature(instances, catalog, library) {
   const comps = catalog && catalog.components || [];
   const byName = /* @__PURE__ */ new Map();
   comps.forEach((c, i) => {
-    if (!byName.has(c.name)) byName.set(c.name, []);
-    byName.get(c.name).push(Object.assign({ _order: i }, c));
+    getOrInit(byName, c.name, () => []).push(Object.assign({ _order: i }, c));
   });
   const catKeys = new Set(comps.map((c) => c.key).filter((k) => !!k));
   const libKeys = new Set((library && library.components || []).map((c) => c.key).filter((k) => !!k));
@@ -475,7 +483,7 @@ function matchByNameAndSignature(instances, catalog, library) {
     row.reasons.push("key lookup: " + (byKey ? "matched" : "NO MATCH (the instance's key is not in the catalog \u2014 re-keyed)"));
     rows.push(row);
   }
-  const proposals = rows.filter((r) => r.match && !r.byKey);
+  const proposals = rows.filter((r) => !!r.match && !r.byKey);
   return {
     rows,
     proposals,
@@ -718,11 +726,12 @@ function driftLint(map, catalog, opts) {
   const byKey = /* @__PURE__ */ new Map(), byId = /* @__PURE__ */ new Map(), byName = /* @__PURE__ */ new Map();
   for (const c of comps) {
     if (c.key) {
-      if (byKey.has(c.key)) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${byKey.get(c.key).name}' and '${c.name}')`, { key: c.key });
+      const prev = byKey.get(c.key);
+      if (prev) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${prev.name}' and '${c.name}')`, { key: c.key });
       byKey.set(c.key, c);
     }
     if (c.id) byId.set(c.id, c);
-    if (c.name) (byName.get(c.name) || byName.set(c.name, []).get(c.name)).push(c);
+    if (c.name) getOrInit(byName, c.name, () => []).push(c);
   }
   const mappedIds = /* @__PURE__ */ new Set();
   const compToEntries = /* @__PURE__ */ new Map();
@@ -747,7 +756,7 @@ function driftLint(map, catalog, opts) {
     }
     if (comp.key) mappedIds.add(comp.key);
     if (comp.id) mappedIds.add(comp.id);
-    (compToEntries.get(comp) || compToEntries.set(comp, []).get(comp)).push(mapKey);
+    getOrInit(compToEntries, comp, () => []).push(mapKey);
     if (f.name && comp.name && f.name !== comp.name) {
       push(warnings, "stale-name", `map entry '${mapKey}' remembers name '${f.name}' but component is now '${comp.name}' (rename \u2014 refresh advisory metadata)`, { mapKey, from: f.name, to: comp.name });
     }
@@ -813,9 +822,9 @@ function screenCoverage(map, catalog, screenDocs) {
       const mc = n.mainComponent;
       const id = mc.setKey || mc.key;
       if (!id) return;
-      if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key });
-      used.get(id).instances++;
-      if (c.hidden) used.get(id).hiddenInstances++;
+      const u = getOrInit(used, id, () => ({ setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key }));
+      u.instances++;
+      if (c.hidden) u.hiddenInstances++;
     });
   }
   const rows = [...used.values()].map((u) => ({

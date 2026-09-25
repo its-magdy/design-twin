@@ -143,7 +143,10 @@ function labelledRoots(doc: unknown, label: string): Root[] {
 }
 
 const r1 = (v: number): number => Math.round(v * 100) / 100;
-const hasTok = (node: IrNode, ...keys: string[]): boolean => !!(node.tokens && keys.some((k) => node.tokens![k] != null));
+const hasTok = (node: IrNode, ...keys: string[]): boolean => {
+  const t = node.tokens;
+  return !!(t && keys.some((k) => t[k] != null));
+};
 
 /**
  * One audit input: a screen document, optionally wrapped as `{ doc, label, vars }` (the wrapper's
@@ -317,9 +320,9 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
         const delta = expectedH === null ? 0 : expectedH - node.box.h;
         const overflow = expectedH !== null && delta > 1; // content genuinely does not fit a fixed/fill box
         const hugMismatch = expectedH !== null && heightMode === "hug" && Math.abs(delta) > 1; // hug must equal content, either direction
-        if (overflow || hugMismatch) {
-          // expectedH is non-null here: both conditions above require it
-          const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH! - padTop - padBottom);
+        // `expectedH !== null` is implied by both overflow and hugMismatch; spelling it out narrows the type
+        if (expectedH !== null && (overflow || hugMismatch)) {
+          const how = direction === "row" ? "max child " + Math.max(...kids.map((c) => c.box.h)) : "children sum " + (expectedH - padTop - padBottom);
           const why = heightMode === "hug"
             ? `heightMode:"hug" means this box's height IS the content height, but its own padding + children compute ${expectedH}, not the declared ${node.box.h}`
             : `content (padding + children) computes ${expectedH}, which OVERFLOWS the declared box.h=${node.box.h} by ${delta}px`;

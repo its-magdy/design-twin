@@ -208,6 +208,15 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/map-util.ts
+function getOrInit(m, k, init) {
+  const have = m.get(k);
+  if (have !== void 0) return have;
+  const made = init();
+  m.set(k, made);
+  return made;
+}
+
 // design-to-code/cli-args.ts
 import { parseArgs } from "node:util";
 var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
@@ -487,8 +496,7 @@ function diffTokens(oldDoc, newDoc) {
   const pairedA = new Set(pairs.values());
   const identities = /* @__PURE__ */ new Map();
   for (const v of [...A.values(), ...B.values()]) {
-    if (!identities.has(v.name)) identities.set(v.name, /* @__PURE__ */ new Map());
-    identities.get(v.name).set(idOf(v), v.collection || "");
+    getOrInit(identities, v.name, () => /* @__PURE__ */ new Map()).set(idOf(v), v.collection || "");
   }
   const label = (v) => {
     const ids = identities.get(v.name);
@@ -508,10 +516,10 @@ function diffTokens(oldDoc, newDoc) {
   }
   const collNames = /* @__PURE__ */ new Map();
   for (const c of [...oldDoc.collections || [], ...newDoc.collections || []]) collNames.set(c.name, (collNames.get(c.name) || /* @__PURE__ */ new Set()).add(c.key || c.name));
-  const colLabel = (c) => collNames.get(c.name).size > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
+  const colLabel = (c) => (collNames.get(c.name)?.size ?? 0) > 1 && c.key ? `${c.name} (key ${String(c.key).slice(0, 8)}\u2026)` : c.name;
   const cols = (doc) => new Map((doc.collections || []).map((c) => [c.key ? "k:" + c.key : "n:" + c.name, { label: colLabel(c), v: { modes: c.modes, ...ifDefined("default", c.default) } }]));
   const CA = cols(oldDoc), CB = cols(newDoc), collections = [];
-  for (const id of /* @__PURE__ */ new Set([...CA.keys(), ...CB.keys()])) collections.push(...fieldDiffs((CB.get(id) || CA.get(id)).label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
+  for (const [id, e] of new Map([...CA, ...CB])) collections.push(...fieldDiffs(e.label, CA.get(id)?.v, CB.get(id)?.v, "collection"));
   return { kind: "tokens", summary: { added: added.length, removed: removed.length, changed: changed.length + (collections.length ? 1 : 0) }, warnings: [], added, removed, changed, collections };
 }
 function diffCatalog(oldDoc, newDoc) {

@@ -40,6 +40,7 @@ import type { IndexRow, ResolveScreenResult, ScreenCandidate } from "./types.ts"
 import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
@@ -144,8 +145,7 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
   const union = new Map<string, { row: IndexRow; via: Set<string> }>(); // row.id -> { row, via: Set<string> }
   const join = (row: IndexRow, via: string): void => {
     const key = row.id || row.file || JSON.stringify(row);
-    if (!union.has(key)) union.set(key, { row, via: new Set() });
-    union.get(key)!.via.add(via);
+    getOrInit(union, key, () => ({ row, via: new Set<string>() })).via.add(via);
   };
   for (const r of rows) {
     if (fold(r.name) === qFold) join(r, "exact layer name");

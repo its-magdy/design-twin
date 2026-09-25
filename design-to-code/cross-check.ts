@@ -48,6 +48,7 @@ import type {
   IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
@@ -123,21 +124,18 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     for (const root of screenRoots(s.doc)) {
       if (root && root.resolvedModes) {
         for (const [coll, mode] of Object.entries(root.resolvedModes)) {
-          if (!resolvedModes.has(coll)) resolvedModes.set(coll, new Set());
-          resolvedModes.get(coll)!.add(mode);
+          getOrInit(resolvedModes, coll, () => new Set<string>()).add(mode);
         }
       }
       walk(root, (n) => {
         for (const [field, name] of Object.entries(n.tokens || {})) {
           if (typeof name !== "string") continue;
-          if (!usedTokenNames.has(name)) usedTokenNames.set(name, []);
-          usedTokenNames.get(name)!.push({ screen: label, nodeId: n.id, field });
+          getOrInit(usedTokenNames, name, () => []).push({ screen: label, nodeId: n.id, field });
         }
         for (const f of n.fills || []) {
           const t = f && f.tokens && f.tokens.color;
           if (typeof t === "string") {
-            if (!usedTokenNames.has(t)) usedTokenNames.set(t, []);
-            usedTokenNames.get(t)!.push({ screen: label, nodeId: n.id, field: "fills" });
+            getOrInit(usedTokenNames, t, () => []).push({ screen: label, nodeId: n.id, field: "fills" });
           }
         }
         if (n.font && n.font.family) fonts.set(n.font.family, (fonts.get(n.font.family) || 0) + 1);
@@ -231,7 +229,10 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     screenVars = none.concat(...own);
   } else if (variables && sliceSources && sliceSources.size) {
     varScope = "union-by-source";
-    screenVars = ((variables && variables.variables) || []).filter((v) => !v.key || !sliceSources.has(v.key) || sliceSources.get(v.key)!.some((sc) => labels.includes(sc)));
+    screenVars = ((variables && variables.variables) || []).filter((v) => {
+      const from = v.key ? sliceSources.get(v.key) : undefined; // no key, or a key no slice claims: kept
+      return !from || from.some((sc) => labels.includes(sc));
+    });
   } else {
     varScope = "union";
     screenVars = (variables && variables.variables) || [];
@@ -310,8 +311,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const dsByNorm = new Map<string, Array<{ name: string; v: Variable }>>();
     for (const [dname, dv] of dsVarByName) {
       const k = norm(dname);
-      if (!dsByNorm.has(k)) dsByNorm.set(k, []);
-      dsByNorm.get(k)!.push({ name: dname, v: dv });
+      getOrInit(dsByNorm, k, () => []).push({ name: dname, v: dv });
     }
     for (const [name, list] of screenVarsByName) {
       if (dsVarByName.has(name)) continue;
@@ -353,8 +353,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       const unionByName = new Map<string, Map<string, Variable>>();
       for (const v of (variables && variables.variables) || []) {
         if (!v || !v.name || !v.key) continue;
-        if (!unionByName.has(v.name)) unionByName.set(v.name, new Map());
-        unionByName.get(v.name)!.set(v.key, v);
+        getOrInit(unionByName, v.name, () => new Map<string, Variable>()).set(v.key, v);
       }
       for (const [name, byKey] of unionByName) {
         if (byKey.size < 2) continue;
@@ -372,8 +371,8 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           `'${name}' is ${all.length} different variables in the merged variables.json — ` +
             all.map((v) => `key ${shortKey(v)} = ${JSON.stringify(flatten(v))}${fromWhere(v)}`).join(" vs ") + ". " +
             (ours.length
-              // every `v` here was indexed by its key above, so `v.key` is a string
-              ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => (sliceSources && sliceSources.get(v.key!)) || []))].join(", ") || "another screen"} — do not change this screen's value to match it.`
+              // every `v` here was indexed by its (non-empty) key above, so the `v.key &&` never short-circuits
+              ? `THIS screen's own variables carry only key ${ours.map(shortKey).join(", ")}, so the ambiguity belongs to ${[...new Set(others.flatMap((v) => (sliceSources && v.key && sliceSources.get(v.key)) || []))].join(", ") || "another screen"} — do not change this screen's value to match it.`
               : `THIS screen carries none of them.`) +
             ` Generate this screen's theme from its own .vars.json (or design-system/tokens.json), not from the union.`,
           { token: name, keys: all.map((v) => v.key), mine: ours.map((v) => v.key) }
@@ -438,16 +437,14 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     for (const c of catalog) {
       if (c.key) byKey.set(c.key, c);
       const k = norm(c.name);
-      if (!byName.has(k)) byName.set(k, []);
-      byName.get(k)!.push(c);
+      getOrInit(byName, k, () => []).push(c);
     }
     // Distinct on the SET key where there is one: a screen using six Button variants is one component
     // to map, not six, and counting variants would flatter the coverage number.
     const distinct = new Map<string, ScreenInstance & { count: number }>();
     for (const i of instances) {
       const id = i.setKey || i.key || "name:" + norm(i.setName);
-      if (!distinct.has(id)) distinct.set(id, Object.assign({ count: 0 }, i));
-      distinct.get(id)!.count++;
+      getOrInit(distinct, id, () => Object.assign({ count: 0 }, i)).count++;
     }
     coverage.distinct = distinct.size;
     for (const i of distinct.values()) {
@@ -505,14 +502,16 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     // like — and there the names AND prop signatures still agree. component-match.ts decides, and its
     // matches are only ever proposals for a person to confirm.
     rekey = localComps.length ? matchByNameAndSignature(visible, components, componentsLibrary) : null;
-    const rekeyed = !!rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey);
+    // the re-key result, only when it says the catalog was re-keyed (null otherwise)
+    const rekeyedBy = rekey && coverage.localPct <= WRONG_CATALOG_PCT && isRekeyed(rekey) ? rekey : null;
+    const rekeyed = !!rekeyedBy;
     coverage.rekey = rekey ? Object.assign({ rekeyed }, rekey.summary) : null;
 
     // ONE bucket per distinct visible component (livetest-3 #318: the table's rows summed to 62 on a
     // 41-component screen, because an ambiguous name was counted as "left unmatched" AND as "new work",
     // and names the re-key pass had proposed still sat in the old buckets). Order of precedence: key
     // (local, then library) > confirmed-able proposal > unverified name twin > ambiguous name > new.
-    const proposedNames = new Set(rekeyed ? rekey!.proposals.map((r) => r.name) : []);
+    const proposedNames = new Set(rekeyedBy ? rekeyedBy.proposals.map((r) => r.name) : []);
     const buckets: Record<CoverageBucket, number> = { localKey: 0, libraryKey: 0, proposed: 0, nameOnly: 0, ambiguous: 0, newWork: 0 };
     for (const e of coverage.entries) {
       const b: CoverageBucket = e.matchedBy === "key" ? (e.scope === "local" ? "localKey" : "libraryKey")
@@ -539,9 +538,9 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     };
     for (const s of screens) for (const root of screenRoots(s.doc)) everyInstance(root);
     coverage.hiddenOnly = hiddenOnly.size;
-    if (rekeyed) {
-      const s = rekey!.summary, props = rekey!.proposals;
-      const residual = rekey!.rows.filter((r) => !r.match);
+    if (rekeyedBy) {
+      const s = rekeyedBy.summary, props = rekeyedBy.proposals;
+      const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
         "blocker",
         "catalog-rekeyed",
@@ -549,7 +548,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           `also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. ` +
           `That is not a foreign library — it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every ` +
           `component key), or the library was re-published. Proposed matches (confirm each before reuse — nothing is auto-accepted): ` +
-          props.slice(0, 12).map((r) => `'${r.name}' → ${r.match!.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
+          props.slice(0, 12).map((r) => `'${r.name}' → ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
           (props.length > 12 ? `, … (${props.length} in all — see componentProposals)` : "") + `. ` +
           `${residual.length} name(s) are not in components.local.json` +
           (buckets.libraryKey + buckets.nameOnly
@@ -873,8 +872,8 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
           ((n.fills || []).map((f) => f && f.tokens && f.tokens.color).find(Boolean));
         if (!fg || typeof fg !== "string") return;
         const key = fg + "|" + bgToken;
-        if (!pairs.has(key)) pairs.set(key, { fg, bg: bgToken, nodes: [], sample: n.name });
-        if (pairs.get(key)!.nodes.length < 4) pairs.get(key)!.nodes.push(n.id);
+        const pair = getOrInit(pairs, key, () => ({ fg, bg: bgToken, nodes: [], sample: n.name }));
+        if (pair.nodes.length < 4) pair.nodes.push(n.id);
       });
     }
   }
@@ -901,8 +900,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   // Grouped by mode, because the actionable unit is "Light is broken", not thirty separate rows.
   const byMode = new Map<string, ContrastFailure[]>();
   for (const f of failures) {
-    if (!byMode.has(f.mode)) byMode.set(f.mode, []);
-    byMode.get(f.mode)!.push(f);
+    getOrInit(byMode, f.mode, () => []).push(f);
   }
   for (const [mode, list] of byMode) {
     push(
@@ -964,7 +962,10 @@ function toMarkdown(res: CrossCheckReport): string {
       "Nothing here is accepted until a person sets `\"confirmed\": true` on the entry in the JSON report.*", "");
     L.push("| instance name | × | → catalog | id | page | evidence | why |", "|---|--:|---|---|---|---|---|");
     for (const p of res.componentProposals) {
-      L.push(`| \`${p.name}\` | ${p.instances} | \`${p.catalog!.name}\` | ${p.catalog!.id} | ${p.catalog!.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.reasons.join("; ")} |`);
+      // crossCheck builds every proposal from a ProposedMatchRow (match typed non-null), so no row is skipped
+      const cat = p.catalog;
+      if (!cat) continue;
+      L.push(`| \`${p.name}\` | ${p.instances} | \`${cat.name}\` | ${cat.id} | ${cat.page || ""} | ${p.evidence}${p.tie ? ` (${p.tie})` : ""} | ${p.reasons.join("; ")} |`);
     }
     L.push("");
     if (res.componentResidual && res.componentResidual.length) {

@@ -82,6 +82,7 @@ import type {
   CodeInputs, IndexRow, IrNode, IrNodeType, JsonObject, Plan, PlanAnchor, PlanComputedStatus, PlanLifecycle,
   PlanStoredStatus, PlanTokenRow, ScreenDoc, VerifyDelta, VerifyReport,
 } from "./types.ts";
+import { getOrInit } from "./map-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // ================================================================ input / timeouts
@@ -233,7 +234,8 @@ function isOpen(p: PlanFile, cwd: string): boolean {
 // images, Dockerfiles) is not scanned for literals: a colour there is data, not a styling decision.
 const SOURCE_EXT = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte", "astro", "css", "scss", "sass", "less", "styl", "html", "htm",
   "swift", "kt", "kts", "java", "dart", "xml", "m", "mm", "h", "cs", "xaml"]);
-const extOf = (rel: string): string => String(rel).toLowerCase().split(".").pop()!;
+// split() always returns at least one element, so pop() is never undefined: `?? ""` is inert.
+const extOf = (rel: string): string => String(rel).toLowerCase().split(".").pop() ?? "";
 const isSourceFile = (rel: string): boolean => SOURCE_EXT.has(extOf(rel));
 
 // A string literal that is prose — a provenance note like "bound to Neutrals/Neutral 0, #121319 in
@@ -481,7 +483,8 @@ function anchorCoverage(plan: Plan, doc: ScreenDoc): AnchorCoverage {
   const anchors: Record<string, PlanAnchor> = plan.anchors || {};
   const covered = new Map<string, boolean>();
   const isCovered = (id: string): boolean => {
-    if (covered.has(id)) return covered.get(id)!;
+    const known = covered.get(id);
+    if (known !== undefined) return known;
     const v = visible.get(id);
     const r = anchored(anchors[id]) || (!!v && !!v.parentId && visible.has(v.parentId) && isCovered(v.parentId));
     covered.set(id, r);
@@ -489,10 +492,14 @@ function anchorCoverage(plan: Plan, doc: ScreenDoc): AnchorCoverage {
   };
   // which uncovered nodes have an anchored node somewhere below them (pure wrappers — a warning)
   const hasAnchoredBelow = new Set<string>();
-  for (const id of visible.keys()) {
+  for (const [id, v] of visible) {
     if (!anchored(anchors[id])) continue;
-    let p = visible.get(id)!.parentId;
-    while (p && visible.has(p) && !hasAnchoredBelow.has(p)) { hasAnchoredBelow.add(p); p = visible.get(p)!.parentId; }
+    let p = v.parentId;
+    while (p && !hasAnchoredBelow.has(p)) {
+      const pv = visible.get(p);
+      if (!pv) break;
+      hasAnchoredBelow.add(p); p = pv.parentId;
+    }
   }
   const unmapped: NodeRef[] = [], wrappers: NodeRef[] = [];
   for (const [id, v] of visible) {
@@ -717,8 +724,7 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
     const h = colorKey(row.value);
     const lit = h && colors.get(h);
     if (lit && !isAllowed(row, lit) && !definedOnlyInTokenSource(lit, row.codeToken)) {
-      if (!colourHits.has(lit)) colourHits.set(lit, { value: row.value, tokens: [] });
-      const e = colourHits.get(lit)!;
+      const e = getOrInit(colourHits, lit, () => ({ value: row.value, tokens: [] }));
       if (!e.tokens.includes(row.codeToken)) e.tokens.push(row.codeToken);
     }
   }
@@ -747,8 +753,9 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
       seenModule.add(row.mapModule);
       if (!moduleImported(row.mapModule, byFile, cwd)) warnings.push(`component '${row.name}' is "reused" from ${row.mapModule}, but no file in files[] imports that module (compared by resolved path / path suffix, so '../../components/X' and '@/components/X' both count) — was it regenerated instead of reused?`);
     }
-    if (verdict === "new" && row.key && mapped.has(row.key)) {
-      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mapped.get(row.key)!.module} in codeconnect.local.json — reuse the existing component`);
+    const mappedTo = verdict === "new" && row.key ? mapped.get(row.key) : undefined;
+    if (mappedTo) {
+      warnings.push(`component '${row.name}' is marked "new" in the plan, but its Figma key is mapped to ${mappedTo.module} in codeconnect.local.json — reuse the existing component`);
     }
     if (verdict === "missing") warnings.push(`component '${row.name}' has no recorded reuse/new decision`);
   }
@@ -836,7 +843,7 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     if (stems.has(stem)) by = "name";
     else if (nodeId && (r.nodeId === nodeId || idFromStem(stem) === nodeId)) by = "nodeId";
     else if (nodeId && fs.existsSync(expFile) && expFrame() === nodeId) by = "expectation frame";
-    else if (layer && e!.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
+    else if (e && layer && e.sameNameRows <= 1 && String(r.screen || "").trim() === layer) by = "layer name";
     if (!by) continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* ignore */ }
@@ -859,9 +866,9 @@ interface Verdict { status: PlanComputedStatus; reasons: string[] }
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
 // failed | unverified | static-only | verified. Never empty reasons.
 function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[]): Verdict {
-  const mode = plan.verification && plan.verification.mode;
+  const v = plan.verification;
   if (!reports.length) {
-    if (mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${plan.verification!.reason || "no reason recorded"})`] };
+    if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${v.reason || "no reason recorded"})`] };
     return { status: "unverified", reasons: ["no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"] };
   }
   // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"

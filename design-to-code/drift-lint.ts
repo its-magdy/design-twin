@@ -30,6 +30,7 @@ import type {
 } from "./types.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
+import { getOrInit } from "./map-util.ts";
 
 const stripSuffix = (k: string): string => String(k).split("#")[0] ?? ""; // "Size#12:3" -> "Size"; ?? "": split() always returns at least one piece, so it never applies
 
@@ -107,9 +108,9 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
   const comps = (catalog && catalog.components) || [];
   const byKey = new Map<string, CatalogEntry>(), byId = new Map<string, CatalogEntry>(), byName = new Map<string, CatalogEntry[]>();
   for (const c of comps) {
-    if (c.key) { if (byKey.has(c.key)) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${byKey.get(c.key)!.name}' and '${c.name}')`, { key: c.key }); byKey.set(c.key, c); }
+    if (c.key) { const prev = byKey.get(c.key); if (prev) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${prev.name}' and '${c.name}')`, { key: c.key }); byKey.set(c.key, c); }
     if (c.id) byId.set(c.id, c);
-    if (c.name) (byName.get(c.name) || byName.set(c.name, []).get(c.name)!).push(c);
+    if (c.name) getOrInit(byName, c.name, () => []).push(c);
   }
   const mappedIds = new Set<string>();           // catalog key/id values that got matched (for coverage)
   const compToEntries = new Map<CatalogEntry, string[]>();       // component -> [mapKey] (double-map detection)
@@ -140,7 +141,7 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     }
     if (comp.key) mappedIds.add(comp.key);
     if (comp.id) mappedIds.add(comp.id);
-    (compToEntries.get(comp) || compToEntries.set(comp, []).get(comp)!).push(mapKey);
+    getOrInit(compToEntries, comp, () => []).push(mapKey);
 
     if (f.name && comp.name && f.name !== comp.name) {
       push(warnings, "stale-name", `map entry '${mapKey}' remembers name '${f.name}' but component is now '${comp.name}' (rename — refresh advisory metadata)`, { mapKey, from: f.name, to: comp.name });
@@ -246,9 +247,9 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
       const mc = n.mainComponent;
       const id = mc.setKey || mc.key;
       if (!id) return;
-      if (!used.has(id)) used.set(id, { setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key });
-      used.get(id)!.instances++;
-      if (c.hidden) used.get(id)!.hiddenInstances++;
+      const u = getOrInit(used, id, () => ({ setName: mc.setName || mc.name, instances: 0, hiddenInstances: 0, key: id, variantKey: mc.key }));
+      u.instances++;
+      if (c.hidden) u.hiddenInstances++;
     });
   }
 

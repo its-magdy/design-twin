@@ -268,8 +268,10 @@ function model(designSystem: TokensDoc | null | undefined, warnings: string[], o
       return { name, id };
     };
     const modes: [NativeMode, ...NativeMode[]] = [modeOf(firstModeName), ...otherModeNames.map(modeOf)];
-    const def = modeNames.includes(String(c.default)) ? String(c.default) : firstModeName;
-    out.push({ name: c.name, type, modes, default: def, defaultId: modes.find((m) => m.name === def)!.id, fields });
+    // modes[i].name === modeNames[i] (built just above), so "the first mode named c.default, else the first
+    // mode" is the mode whose name is `modeNames.includes(c.default) ? c.default : firstModeName`.
+    const defMode = modes.find((m) => m.name === String(c.default)) ?? modes[0];
+    out.push({ name: c.name, type, modes, default: defMode.name, defaultId: defMode.id, fields });
   }
   return out;
 }
@@ -295,13 +297,16 @@ function compose(cols: NativeCollection[], opts?: NativeOpts): string {
     "import androidx.compose.ui.unit.Dp", "import androidx.compose.ui.unit.TextUnit", "import androidx.compose.ui.unit.dp", "import androidx.compose.ui.unit.sp"];
   for (const c of cols) {
     L.push("", `// Figma collection "${c.name}"`);
-    if (c.modes.length === 1) {
-      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, c.modes[0].name))} // ${f.source}`), "}");
+    const [m0, m1] = c.modes;
+    if (m1 === undefined) {
+      L.push(`object ${c.type} {`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]} = ${lit(f.kind, valueIn(f, m0.name))} // ${f.source}`), "}");
       continue;
     }
     L.push("@Immutable", `data class ${c.type}(`, ...c.fields.map((f) => `    val ${f.id}: ${T[f.kind]}, // ${f.source}`), ")");
     for (const m of c.modes) L.push("", `val ${c.type}${pascal([m.id])} = ${c.type}(`, ...c.fields.map((f) => `    ${f.id} = ${lit(f.kind, valueIn(f, m.name))},`), ")");
-    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([c.modes.find((m) => m.name !== c.default)!.id])}) { … }`,
+    // First non-default mode. Mode ids are unique (modeIds above), so with 2+ modes one of m0/m1 is not the
+    // default; with unique mode names this is the old `modes.find((m) => m.name !== c.default)`.
+    L.push("", `// Provide the active mode once, near the root: CompositionLocalProvider(Local${c.type} provides ${c.type}${pascal([(m0.id !== c.defaultId ? m0 : m1).id])}) { … }`,
       `val Local${c.type} = staticCompositionLocalOf { ${c.type}${pascal([c.defaultId])} }`);
   }
   return L.join("\n") + "\n";
