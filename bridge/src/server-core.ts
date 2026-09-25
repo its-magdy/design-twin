@@ -261,7 +261,11 @@ interface ClientEntry {
   fileKey: string | null;
   page: string | null;
   pluginVersion: string | null;
-  lastActivity: number;
+  /** Parsed frames received from this client so far — hello, progress, replies, anything the plugin
+   *  sent that parsed. request()'s stall check captures it at send time and disarms on the first
+   *  frame AFTER that: a count, not a clock, so a connect (or a frame) in the same millisecond as
+   *  the send can neither pass for life since the send nor be missed. */
+  frames: number;
   /** heartbeat: cleared before each ping, set again by the pong (ws README, "How to detect and close
    *  broken connections?"). Still false at the next tick = the peer is gone, and it is terminated. */
   isAlive: boolean;
@@ -462,7 +466,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
     // bridge back, and the two ping-ponged forever (observed live). Admitting both removes the
     // contention rather than arbitrating it.
     const connId = "c" + ++connSeq;
-    const entry: ClientEntry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, lastActivity: Date.now(), isAlive: true };
+    const entry: ClientEntry = { ws, connId, connectedAt: Date.now(), instanceId: null, file: null, fileKey: null, page: null, pluginVersion: null, frames: 0, isAlive: true };
     ws.on("pong", () => { entry.isAlive = true; });
     connIds.set(ws, connId);
     clients.set(connId, entry);
@@ -484,17 +488,17 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       }
       const msg = parsePluginFrame(parsed);
       if (!msg) return;
-      // ANY message from this client is a sign of life — recorded unconditionally, before the
+      // ANY message from this client is a sign of life — counted unconditionally, before the
       // type-specific handling below, so request()'s stall detector (see below) can tell "the plugin
       // is genuinely walking a big file and periodically reporting progress" from "nothing has been
       // heard from this socket since the command was sent", which a plain reply-or-timeout wait
       // cannot: findings 202/213 measured a 300s/908s silent wait, on a bridge that WAS connected, for
       // work that took 7.5-8.8s once a daemon kept the connection warm (finding 220).
-      entry.lastActivity = Date.now();
+      entry.frames++;
       // An unsolicited progress frame relayed from the plugin's own UI (figma-plugin/src/progress.ts
       // posts these to the iframe DOM; ui.html forwards a bridge-triggered run's frames over this
       // socket too). Carries no request id — same rule as `hello` — and needs no reply; it exists
-      // to keep `lastActivity` current during a long walk — and to feed the progress listener of any
+      // to keep `frames` moving during a long walk — and to feed the progress listener of any
       // request in flight on THIS connection (the MCP server forwards them as notifications/progress).
       if (msg.type === "progress") {
         for (const p of pending.values()) {
@@ -810,6 +814,7 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
       let stallTimer: ReturnType<typeof setInterval> | null = null;
       if (typeof stallMs === "number" && stallMs > 0) {
         const sentAt = Date.now();
+        const framesAtSend = client.frames;
         stallTimer = setInterval(() => {
           if (!pending.has(id)) return; // settled already — the interval's own clear below is racing it
           // LIVE (2026-09-25): a real one-page export goes legitimately quiet for longer than any
@@ -818,10 +823,11 @@ function createBridge(port: number = PORT, opts: BridgeOptions = {}) {
           // the reply (catalog build, then a 120 MB reply serialised and sent) — so "quiet for stallMs
           // at ANY point" aborted a working export and left the plugin walking for nobody. The stall
           // this exists to catch (findings 202/213) is a connection that never shows life for the
-          // request at all; so the check disarms itself on the FIRST sign of life after `sentAt` and
-          // the real per-command timeout bounds everything after that (as it always did on the daemon
-          // path, which never opts in).
-          if (client.lastActivity >= sentAt) { if (stallTimer) clearInterval(stallTimer); stallTimer = null; return; }
+          // request at all; so the check disarms itself on the FIRST frame after the send — by COUNT
+          // (`frames`), not by clock: a timestamp compare read a client that connected in the same
+          // millisecond as the send as life since the send — and the real per-command timeout bounds
+          // everything after that (as it always did on the daemon path, which never opts in).
+          if (client.frames > framesAtSend) { if (stallTimer) clearInterval(stallTimer); stallTimer = null; return; }
           if (Date.now() - sentAt < stallMs) return;
           pending.delete(id);
           if (stallTimer) clearInterval(stallTimer);
