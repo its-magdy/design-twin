@@ -790,7 +790,8 @@ const sandbox = context as unknown as Sandbox;
     af0.tracks?.[0]?.op === "scale" && af0.tracks?.[0]?.keyframes?.[1]?.value === 0.5));
   const af2 = an.fills?.["2"];
   const af2Phase = af2 && "properties" in af2 ? af2.properties["shader:phase"] : undefined;
-  const af2PhaseTrack0 = af2Phase && must(af2Phase.tracks, "af2 shader:phase tracks")[0];
+  // must() only once duration matched — the old && chain never reached `tracks` otherwise
+  const af2PhaseTrack0 = af2Phase && af2Phase.duration === 3 ? must(af2Phase.tracks, "af2 shader:phase tracks")[0] : undefined;
   ok("motion animations.fills shader track under properties (SET op omitted)", !!(af2Phase && af2Phase.duration === 3 &&
     af2PhaseTrack0 && af2PhaseTrack0.op === undefined && af2PhaseTrack0.keyframes?.[0]?.value === 6));
   const as1 = an.strokes?.["1"];

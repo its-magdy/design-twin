@@ -218,7 +218,7 @@ check("catalog: removed / added components and a new variant option are all seen
   const cat = (): { components: Array<CatalogComponent & { variantProps?: Record<string, string[]> }> } => ({ components: [{ key: "k1", id: "1:1", name: "Button", type: "COMPONENT_SET", page: "DS", variantProps: { State: ["default", "pressed"] } }, { key: "k2", id: "1:2", name: "Chip", type: "COMPONENT" }] });
   const b = cat();
   const b0 = must(b.components[0], "b.components[0]");
-  must(must(b0.variantProps, "b0.variantProps").State, "b0.variantProps.State").push("loading"); b0.page = "Moved"; b.components.splice(1, 1); b.components.push({ key: "k3", id: "1:3", name: "Badge", type: "COMPONENT" });
+  b0.variantProps?.State?.push("loading"); b0.page = "Moved"; b.components.splice(1, 1); b.components.push({ key: "k3", id: "1:3", name: "Badge", type: "COMPONENT" });
   const d = diffDocs(cat(), b);
   if (d.kind !== "catalog") return false;
   const dc0 = d.changed[0];
