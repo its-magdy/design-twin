@@ -263,7 +263,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
 
 // ================================================================= livetest-3 regressions (P2a)
 // Every fixture below is the REAL export / probe output of the livetest-3 run, built by
-// test/fixtures/livetest3/verify/build.js (which proves the pruned exports give byte-identical
+// test/fixtures/livetest3/verify/build.ts (which proves the pruned exports give byte-identical
 // expectations and audits to the full ones). The "before" numbers in the comments are what the
 // pre-fix verify-screen.js printed on these exact files.
 (() => {

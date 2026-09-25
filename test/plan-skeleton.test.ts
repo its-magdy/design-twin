@@ -1,6 +1,6 @@
 // Offline tests for design-to-code/plan-skeleton.ts — the build-screen plan, generated from the export
 // (livetest-3 §2.9 f; P2b). Driven by test/fixtures/livetest3/plan/, the live run's real export pruned
-// by its build.js (visibility, bindings and instances are the export's own — see the counts below).
+// by its build.ts (visibility, bindings and instances are the export's own — see the counts below).
 //   node test/plan-skeleton.test.ts
 import fs from "node:fs";
 import os from "node:os";

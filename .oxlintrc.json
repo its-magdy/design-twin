@@ -6,8 +6,9 @@
   "plugins": ["typescript"],
   // Only the rules below — no default categories.
   "categories": { "correctness": "off", "suspicious": "off", "pedantic": "off", "perf": "off", "style": "off", "restriction": "off", "nursery": "off" },
-  // .js/.mjs (build scripts, committed bundles) and fixtures have no tsconfig and would lint untyped.
-  "ignorePatterns": ["test/fixtures/**", "**/*.js", "**/*.mjs", "**/dist/**", ".claude/**", "figma-plugin/code.js", "**/node_modules/**"],
+  // .js/.mjs (committed bundles) and fixtures have no tsconfig and would lint untyped — except the two
+  // fixture generators, which test/tsconfig.json types like any other test file.
+  "ignorePatterns": ["test/fixtures/**", "!test/fixtures/livetest3/*/build.ts", "**/*.js", "**/*.mjs", "**/dist/**", ".claude/**", "figma-plugin/code.js", "**/node_modules/**"],
   "rules": {
     "typescript/no-explicit-any": "error",
     "typescript/no-unsafe-assignment": "error",
