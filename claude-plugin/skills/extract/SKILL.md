@@ -107,9 +107,10 @@ with the *library* open, not the file consuming it).
 name and the same size, and `list children` returns only name/id/type/size, so nothing in that output
 tells them apart. Don't take the first id: `dtwin screenshot <id>` renders ONE node to
 `design/export/assets/<id>_ref.png` cheaply (no `serialize()`, no asset walk, well under a second
-warm). Shoot each candidate, look, then pull the right one. That PNG lands in exactly the place a
-later `--node` pull of the same frame writes its own reference, so shooting first costs nothing and
-leaves no duplicate. Ask the user if the renders don't settle it.
+warm). Shoot each candidate, look, then pull the right one. At the default scale that PNG lands in
+exactly the place a later `--node` pull of the same frame writes its own reference, so shooting first
+costs nothing and leaves no duplicate. A cheap `--scale 0.25` thumbnail is written as
+`<id>_shot@0.25x.png` instead, so it never stands in for the full-size reference. Ask the user if the renders don't settle it.
 
 **A state you need may be a sibling frame, not a missing design.** Before reporting "there is no
 populated/empty/error state", run `dtwin list children <the parent section>`. On the live file the

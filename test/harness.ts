@@ -633,6 +633,37 @@ const sandbox: Sandbox = context;
     sel.assets.some((a) => a.kind === "reference" && /_ref\.png$/.test(a.file)));
   ok("every asset carries a content hash, so a consumer can spot duplicates without diffing bytes",
     sel.assets.every((a) => typeof a.hash === "string" && a.hash.length > 0));
+  // DT-25 / F-08 end to end: the REAL plugin reply above, written by the REAL bridge writer over an
+  // assets/ dir that already holds (a) a different image under the reference's own name — a discovery
+  // thumbnail — and (b) the first SVG's exact bytes under another name. Every pointer the written screen
+  // JSON carries must name a file on disk (exact case), and the reference must be this pull's render.
+  {
+    const os = await import("node:os");
+    const OUT = await import("../bridge/src/write-out.ts");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-e2e-assets-"));
+    fs.mkdirSync(path.join(dir, "assets"));
+    const refAsset = must(sel.assets.find((a) => a.kind === "reference"), "the reply's reference asset");
+    fs.writeFileSync(path.join(dir, "assets", refAsset.file), Buffer.from([137, 80, 78, 71, 1, 2, 3])); // a different PNG under the same name
+    const reply = JSON.parse(JSON.stringify({ ...sel, screenName: sel.screen.screen || "Harness screen", nodeId: tree.id, page: "Harness page", pageId: "0:1" })) as ScreenReply;
+    const res = OUT.writeScreen(dir, reply, undefined);
+    const written = JSON.parse(fs.readFileSync(res.wrote.screen, "utf8")) as ScreenExport;
+    const ptrs: string[] = [];
+    const visit = (v: unknown): void => {
+      if (!v || typeof v !== "object") return;
+      if (Array.isArray(v)) { v.forEach(visit); return; }
+      for (const [k, val] of Object.entries(v)) (k === "asset" || k === "reference") && typeof val === "string" ? ptrs.push(val) : visit(val);
+    };
+    visit(written.nodes);
+    const onDisk = new Set(fs.readdirSync(path.join(dir, "assets")));
+    // This fixture's reply carries one asset, the reference (the SVG/content-reuse cases run with the
+    // plugin's asset shape in bridge.test.ts). With a thumbnail pre-seeded under its name, the check that
+    // tells a working writer from a broken one is the next: the pointer must MOVE to this pull's render.
+    ok("[DT-25 e2e] every pointer the plugin's reply produces names a file on disk (exact case)",
+      ptrs.length >= 1 && ptrs.every((p) => p.startsWith("assets/") && onDisk.has(p.slice("assets/".length))));
+    ok("[F-08 e2e] the root reference is this pull's render, not the file that already held its name",
+      written.nodes[0]?.reference !== "assets/" + refAsset.file && fs.readFileSync(path.join(dir, must(written.nodes[0]?.reference, "reference"))).equals(Buffer.from(must(refAsset.base64, "base64"), "base64")));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   ok("componentPropertyReferences -> propRefs (stripped)", !!(txt.propRefs && txt.propRefs.characters === "Label"));
   const btnOverride0 = btn.overrides?.[0];
   ok("instance overrides captured (empty filtered)", Array.isArray(btn.overrides) && btn.overrides.length === 1 && btnOverride0 !== undefined && btnOverride0.fields.indexOf("characters") !== -1);

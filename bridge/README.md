@@ -323,7 +323,8 @@ MCP twin: `figma_export_url` (also accepts a bare node id, not just a URL).
 dtwin --screenshot 123:456                # writes design/export/assets/123_456_ref.png — the same
                                           # path a later --node pull of that frame writes its own
                                           # reference to, so there is never a second copy
-dtwin --screenshot 123:456 --scale 3      # override the default (auto, capped at 2048px on the longest side)
+dtwin --screenshot 123:456 --scale 0.25   # override the default (auto, capped at 2048px on the longest side);
+                                          # writes assets/123_456_shot@0.25x.png, never the reference's name
 ```
 
 Every export already carries **one** whole-frame reference PNG per exported root (`reference` in the

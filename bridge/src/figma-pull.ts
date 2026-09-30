@@ -111,6 +111,7 @@
 //   dtwin --screenshot <id> [--scale N]  # on-demand PNG of ONE node (a component/instance
 //                                        # buried in a dense screen, say) — the visual-validation
 //                                        # counterpart to --list/--children. WRITES assets/<id>_ref.png
+//                                        # (with --scale: assets/<id>_shot@<N>x.png)
 //                                        # (unlike --list/--children, which only print), but is still
 //                                        # cheap: it skips serialize() and the recursive asset walk, so
 //                                        # exportAsync on the node itself is the only cost. --scale
@@ -237,7 +238,7 @@ const writeJson = (dir: string, name: string, obj: unknown, quiet?: boolean) => 
 // OUT.writePages itself) — kept as an export because test/bridge.test.ts drives the pages/ LAYOUT
 // through this exact entry point.
 const writePages = (dir: string, layersDoc: LayersDoc | null | undefined) => OUT.writePages(dir, layersDoc, plog);
-const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"]) => OUT.writeScreenshot(dir, r, plog);
+const writeScreenshot = (dir: string, r: Commands["screenshot"]["reply"], scale?: number) => OUT.writeScreenshot(dir, r, plog, { scale });
 // hygiene.json persists every warning (see design-system-layout.ts), but writeJson's own log line is
 // just "wrote design-system/hygiene.json" — a caller watching stderr would never see a DUPLICATE
 // COMPONENT NAME or a variant-explosion warning without a separate JSON read. Echo them to stderr
@@ -1039,7 +1040,7 @@ async function main(parsed: ParsedArgs, core: typeof ServerCore): Promise<void> 
     // Print the path writeScreenshot actually wrote, not the plugin's own relative `reference`
     // string: those disagreed for a whole release (live-test findings 20/31) and a printed path that
     // finds nothing is worse than no path at all.
-    const shot = writeScreenshot(outDir, r);
+    const shot = writeScreenshot(outDir, r, scale);
     const ref = shot.reference || r.reference;
     if (!ref) throw new Error(`the plugin rendered ${r.name} (${r.type}) but named no reference file — nothing was written`);
     console.log(JSON.stringify({ id: r.id, name: r.name, type: r.type, reference: ref }, null, 2));

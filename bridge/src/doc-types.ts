@@ -661,6 +661,11 @@ export interface IndexRow {
   /** sibling <Screen>.assets.json */
   assets?: string;
   reference?: string;
+  /** reference PNG px per design px (write-out.js writeScreen; F-118). */
+  referenceScale?: number;
+  /** where the reference PNG's top-left sits relative to the node's `box` top-left, in design px — the
+   *  render bounds include shadows/outside strokes, so it is usually <= 0 (F-118). */
+  referenceOffset?: { x: number; y: number };
   w?: number;
   h?: number;
 }

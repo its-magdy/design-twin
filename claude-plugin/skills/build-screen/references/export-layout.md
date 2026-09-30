@@ -162,7 +162,11 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
 - The reference PNG is rendered **above 1x** (a 1440x1100 frame came back 2048x1565, ~1.42x) — the
   scale is chosen to fit a pixel budget, so it is not a round number and not worth assuming. Read the
   image's real dimensions and compare against `box.w`/`box.h` rather than treating the PNG's pixels as
-  layout units (px / pt / dp — Figma px at 1x, whatever your stack calls them).
+  layout units (px / pt / dp — Figma px at 1x, whatever your stack calls them). A single-screen pull
+  records both on the index row: `referenceScale` (PNG px per design px) and `referenceOffset` (where
+  the PNG's top-left sits relative to `box`, in design px). The render covers the node's shadows and
+  outside strokes, so a popup with a 21 px shadow has `referenceOffset: {x: -21, y: -1}` while a
+  shadowless frame has `{x: 0, y: 0}` — subtract it before comparing a crop against box coordinates.
 - The reference screenshot (visual ground truth) — held by the `reference` field — **`nodes[0].reference` in a single-screen
   `design/<screen>.json`** (the field sits on the node, and there is one per exported node), or the
   **root `reference`** of a page-walk layer file (`design/export/pages/<page>/<name>__<id>.json`, where it
