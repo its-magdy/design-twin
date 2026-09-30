@@ -17,6 +17,7 @@ var MAP_FILE = path.join(DESIGN_DIR, "codeconnect.local.json");
 var PLAN_DIR = path.join(DESIGN_DIR, "plan");
 var AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 var VERIFY_DIR = path.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
 
 // bridge/src/snapshot-meta.ts
 function field(doc, key) {
@@ -36,12 +37,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path3, parent, depth) {
+  (function go(node, parentHidden, path4, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -81,6 +82,10 @@ function readJson(file, guard) {
   }
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
   return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
 }
 
 // design-to-code/catalog-input.ts
@@ -543,7 +548,7 @@ function isMainFallback(metaUrl) {
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -570,7 +575,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path3, message) => errors.push({ path: path3, message });
+  const err = (path4, message) => errors.push({ path: path4, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -612,6 +617,7 @@ function validateMap(map) {
       }
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
       if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
@@ -676,8 +682,81 @@ function isCodeConnectMap(x) {
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 if (false) process.exitCode = main(process.argv.slice(2));
 
+// design-to-code/design-system-dir.ts
+import fs3 from "node:fs";
+import path3 from "node:path";
+function exportRootOf(screenFile, dsDir) {
+  const roots = [];
+  if (screenFile) {
+    const pages = path3.dirname(path3.dirname(screenFile));
+    if (path3.basename(pages) === "pages") roots.push(path3.dirname(pages));
+  }
+  if (dsDir) {
+    const parent = path3.dirname(path3.normalize(dsDir));
+    roots.push(path3.basename(parent) === "libraries" ? path3.dirname(parent) : parent);
+  }
+  return roots.find((r) => fs3.existsSync(path3.join(r, "libraries", "index.json"))) ?? null;
+}
+function findLibraryExports(screenFile, dsDir) {
+  const root = exportRootOf(screenFile, dsDir);
+  if (!root) return [];
+  const index = readJsonOrNull(path3.join(root, "libraries", "index.json"), isLibrariesIndex);
+  if (!index) return [];
+  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
+    const rel = path3.join(root, "libraries", r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path3.join(rel, "components.json"), isComponentsCatalog) };
+  });
+}
+function discoverCatalogs(namedFile, screenFile) {
+  const dir = path3.dirname(namedFile);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set([path3.resolve(namedFile)]);
+  const add = (file, role, catalog) => {
+    if (seen.has(path3.resolve(file)) || !fs3.existsSync(file)) return;
+    seen.add(path3.resolve(file));
+    out.push({ file, role, catalog });
+  };
+  for (const lib of findLibraryExports(screenFile, dir)) add(path3.join(lib.rel, "components.json"), "library", lib.components);
+  const sample = path3.join(dir, "components.library.json");
+  add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
+  return out;
+}
+function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
+  const out = [{ file: namedFile, catalog: named, role: "named" }];
+  const seen = /* @__PURE__ */ new Set([path3.resolve(namedFile)]);
+  for (const f of extraFiles) {
+    if (seen.has(path3.resolve(f))) continue;
+    seen.add(path3.resolve(f));
+    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+  }
+  for (const d of discoverCatalogs(namedFile, screenFile)) {
+    if (seen.has(path3.resolve(d.file))) continue;
+    seen.add(path3.resolve(d.file));
+    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else if (onSkip) onSkip(d.file);
+  }
+  return out;
+}
+function unionCatalog(sources) {
+  const first = sources[0];
+  const keys = /* @__PURE__ */ new Set();
+  const components = [];
+  for (const s of sources) for (const c of s.catalog.components) {
+    if (c.key) {
+      if (keys.has(c.key)) continue;
+      keys.add(c.key);
+    }
+    components.push(c);
+  }
+  return { ...first ? first.catalog : {}, components };
+}
+var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
+
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0] ?? "";
+function discoverExtraCatalogs(namedFile) {
+  return discoverCatalogs(namedFile).flatMap((d) => d.catalog ? [{ file: d.file, catalog: d.catalog }] : []);
+}
 var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function checkFreshness(catalog, push, warnings, opts = {}) {
   const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
@@ -704,6 +783,12 @@ function checkFreshness(catalog, push, warnings, opts = {}) {
   }
   return void 0;
 }
+function checkExtraFreshness(x, push, warnings, opts) {
+  const maxAgeMs = opts.maxAgeMs !== void 0 && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
+  const { exportedAt, ageMs, problem } = snapshotAge(x.catalog, opts.now || Date.now());
+  if (problem) push(warnings, "unknown-freshness", `${x.file} has ${problem === "missing" ? "no `exportedAt` timestamp" : `an unparseable \`exportedAt\` ('${exportedAt}')`} \u2014 map entries resolved in it may be stale.`, { ...ifDefined("exportedAt", exportedAt) });
+  else if (typeof ageMs === "number" && ageMs > maxAgeMs) push(warnings, "stale-snapshot", `${x.file} was exported ${(ageMs / 36e5).toFixed(1)}h ago (max-age ${(maxAgeMs / 36e5).toFixed(1)}h) \u2014 map entries resolved in it are checked against that snapshot.`, { ...ifDefined("exportedAt", exportedAt), ageMs, maxAgeMs });
+}
 function indexPropsByBase(rawProps, valKey, subject, push, warnings, mapKey) {
   const ambiguous = /* @__PURE__ */ new Set(), out = nullProto();
   for (const k of Object.keys(rawProps || {})) {
@@ -721,17 +806,29 @@ function driftLint(map, catalog, opts) {
   const errors = [], warnings = [];
   const push = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
   const freshness = checkFreshness(catalog, push, warnings, opts || {});
+  const extras = opts && opts.extraCatalogs || [];
+  for (const x of extras) checkExtraFreshness(x, push, warnings, opts || {});
   const comps = catalog && catalog.components || [];
   const byKey = /* @__PURE__ */ new Map(), byId = /* @__PURE__ */ new Map(), byName = /* @__PURE__ */ new Map();
-  for (const c of comps) {
-    if (c.key) {
-      const prev = byKey.get(c.key);
-      if (prev) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${prev.name}' and '${c.name}')`, { key: c.key });
-      byKey.set(c.key, c);
+  const index = (list, primary, file) => {
+    const own = /* @__PURE__ */ new Map(), claimed = /* @__PURE__ */ new Set();
+    for (const c of list) {
+      if (c.key) {
+        const dup = own.get(c.key);
+        if (dup) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${dup.name}' and '${c.name}')${file ? ` in ${file}` : ""}`, { key: c.key });
+        own.set(c.key, c);
+        if (!byKey.has(c.key) || claimed.has(c.key)) {
+          byKey.set(c.key, c);
+          claimed.add(c.key);
+        }
+      }
+      if (c.id && primary) byId.set(c.id, c);
+      if (c.name) getOrInit(byName, c.name, () => []).push(c);
     }
-    if (c.id) byId.set(c.id, c);
-    if (c.name) getOrInit(byName, c.name, () => []).push(c);
-  }
+  };
+  index(comps, true);
+  for (const x of extras) index(x.catalog.components || [], false, x.file);
+  const inNamed = new Set(comps);
   const mappedIds = /* @__PURE__ */ new Set();
   const compToEntries = /* @__PURE__ */ new Map();
   const entries = map && map.components || {};
@@ -754,7 +851,7 @@ function driftLint(map, catalog, opts) {
       continue;
     }
     if (comp.key) mappedIds.add(comp.key);
-    if (comp.id) mappedIds.add(comp.id);
+    if (comp.id && inNamed.has(comp)) mappedIds.add(comp.id);
     getOrInit(compToEntries, comp, () => []).push(mapKey);
     if (f.name && comp.name && f.name !== comp.name) {
       push(warnings, "stale-name", `map entry '${mapKey}' remembers name '${f.name}' but component is now '${comp.name}' (rename \u2014 refresh advisory metadata)`, { mapKey, from: f.name, to: comp.name });
@@ -791,7 +888,10 @@ function driftLint(map, catalog, opts) {
     if (c.key && mappedIds.has(c.key) || c.id && mappedIds.has(c.id)) continue;
     push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished \u2014 no key)"} has no map entry`, { ...ifDefined("key", c.key), name: c.name });
   }
-  return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
+  let mapped = 0, mappedElsewhere = 0;
+  for (const comp of compToEntries.keys()) if (inNamed.has(comp)) mapped++;
+  else mappedElsewhere++;
+  return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped, mappedElsewhere, errorCount: errors.length, warningCount: warnings.length } };
 }
 var LIVE_META_TIMEOUT_MS = 1e4;
 async function checkLiveFreshness(fileKey, token, exportedAt) {
@@ -849,8 +949,8 @@ function screenCoverage(map, catalog, screenDocs) {
   };
 }
 async function main(argv) {
-  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
-  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
+  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]`;
+  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, catalog: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
@@ -895,18 +995,27 @@ ${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014
   }
   if (!isCodeConnectMap(mapRaw)) return 1;
   const map = mapRaw;
-  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
+  const sources = readCatalogSet(
+    catalogFile,
+    catalog,
+    flags.catalog || [],
+    screenFiles[0],
+    (f) => console.error(`warn   [catalog-unreadable] ${f} is not a readable component catalog \u2014 skipped (map entries that live only there will show as orphaned).`)
+  );
+  console.error(catalogSetLine(sources));
+  const extraCatalogs = sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
+  const union = unionCatalog(sources);
+  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs), extraCatalogs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;
   console.error(`
-${s.mapped}/${s.catalogComponents} components mapped \xB7 ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
+${s.mapped}/${s.catalogComponents} components mapped${s.mappedElsewhere ? ` (+${s.mappedElsewhere} map entr${s.mappedElsewhere === 1 ? "y" : "ies"} resolved in the other catalog(s))` : ""} \xB7 ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
   console.error(`      (that number is the CATALOG measured against the map \u2014 it says nothing about any particular screen.)`);
-  let screenFail = false;
   if (screenFiles.length) {
     const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
     const docs = read.map((r) => r.doc);
-    const cov = screenCoverage(map, catalog, docs);
+    const cov = screenCoverage(map, union, docs);
     if (!cov.distinct) {
       console.error(`
 SCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes \u2014 nothing to reuse either way.`);
@@ -917,23 +1026,24 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
       );
       console.error(`       (this says which components you can REUSE by key \u2014 not which ones the build contains; that is verify's job.)`);
       const none = [];
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog) : null;
+      const others = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog, others) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
-        screenFail = true;
         console.error(
-          `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
+          `warn   [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
        That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.
        Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
-       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.
+       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) \u2014 are they the same components? Until confirmed, build every instance as new.`
         );
       } else if (cov.mapPct === 0) {
-        screenFail = true;
         console.error(
-          `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.
-       The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
+          `warn   [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map by key` + (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read \u2014 \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).
+` : `, nor to any catalog read.
+`) + `       The catalog you exported is not the library this screen is built from \u2014 a green "mapped" count above measures
        the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,
        then export it with \`dtwin pull --as-library "<name>"\` (CLI only \u2014 the MCP server has no library export).
-       Until then build every instance as new.`
+       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`
         );
       } else if (cov.unmapped.length) {
         console.error(
@@ -954,7 +1064,7 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
       console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
   }
-  return res.errors.length || screenFail ? 1 : 0;
+  return res.errors.length ? 1 : 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) void main(process.argv.slice(2)).then((code) => {
   process.exitCode = code;
@@ -963,6 +1073,7 @@ export {
   DEFAULT_MAX_AGE_MS,
   checkFreshness,
   checkLiveFreshness,
+  discoverExtraCatalogs,
   driftLint,
   screenCoverage,
   validateMap

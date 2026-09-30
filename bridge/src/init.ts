@@ -86,6 +86,22 @@ const isOurMcpEntry = (e: unknown): boolean => {
   return !!e && Array.isArray(args) && (args.some((a) => /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
 };
 
+// Does package.json list Tailwind v4 (tailwindcss not pinned to v3, or its v4-only Vite/PostCSS plugin) in dependencies or devDependencies?
+function usesTailwind(cwd: string): boolean {
+  let raw: unknown;
+  try { raw = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as unknown; } catch { return false; }
+  if (!isPlainObject(raw)) return false;
+  const deps = [raw.dependencies, raw.devDependencies].filter(isPlainObject);
+  // @tailwindcss/vite and @tailwindcss/postcss exist only for v4. `tailwindcss` itself counts unless its
+  // range is clearly v3 (^3 / ~3 / 3.x / >=3 <4): v3 scans only its `content` globs, so the note would be wrong.
+  if (deps.some((d) => "@tailwindcss/vite" in d || "@tailwindcss/postcss" in d)) return true;
+  const range = deps.map((d) => d.tailwindcss).find((v) => v !== undefined);
+  if (range === undefined) return false;
+  // Each `||` alternative on its own: "^3.0.0 || ^4.0.0" allows v4, so it still gets the note.
+  const isV3 = (r: string): boolean => /^\s*(?:[\^~]|>=?\s*)?v?3(?:$|[.\s<x*])/.test(r) && (!/^\s*>/.test(r) || /<\s*v?4/.test(r)); // ">=3" alone may be v4
+  return !(typeof range === "string" && range.split("||").every(isV3));
+}
+
 // Same detection order build-screen's step 0 documents — first match wins, most specific first.
 function detectProfile(cwd: string): { profile: string; because: string } | null {
   const has = (f: string) => fs.existsSync(path.join(cwd, f));
@@ -155,6 +171,9 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
   const gi = path.join(cwd, ".gitignore");
   const ignored = fs.existsSync(gi) && /^\/?design\/?\s*$/m.test(fs.readFileSync(gi, "utf8"));
   if (ignored) actions.push({ kind: "note", note: ".gitignore ignores design/ — target.json, codeconnect.local.json, plan/ and audit/ under it are hand-authored and are NOT regenerable. Ignore only the export: replace `design/` with `design/export/`" });
+
+  // DT-79 (D9: suggest only): a Tailwind project would otherwise compile class names quoted in design/.
+  if (usesTailwind(cwd)) actions.push({ kind: "note", note: LAYOUT.TAILWIND_SOURCE_NOT_NOTE });
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
@@ -281,4 +300,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson };
+export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson, usesTailwind };

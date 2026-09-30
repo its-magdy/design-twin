@@ -155,6 +155,8 @@ check its variant `options` for hover/focus/disabled/error/selected states befor
 visible `:focus-visible` rule even if the Figma design only shows a `:hover` state — it's the most
 commonly missed a11y requirement. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
 `[aria-disabled="true"]`.
+The browser's default `<button>` cursor is the arrow: set `cursor:pointer` on enabled buttons in the base CSS. A design
+with no Pressed variant still gets a default `:active` treatment (defaulted state, designer question).
 
 **Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
 target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).
@@ -186,7 +188,8 @@ appears on a vector node whose SVG export failed. Render it inline as
 **Tokens** — the right-hand value in `tokens.json` is a CSS custom property (e.g. `var(--color-primary)`).
 Use it inside the module CSS (`color: var(--color-text)`), not inline literals.
 - Generated theme: `node "<scripts>/tokens.js" <variables file> <dir>` with **no** `--web` flag — `tokens.css` is the
-  file for this stack (`:root` plus a `[data-theme="…"]` block per non-default mode). Its names keep
+  file for this stack (`:root` plus a `[data-theme="…"]` block per non-default mode; when several collections share a mode name each is scoped
+  `[data-theme-<collection>="<mode>"]` and `tokens.js` warns which attributes to set). Its names keep
   the Figma name's case and turn `/` and spaces into `-`: `Primary/Primary` → `--Primary-Primary`,
   `Space 4` → `--Space-4`. CSS has no built-in scale for them to shadow, so there is no prefix.
 - A name ending in `-<8 hex>` (`--Space-4-1a2b3c4d`) means two Figma variables share that name with

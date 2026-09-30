@@ -36,6 +36,10 @@ invent because the export did not provide one (token, component or asset — say
 where it lives); the verification evidence and the status you **expect** (see below); residual
 differences; open questions for the designer.
 
+You cannot ask the user: when the skill says to have the user confirm a list (e.g. the map-bootstrap
+stubs), record it in the plan, set `status:"awaiting-user"`, name the list in your hand-back and never
+confirm it on their behalf.
+
 Nothing stores a status: it is computed (`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" --status`) from the hook's result, the
 hashes of `files[]` and the verify report's verdict, and the hook runs after you hand back. Report
 the evidence you have and the status you expect: "rendered (Playwright, design/verify/<screen>.png);

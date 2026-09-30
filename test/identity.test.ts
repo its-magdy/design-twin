@@ -268,8 +268,9 @@ console.log("map-bootstrap.js --from-proposals / drift-lint.js:");
   const fresh = path.join(dir, "fresh.json");
   node("map-bootstrap.ts", [path.join(FX, "design-system/components.local.json"), "--out", fresh]);
   const dl0 = node("drift-lint.ts", [fresh, path.join(FX, "design-system/components.local.json"), "--screen", path.join(FX, POS + ".json")]);
-  ok("[226] with a catalog-only map, drift-lint names the re-key case instead of 'not the library this screen is built from'",
-    dl0.status === 1 && /\[catalog-rekeyed\]/.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
+  // D13 (field tests): catalog-rekeyed is a warning with a question to confirm — exit 0, no longer 1.
+  ok("[226/D13] with a catalog-only map, drift-lint names the re-key case (a warning to confirm, exit 0) instead of 'not the library this screen is built from'",
+    dl0.status === 0 && /^warn {3}\[catalog-rekeyed\]/m.test(dl0.stderr) && /Confirm: /.test(dl0.stderr) && !/not the library this screen is built from/.test(dl0.stderr));
 }
 
 report();

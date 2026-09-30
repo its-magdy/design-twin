@@ -739,8 +739,9 @@ export interface GetComponentModule {
 }
 export interface DriftLintModule {
   validateMap(map: unknown): { ok: boolean; errors: Array<{ path: string; message: string }> };
-  driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number }):
+  driftLint(map: unknown, catalog: ComponentsCatalog | null | undefined, opts?: { maxAgeMs?: number; now?: number; extraCatalogs?: ReadonlyArray<{ file: string; catalog: ComponentsCatalog }> }):
     { errors: unknown[]; warnings: unknown[]; freshness: unknown; summary: unknown };
+  discoverExtraCatalogs(namedFile: string): Array<{ file: string; catalog: ComponentsCatalog }>;
 }
 async function loadLayer<T>(mod: string, tool: string): Promise<T> {
   try {
@@ -873,13 +874,17 @@ server.registerTool(
           `\n\n${mapPath} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`node design-to-code/map-validate.ts ${mapPath}\`.`
       );
     }
-    const catalogRaw = JSON.parse(fs.readFileSync(componentsLocalPath(a.exportDir), "utf8")) as unknown;
+    const catalogFile = componentsLocalPath(a.exportDir);
+    const catalogRaw = JSON.parse(fs.readFileSync(catalogFile, "utf8")) as unknown;
     // Same as the CLI (design-to-code/drift-lint.ts): a non-catalog is linted as "no catalog".
     const catalog = isCatalogLike(catalogRaw) ? catalogRaw : null;
-    const res = layer.driftLint(map, catalog, a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : undefined);
+    // Same catalog set as the CLI (DT-26): components.library.json beside it and every pulled library, so a
+    // map entry for a library component is not "orphaned". Discovery never exits (this is the server process).
+    const extraCatalogs = layer.discoverExtraCatalogs(catalogFile);
+    const res = layer.driftLint(map, catalog, { ...(a.maxAgeHours ? { maxAgeMs: a.maxAgeHours * 3600000 } : {}), extraCatalogs });
     // Drift is a FINDING, not a tool failure — return it as a normal result so the agent reads the
     // errors instead of an isError blob it may discard. `ok` is the thing to branch on.
-    return textResult({ ok: res.errors.length === 0, ...res });
+    return textResult({ ok: res.errors.length === 0, catalogsRead: [catalogFile, ...extraCatalogs.map((x) => x.file)], ...res });
   })
 );
 

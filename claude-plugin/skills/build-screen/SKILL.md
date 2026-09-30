@@ -85,7 +85,8 @@ its export directly in `design/` — every path below works either way, just dro
   plus **`design/tokens.json`** overrides — Figma value → your token. Choose the input by what it
   means, because the choice changes values: `design/export/design-system/tokens.json` when it exists
   (the library's own definitions); else the screen's own `…__<id>.vars.json`; the merged
-  `design/export/variables.json` only when you need every screen at once. The union can hold two
+  `design/export/variables.json` only when you need every screen at once (a shell shared by several screens
+  does — see step 2). The union can hold two
   different variables with one name and different values (say `Space 4` = 24 and = 16); tokens.js
   then emits both, each suffixed with its key, and warns — the screen's own `.vars.json` gives the
   plain name its real value. Add the flag your profile names to also get ONE theme source file in the
@@ -207,8 +208,12 @@ Copy this checklist into your notes and keep it updated:
        design/export/design-system/components.local.json --screen <screen json>`.
        Without `--screen` it prints how much of the CATALOG your map covers — a figure that read
        `318/318 components mapped · 0 error(s)` on a map covering 0% of the screen about to be built,
-       because it measures the catalog against itself. With `--screen` it prints SCREEN COVERAGE and
-       exits non-zero at 0%. Fix an `ok:false` map before generating against it; heed a stale-snapshot
+       because it measures the catalog against itself. With `--screen` it prints SCREEN COVERAGE; 0% (and
+       `catalog-rekeyed`) is a warning with a confirm question, exit 0, like the audit's. drift-lint (and MCP
+       `design_drift_lint`) always reads the positional catalog plus `components.library.json` beside it and the
+       `design/export/libraries/*/components.json` listed in `libraries/index.json` (repeatable `--catalog <file>`),
+       printing which; map-bootstrap does the same only with `--screen`/`--from-proposals` (a full bootstrap
+       stubs just the named catalog). So a component from a pulled library is mapped, not orphaned. Fix an `ok:false` map before generating against it; heed a stale-snapshot
        warning. No map at all → **stop**, but run the coverage/cross-check FIRST and bootstrap only
        what this screen actually uses — a full bootstrap on a real catalog stubs every component in
        the file (318 on the live run, none of them on the screen about to be built) and produces a
@@ -216,10 +221,13 @@ Copy this checklist into your notes and keep it updated:
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json
        --out design/codeconnect.local.json --screen <screen json>` scopes the stubs to the keys/ids
        this screen's own visible instances reference, and have the user confirm only that short list
-       before continuing — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form
+       before continuing (a `designtwin:screen-builder` subagent cannot ask: it records the list in the
+       plan, sets `status:"awaiting-user"`, names the list in its hand-back and never confirms for the
+       user; the orchestrator asks) — or, when cross-check reported `catalog-rekeyed`, the `--from-proposals` form
        above instead (also already scoped to the screen's own instance keys). After any hand edit, check its shape with
        `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-validate.js" design/codeconnect.local.json` — drift-lint
-       assumes a well-formed map.
+       assumes a well-formed map. Entry `status` is `active` | `deprecated` | `needs-review`; an optional
+       free-text `note` is allowed; any other key is rejected.
      - **The catalog does not exist** (the normal single-screen case). This is **not** a stop, and it
        is not a reason to run map-bootstrap anyway — it will just tell you the file is missing.
        Offer the one-command fix: `dtwin pull --design-system` writes
@@ -316,8 +324,9 @@ Copy this checklist into your notes and keep it updated:
      hand-writing a theme from the bound token names. `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" … --web tailwind` writes only
      `theme.css` to the given directory; the generic token set is not written there unless you pass
      `--also-generic`. Feed it the design
-     system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
-     whose repeated names come out key-suffixed (see *Where everything is*). Move the file into the
+     system's `tokens.json`, else this screen's own `.vars.json` — a shell shared by several
+     screens needs every screen's tokens, so use the merged `variables.json` and pick, per key-suffixed
+     name, the key each screen's `.vars.json` carries (record it in the token row). Move the file into the
      app's source tree (ask where), list it in `files[]`, and have every screen import it; a project
      that already has a theme keeps it, and its names win. Do not fill a MISSING row with a token defined for a different role/surface just
      because it's close or already imported elsewhere — that's silent hardcoding by proxy and the bug
@@ -335,7 +344,9 @@ Copy this checklist into your notes and keep it updated:
    - **Layout tree** — stacks/grids/native containers with fill/hug/fixed per node; system chrome
      drawn in the frame (status bar, home indicator) becomes insets, not views.
    - **State matrix** — interaction states per control (from variant options + audit), screen data
-     states (loading/empty/error), and which are designed vs defaulted.
+     states (loading/empty/error), and which are designed vs defaulted. If every frame is one width, add
+     the designer question "desktop-only design — how should narrow widths behave?" and build the
+     profile's default.
    - **Unit conversions** — list the text metrics, strokes, shadows, blurs, gradients and transitions
      that need the profile's conversion, and mark approximations (spread on iOS, blur radius, diamond
      gradients) so verification doesn't chase them.
@@ -460,7 +471,7 @@ Copy this checklist into your notes and keep it updated:
 
 4. **States, scaling, theme, direction.** Before calling a component done:
    - Every interaction state in the matrix, including a **visible focus indicator** even if undrawn,
-     and pressed feedback on touch.
+     and pressed feedback on every pointer type (mouse and touch), plus the profile's cursor rule on web.
    - Screen data states: loading, empty, error (designed or the audit's default), not just the ideal.
    - Font scaling: layout survives 200% text (Android) / accessibility sizes (iOS) / 200% zoom (web)
      without clipping; touch targets ≥ 44pt iOS / 48dp Android / 24px web (44 recommended).
@@ -574,7 +585,7 @@ Copy this checklist into your notes and keep it updated:
    states designed vs defaulted (with the defaults used); approximations; **every name you invented**
    (any token/component/asset the export did not name — list each with what you called it and where
    it lives, so the user can rename it before it spreads); verification evidence (what was rendered
-   and compared, residual differences); open designer questions. If no component catalog
+   and compared, residual differences); **invented features**; open designer questions (including a desktop-only design). If no component catalog
    was exported (step 1), say so in one line — "new" there means unverified against Figma's catalog.
    Resolve whatever the `Stop` hook blocked on earlier in this turn before writing this report.
 
@@ -624,6 +635,15 @@ on its own, since it re-runs once per fix round — that reference explains why.
 - **No system chrome as views.** Drawn status bars, home indicators and keyboards become insets.
 - **Never invent a design decision silently.** Undesigned states/behaviors use the audit default and
   are listed in the report.
+- **A measurable accessibility failure is never waived.** WCAG 1.4.3 text contrast (placeholders too),
+  1.4.11 non-text contrast, 2.5.8 target size can never be closed by a `decision`, a `deviation` or "kept as
+  designed". Build it to pass (the audit's default, else the nearest passing design-system token, recorded as
+  a deviation `{nodeId, field, designed, built, reason}` citing the criterion and ratio) and list it as an
+  open designer question in the step-6 report.
+- **A feature with no design counterpart is invented** (CSV export, share link, rendered rich text): list it
+  in the report and make its output safe. CSV cells are quoted with `"` escaped as `""`, and a leading
+  `=`/`+`/`-`/`@`/Tab/CR gets a `'` prefix (OWASP CSV injection); user data goes in an `href` only with an
+  http/https/mailto scheme, never into innerHTML/`dangerouslySetInnerHTML`.
 - **Evidence over assertion.** Report what was rendered and compared, not that it "matches".
 - **Convention fallback ladder** when something's ambiguous: `design-system/`/IR → the user's
   codebase → common platform patterns. Match what's already there.

@@ -40,6 +40,16 @@ export const PLAN_DIR = path.join(DESIGN_DIR, "plan");
 export const AUDIT_DIR = path.join(DESIGN_DIR, "audit");
 export const VERIFY_DIR = path.join(DESIGN_DIR, "verify");
 
+// DT-79: Tailwind v4's automatic source detection scans every file git does not ignore — Markdown
+// included (tailwindcss.com/docs/detecting-classes-in-source-files) — so class names quoted in design/
+// notes, audits and plans are generated into the shipped CSS. The exclusion is `@source not "<path
+// relative to the stylesheet>";` (Tailwind v4.1+). Only SUGGESTED (D9): the path depends on where the
+// CSS entry lives, and the user's stylesheet is theirs. One wording for `dtwin init` and tokens.js.
+export const TAILWIND_SOURCE_NOT_NOTE =
+  `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. ` +
+  `Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` ` +
+  `(e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) — Tailwind v4.1+`;
+
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with
 // different fixes.
