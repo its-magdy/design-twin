@@ -30,7 +30,7 @@ interface KeyTables {
 }
 const KEYS: KeyTables = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -101,6 +101,9 @@ function validateMap(map: unknown): MapValidationResult {
 
     // A non-string status is "not one of the statuses" (Array.prototype.includes never matches it).
     if (e.status !== undefined && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    // A free-text note a person (or build-screen) leaves on an entry — "props mapped by hand", "why it is
+    // deprecated". No tool reads it; it only has to be a string (F-32).
+    optStrings(e, ["note"], at, err);
 
     if (e.props !== undefined) {
       if (!isObj(e.props)) err(`${at}.props`, "must be an object");

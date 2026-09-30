@@ -3,7 +3,7 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -729,6 +729,18 @@ function getOrInit(m, k, init) {
   return made;
 }
 
+// bridge/src/project-layout.ts
+import path3 from "node:path";
+var DESIGN_DIR = "design";
+var EXPORT_SUBDIR = "export";
+var EXPORT_DIR = path3.join(DESIGN_DIR, EXPORT_SUBDIR);
+var TARGET_FILE = path3.join(DESIGN_DIR, "target.json");
+var MAP_FILE = path3.join(DESIGN_DIR, "codeconnect.local.json");
+var PLAN_DIR = path3.join(DESIGN_DIR, "plan");
+var AUDIT_DIR = path3.join(DESIGN_DIR, "audit");
+var VERIFY_DIR = path3.join(DESIGN_DIR, "verify");
+var TAILWIND_SOURCE_NOT_NOTE = `Tailwind v4 scans every file git does not ignore, ${DESIGN_DIR}/ included, so class names quoted in ${DESIGN_DIR}/ notes, audits and plans end up in your CSS. Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` (e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) \u2014 Tailwind v4.1+`;
+
 // design-to-code/tokens.ts
 var isLeaf = (n) => n !== void 0 && n.$value !== void 0;
 var round = (x) => Math.round(x * 1e4) / 1e4;
@@ -1016,8 +1028,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     }
     const planned = plan.canonical.get(v);
     if (planned === void 0) continue;
-    const path4 = planned.split(DTCG_SEP);
-    if (path4.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    const path5 = planned.split(DTCG_SEP);
+    if (path5.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
     }
@@ -1028,25 +1040,25 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       continue;
     }
     let node = root, collided = false;
-    for (const [i, seg] of path4.slice(0, -1).entries()) {
+    for (const [i, seg] of path5.slice(0, -1).entries()) {
       let child = node[seg];
       if (child === void 0) child = node[seg] = {};
       else if (isLeaf(child)) {
-        warn(`token '${v.name}' collides with token '${path4.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
+        warn(`token '${v.name}' collides with token '${path5.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
         collided = true;
         break;
       }
       node = child;
     }
     if (collided) continue;
-    const leafKey = path4[path4.length - 1] ?? "";
+    const leafKey = path5[path5.length - 1] ?? "";
     const existing = node[leafKey];
     if (existing !== void 0 && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name \u2014 skipped`);
       continue;
     }
     if (existing !== void 0) {
-      warn(`token '${v.name}' lands on '${path4.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
+      warn(`token '${v.name}' lands on '${path5.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
       continue;
     }
     let type = DTCG_TYPE[v.type];
@@ -1186,10 +1198,92 @@ function cssPlan(designSystem) {
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-")
   );
 }
+function collectionOf(v, collections) {
+  const named = collections.filter((c) => c.name === v.collection);
+  if (named.length <= 1) return named[0];
+  const modes = Object.keys(v.values || {});
+  return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
+}
+function planModeScopes(designSystem) {
+  const collections = designSystem && designSystem.collections || [];
+  const vars = designSystem && designSystem.variables || [];
+  const groupIds = /* @__PURE__ */ new Map();
+  collections.forEach((c, i) => groupIds.set(c, "c" + i));
+  const groupOf = (v) => {
+    const c = collectionOf(v, collections);
+    return c ? groupIds.get(c) ?? "" : "";
+  };
+  const collOfGroup = /* @__PURE__ */ new Map();
+  for (const [c, id] of groupIds) collOfGroup.set(id, c);
+  const groupsPerMode = /* @__PURE__ */ new Map();
+  const declared = (g, v) => {
+    const c = collOfGroup.get(g);
+    if (c) {
+      const def2 = c.default ?? (c.modes || [])[0];
+      return (c.modes || []).filter((m) => m !== def2);
+    }
+    const def = defaultModeName(v, collections);
+    return Object.keys(v.values || {}).filter((m) => m !== def);
+  };
+  for (const v of vars) {
+    if (!segs(v.name).length || !emitted(v)) continue;
+    if (baseValue(v, collections) === void 0) continue;
+    const g = groupOf(v);
+    for (const m of declared(g, v)) {
+      const list = getOrInit(groupsPerMode, m, () => []);
+      if (!list.includes(g)) list.push(g);
+    }
+  }
+  const qualified = /* @__PURE__ */ new Set();
+  for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  const nameOf = (g) => collOfGroup.get(g)?.name;
+  const slugOf = (g) => suffixSlug(nameOf(g) ?? "no collection") || "collection";
+  const slugCount = /* @__PURE__ */ new Map();
+  for (const g of qualified) slugCount.set(slugOf(g), (slugCount.get(slugOf(g)) ?? 0) + 1);
+  const attrOf = /* @__PURE__ */ new Map();
+  const used = /* @__PURE__ */ new Set();
+  for (const g of qualified) {
+    const slug = slugOf(g);
+    const key = collOfGroup.get(g)?.key;
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n;
+    used.add(attr);
+    attrOf.set(g, attr);
+  }
+  const warnings = [];
+  for (const [m, list] of groupsPerMode) {
+    if (list.length < 2) continue;
+    const label = (g) => nameOf(g) ?? "(no collection)";
+    warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
+  }
+  const scope = (g, m) => {
+    const list = groupsPerMode.get(m) || [];
+    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+  };
+  return { groupOf, scope, warnings };
+}
+function modeBlocks(plan) {
+  const blocks = /* @__PURE__ */ new Map();
+  return {
+    set(v, mode, prop, line) {
+      const group = plan.groupOf(v);
+      getOrInit(blocks, group + "\0" + mode, () => ({ group, mode, lines: /* @__PURE__ */ new Map() })).lines.set(prop, line);
+    },
+    render(selector) {
+      let out = "";
+      for (const b of blocks.values()) {
+        const sc = plan.scope(b.group, b.mode);
+        out += `
+${selector ? selector(b.mode, sc) : `[${sc.attribute}="${cssAttrEscape(b.mode)}"]`} {
+` + [...b.lines.values()].join("\n") + "\n}\n";
+      }
+      return out;
+    }
+  };
+}
 function toCSS(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
   const vars = designSystem && designSystem.variables || [];
-  const selectorFor = (mode) => opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`;
   const plan = cssPlan(designSystem);
   if (notes) notes.push(...plan.notes);
   const ref = (referrer) => (name) => {
@@ -1198,7 +1292,7 @@ function toCSS(designSystem, opts, notes) {
   };
   const pctRef = (referrer) => (name) => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = /* @__PURE__ */ new Map();
-  const perMode = nullProto();
+  const perMode = modeBlocks(planModeScopes(designSystem));
   for (const v of vars) {
     if (!segs(v.name).length) continue;
     if (!emitted(v)) continue;
@@ -1211,18 +1305,17 @@ function toCSS(designSystem, opts, notes) {
     const baseStr = JSON.stringify(base);
     const unit = numberUnit(v, opts);
     const r = ref(v), p = pctRef(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
+    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const val = (raw) => font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p);
+    rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r, p)};`);
+      perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
   }
-  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  for (const [m, lines] of Object.entries(perMode)) out += `
-${selectorFor(m)} {
-` + [...lines.values()].join("\n") + "\n}\n";
-  return out;
+  const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
+  return out + perMode.render(opts && opts.selector);
 }
 var TW_NAMESPACE = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
 var TW_PREFIX = "figma-";
@@ -1237,16 +1330,24 @@ function twName(v, opts) {
 var RADIUS_SCOPES = /* @__PURE__ */ new Set(["CORNER_RADIUS"]);
 function twKind(v, opts) {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null;
   const scopes = v.scopes || [];
   const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  if (v.type === "STRING") {
+    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
+    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
+  }
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null;
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
   if (!narrowed && /font.?size|text.?size|type.?size/i.test((v.collection ?? "") + "/" + v.name)) return "fontSize";
   return "dimension";
+}
+function cssFontFamily(raw) {
+  const s = raw.trim();
+  if (!s || /[,'"]/.test(s) || /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(s)) return cssEscapeText(raw);
+  return '"' + s.replace(/["\\\n\r\f]/g, hexEsc) + '"';
 }
 function toTailwind(designSystem, opts, notes) {
   const collections = designSystem && designSystem.collections || [];
@@ -1263,7 +1364,21 @@ function toTailwind(designSystem, opts, notes) {
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = /* @__PURE__ */ new Map();
-  const perMode = nullProto();
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes);
+  warnings.push(...scopes.warnings);
+  const aliasedByFont = /* @__PURE__ */ new Set();
+  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
+  for (let v = queue.pop(); v !== void 0; v = queue.pop()) {
+    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
+      const t = aliasTarget(plan, n, v);
+      if (t && !aliasedByFont.has(t)) {
+        aliasedByFont.add(t);
+        queue.push(t);
+      }
+    }
+  }
+  const leftOut = [];
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -1273,28 +1388,34 @@ function toTailwind(designSystem, opts, notes) {
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === void 0) continue;
-    if (twKind(v, opts)) utilities++;
+    const kind = twKind(v, opts);
+    if (v.type === "STRING" && !kind && !aliasedByFont.has(v)) {
+      if (!leftOut.includes(v.name)) leftOut.push(v.name);
+      continue;
+    }
+    if (kind) utilities++;
     const unit = numberUnit(v, opts);
     const ref = (n) => {
       const t = aliasTargetId(plan, n, v);
       return t ? t.id : "--" + TW_PREFIX + twSlug(n);
     };
     const pctRef = (n) => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
-    const val = (raw) => cssValue(webNumber(v, raw), unit, ref, pctRef);
+    const val = (raw) => kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef);
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === void 0) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = /* @__PURE__ */ new Map())).set(name, `  ${name}: ${val(values[m])};`);
+      perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+  }
+  if (leftOut.length) {
+    warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, \u2026 +${leftOut.length - 4} more` : ""}) \u2014 a value like 'Semi Bold' is not usable in @theme and generates no utility. They are kept in tokens.dtcg.json and tokens.css (written with --also-generic); scope a font-family STRING to FONT_FAMILY in Figma to get a --font-figma-* utility`);
   }
   let out = '@import "tailwindcss";\n/* GENERATED by Design Twin (tokens.js --web tailwind) \u2014 do not edit by hand; re-run after a token pull.\n   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-\u2026),\n   so Tailwind\'s own scale (rounded-xl, p-4, \u2026) keeps its framework meaning. */\n';
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  for (const [m, lines] of Object.entries(perMode)) out += `
-[data-theme="${cssAttrEscape(m)}"] {
-` + [...lines.values()].join("\n") + "\n}\n";
+  out += perMode.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 var RESOLVER_VERSION = "2025.10";
@@ -1418,8 +1539,14 @@ function lintTokens(designSystem, opts) {
   return dedupe(warnings);
 }
 var dedupe = (list) => [...new Set(list)];
+function cssFilesOf(opts) {
+  return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
+}
 function lintNames(designSystem, opts, warnings) {
   const vars = designSystem && designSystem.variables || [];
+  const files = cssFilesOf(opts);
+  const inCss = files.join("/") || "the CSS";
+  warnings.push(...planModeScopes(designSystem).warnings);
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
     for (const target of aliasNames(v.values[m])) {
@@ -1436,11 +1563,11 @@ function lintNames(designSystem, opts, warnings) {
       if (isAlias(opacity)) {
         plan = plan || cssPlan(designSystem);
         if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
-          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); tokens.css/theme.css carry the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); ${inCss} carr${files.length > 1 ? "y" : "ies"} the colour only \u2014 the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
           break;
         }
       } else if (pctOutOfRange(opacity)) {
-        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(opacity)}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${opacity}`);
       }
     }
   }
@@ -1449,14 +1576,14 @@ function lintNames(designSystem, opts, warnings) {
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
-      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0\u2013100 range; clamped to ${clampOpacityPct(Number(txt))}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${txt}`);
     }
   }
   for (const v of vars) {
     if (v.type !== "STRING") continue;
     for (const m of Object.keys(v.values || {})) {
       if (cssNeedsEscape(v.values[m])) {
-        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in tokens.css`);
+        warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in ${inCss}`);
         break;
       }
     }
@@ -1465,7 +1592,7 @@ function lintNames(designSystem, opts, warnings) {
   for (const c of designSystem && designSystem.collections || []) for (const m of c.modes || []) modeNames.add(m);
   for (const v of vars) for (const m of Object.keys(v.values || {})) modeNames.add(m);
   for (const m of modeNames) {
-    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its tokens.css selector`);
+    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its ${inCss} selector`);
   }
   for (const v of vars) {
     if (v.type === "FLOAT" && unitDecision(v, opts) === "name") {
@@ -1475,7 +1602,8 @@ function lintNames(designSystem, opts, warnings) {
     if (!s.length) continue;
     const folded = cssVarName(v.name);
     if (folded !== "--" + s.join("-")) {
-      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
+      const as = files.map((f) => `${f === "theme.css" ? twName(v, opts) : folded} in ${f}`).join(", ");
+      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${as}`);
     }
   }
   return warnings;
@@ -1488,6 +1616,7 @@ function emitTokens(designSystem, opts) {
   const tailwind = opts && opts.tailwind ? toTailwind(designSystem, opts, notes) : void 0;
   const { resolver, files } = toResolver(designSystem, warnings, opts);
   const collisions = collisionMessages(notes, opts);
+  if (tailwind) warnings.push(...tailwind.warnings);
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
@@ -1533,17 +1662,18 @@ ${USAGE}`);
     NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json \u2014 pass that instead."
   );
   fs3.mkdirSync(outDir, { recursive: true });
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input) });
   const hasTarget = web !== void 0 || native !== void 0;
   const writeGeneric = !hasTarget || alsoGeneric;
+  const cssFiles = [...writeGeneric ? ["tokens.css"] : [], ...webFile !== void 0 ? [webFile] : []];
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== void 0, sources: sourcesOf(ds, input), cssFiles });
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs3.writeFileSync(path3.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs3.writeFileSync(path3.join(outDir, "tokens.css"), css);
-    fs3.writeFileSync(path3.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path4.join(outDir, "tokens.css"), css);
+    fs3.writeFileSync(path4.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
-      const dest = path3.join(outDir, ...rel.split("/"));
-      fs3.mkdirSync(path3.dirname(dest), { recursive: true });
+      const dest = path4.join(outDir, ...rel.split("/"));
+      fs3.mkdirSync(path4.dirname(dest), { recursive: true });
       fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
@@ -1551,18 +1681,19 @@ ${USAGE}`);
   const tw = tailwind;
   if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
     const file = webFile;
-    fs3.writeFileSync(path3.join(outDir, file), tw.text);
+    fs3.writeFileSync(path4.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
-    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
-    fs3.writeFileSync(path3.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path4.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
   warnings.forEach((w) => console.error("warn  " + w));
+  if (webFile !== void 0) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {
     const genericNote = writeGeneric ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ \u2014 also written here because --also-generic was passed)` : ` \u2014 the generic handoff set (tokens.dtcg.json, tokens.css, tokens.resolver.json, tokens/) was NOT written here; it belongs under design/, not the app's source tree (pass --also-generic to also write it to ${outDir})`;
     console.log(`wrote ${canonicalFile} to ${outDir} \u2014 this is the file your app should import${genericNote} (${(ds.variables || []).length} variables)`);

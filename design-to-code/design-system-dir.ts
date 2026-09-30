@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ComponentsCatalog, IndexRow, IrNode, TextStylesDoc, TokensDoc } from "./types.ts";
 import { isScreenDoc, screenRoots } from "./export-shape.ts";
-import { readOptionalDoc } from "./catalog-input.ts";
+import { readOptionalDoc, readSplitFile } from "./catalog-input.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { isComponentsCatalog, isLibrariesIndex, isPagesRootIndex, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
 
@@ -79,6 +79,76 @@ function findLibraryExports(screenFile: string | undefined, dsDir: string | unde
     });
 }
 
+// ---------------------------------------------------------------- every catalog a map may point into (DT-26)
+/** One component catalog read for drift-lint / map-bootstrap, and where it came from. */
+export interface CatalogSource {
+  file: string;
+  catalog: ComponentsCatalog;
+  /** named: the positional argument · extra: a --catalog · library: libraries/<dir>/components.json ·
+   *  library-sample: components.library.json (components seen used from remote libraries, props sampled) */
+  role: "named" | "extra" | "library" | "library-sample";
+}
+// A map entry may be keyed to a component that lives in a pulled library (libraries/<dir>/components.json)
+// or that the design file only uses from one (design-system/components.library.json). Reading only the
+// named catalog made every such entry `orphaned-entry` and kept map-bootstrap --screen from stubbing it.
+// Order = precedence when two catalogs carry the same key: the named one, each --catalog, the full
+// library definitions, then the sampled rows (fewest props). A file already in the list is not read twice.
+// Discovered files that are absent or unreadable are skipped with a warning (like findLibraryExports);
+// only a --catalog the user named fails loud (exit 2).
+/** One catalog found beside the named one; `catalog` is null when the file is there but is not a readable catalog. */
+export interface DiscoveredCatalog { file: string; role: "library" | "library-sample"; catalog: ComponentsCatalog | null }
+// The ONE discovery order (CLI and MCP): every libraries/<dir>/components.json of the export, then the
+// sampled components.library.json beside the named catalog. Never exits, never throws on a bad file —
+// an absent file is left out, a present-but-broken one comes back with catalog:null for the caller to report.
+function discoverCatalogs(namedFile: string, screenFile?: string): DiscoveredCatalog[] {
+  const dir = path.dirname(namedFile);
+  const out: DiscoveredCatalog[] = [];
+  const seen = new Set([path.resolve(namedFile)]);
+  const add = (file: string, role: DiscoveredCatalog["role"], catalog: ComponentsCatalog | null): void => {
+    if (seen.has(path.resolve(file)) || !fs.existsSync(file)) return;
+    seen.add(path.resolve(file));
+    out.push({ file, role, catalog });
+  };
+  for (const lib of findLibraryExports(screenFile, dir)) add(path.join(lib.rel, "components.json"), "library", lib.components);
+  const sample = path.join(dir, "components.library.json");
+  add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
+  return out;
+}
+// The CLI's set: the named catalog, each --catalog (the user named it: a broken one fails loud, exit 2),
+// then discoverCatalogs' files — a broken DISCOVERED file is reported through `onSkip` and left out,
+// like the MCP tool does (it was never asked for).
+function readCatalogSet(namedFile: string, named: ComponentsCatalog, extraFiles: readonly string[], screenFile?: string, onSkip?: (file: string) => void): CatalogSource[] {
+  const out: CatalogSource[] = [{ file: namedFile, catalog: named, role: "named" }];
+  const seen = new Set([path.resolve(namedFile)]);
+  for (const f of extraFiles) {
+    if (seen.has(path.resolve(f))) continue;
+    seen.add(path.resolve(f));
+    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+  }
+  for (const d of discoverCatalogs(namedFile, screenFile)) {
+    if (seen.has(path.resolve(d.file))) continue;
+    seen.add(path.resolve(d.file));
+    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else if (onSkip) onSkip(d.file);
+  }
+  return out;
+}
+/** Every catalog's components in precedence order, the first row per key kept (the union a screen's
+ *  instances are looked up in). Rows without a key are all kept. */
+function unionCatalog(sources: readonly CatalogSource[]): ComponentsCatalog {
+  const first = sources[0];
+  const keys = new Set<string>();
+  const components: ComponentsCatalog["components"] = [];
+  for (const s of sources) for (const c of s.catalog.components) {
+    if (c.key) { if (keys.has(c.key)) continue; keys.add(c.key); }
+    components.push(c);
+  }
+  return { ...(first ? first.catalog : {}), components };
+}
+/** The one line naming every catalog read. */
+const catalogSetLine = (sources: readonly CatalogSource[]): string =>
+  `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
+
 // ---------------------------------------------------------------- the frames beside a screen (DT-22 / F-18)
 /** A frame's texts read from its own export: `all` (hidden layers included — an empty-state sentence can
  *  sit anywhere) and `shallow` (within 6 levels of the root: loading/error words deeper are data). */
@@ -134,4 +204,4 @@ function findExportNeighbours(screenFile: string): ExportNeighbours | null {
   return { layers, unexportedShots: [...shots].sort(), textsOf };
 }
 
-export { readDesignSystemDir, findLibraryExports, findExportNeighbours };
+export { readDesignSystemDir, findLibraryExports, findExportNeighbours, discoverCatalogs, readCatalogSet, unionCatalog, catalogSetLine };

@@ -87,6 +87,8 @@ export interface MapEntry {
   variantOverrides?: Array<{ when: Record<string, string>; code: MapCodeTarget }>;
   childrenByLayer?: { layerNamePattern?: string; slot?: string };
   status?: MapStatus;
+  /** free text for people; no tool reads it */
+  note?: string;
 }
 export interface CodeConnectMap {
   version: 1;
@@ -355,7 +357,8 @@ export interface DriftLintResult {
   errors: DriftFinding[];
   warnings: DriftFinding[];
   freshness: FreshnessWarning | undefined;
-  summary: { entries: number; catalogComponents: number; mapped: number; errorCount: number; warningCount: number };
+  /** mapped: components of the NAMED catalog with an entry; mappedElsewhere: entries resolved in another catalog read beside it */
+  summary: { entries: number; catalogComponents: number; mapped: number; mappedElsewhere: number; errorCount: number; warningCount: number };
 }
 /** drift-lint.js screenCoverage() */
 export interface ScreenCoverage {

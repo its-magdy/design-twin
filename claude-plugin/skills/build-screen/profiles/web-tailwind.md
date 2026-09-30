@@ -1,7 +1,7 @@
 # Profile: web-tailwind (React + Tailwind CSS)
 
 ## Contents
-Layout · Grid · Scroll/clip/sticky · Prototype reactions · Theming (+ dark mode) · Detect the Tailwind
+Layout · Grid · Scroll/clip/sticky · Tables · Prototype reactions · Theming (+ dark mode) · Detect the Tailwind
 major · Native controls · Idiomatic web (patterns by structure) · Hints, not output · Component reuse · Effects · Text metrics · Strokes · Fills · Text overflow ·
 Images · Interaction states · Accessibility & RTL · Accessibility naming · Motion · Vector fallback ·
 Tokens · Components · Assets · Fit the existing app ·
@@ -36,6 +36,13 @@ Output
   scrolls) → apply `sticky top-0 z-10` (header) or `sticky bottom-0 z-10` (footer) to that many leading
   children in DOM order; everything after scrolls normally. Absent → treat all children as normal flow.
 
+**Tables** — a `table-fixed` table needs a `min-w-*` on its flexible column (or the table) inside an
+`overflow-x-auto` wrapper, else the name column collapses to 0 px below the design width.
+- Negative margins go on the scroll wrapper, not the table (on the table they leave a few px of scroll overflow).
+- Give the wrapper `relative` when the table holds `sr-only` (absolutely positioned) content, or it escapes the wrapper and widens the page.
+- A visually-hidden `<caption>` can disturb `border-separate` spacing in some engines: check, or use `aria-labelledby`.
+- Text-derived widths differ by fractions of a px between engines: compare with a tolerance.
+
 **Prototype `reactions`/`flows` → behavior, not markup**
 - `flows` (named entry points) are candidate top-level routes for your router; don't render them.
 - A `reactions` entry with `trigger:"on_click"`/`"on_press"` + `actions[].navigation` → an `onClick`
@@ -52,6 +59,9 @@ Output
   in — use it to pick the right token file/CSS class when a subtree has no `variableModes` of its own.
 - `variableModes` on a subtree pins it to a specific mode regardless of the page default — wrap that
   subtree in the project's theme scope instead of hardcoding its resolved colors.
+- Mode selectors: a mode name that only one collection declares (besides its default) is `data-theme="<mode>"`; when several collections
+  share a mode name (two "Dark"s) the generated file scopes each as `data-theme-<collection>="<mode>"` and
+  `tokens.js` warns which attributes to set — set the ones the screen's `resolvedModes`/`variableModes` name.
 - **`dark:` is `prefers-color-scheme`-only by default** — a `className="dark"` wrapper does nothing unless
   the project has opted into a selector-driven dark variant. In v4 that's one line of CSS:
   `@custom-variant dark (&:where(.dark, .dark *));` (or `(&:where([data-theme=dark], [data-theme=dark] *))`).
@@ -66,6 +76,9 @@ Output
   the matching utility (`bg-primary`, `text-lg`). The spacing scale derives from a single `--spacing`
   variable, so `p-4` = `calc(var(--spacing) * 4)`. Add new design tokens to `@theme`, not to a config file.
 - **v3** keeps tokens in `tailwind.config.*` under `theme.extend.{colors,spacing,fontSize,borderRadius}`.
+- v4 scans every non-gitignored file, markdown included, so class names quoted in `design/` (audits, plans,
+  notes) get compiled into the app's CSS. Put `@source not "<path from the CSS entry to design/>";` (v4.1+)
+  beside `@import "tailwindcss"`; a compiled class is not evidence that an element uses it.
 - Write `tokens.json`'s right-hand side to match whichever the project uses; don't create a
   `tailwind.config.js` in a v4 project just to hold tokens.
 - **An `@theme` variable REPLACES Tailwind's own of the same name.** `--radius-xl: 16px` makes every
@@ -79,7 +92,12 @@ Output
   meaning. When you add a design token by hand, follow the same rule.
 - A generated name ending in `-<8 hex>` (`--spacing-figma-space-4-1a2b3c4d`) means two Figma variables
   share that name with different values; the suffix is the variable's key. Use the one whose key the
-  screen's own `.vars.json` carries — never the other because it looks shorter.
+  screen's own `.vars.json` carries — never the other because it looks shorter. A shell shared by several
+  screens needs every screen's tokens: feed the design system's `tokens.json` when it exists, else the merged
+  `design/export/variables.json`, and for each suffixed name pick the key each screen's `.vars.json` carries
+  (record it in the plan's token row).
+- `theme.css` holds only CSS-usable tokens: font families are `--font-figma-*` (`font-figma-*`); STRING tokens
+  that are not font families (a style name like "Semi Bold") are left out with a warning — use the weight value.
 - Figma's "fully rounded" corner (a literal 1e9) is emitted as `9999px`; `rounded-full` is equivalent.
 - With `--web tailwind`, `tokens.js` writes **only `theme.css`** to the given directory — the generic
   handoff set (`tokens.dtcg.json`, `tokens.css`, `tokens.resolver.json`, `tokens/`) is not written there;
@@ -121,7 +139,10 @@ library (Radix, React Aria, Headless UI…) beats all of the above** — check `
   the frame are never elements.
 - The frame's width is ONE viewport, not a fixed canvas: the root is `w-full`/`width:100%` with a
   `max-width` when the design is centred, and fills are fluid. Add breakpoints only where the project
-  already uses them or a second frame shows the other size.
+  already uses them or a second frame shows the other size. When every exported frame is one desktop width
+  (especially with Tablet/Mobile variable modes), don't silently ship desktop-only: raise the designer question
+  "desktop-only design — how should narrow widths behave?" and build the default: fluid down to a stated minimum
+  width, an existing responsive shell pattern (e.g. collapsible sidebar) reused, wide tables scrolling in their container.
 
 **Hints, not output** — `layoutGrids`, `measurements`, `devStatus`/`devStatusNote`, `devResources` inform
 your column structure and let you sanity-check spacing; never render them as visible UI.
@@ -185,6 +206,14 @@ check its variant `options` for hover/focus/disabled/error/selected states befor
 visible `focus-visible:` style even if the Figma design only shows a hover state — it's the most commonly
 missed a11y requirement. `hover:` only matters on pointer devices (`@media (hover:hover)` — Tailwind v4's
 default); also `active:`, `disabled:`/`aria-disabled:`.
+- v4 buttons default to `cursor: default` (why every button showed an arrow on the field run). Once, in the CSS
+  entry, unless the app already sets it: `@layer base { button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; } }`.
+- Pressed feedback on every pointer type: a design with no Pressed variant still gets a default `active:` treatment
+  (the app's own, else a small darken/overlay), recorded as a defaulted state and listed as a designer question.
+- A control wired to nothing (no reaction, no handler) must not look live: no hover/pointer affordance; mark it
+  `disabled`/`aria-disabled` or ask.
+- Hover-revealed controls: `opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100`
+  (touch has no hover; `pointer-coarse:` is v4.1+, on v4.0/v3 use `[@media(pointer:coarse)]:opacity-100`); never `invisible`/`hidden`, which drop the control from the tab order.
 
 **Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
 target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).

@@ -28,14 +28,26 @@ import type {
   CodeConnectMap, ComponentPropDef, ComponentsCatalog, DriftCode, DriftFinding, DriftLintResult, FreshnessWarning, MapEntry, PropMap,
   ScreenCoverage, ScreenDoc, VisibleInstance,
 } from "./types.ts";
+import { readCatalogSet, unionCatalog, catalogSetLine, discoverCatalogs } from "./design-system-dir.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 
 const stripSuffix = (k: string): string => String(k).split("#")[0] ?? ""; // "Size#12:3" -> "Size"; ?? "": split() always returns at least one piece, so it never applies
 
-/** What driftLint accepts as `opts`. */
-export interface DriftLintOptions { maxAgeMs?: number; now?: number }
+/** A catalog read beside the named one (components.library.json, libraries/<dir>/components.json, a --catalog). */
+export interface ExtraCatalog { file: string; catalog: ComponentsCatalog }
+/** What driftLint accepts as `opts`. `extraCatalogs`: map entries also resolve against these (DT-26) —
+ *  coverage (unmapped-component) and the freshness banner stay about the named catalog. */
+export interface DriftLintOptions { maxAgeMs?: number; now?: number; extraCatalogs?: readonly ExtraCatalog[] }
+
+/** The catalogs a map may also point into, found beside `namedFile` WITHOUT ever exiting: the MCP server
+ *  (figma-mcp.ts design_drift_lint) runs driftLint in-process, where any process.exit would take the
+ *  whole server down. Same discovery (discoverCatalogs) as readCatalogSet with no --catalog; an absent or
+ *  unreadable file is skipped (and so is not in the tool's catalogsRead). */
+function discoverExtraCatalogs(namedFile: string): ExtraCatalog[] {
+  return discoverCatalogs(namedFile).flatMap((d) => (d.catalog ? [{ file: d.file, catalog: d.catalog }] : []));
+}
 
 type Push = (arr: DriftFinding[], code: DriftCode, message: string, extra?: Partial<DriftFinding>) => void;
 
@@ -78,6 +90,15 @@ function checkFreshness(catalog: { exportedAt?: string | null; file?: string } |
   return undefined;
 }
 
+// The other catalogs only get a one-line warning when their own stamp is missing, unparseable or older
+// than max-age — the prominent banner (and the returned FreshnessWarning) stays about the named catalog.
+function checkExtraFreshness(x: ExtraCatalog, push: Push, warnings: DriftFinding[], opts: DriftLintOptions): void {
+  const maxAgeMs = opts.maxAgeMs !== undefined && opts.maxAgeMs > 0 ? opts.maxAgeMs : DEFAULT_MAX_AGE_MS;
+  const { exportedAt, ageMs, problem } = snapshotAge(x.catalog, opts.now || Date.now());
+  if (problem) push(warnings, "unknown-freshness", `${x.file} has ${problem === "missing" ? "no `exportedAt` timestamp" : `an unparseable \`exportedAt\` ('${exportedAt}')`} — map entries resolved in it may be stale.`, { ...ifDefined("exportedAt", exportedAt) });
+  else if (typeof ageMs === "number" && ageMs > maxAgeMs) push(warnings, "stale-snapshot", `${x.file} was exported ${(ageMs / 3600000).toFixed(1)}h ago (max-age ${(maxAgeMs / 3600000).toFixed(1)}h) — map entries resolved in it are checked against that snapshot.`, { ...ifDefined("exportedAt", exportedAt), ageMs, maxAgeMs });
+}
+
 // Index a props object by base name (Figma's "#id" suffix stripped), warning on — and recording —
 // any two distinct keys that collapse to the same base so callers skip order-dependent errors on it.
 interface IndexedProps<T> { props: Record<string, T>; ambiguous: Set<string> }
@@ -104,14 +125,32 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
   const push: Push = (arr, code, message, extra) => arr.push(Object.assign({ code, message }, extra || {}));
 
   const freshness = checkFreshness(catalog, push, warnings, opts || {});
+  const extras = (opts && opts.extraCatalogs) || [];
+  for (const x of extras) checkExtraFreshness(x, push, warnings, opts || {});
 
   const comps = (catalog && catalog.components) || [];
   const byKey = new Map<string, CatalogEntry>(), byId = new Map<string, CatalogEntry>(), byName = new Map<string, CatalogEntry[]>();
-  for (const c of comps) {
-    if (c.key) { const prev = byKey.get(c.key); if (prev) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${prev.name}' and '${c.name}')`, { key: c.key }); byKey.set(c.key, c); }
-    if (c.id) byId.set(c.id, c);
-    if (c.name) getOrInit(byName, c.name, () => []).push(c);
-  }
+  // Within ONE catalog a repeated key is a real problem (today's warning, and the last row wins as
+  // before). ACROSS catalogs the same key is the same component seen twice (a library's own
+  // components.json and the design file's sampled components.library.json): the first catalog wins, silently.
+  const index = (list: readonly CatalogEntry[], primary: boolean, file?: string): void => {
+    const own = new Map<string, CatalogEntry>(), claimed = new Set<string>();
+    for (const c of list) {
+      if (c.key) {
+        const dup = own.get(c.key);
+        if (dup) push(warnings, "duplicate-key", `two catalog components share key '${c.key}' ('${dup.name}' and '${c.name}')${file ? ` in ${file}` : ""}`, { key: c.key });
+        own.set(c.key, c);
+        if (!byKey.has(c.key) || claimed.has(c.key)) { byKey.set(c.key, c); claimed.add(c.key); }
+      }
+      // Node ids are unique only within ONE Figma file: an id from another catalog (a library's "1:5")
+      // must never resolve an entry whose own component was deleted — ids index the named catalog only.
+      if (c.id && primary) byId.set(c.id, c);
+      if (c.name) getOrInit(byName, c.name, () => []).push(c);
+    }
+  };
+  index(comps, true);
+  for (const x of extras) index(x.catalog.components || [], false, x.file);
+  const inNamed = new Set<CatalogEntry>(comps);
   const mappedIds = new Set<string>();           // catalog key/id values that got matched (for coverage)
   const compToEntries = new Map<CatalogEntry, string[]>();       // component -> [mapKey] (double-map detection)
   const entries = (map && map.components) || {};
@@ -140,7 +179,7 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
       continue;
     }
     if (comp.key) mappedIds.add(comp.key);
-    if (comp.id) mappedIds.add(comp.id);
+    if (comp.id && inNamed.has(comp)) mappedIds.add(comp.id); // ids are per file — only the named catalog's
     getOrInit(compToEntries, comp, () => []).push(mapKey);
 
     if (f.name && comp.name && f.name !== comp.name) {
@@ -183,7 +222,11 @@ function driftLint(map: CodeConnectMap | null | undefined, catalog: ComponentsCa
     push(warnings, "unmapped-component", `component '${c.name}'${c.key ? " (key " + c.key + ")" : " (unpublished — no key)"} has no map entry`, { ...ifDefined("key", c.key), name: c.name });
   }
 
-  return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped: compToEntries.size, errorCount: errors.length, warningCount: warnings.length } };
+  // `mapped` stays "components of the named catalog that have an entry" (so mapped <= catalogComponents);
+  // entries that resolved in another catalog are counted on their own.
+  let mapped = 0, mappedElsewhere = 0;
+  for (const comp of compToEntries.keys()) if (inNamed.has(comp)) mapped++; else mappedElsewhere++;
+  return { errors, warnings, freshness, summary: { entries: Object.keys(entries).length, catalogComponents, mapped, mappedElsewhere, errorCount: errors.length, warningCount: warnings.length } };
 }
 /** A catalog row as this linter reads it (components.local.json / design-system.json `components[]`). */
 type CatalogEntry = ComponentsCatalog["components"][number];
@@ -278,7 +321,7 @@ function screenCoverage(map: CodeConnectMap | null | undefined, catalog: Compone
 
 // validateMap is re-exported so the MCP server's lazily-loaded drift-lint layer (bridge/src/figma-mcp.ts
 // DriftLintModule) can apply the same map gate as the CLI below from this one module.
-export { driftLint, validateMap, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
+export { driftLint, discoverExtraCatalogs, validateMap, screenCoverage, checkFreshness, checkLiveFreshness, DEFAULT_MAX_AGE_MS };
 
 // The CLI's inputs are files the user named. The MAP goes through map-validate.ts's full validator
 // (below): the old "is it an object" guard let {"components":{"X":null}} through to driftLint, which
@@ -286,14 +329,18 @@ export { driftLint, validateMap, screenCoverage, checkFreshness, checkLiveFreshn
 // doc-guards.ts / export-shape.ts guards as they are read — a wrong file is a one-line error, exit 2.
 
 // CLI: node design-to-code/drift-lint.ts <codeconnect.local.json> <design-system/components.local.json>
-//        [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]
+//        [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]
+// Beside the named catalog it also reads components.library.json in the same dir and every
+// libraries/<dir>/components.json of the export (design-system-dir.ts readCatalogSet), and names them all.
+// Exit: 1 for a lint error (map-invalid, orphaned-entry, …); 0% screen coverage and catalog-rekeyed are
+// warnings with a question to confirm (owner decision D13) — they do not fail the run.
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
 async function main(argv: string[]): Promise<number> {
-  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
+  const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--catalog <components.json>]... [--max-age <hours>]`;
   // --screen is repeatable: a build usually spans a screen plus its modals, and the question
   // "how much of this can I reuse" is about all of them together.
-  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
+  const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, catalog: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
   let maxAgeHours: number | undefined;
@@ -322,19 +369,23 @@ async function main(argv: string[]): Promise<number> {
   }
   if (!isCodeConnectMap(mapRaw)) return 1; // unreachable: validateMap just passed (isCodeConnectMap IS that check)
   const map = mapRaw;
-  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
+  const sources = readCatalogSet(catalogFile, catalog, flags.catalog || [], screenFiles[0],
+    (f) => console.error(`warn   [catalog-unreadable] ${f} is not a readable component catalog — skipped (map entries that live only there will show as orphaned).`));
+  console.error(catalogSetLine(sources));
+  const extraCatalogs = sources.slice(1).map((x) => ({ file: x.file, catalog: x.catalog }));
+  const union = unionCatalog(sources);
+  const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs), extraCatalogs });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
   res.warnings.forEach((w) => console.error(`warn   [${w.code}] ${w.message}`));
   const s = res.summary;
-  console.error(`\n${s.mapped}/${s.catalogComponents} components mapped · ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
+  console.error(`\n${s.mapped}/${s.catalogComponents} components mapped${s.mappedElsewhere ? ` (+${s.mappedElsewhere} map entr${s.mappedElsewhere === 1 ? "y" : "ies"} resolved in the other catalog(s))` : ""} · ${s.errorCount} error(s), ${s.warningCount} warning(s)`);
   console.error(`      (that number is the CATALOG measured against the map — it says nothing about any particular screen.)`);
 
   // The number a builder is actually asking for. Printed last, because it is the headline.
-  let screenFail = false;
   if (screenFiles.length) {
     const read = screenFiles.map((f) => ({ file: f, doc: readDocFile(f, "screen export", isScreenDoc) }));
     const docs = read.map((r) => r.doc);
-    const cov = screenCoverage(map, catalog, docs);
+    const cov = screenCoverage(map, union, docs); // "in the catalog" = in ANY catalog read
     if (!cov.distinct) {
       console.error(`\nSCREEN COVERAGE: the given screen export(s) contain no INSTANCE nodes — nothing to reuse either way.`);
     } else {
@@ -349,24 +400,31 @@ async function main(argv: string[]): Promise<number> {
       // every name and prop signature intact (livetest-3 #226). Tell the two cases apart before
       // pointing the user at "the wrong library".
       const none: VisibleInstance[] = [];
-      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog) : null;
+      // D13: both 0% cases are a WARNING with a question to confirm (as cross-check's catalog-rekeyed /
+      // catalog-covers-nothing are) — "you exported the wrong library" has a default (build every
+      // instance as new) and is the user's call, not a failed lint. Exit stays 0 for them.
+      // Re-key is a question about the NAMED catalog (cross-check asks it the same way): the other catalogs
+      // are passed as its `library` side — a sampled third-party row matching by key is not the design
+      // system's own component, and must not hide that the named catalog was re-keyed.
+      const others: ComponentsCatalog = { components: extraCatalogs.flatMap((x) => x.catalog.components) };
+      const rekey = cov.mapPct === 0 ? matchByNameAndSignature(none.concat(...read.map((r) => visibleInstances(r.doc, r.file))), catalog, others) : null;
       if (cov.mapPct === 0 && rekey && isRekeyed(rekey)) {
-        screenFail = true;
         console.error(
-          `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
+          `warn   [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
             `${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.\n` +
             `       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.\n` +
             `       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
-            `       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+            `       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.\n` +
+            `       Confirm: ${rekey.summary.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) — are they the same components? Until confirmed, build every instance as new.`
         );
       } else if (cov.mapPct === 0) {
-        screenFail = true;
         console.error(
-          `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.\n` +
+          `warn   [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map by key` +
+            (cov.inCatalog ? ` (${cov.inCatalog} of them are in the catalog(s) read — \`${scriptCmd("map-bootstrap")} ${catalogFile} --screen <screen.json> --out <map>\` stubs those).\n` : `, nor to any catalog read.\n`) +
             `       The catalog you exported is not the library this screen is built from — a green "mapped" count above measures\n` +
             `       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,\n` +
             `       then export it with \`dtwin pull --as-library "<name>"\` (CLI only — the MCP server has no library export).\n` +
-            `       Until then build every instance as new.`
+            `       Confirm: is ${catalogFile}${extraCatalogs.length ? ` (or any of the ${extraCatalogs.length} other catalog(s) read)` : ""} the component library this screen is built from? Until confirmed, build every instance as new.`
         );
       } else if (cov.unmapped.length) {
         console.error(
@@ -393,7 +451,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
   // A rejection main() did not catch still crashes the process (it is not handled below).
-  return res.errors.length || screenFail ? 1 : 0;
+  return res.errors.length ? 1 : 0;
 }
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) void main(process.argv.slice(2)).then((code) => { process.exitCode = code; }); // exitCode, not exit(): every printed line flushes first

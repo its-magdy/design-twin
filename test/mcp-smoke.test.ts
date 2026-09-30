@@ -97,6 +97,33 @@ void (async () => {
     const invalid = await client.callTool({ name: "design_drift_lint", arguments: { map: "bad-map.json" } });
     ok("design_drift_lint rejects an invalid map as a tool error mentioning map-invalid", invalid.isError === true && /\[map-invalid\]/.test(firstText(invalid)) && /not a valid component map/.test(firstText(invalid)));
 
+    // DT-26 on the MCP path: the same catalog set as the CLI — components.library.json beside the named
+    // catalog and every pulled library — so an entry for a library component is not orphaned; a broken
+    // components.library.json is skipped, never an exit of the server process.
+    {
+      const ex = path.join(CWD, "ddl");
+      fs.mkdirSync(path.join(ex, "design-system"), { recursive: true });
+      fs.mkdirSync(path.join(ex, "libraries", "acme-kit"), { recursive: true });
+      fs.writeFileSync(path.join(ex, "design-system.json"), JSON.stringify({ files: { componentsLocal: "design-system/components.local.json" } }));
+      fs.writeFileSync(path.join(ex, "design-system", "components.local.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-local", id: "1:1", name: "Row", type: "COMPONENT" }] }));
+      fs.writeFileSync(path.join(ex, "libraries", "index.json"), JSON.stringify({ libraries: [{ dir: "acme-kit", libraryName: "Acme Kit" }] }));
+      fs.writeFileSync(path.join(ex, "libraries", "acme-kit", "components.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-lib", name: "Button", type: "COMPONENT_SET" }] }));
+      fs.writeFileSync(path.join(ex, "design-system", "components.library.json"), JSON.stringify({ exportedAt: new Date().toISOString(), components: [{ key: "k-sample", name: "Chip", type: "COMPONENT", remote: true }] }));
+      const entry = (key: string, name: string) => ({ figma: { key, name }, code: { module: "src/ui/" + name + ".tsx", export: name } });
+      fs.writeFileSync(path.join(CWD, "lib-map.json"), JSON.stringify({ version: 1, components: { "k-local": entry("k-local", "Row"), "k-lib": entry("k-lib", "Button"), "k-sample": entry("k-sample", "Chip") } }));
+      const lint = async () => {
+        const r = await client.callTool({ name: "design_drift_lint", arguments: { map: "lib-map.json", exportDir: "ddl" } });
+        return { isError: r.isError === true, text: firstText(r) };
+      };
+      const both = await lint();
+      ok("[DT-26] design_drift_lint resolves entries against components.library.json and libraries/<dir>/components.json (no orphans)",
+        !both.isError && !/orphaned-entry/.test(both.text) && /"ok":\s*true/.test(both.text) && /acme-kit/.test(both.text) && /components\.library\.json/.test(both.text));
+      fs.writeFileSync(path.join(ex, "design-system", "components.library.json"), "{ not json");
+      const broken = await lint();
+      ok("[DT-26] design_drift_lint skips a broken components.library.json (the entry is orphaned) and the server stays up",
+        !broken.isError && /orphaned-entry/.test(broken.text) && /k-sample/.test(broken.text) && !/k-lib'/.test(broken.text));
+    }
+
     // design_get_component follows design-system.json's files.componentsLocal pointer: a wrong-shaped
     // manifest is a tool error that says so (not "Cannot read properties of null" / a path.join
     // TypeError), and a pointer that leaves the server's directory is refused before anything is read.

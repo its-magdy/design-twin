@@ -328,7 +328,7 @@ function auditGateStatus(cwd, screenFile, screenName) {
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -397,6 +397,7 @@ function validateMap(map) {
       }
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
       if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);

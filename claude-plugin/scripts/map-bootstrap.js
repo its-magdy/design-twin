@@ -2,7 +2,7 @@
 
 
 // design-to-code/map-bootstrap.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -48,6 +48,10 @@ function readJson(file, guard) {
   }
   if (!guard(parsed)) return { error: `is not ${guard.expected || "the expected kind of document"}` };
   return { doc: parsed };
+}
+function readJsonOrNull(file, guard) {
+  const r = readJson(file, guard);
+  return "doc" in r ? r.doc : null;
 }
 
 // design-to-code/catalog-input.ts
@@ -301,7 +305,7 @@ function isMainFallback(metaUrl) {
 var STATUSES = ["active", "deprecated", "needs-review"];
 var KEYS = {
   root: ["version", "figmaFileKey", "components"],
-  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status"],
+  entry: ["figma", "code", "props", "variantOverrides", "childrenByLayer", "status", "note"],
   figma: ["key", "id", "name", "unstable"],
   code: ["module", "export", "targets"],
   target: ["module", "export"],
@@ -328,7 +332,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path2, message) => errors.push({ path: path2, message });
+  const err = (path3, message) => errors.push({ path: path3, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -370,6 +374,7 @@ function validateMap(map) {
       }
     }
     if (e.status !== void 0 && (!isStr(e.status) || !STATUSES.includes(e.status))) err(`${at}.status`, `must be one of ${STATUSES.join("|")}`);
+    optStrings(e, ["note"], at, err);
     if (e.props !== void 0) {
       if (!isObj2(e.props)) err(`${at}.props`, "must be an object");
       else for (const pn of Object.keys(e.props)) validateProp(e.props[pn], `${at}.props.${pn}`, err);
@@ -433,6 +438,76 @@ function isCodeConnectMap(x) {
 }
 isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
 if (false) process.exitCode = main(process.argv.slice(2));
+
+// design-to-code/design-system-dir.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+function exportRootOf(screenFile, dsDir) {
+  const roots = [];
+  if (screenFile) {
+    const pages = path2.dirname(path2.dirname(screenFile));
+    if (path2.basename(pages) === "pages") roots.push(path2.dirname(pages));
+  }
+  if (dsDir) {
+    const parent = path2.dirname(path2.normalize(dsDir));
+    roots.push(path2.basename(parent) === "libraries" ? path2.dirname(parent) : parent);
+  }
+  return roots.find((r) => fs3.existsSync(path2.join(r, "libraries", "index.json"))) ?? null;
+}
+function findLibraryExports(screenFile, dsDir) {
+  const root = exportRootOf(screenFile, dsDir);
+  if (!root) return [];
+  const index = readJsonOrNull(path2.join(root, "libraries", "index.json"), isLibrariesIndex);
+  if (!index) return [];
+  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
+    const rel = path2.join(root, "libraries", r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path2.join(rel, "components.json"), isComponentsCatalog) };
+  });
+}
+function discoverCatalogs(namedFile, screenFile) {
+  const dir = path2.dirname(namedFile);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set([path2.resolve(namedFile)]);
+  const add = (file, role, catalog) => {
+    if (seen.has(path2.resolve(file)) || !fs3.existsSync(file)) return;
+    seen.add(path2.resolve(file));
+    out.push({ file, role, catalog });
+  };
+  for (const lib of findLibraryExports(screenFile, dir)) add(path2.join(lib.rel, "components.json"), "library", lib.components);
+  const sample = path2.join(dir, "components.library.json");
+  add(sample, "library-sample", readJsonOrNull(sample, isComponentsCatalog));
+  return out;
+}
+function readCatalogSet(namedFile, named, extraFiles, screenFile, onSkip) {
+  const out = [{ file: namedFile, catalog: named, role: "named" }];
+  const seen = /* @__PURE__ */ new Set([path2.resolve(namedFile)]);
+  for (const f of extraFiles) {
+    if (seen.has(path2.resolve(f))) continue;
+    seen.add(path2.resolve(f));
+    out.push({ file: f, role: "extra", catalog: readSplitFile(f, "component catalog (--catalog)", isComponentsCatalog, "components", "design-system/components.library.json") });
+  }
+  for (const d of discoverCatalogs(namedFile, screenFile)) {
+    if (seen.has(path2.resolve(d.file))) continue;
+    seen.add(path2.resolve(d.file));
+    if (d.catalog) out.push({ file: d.file, role: d.role, catalog: d.catalog });
+    else if (onSkip) onSkip(d.file);
+  }
+  return out;
+}
+function unionCatalog(sources) {
+  const first = sources[0];
+  const keys = /* @__PURE__ */ new Set();
+  const components = [];
+  for (const s of sources) for (const c of s.catalog.components) {
+    if (c.key) {
+      if (keys.has(c.key)) continue;
+      keys.add(c.key);
+    }
+    components.push(c);
+  }
+  return { ...first ? first.catalog : {}, components };
+}
+var catalogSetLine = (sources) => `catalogs read (${sources.length}): ` + sources.map((s) => `${s.file} [${s.role}, ${s.catalog.components.length} component(s)]`).join(", ");
 
 // design-to-code/map-bootstrap.ts
 var clone = (o) => structuredClone(o);
@@ -512,7 +587,13 @@ function bootstrap(catalog, existing) {
     if (c.type !== "COMPONENT" && c.type !== "COMPONENT_SET") continue;
     const id = c.key || c.id;
     if (!id) continue;
-    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x));
+    const keyClash = (x) => {
+      if (!c.key || x === c.key) return false;
+      const pk = prevByIdent.get(x);
+      const pkKey = pk ? (prev[pk]?.figma || {}).key : void 0;
+      return !!pkKey && pkKey !== c.key;
+    };
+    const matchKey = [c.key, c.id, id].find((x) => x && prevByIdent.has(x) && !keyClash(x));
     const prevKey = matchKey ? prevByIdent.get(matchKey) : null;
     const prevEntry = prevKey ? prev[prevKey] : null;
     if (prevKey && prevEntry) {
@@ -542,7 +623,7 @@ function bootstrap(catalog, existing) {
   for (const [pk, pe] of Object.entries(prev)) if (!usedPrev.has(pk) && !(pk in out.components)) out.components[pk] = clone(pe);
   return out;
 }
-function bootstrapFromProposals(proposals, catalog, existing) {
+function bootstrapFromProposals(proposals, catalog, existing, others) {
   const out = { version: 1, components: nullProto() };
   if (existing && existing.figmaFileKey) out.figmaFileKey = existing.figmaFileKey;
   const prev = existing && existing.components || {};
@@ -553,7 +634,7 @@ function bootstrapFromProposals(proposals, catalog, existing) {
     if (!p || p.confirmed !== true) continue;
     report.confirmed++;
     const want = p.catalog || {};
-    const c = comps.find((x) => want.key && x.key === want.key || want.id && x.id === want.id);
+    const c = want.key ? comps.find((x) => x.key === want.key) || (others && others.components || []).find((x) => x.key === want.key) : want.id ? comps.find((x) => x.id === want.id) : void 0;
     const mapKey = (p.instanceKeys || [])[0];
     if (!c) {
       report.skipped.push(`'${p.name}': catalog component ${want.id || want.key || "?"} is not in this catalog`);
@@ -581,8 +662,18 @@ function proposalsIn(doc) {
   return null;
 }
 function main(argv) {
-  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
+  const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>] [--catalog <components.json>]...`;
   let outFile = null, proposalsFile = null, screenFile = null;
+  const extraCatalogFiles = [];
+  for (let ci = argv.indexOf("--catalog"); ci !== -1; ci = argv.indexOf("--catalog")) {
+    const next = argv[ci + 1];
+    if (!next || next.startsWith("--")) {
+      console.error("--catalog needs a component catalog .json (components.json / components.library.json)\n" + usage);
+      return 1;
+    }
+    extraCatalogFiles.push(next);
+    argv.splice(ci, 2);
+  }
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     const next = argv[pi + 1];
@@ -632,8 +723,18 @@ ${usage}`);
     "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
   );
+  const sources = screenFile || proposalsFile ? readCatalogSet(
+    catalogFile,
+    catalog,
+    extraCatalogFiles,
+    screenFile ?? void 0,
+    (f) => console.error(`map-bootstrap: warn  ${f} is not a readable component catalog \u2014 skipped`)
+  ) : [{ file: catalogFile, catalog, role: "named" }];
+  const union = unionCatalog(sources);
+  const others = { components: unionCatalog(sources.slice(1)).components.filter((c) => !!c.key && !catalog.components.some((n) => n.key === c.key)).map(({ id: _foreignId, ...c }) => c) };
+  if (screenFile || proposalsFile) console.error(`map-bootstrap: ${catalogSetLine(sources)}`);
   const existingFile = existingArg || outFile;
-  const existingRaw = existingFile && fs3.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
+  const existingRaw = existingFile && fs4.existsSync(existingFile) ? readJsonFile(existingFile, "existing map") : null;
   let existing = null;
   if (existingRaw !== null) {
     const valid = validateMap(existingRaw);
@@ -651,13 +752,13 @@ ${usage}`);
       console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run \`${scriptCmd("cross-check")} <screen.json> --out <base>\` (or --json) and pass the JSON it wrote`);
       return 1;
     }
-    const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
+    const { map, report } = bootstrapFromProposals(proposals, catalog, existing, others);
     if (!report.confirmed) {
       console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each entry they accept, and re-run. Nothing was written \u2014 proposals are never accepted automatically.`);
       return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
-    if (outFile) fs3.writeFileSync(outFile, out);
+    if (outFile) fs4.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
@@ -671,17 +772,20 @@ ${usage}`);
       if (i.key) used.add(i.key);
       if (i.setKey) used.add(i.setKey);
     }
-    const all = catalog.components;
-    const scoped = all.filter((c) => c.key && used.has(c.key) || c.id && used.has(c.id));
+    const all = union.components;
+    const fromNamed = catalog.components.filter((c) => c.key && used.has(c.key) || c.id && used.has(c.id));
+    const fromLibs = others.components.filter((c) => c.key && used.has(c.key));
+    const scoped = [...fromNamed, ...fromLibs];
     scopedCatalog = safeAssign({}, catalog, { components: scoped });
-    console.error(`map-bootstrap: --screen scoped the catalog from ${all.length} to ${scoped.length} component(s) this screen actually uses.`);
+    const fromOthers = fromLibs.length;
+    console.error(`map-bootstrap: --screen scoped the catalog${sources.length > 1 ? `s` : ""} from ${all.length} to ${scoped.length} component(s) this screen actually uses` + (fromOthers ? ` (${fromOthers} of them from a library catalog).` : "."));
   }
   const written = bootstrap(scopedCatalog, existing);
   const json = JSON.stringify(written, null, 2) + "\n";
   if (!outFile) {
     process.stdout.write(json);
   } else {
-    fs3.writeFileSync(outFile, json);
+    fs4.writeFileSync(outFile, json);
     const entries = Object.values(written.components);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);

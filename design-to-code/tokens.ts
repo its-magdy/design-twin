@@ -40,7 +40,9 @@
 //                             files it $refs. Each multi-mode collection becomes a modifier whose
 //                             contexts are its mode names; base sets carry default-mode values and a
 //                             context carries ONLY what differs (same dedup as toCSS).
-//   toCSS(ds[, opts])      -> :root + [data-theme="mode"] custom properties (zero-dependency).
+//   toCSS(ds[, opts])      -> :root + one block per (collection, mode): [data-theme="mode"], or
+//                             [data-theme-<collection>="mode"] when collections share the mode name
+//                             (see planModeScopes) — custom properties, zero-dependency.
 //   lintTokens(ds[, opts]) -> string[] of problems (never-silent guarantee): group/leaf collisions,
 //                             duplicate names, malformed/missing color, missing default-mode value,
 //                             dangling aliases, CSS var-name collisions, empty names.
@@ -61,11 +63,17 @@ import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main i
 import { ifDefined, nullProto } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
 import type { VariableComposedColor } from "../bridge/src/doc-types.ts";
+import { TAILWIND_SOURCE_NOT_NOTE } from "../bridge/src/project-layout.ts";
 
 /** The options every emitter shares (opts.unitless is honoured by the ONE unitDecision below). */
 export interface EmitOpts extends UnitOpts {
-  /** toCSS: the selector a non-default mode's block lives under (default `[data-theme="<mode>"]`). */
-  selector?: (mode: string) => string;
+  /** toCSS: the selector a non-default mode's block lives under. Default `[<scope.attribute>="<mode>"]`,
+   *  where scope.attribute is `data-theme`, or `data-theme-<collection>` when several collections have a
+   *  block for that mode name (see planModeScopes). `scope.collection` is the collection's name. */
+  selector?: (mode: string, scope: ModeScope) => string;
+  /** The CSS files the caller writes ("tokens.css", "theme.css") — warnings name these, not a fixed file.
+   *  Default: tokens.css, plus theme.css when opts.tailwind. */
+  cssFiles?: readonly string[];
   /** Map(variable key -> [screen]) so a collision warning can say which screen each variable came from. */
   sources?: SliceSources | null;
   /** emitTokens: also build theme.css in the same pass. */
@@ -782,11 +790,117 @@ function cssPlan(designSystem: TokensDoc | null | undefined): IdPlan {
     (v) => cssVarName(v.name) === "--" + segs(v.name).join("-"));
 }
 
+// --- non-default modes: one block per (collection, mode) -----------------------------------------
+// Figma selects a mode PER COLLECTION. Keying the blocks by mode NAME alone flipped every collection that
+// has a "Dark" at once (DT-24 / D15). So lines are grouped by (collection, mode). A mode name only one
+// collection has a block for keeps the plain `[data-theme="<mode>"]` (the usual single-theme file is
+// unchanged); when two or more collections have a block for the same name, each gets
+// `[data-theme-<collection slug>="<mode>"]`, a slug two collections share gets `-<first 8 of its key>`,
+// and ONE warning per clashing name says which attributes to set.
+/** What a block's selector is scoped by — handed to opts.selector. */
+export interface ModeScope { collection: string | undefined; attribute: string }
+interface ModeScopePlan {
+  groupOf: (v: Variable) => string;
+  scope: (group: string, mode: string) => ModeScope;
+  warnings: string[];
+}
+// Which collection a variable belongs to. Variables carry only the collection NAME, and real exports have
+// two collections of one name (a single-mode "Spacing" and a Desktop/Tablet/Mobile "Spacing"): among
+// same-named collections, the one declaring every mode the variable has values for.
+// Limit: two same-named collections with the SAME mode list cannot be told apart (no collection key on a
+// variable) — their variables all land in the first one.
+function collectionOf(v: Variable, collections: readonly VariableCollection[]): VariableCollection | undefined {
+  const named = collections.filter((c) => c.name === v.collection);
+  if (named.length <= 1) return named[0];
+  const modes = Object.keys(v.values || {});
+  return named.find((c) => modes.every((m) => (c.modes || []).includes(m))) ?? named[0];
+}
+// The (collection, mode) pairs that emit a block: exactly the condition toCSS/toTailwind emit a line on
+// (a defined, non-default value that differs from the emitted base). theme.css plans off the same list
+// as tokens.css, so the two files always agree on every block's selector.
+function planModeScopes(designSystem: TokensDoc | null | undefined): ModeScopePlan {
+  const collections = (designSystem && designSystem.collections) || [];
+  const vars = (designSystem && designSystem.variables) || [];
+  const groupIds = new Map<VariableCollection, string>();
+  collections.forEach((c, i) => groupIds.set(c, "c" + i));
+  const groupOf = (v: Variable): string => { const c = collectionOf(v, collections); return c ? groupIds.get(c) ?? "" : ""; };
+  const collOfGroup = new Map<string, VariableCollection>();
+  for (const [c, id] of groupIds) collOfGroup.set(id, c);
+  const groupsPerMode = new Map<string, string[]>();
+  // Shared = DECLARED by several collections (each collection's modes minus its default), not "has a
+  // differing value today": otherwise one designer edit to a value flips the next pull from
+  // [data-theme="Dark"] to [data-theme-<collection>="Dark"] with no change to the modes. A collection
+  // counts once it has ANY emittable variable — whichever record tokens.css's or theme.css's plan keeps
+  // as canonical, its group is in this list, so neither file can fall back to a bare selector for it.
+  // The no-collection group ("") declares the non-default modes its variables have values for.
+  const declared = (g: string, v: Variable): string[] => {
+    const c = collOfGroup.get(g);
+    if (c) { const def = c.default ?? (c.modes || [])[0]; return (c.modes || []).filter((m) => m !== def); }
+    const def = defaultModeName(v, collections);
+    return Object.keys(v.values || {}).filter((m) => m !== def);
+  };
+  for (const v of vars) {
+    if (!segs(v.name).length || !emitted(v)) continue;
+    if (baseValue(v, collections) === undefined) continue;
+    const g = groupOf(v);
+    for (const m of declared(g, v)) {
+      const list = getOrInit(groupsPerMode, m, () => []);
+      if (!list.includes(g)) list.push(g);
+    }
+  }
+  // One attribute per collection that is ever qualified, the same for all its modes.
+  const qualified = new Set<string>();
+  for (const list of groupsPerMode.values()) if (list.length > 1) for (const g of list) qualified.add(g);
+  const nameOf = (g: string): string | undefined => collOfGroup.get(g)?.name;
+  const slugOf = (g: string): string => suffixSlug(nameOf(g) ?? "no collection") || "collection";
+  const slugCount = new Map<string, number>();
+  for (const g of qualified) slugCount.set(slugOf(g), (slugCount.get(slugOf(g)) ?? 0) + 1);
+  const attrOf = new Map<string, string>();
+  const used = new Set<string>();
+  for (const g of qualified) {
+    const slug = slugOf(g);
+    const key = collOfGroup.get(g)?.key;
+    let attr = "data-theme-" + slug + ((slugCount.get(slug) ?? 0) > 1 && key ? "-" + suffixSlug(key.slice(0, KEY_SUFFIX_LEN)) : "");
+    for (let n = 2; used.has(attr); n++) attr = "data-theme-" + slug + "-" + n; // no key to tell them apart
+    used.add(attr);
+    attrOf.set(g, attr);
+  }
+  const warnings: string[] = [];
+  for (const [m, list] of groupsPerMode) {
+    if (list.length < 2) continue;
+    const label = (g: string): string => nameOf(g) ?? "(no collection)";
+    warnings.push(`mode '${m}' exists in ${list.length} collections (${list.map(label).join(", ")}); their blocks are scoped per collection instead of [data-theme="${m}"]: set ${list.map((g) => `${attrOf.get(g) ?? "data-theme"}="${m}"`).join(" / ")} on the element that picks each collection's mode`);
+  }
+  const scope = (g: string, m: string): ModeScope => {
+    const list = groupsPerMode.get(m) || [];
+    return { collection: nameOf(g), attribute: list.length > 1 ? attrOf.get(g) ?? "data-theme" : "data-theme" };
+  };
+  return { groupOf, scope, warnings };
+}
+/** Non-default-mode lines, grouped by (collection, mode) in first-seen order. */
+interface ModeBlocks { set: (v: Variable, mode: string, prop: string, line: string) => void; render: (selector?: EmitOpts["selector"]) => string }
+function modeBlocks(plan: ModeScopePlan): ModeBlocks {
+  const blocks = new Map<string, { group: string; mode: string; lines: Map<string, string> }>();
+  return {
+    set(v, mode, prop, line) {
+      const group = plan.groupOf(v);
+      getOrInit(blocks, group + "\u0000" + mode, () => ({ group, mode, lines: new Map<string, string>() })).lines.set(prop, line);
+    },
+    render(selector) {
+      let out = "";
+      for (const b of blocks.values()) {
+        const sc = plan.scope(b.group, b.mode);
+        out += `\n${selector ? selector(b.mode, sc) : `[${sc.attribute}="${cssAttrEscape(b.mode)}"]`} {\n` + [...b.lines.values()].join("\n") + "\n}\n";
+      }
+      return out;
+    },
+  };
+}
+
 // `notes` (internal): see toDTCG.
 function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, notes?: CollisionNote[]): string {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
-  const selectorFor = (mode: string): string => (opts && opts.selector ? opts.selector(mode) : `[data-theme="${cssAttrEscape(mode)}"]`);
 
   // Keyed by custom-property NAME, not pushed as lines. Two records of the SAME variable, or two
   // variables that resolve identically in every mode (seen live: three "Schemes/On Primary" with
@@ -798,11 +912,10 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
   const ref = (referrer: Variable) => (name: string): string => { const t = aliasTargetId(plan, name, referrer); return t ? t.id : cssVarName(name); };
   const pctRef = (referrer: Variable) => (name: string): boolean => cssPercentVar(plan, aliasTarget(plan, name, referrer), opts);
   const rootLines = new Map<string, string>();
-  // Null-prototype: keyed by MODE NAMES (free-form designer strings, reaching us through JSON.parse,
-  // which creates a real own "__proto__" key). On a plain object `perMode["__proto__"]` resolves to
-  // Object.prototype — truthy, but with no .push — so this line threw an uncaught TypeError and the
-  // CLI died AFTER having already written tokens.dtcg.json, leaving a half-written output pair.
-  const perMode: Record<string, Map<string, string>> = nullProto();
+  // A Map keyed by (collection, mode), never a plain object: mode names are free-form designer strings
+  // reaching us through JSON.parse, and a mode literally named "__proto__" once resolved to
+  // Object.prototype on a plain object and crashed the CLI half-way through writing its outputs.
+  const perMode = modeBlocks(planModeScopes(designSystem));
   for (const v of vars) {
     if (!segs(v.name).length) continue; // skip empty names (would emit invalid `--:`)
     if (!emitted(v)) continue; // EASING/TIMING: no CSS value (toDTCG reports the skip)
@@ -815,16 +928,19 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
     const baseStr = JSON.stringify(base); // hoisted: base is invariant across the mode loop below
     const unit = numberUnit(v, opts);
     const r = ref(v), p = pctRef(v);
-    rootLines.set(varName, `  ${varName}: ${cssValue(webNumber(v, base), unit, r, p)};`);
+    // A font-family STRING (the same test theme.css uses) is written as a font-family value, quoted when
+    // it is not one identifier — `font-family: var(--Heading)` must not get `Inter Display 2` bare.
+    const font = v.type === "STRING" && twKind(v, opts) === "fontFamily";
+    const val = (raw: VariableValue): string => (font && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, r, p));
+    rootLines.set(varName, `  ${varName}: ${val(base)};`);
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue; // dedup vs the EMITTED base (handles undefined-default)
-      (perMode[m] || (perMode[m] = new Map())).set(varName, `  ${varName}: ${cssValue(webNumber(v, values[m]), unit, r, p)};`);
+      perMode.set(v, m, varName, `  ${varName}: ${val(values[m])};`);
     }
   }
-  let out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
-  for (const [m, lines] of Object.entries(perMode)) out += `\n${selectorFor(m)} {\n` + [...lines.values()].join("\n") + "\n}\n";
-  return out;
+  const out = rootLines.size ? ":root {\n" + [...rootLines.values()].join("\n") + "\n}\n" : "";
+  return out + perMode.render(opts && opts.selector);
 }
 
 // --- Tailwind v4 theme ------------------------------------------------------------------------
@@ -853,7 +969,8 @@ function toCSS(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, note
 // can be relied on; one prefix makes a collision impossible and every design-system utility greppable.
 //
 // Modes: `@theme` cannot be nested in a selector, so the default mode's values live there and every
-// other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block. Tailwind's
+// other mode reassigns the SAME custom properties in a plain `[data-theme="…"]` block (per collection
+// when the name is shared — the same planModeScopes selectors as tokens.css). Tailwind's
 // generated utilities read `var(--color-…)`, so they follow the override with no extra work.
 type TwKind = "color" | "dimension" | "radius" | "fontSize" | "fontFamily";
 const TW_NAMESPACE: Record<TwKind, string> = { color: "--color-", dimension: "--spacing-", radius: "--radius-", fontSize: "--text-", fontFamily: "--font-" };
@@ -873,11 +990,17 @@ function twName(v: Variable, opts?: EmitOpts): string {
 const RADIUS_SCOPES = new Set(["CORNER_RADIUS"]);
 function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
   if (v.type === "COLOR") return "color";
-  if (v.type === "STRING") return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
-  if (v.type !== "FLOAT") return null;
-  if (unitDecision(v, opts) !== "px") return null; // unitless: opacity/weight — no Tailwind namespace fits
   const scopes = v.scopes || [];
   const narrowed = scopes.length && !scopes.every((s) => s === "ALL_SCOPES");
+  // DT-24: the scope is the designer's own statement — a FONT_FAMILY-scoped STRING is a font family
+  // whatever it is called ("Heading" in a "Type" collection). The name is only a fallback when the scopes
+  // say nothing (ALL_SCOPES / none); a STRING narrowed to anything else (FONT_STYLE: "Semi Bold") is not one.
+  if (v.type === "STRING") {
+    if (narrowed) return scopes.includes("FONT_FAMILY") ? "fontFamily" : null;
+    return /font.?family|typeface/i.test((v.collection ?? "") + "/" + v.name) ? "fontFamily" : null;
+  }
+  if (v.type !== "FLOAT") return null;
+  if (unitDecision(v, opts) !== "px") return null; // unitless: opacity/weight — no Tailwind namespace fits
   if (narrowed && scopes.some((x) => RADIUS_SCOPES.has(x))) return "radius";
   if (narrowed && scopes.includes("FONT_SIZE")) return "fontSize";
   if (!narrowed && /radius|corner|rounded/i.test(v.name)) return "radius";
@@ -885,9 +1008,21 @@ function twKind(v: Variable, opts?: EmitOpts): TwKind | null {
   return "dimension";
 }
 
+// A font family as a font-family VALUE: a family name that is not a single identifier ("Open Sans",
+// "Inter Display 2") is quoted — unquoted, a name with a digit-led word is invalid and one with spaces
+// only survives by accident of the identifier rules (CSS Fonts 4 §2.1.1: "Font family names that happen
+// to be the same as a keyword value … must be quoted"; names with whitespace SHOULD be). A value that is
+// already a list or already quoted ("Inter, sans-serif", "'Inter'") is the designer's CSS, left as is.
+function cssFontFamily(raw: string): string {
+  const s = raw.trim();
+  if (!s || /[,'"]/.test(s) || /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(s)) return cssEscapeText(raw);
+  return '"' + s.replace(/["\\\n\r\f]/g, hexEsc) + '"';
+}
+
 // → { text, utilities, tokens, warnings[] }. `warnings` carries the name collisions (the slug folds
 // case and punctuation, so `Space 3` and `(Space 3)` land on one Tailwind name even though tokens.css
-// kept them apart) unless the internal `notes` array is passed, as emitTokens does.
+// kept them apart) unless the internal `notes` array is passed, as emitTokens does — plus the STRING
+// tokens left out of theme.css and the per-collection mode scoping (both always).
 function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts, notes?: CollisionNote[]): TailwindResult {
   const collections = (designSystem && designSystem.collections) || [];
   const vars = (designSystem && designSystem.variables) || [];
@@ -897,7 +1032,21 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
   if (notes) notes.push(...plan.notes);
   else warnings.push(...collisionMessages(plan.notes, opts));
   const theme = new Map<string, string>();
-  const perMode: Record<string, Map<string, string>> = nullProto();
+  const scopes = planModeScopes(designSystem);
+  const perMode = modeBlocks(scopes); // the same (collection, mode) selectors as tokens.css
+  warnings.push(...scopes.warnings);
+  // DT-24: a STRING that is not a font family ("Semi Bold", a label) is not a usable value in @theme and
+  // earns no utility, so it is left out — unless a font-family token aliases it (then the var() must resolve).
+  const aliasedByFont = new Set<Variable>();
+  // The whole alias chain: a kept STRING that itself aliases another STRING keeps that one too.
+  const queue = vars.filter((v) => v.type === "STRING" && twKind(v, opts) === "fontFamily");
+  for (let v = queue.pop(); v !== undefined; v = queue.pop()) {
+    for (const m of Object.keys(v.values || {})) for (const n of aliasNames(v.values[m])) {
+      const t = aliasTarget(plan, n, v);
+      if (t && !aliasedByFont.has(t)) { aliasedByFont.add(t); queue.push(t); }
+    }
+  }
+  const leftOut: string[] = [];
   let utilities = 0;
   for (const v of vars) {
     if (!segs(v.name).length) continue;
@@ -907,28 +1056,34 @@ function toTailwind(designSystem: TokensDoc | null | undefined, opts?: EmitOpts,
     const def = defaultModeName(v, collections);
     const base = baseValue(v, collections, def);
     if (base === undefined) continue;
-    if (twKind(v, opts)) utilities++;
+    const kind = twKind(v, opts);
+    if (v.type === "STRING" && !kind && !aliasedByFont.has(v)) { if (!leftOut.includes(v.name)) leftOut.push(v.name); continue; }
+    if (kind) utilities++;
     const unit = numberUnit(v, opts);
     // An alias must point at the TAILWIND name of its target (its own namespace, its own
     // disambiguated name), not the tokens.css one.
     const ref = (n: string): string => { const t = aliasTargetId(plan, n, v); return t ? t.id : "--" + TW_PREFIX + twSlug(n); };
     const pctRef = (n: string): boolean => cssPercentVar(plan, aliasTarget(plan, n, v), opts);
-    const val = (raw: VariableValue): string => cssValue(webNumber(v, raw), unit, ref, pctRef);
+    const val = (raw: VariableValue): string => (kind === "fontFamily" && typeof raw === "string" ? cssFontFamily(raw) : cssValue(webNumber(v, raw), unit, ref, pctRef));
     const baseStr = JSON.stringify(base);
     theme.set(name, `  ${name}: ${val(base)};`);
     const values = v.values || {};
     for (const m of Object.keys(values)) {
       if (m === def || values[m] === undefined) continue;
       if (JSON.stringify(values[m]) === baseStr) continue;
-      (perMode[m] || (perMode[m] = new Map())).set(name, `  ${name}: ${val(values[m])};`);
+      perMode.set(v, m, name, `  ${name}: ${val(values[m])};`);
     }
+  }
+  if (leftOut.length) {
+    warnings.push(`theme.css leaves out ${leftOut.length} STRING token(s) that are not font families (${leftOut.slice(0, 4).map((n) => `'${n}'`).join(", ")}${leftOut.length > 4 ? `, … +${leftOut.length - 4} more` : ""}) — ` +
+      "a value like 'Semi Bold' is not usable in @theme and generates no utility. They are kept in tokens.dtcg.json and tokens.css (written with --also-generic); scope a font-family STRING to FONT_FAMILY in Figma to get a --font-figma-* utility");
   }
   let out = '@import "tailwindcss";\n' +
     "/* GENERATED by Design Twin (tokens.js --web tailwind) — do not edit by hand; re-run after a token pull.\n" +
     "   Every design-system variable sits under a `figma-` name (rounded-figma-xl, p-figma-space-4, bg-figma-…),\n" +
     "   so Tailwind's own scale (rounded-xl, p-4, …) keeps its framework meaning. */\n";
   if (theme.size) out += "\n@theme {\n" + [...theme.values()].join("\n") + "\n}\n";
-  for (const [m, lines] of Object.entries(perMode)) out += `\n[data-theme="${cssAttrEscape(m)}"] {\n` + [...lines.values()].join("\n") + "\n}\n";
+  out += perMode.render();
   return { text: out, utilities, tokens: theme.size, warnings };
 }
 
@@ -1131,8 +1286,17 @@ const dedupe = <T>(list: readonly T[]): T[] => [...new Set(list)];
 
 // The half of the lint that does NOT come from toDTCG. Split out so emitTokens can lint off the
 // warnings toDTCG already collected instead of building the whole DTCG tree a second time.
+// DT-24: the CSS file(s) the caller writes, as a warning names them — theme.css alone under `--web
+// tailwind` (tokens.css is not written then), tokens.css by default, both with --also-generic.
+function cssFilesOf(opts: EmitOpts | undefined): string[] {
+  return opts && opts.cssFiles ? [...opts.cssFiles] : opts && opts.tailwind ? ["tokens.css", "theme.css"] : ["tokens.css"];
+}
 function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | undefined, warnings: string[]): string[] {
   const vars = (designSystem && designSystem.variables) || [];
+  const files = cssFilesOf(opts);
+  const inCss = files.join("/") || "the CSS";
+  // Several collections with a block for one mode name: scoped per collection (planModeScopes).
+  warnings.push(...planModeScopes(designSystem).warnings);
   // Dangling aliases: an aliasOf whose target isn't a defined token.
   const names = new Set(vars.map((v) => segs(v.name).join(".")).filter(Boolean));
   for (const v of vars) for (const m of Object.keys(v.values || {})) {
@@ -1153,11 +1317,11 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
       if (isAlias(opacity)) {
         plan = plan || cssPlan(designSystem);
         if (!cssPercentVar(plan, aliasTarget(plan, opacity.aliasOf, v), opts)) {
-          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); tokens.css/theme.css carry the colour only — the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
+          warnings.push(`token '${v.name}' (mode ${m}) is a composed colour whose opacity '${opacity.aliasOf}' is not an OPACITY/COLOR_OPACITY-scoped number (its CSS is not a percentage); ${inCss} carr${files.length > 1 ? "y" : "ies"} the colour only — the opacity is in tokens.dtcg.json $extensions["figma.com"]`);
           break;
         }
       } else if (pctOutOfRange(opacity)) {
-        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(opacity)}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${opacity}`);
+        warnings.push(`token '${v.name}' (mode ${m}) is a composed colour with opacity ${opacity}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(opacity)}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${opacity}`);
       }
     }
   }
@@ -1167,7 +1331,7 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
     for (const m of Object.keys(v.values || {})) {
       const raw = v.values[m];
       const txt = typeof raw === "number" ? String(raw) : typeof raw === "string" && NUMERIC_TEXT.test(raw) ? raw : null;
-      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(Number(txt))}% in tokens.css/theme.css (as Figma does); tokens.dtcg.json keeps ${txt}`);
+      if (txt !== null && pctOutOfRange(Number(txt))) warnings.push(`token '${v.name}' (mode ${m}) is an opacity of ${txt}, outside Figma's 0–100 range; clamped to ${clampOpacityPct(Number(txt))}% in ${inCss} (as Figma does); tokens.dtcg.json keeps ${txt}`);
     }
   }
   // STRING tokens carrying CSS-structural characters are emitted escaped (see cssEscapeText) — report
@@ -1177,7 +1341,7 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
   for (const v of vars) {
     if (v.type !== "STRING") continue;
     for (const m of Object.keys(v.values || {})) {
-      if (cssNeedsEscape(v.values[m])) { warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in tokens.css`); break; }
+      if (cssNeedsEscape(v.values[m])) { warnings.push(`token '${v.name}' (mode ${m}) contains CSS-structural characters; escaped for safety in ${inCss}`); break; }
     }
   }
   // Mode names that had to be escaped to stay inside their `[data-theme="…"]` selector. Same
@@ -1187,7 +1351,7 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
   for (const c of (designSystem && designSystem.collections) || []) for (const m of c.modes || []) modeNames.add(m);
   for (const v of vars) for (const m of Object.keys(v.values || {})) modeNames.add(m);
   for (const m of modeNames) {
-    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its tokens.css selector`);
+    if (cssAttrNeedsEscape(m)) warnings.push(`mode '${m}' contains a quote or backslash; escaped in its ${inCss} selector`);
   }
 
   // One pass per variable for the three name-derived checks below; `segs`/`cssVarName` are split +
@@ -1210,7 +1374,8 @@ function lintNames(designSystem: TokensDoc | null | undefined, opts: EmitOpts | 
     if (!s.length) continue;
     const folded = cssVarName(v.name);
     if (folded !== "--" + s.join("-")) {
-      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${folded}`);
+      const as = files.map((f) => `${f === "theme.css" ? twName(v, opts) : folded} in ${f}`).join(", ");
+      warnings.push(`token '${v.name}' contains characters that are illegal in a CSS custom property; emitted as ${as}`);
     }
   }
   return warnings;
@@ -1233,6 +1398,7 @@ function emitTokens(designSystem: TokensDoc | null | undefined, opts?: EmitOpts)
   // warning dedupe sees the messages toDTCG already recorded.
   const { resolver, files } = toResolver(designSystem, warnings, opts);
   const collisions = collisionMessages(notes, opts);
+  if (tailwind) warnings.push(...tailwind.warnings); // no collisions in it (notes was passed): the left-out STRINGs, the mode scoping
   lintNames(designSystem, opts, warnings);
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
@@ -1272,15 +1438,17 @@ function main(args: string[]): number {
   const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
     NO_DESIGN_SYSTEM_HINT + "\n       A single-screen pull DOES write design/variables.json — pass that instead.");
   fs.mkdirSync(outDir, { recursive: true }); // documented usage is `… ./out`; don't die on a raw ENOENT
-  // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
-  // across every output it touches, naming the screen(s) each colliding variable came from.
-  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: sourcesOf(ds, input) });
   // finding 225: a --web/--native target used to get the generic set (dtcg/css/resolver/tokens/)
   // written on top of it unconditionally, with no indication of which file the app actually
   // consumes. Now: a target selected -> ONLY that target's file(s) are written to outDir, unless
   // --also-generic is passed. No target -> unchanged (generic set only).
   const hasTarget = web !== undefined || native !== undefined;
   const writeGeneric = !hasTarget || alsoGeneric;
+  // The CSS files actually written, so a warning names those (DT-24) — not tokens.css when only theme.css is.
+  const cssFiles = [...(writeGeneric ? ["tokens.css"] : []), ...(webFile !== undefined ? [webFile] : [])];
+  // one pass: emit + lint share the same opts and traversal, and a name collision is reported once
+  // across every output it touches, naming the screen(s) each colliding variable came from.
+  const { dtcg, css, tailwind, resolver, resolverFiles, warnings } = emitTokens(ds, { tailwind: web !== undefined, sources: sourcesOf(ds, input), cssFiles });
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
     fs.writeFileSync(path.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
@@ -1305,7 +1473,7 @@ function main(args: string[]): number {
     fs.writeFileSync(path.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities — every token is a plain custom property you must reference with var()`);
-    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
+    else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, booleans, strings a font family aliases) — emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== undefined) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || undefined) });
@@ -1314,6 +1482,8 @@ function main(args: string[]): number {
     canonicalFile = n.file;
   }
   warnings.forEach((w) => console.error("warn  " + w));
+  // DT-79 (D9): a suggestion only, printed — not written into theme.css, which the user moves into the app.
+  if (webFile !== undefined) console.error("note  " + TAILWIND_SOURCE_NOT_NOTE);
   if (hasTarget) {
     const genericNote = writeGeneric
       ? ` (+ the generic set: tokens.dtcg.json, tokens.css, tokens.resolver.json, ${genericCount} file(s) under ${RESOLVER_DIR}/ — also written here because --also-generic was passed)`

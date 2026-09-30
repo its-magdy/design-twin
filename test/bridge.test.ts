@@ -743,6 +743,22 @@ void (async () => {
       const note = init.plan(mk({ ".gitignore": "node_modules/\ndesign/\n" }), { token: tok }).find((a) => a.kind === "note");
       return !!note && /NOT regenerable/.test(note.note) && /design\/export\//.test(note.note);
     })());
+    // DT-79 (D9: suggest only): Tailwind v4 compiles class names quoted in design/ notes unless excluded.
+    ok("[DT-79] a project whose package.json lists tailwindcss (deps or devDeps) gets ONE @source not note; others get none", (() => {
+      const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /@source not "<path from that CSS file to design\/>";/.test(a.note) && /v4\.1\+/.test(a.note));
+      return notes({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}' }).length === 1 && notes({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }).length === 1
+        && notes({ "package.json": '{"dependencies":{"react":"19"}}' }).length === 0 && notes({}).length === 0 && notes({ "package.json": "not json" }).length === 0;
+    })());
+    ok("[DT-79] no note for a Tailwind pinned to v3 (^3 / ~3 / 3.x / >=3 <4 — v3 does not auto-scan); v4 ranges and the v4-only plugins still get it", (() => {
+      const n = (pkg: string) => init.plan(mk({ "package.json": pkg }), { token: tok }).filter((a) => a.kind === "note" && /@source not/.test(a.note)).length;
+      return ["^3.4.1", "~3.3", "3.x", ">=3 <4"].every((r) => n(`{"devDependencies":{"tailwindcss":"${r}"}}`) === 0)
+        && n('{"devDependencies":{"tailwindcss":"^4.1.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ^4.0.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ~3.4"}}') === 0 && n('{"devDependencies":{"tailwindcss":">=3"}}') === 1 && n('{"devDependencies":{"@tailwindcss/vite":"^4"}}') === 1;
+    })());
+    ok("[DT-79] init only suggests it — nothing is written into a stylesheet", (() => {
+      const d = mk({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}', "src/app.css": '@import "tailwindcss";\n' });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      return fs.readFileSync(path.join(d, "src/app.css"), "utf8") === '@import "tailwindcss";\n';
+    })());
   // The layout split, asserted where it is decided: dtwin writes only under design/export/, and
   // everything a re-pull must not destroy sits beside it (see bridge/project-layout.js).
   ok("[init] scaffolds design/ AND design/export/, so the split is visible before the first pull",
