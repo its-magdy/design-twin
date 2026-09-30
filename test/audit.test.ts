@@ -6,8 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync, execFileSync } from "node:child_process";
-import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind } from "../design-to-code/audit.ts";
-import type { AuditInput } from "../design-to-code/audit.ts";
+import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, BLOCKER_CODES } from "../design-to-code/audit.ts";
+import type { AuditInput, AuditOptions } from "../design-to-code/audit.ts";
 import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
@@ -651,6 +651,221 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
     { id: "9:9", type: "INSTANCE", name: "Row", reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "30:1", destination: "Details", navigation: "navigate" }] }] },
   ] }]), { platform: "web" });
   check("[review L3] two different frames that share a name are two destinations, told apart by id", codes(two, "prototype-navigation").length === 2 && codes(two, "prototype-navigation").some((f) => f.destinationId === "30:1" && /\(30:1\)/.test(f.message)));
+}
+
+// ================================================================ field tests, group 5 (audit skill + severity model, D1/D11/D12)
+console.log("field-test group 5:");
+const repoRoot = path.join(import.meta.dirname, "..");
+const readRepo = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), "utf8");
+{
+  // D1/D11 doc-guard: the SKILL's blocker list IS the code's, and no emit site can raise any other code as a blocker.
+  const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
+  const line = /Blocker codes: ([^\n]*)/.exec(skill)?.[1] ?? "";
+  const listed = [...line.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
+  check("[D1 doc-guard] SKILL.md's 'Blocker codes:' list equals BLOCKER_CODES", JSON.stringify(listed) === JSON.stringify([...BLOCKER_CODES].sort()));
+  const emitted = new Set<string>();
+  for (const f of ["design-to-code/audit.ts", "design-to-code/cross-check.ts"]) {
+    for (const m of readRepo(f).matchAll(/"blocker"(?:\s*:\s*"(?:warning|info)")?,\s*"([a-z]+(?:-[a-z]+)+)"/g)) if (m[1]) emitted.add(m[1]);
+  }
+  check("[D1 doc-guard] every code emitted as \"blocker\" in audit.ts/cross-check.ts is in BLOCKER_CODES (and the scan found some)",
+    emitted.size >= 3 && [...emitted].every((c) => (BLOCKER_CODES as readonly string[]).includes(c)));
+  check("[D1 doc-guard] the scan also sees the conditional token-name-collision emit", emitted.has("token-name-collision"));
+}
+{
+  // D1: cross-file warnings carry a confirm question, and the audit asks it with the others.
+  const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
+  const res = audit({ doc, label: "Items" }, { platform: "web", designSystem: { components: { components: [{ name: "Other", type: "COMPONENT_SET", key: "k-o" }] } } });
+  const f = res.findings.find((x) => x.code === "catalog-covers-nothing");
+  check("[D1] catalog-covers-nothing reaches the audit as a warning, and its confirm question is asked", f?.severity === "warning" && res.questions.some((q) => /^Confirm \(catalog-covers-nothing\): /.test(q)));
+  check("[D1] …so the gate has no blocker for it", res.summary.blockers === 0);
+}
+{
+  // DT-21 / F-10: overrides re-render BOTH files; the gate reads the same severity as the .md.
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-overrides-"));
+  const screenFile = path.join(cwd, "design", "export", "pages", "Main", "Login__1_1.json");
+  fs.mkdirSync(path.dirname(screenFile), { recursive: true });
+  fs.copyFileSync(path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), screenFile);
+  const ovFile = path.join(cwd, "design", "audit", "Login__1_1.overrides.json");
+  fs.mkdirSync(path.dirname(ovFile), { recursive: true });
+  const run = (args: string[] = []) => spawnSync(process.execPath, [cli, path.relative(cwd, screenFile), "--platform", "ios", ...args], { encoding: "utf8", cwd });
+  const before = run();
+  const beforeGate = auditGateStatus(cwd, screenFile, "Login");
+  fs.writeFileSync(ovFile, JSON.stringify({ overrides: [
+    { code: "missing-font", nodeId: "1:11", severity: "warning", reason: "the font files are licensed and in the repo", decidedBy: "user", decidedAt: "2026-09-30T00:00:00Z" },
+    { code: "export-truncated", severity: "info", reason: "stale decision" },
+  ] }));
+  const after = run();
+  const json = parseAs(fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.json"), "utf8"), isAuditReport, "audit report");
+  const md = fs.readFileSync(path.join(cwd, "design", "audit", "Login__1_1.md"), "utf8");
+  const font = json.findings.find((f) => f.code === "missing-font");
+  check("[DT-21] before: missing-font is a blocker the gate sees", before.status === 0 && beforeGate.blockers.includes("missing-font#0"));
+  check("[DT-21] an override downgrades it in the .json (summary + finding, with from/reason/decidedBy)",
+    after.status === 0 && json.summary.blockers === 0 && font?.severity === "warning" && font.overridden?.from === "blocker" && font.overridden.decidedBy === "user");
+  check("[DT-21] …and in the .md, marked with the old severity and the reason", /`missing-font` .*\*\(was blocker: the font files are licensed and in the repo\)\*/.test(md) && /\*\*0 blocker\(s\)\*\*/.test(md));
+  check("[F-10] the gate reads the same decision: no blockers left", auditGateStatus(cwd, screenFile, "Login").blockers.length === 0);
+  check("[DT-21] an override that matches nothing is reported (JSON, .md, stderr), not dropped",
+    json.overridesUnmatched?.length === 1 && json.overridesUnmatched[0]?.code === "export-truncated" && /matched no finding/.test(md) && /override for export-truncated NOT applied: matched no finding/.test(after.stderr));
+  fs.writeFileSync(ovFile, JSON.stringify({ overrides: [{ code: "missing-font", severity: "warning", reason: "" }] }));
+  const bad = run();
+  check("[DT-21] an override with no reason is refused (exit 2, one line) — a silent non-decision would re-open the blocker", bad.status === 2 && /audit overrides: .* is not an audit overrides file/.test(bad.stderr));
+  // The gate's name lookup must never take a sidecar (.overrides/.cross) for the report.
+  fs.writeFileSync(ovFile, JSON.stringify({ overrides: [] }));
+  fs.writeFileSync(path.join(cwd, "design", "audit", "Login__1_1.cross.json"), JSON.stringify({ findings: [{ severity: "blocker", code: "catalog-rekeyed", message: "x" }], summary: {} }));
+  check("[gate] name lookup skips <screen>.cross.json / .overrides.json and finds the report itself", locateAuditFile(cwd, null, "Login") === "design/audit/Login__1_1.json");
+}
+{
+  // DT-22 / F-18: a same-page frame whose copy reads like the missing state is named; orphan screenshots are listed.
+  const layers = [
+    { id: "5:1", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__5_1.json", title: "Items", texts: ["Items", "Add item"] },
+    { id: "5:2", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__5_2.json", title: "Items", texts: ["Items", "No items added yet.", "Add item"] },
+    { id: "6:1", name: "Settings", page: "Other", pageId: "0:2", file: "pages/Other/Settings__6_1.json", texts: ["Something went wrong"] },
+    { id: "5:3", name: "Projects", page: "Main", pageId: "0:1", file: "pages/Main/Projects__5_3.json", title: "Projects", texts: ["Projects", "No projects yet."] },
+  ];
+  const res = audit(g4([{ id: "5:1", type: "FRAME", name: "Items" }]), { platform: "web", neighbours: { layers, unexportedShots: ["7:1", "7:2"] } });
+  const sib = res.findings.find((f) => f.code === "state-in-sibling");
+  check("[DT-22] a same-page frame reading 'No items added yet.' is named as the likely empty state", sib?.state === "empty" && sib.candidates?.[0]?.id === "5:2" && res.questions.some((q) => /No empty state in this frame — is 'Items' \(5:2: "No items added yet\."\)/.test(q)));
+  check("[DT-22] an unrelated frame on the same page ('No projects yet.') is not offered as THIS screen's empty state", !(sib?.candidates || []).some((c) => c.id === "5:3"));
+  check("[DT-22] a frame on ANOTHER page is not a candidate (its 'Something went wrong' is someone else's error)", !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "error"));
+  check("[DT-22] the state itself stays not-found — a text match is a lead, not proof", res.screenStates.empty === "not-found");
+  check("[DT-22] frames screenshotted but never exported are listed", res.findings.some((f) => f.code === "unexported-frames" && JSON.stringify(f.ids) === JSON.stringify(["7:1", "7:2"])));
+  // End to end: the CLI reads pages/index.json and assets/ beside the screen.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-neighbours-"));
+  const put = (rel: string, body: string | object): void => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof body === "string" ? body : JSON.stringify(body)); };
+  // The index's texts are only the first few strings (on real screens: the sidebar); the empty-state
+  // sentence is found in the sibling's own export, deep in its tree.
+  put("design/export/pages/index.json", { pageDirs: [{ dir: "Main", index: "pages/Main/index.json" }], layers: layers.map((l) => ({ ...l, texts: ["Dashboard", "Items", "Settings"] })) });
+  const nest = (depth: number, leaf: Parameters<typeof node>[0]): Parameters<typeof node>[0] => depth ? { id: `5:n${depth}`, type: "FRAME", name: `Level ${depth}`, children: [nest(depth - 1, leaf)] } : leaf;
+  put("design/export/pages/Main/Items__5_2.json", screenExport([{ id: "5:2", type: "FRAME", name: "Items", children: [nest(7, { id: "5:26", type: "TEXT", name: "Main Text", text: "No items added yet." })] }], { screen: "Items" }));
+  put("design/export/pages/Main/Items__5_1.json", screenExport([{ id: "5:1", type: "FRAME", name: "Items" }], { screen: "Items" }));
+  put("design/export/assets/5_1_ref.png", "png"); put("design/export/assets/7_1_ref.png", "png"); put("design/export/assets/7_2_shot@0.25x.png", "png");
+  const out = parseAs(execFileSync(process.execPath, [cli, "design/export/pages/Main/Items__5_1.json", "--platform", "web", "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  check("[DT-22 CLI] the sibling sweep and orphan screenshots come from disk (the audited frame's own ref is not an orphan)",
+    out.findings.some((f) => f.code === "state-in-sibling" && f.candidates?.[0]?.id === "5:2") && JSON.stringify(out.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:1", "7:2"]));
+}
+{
+  // D12 doc-guards: the skill still forks, is disk-only by default, calls Figma only in paragraphs about `live`, and reports its commands.
+  const skill = readRepo("claude-plugin/skills/audit-design/SKILL.md");
+  check("[D12] audit-design keeps context: fork and takes a `--live` flag", /\ncontext: fork\n/.test(skill) && /argument-hint: .*\[--live\]/.test(skill));
+  check("[D12/DT-19] the disk-only rule is stated, keyed on the flag (not a word a screen name can contain)", /\*\*Disk-only unless told otherwise\.\*\*/.test(skill) && /ends with the flag `--live`/.test(skill) && !/contains the word `live`/.test(skill));
+  // Any `dtwin <command>` or `figma_*` named in a paragraph — except the one sentence saying what --as-library WRITES.
+  const callParas = skill.split(/\n\s*\n/).filter((p) => /`dtwin (?!pull --as-library)[a-z-]+|`figma_[a-z_]+`/.test(p));
+  check("[D12/DT-16] every paragraph that names a Figma-reaching call is about `--live` (or is printed output)", callParas.length > 0 && callParas.every((p) => /`--live`|\*\*Live only\*\*|prints/.test(p))); // not "the live run" — the FLAG
+  check("[D12/F-21] the hand-back lists every command run", /list \*\*every command you ran\*\*/.test(skill));
+  check("[DT-21] the skill says to record severity changes in the overrides file, not the .md", /Never change a severity by editing the `\.md`/.test(skill) && /\.overrides\.json/.test(skill));
+}
+{
+  // F-19: every CLI remediation hint in finding text names its MCP twin, or says it has none.
+  const lines = ["design-to-code/cross-check.ts", "design-to-code/drift-lint.ts"].flatMap((f) => readRepo(f).split("\n")).filter((l) => !/^\s*\/\//.test(l));
+  const asLib = lines.filter((l) => /dtwin pull --as-library/.test(l));
+  const listLib = lines.filter((l) => /dtwin list libraries/.test(l));
+  check("[F-19] every `dtwin pull --as-library` hint says it is CLI only", asLib.length >= 2 && asLib.every((l) => /CLI only/.test(l)));
+  check("[F-19] every `dtwin list libraries` hint names figma_list_libraries", listLib.length >= 1 && listLib.every((l) => /figma_list_libraries/.test(l)));
+}
+
+// ---- review round 1 of group 5
+{
+  // H1: an override reaches the cross-file section too — .md, crossFile.findings and crossFile.summary agree.
+  const vars: TokensDoc = { collections: [{ name: "Spacing", modes: ["Desktop"], default: "Desktop", theming: false, key: "screen-space" }],
+    variables: [{ name: "(Space 3)", collection: "Spacing", tier: "primitive", key: "screen-k2", type: "FLOAT", values: { Desktop: 12 } }] };
+  const dsTokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "ds-space" }],
+    variables: [{ name: "Space 3", collection: "Spacing", tier: "primitive", key: "ds-k2", type: "FLOAT", values: { "Mode 1": 16 } }] };
+  const input: AuditInput = { doc: screenExport([{ id: "10:1", type: "FRAME", name: "Items", children: [{ id: "10:2", type: "FRAME", name: "Row", tokens: { itemSpacing: "(Space 3)" } }] }], { screen: "Items" }), label: "Items", vars };
+  const base = audit(input, { platform: "web", designSystem: { tokens: dsTokens }, variables: vars });
+  check("[review H1] setup: a used name clash is a blocker in both places", base.summary.blockers === 1 && base.crossFile?.summary.blockers === 1);
+  const decided = audit(input, { platform: "web", designSystem: { tokens: dsTokens }, variables: vars,
+    overrides: [{ code: "token-name-collision", token: "(Space 3)", severity: "warning", reason: "the screen's value is the intended one", decidedBy: "user" }] });
+  const md = toMarkdown(decided);
+  const crossBlock = md.slice(md.indexOf("## Does this screen come from"), md.indexOf("## Token binding"));
+  check("[review H1] after a downgrade, crossFile.findings and crossFile.summary say warning too", decided.summary.blockers === 0 && decided.crossFile?.summary.blockers === 0 && decided.crossFile.findings.find((f) => f.code === "token-name-collision")?.severity === "warning");
+  check("[review H1] …and so does the .md's cross-file section, with the decision", !/\*\*blocker\*\*/.test(crossBlock) && /\*\*warning\*\* `token-name-collision`.*\(was blocker: the screen's value is the intended one\)/.test(crossBlock));
+}
+{
+  // M4: override rules.
+  const login = readFixture(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), isScreenExport);
+  const run = (overrides: NonNullable<AuditOptions["overrides"]>) => audit({ doc: login, label: "Login" }, { platform: "ios", overrides });
+  const broad = run([{ code: "missing-font", severity: "warning", reason: "fonts are licensed", decidedBy: "user" }]);
+  check("[review M4a] an entry without nodeId for a node-level code is too broad — not applied", broad.summary.blockers === 1 && /too broad/.test(broad.overridesUnmatched?.[0]?.why ?? ""));
+  const raise = run([{ code: "low-contrast", nodeId: "1:4", severity: "blocker", reason: "brand rule", decidedBy: "user" }]);
+  check("[review M4b] a non-blocker code cannot be raised to a blocker", raise.summary.blockers === 1 && /can be blockers/.test(raise.overridesUnmatched?.[0]?.why ?? ""));
+  const nobody = run([{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "fonts are licensed" }]);
+  check("[review M4e] downgrading a blocker without decidedBy is refused", nobody.summary.blockers === 1 && /needs decidedBy/.test(nobody.overridesUnmatched?.[0]?.why ?? ""));
+  const twice = run([{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "a", decidedBy: "user" }, { code: "missing-font", nodeId: "1:11", severity: "info", reason: "b", decidedBy: "user" }]);
+  check("[review M4c] a second entry on an already-decided finding is not reported as stale (first wins)", twice.summary.blockers === 0 && !twice.overridesUnmatched && twice.findings.find((f) => f.code === "missing-font")?.severity === "warning");
+  // M4d: a decided cross-file warning's confirm question is not asked again.
+  const doc = screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Widget", mainComponent: { name: "Widget", key: "k-w-v", setKey: "k-w", setName: "Widget" } }] }], { screen: "Items" });
+  const ds = { components: { components: [{ name: "Other", type: "COMPONENT_SET" as const, key: "k-o" }] } };
+  const asked = audit({ doc, label: "Items" }, { platform: "web", designSystem: ds });
+  const answered = audit({ doc, label: "Items" }, { platform: "web", designSystem: ds, overrides: [{ code: "catalog-covers-nothing", severity: "info", reason: "confirmed: every instance is new work", decidedBy: "user" }] });
+  check("[review M4d] once decided, the confirm question is not asked again", asked.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)) && !answered.questions.some((q) => /^Confirm \(catalog-covers-nothing\)/.test(q)));
+}
+{
+  // M3: frames sharing a generic name ("Popup" ×3) are not related through the name; titles decide.
+  const layers = [
+    { id: "11:1", name: "Popup", page: "Main", pageId: "0:1", file: "pages/Main/Popup__11_1.json", title: "Add Item", texts: ["Add Item"] },
+    { id: "11:2", name: "Popup", page: "Main", pageId: "0:1", file: "pages/Main/Popup__11_2.json", title: "Export Report", texts: ["Export Report", "Loading…", "Something went wrong"] },
+    { id: "11:3", name: "Popup", page: "Main", pageId: "0:1", file: "pages/Main/Popup__11_3.json", title: "Add Item", texts: ["Add Item", "Something went wrong"] },
+  ];
+  const res = audit(g4([{ id: "11:1", type: "FRAME", name: "Popup" }], "Popup"), { platform: "web", neighbours: { layers, unexportedShots: [] } });
+  const err = res.findings.find((f) => f.code === "state-in-sibling" && f.state === "error");
+  check("[review M3] a same-named frame with a DIFFERENT title is not offered; one with the same title is", !!err && JSON.stringify(err.candidates?.map((c) => c.id)) === JSON.stringify(["11:3"]) && !res.findings.some((f) => f.code === "state-in-sibling" && f.state === "loading"));
+}
+{
+  // M7: a sidecar report (<screen>.library.json) is not "an existing report for this node" — the documented re-run works.
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "audit-sidecar-"));
+  const screenFile = path.join(cwd, "design", "export", "pages", "Main", "Login__1_1.json");
+  fs.mkdirSync(path.dirname(screenFile), { recursive: true });
+  fs.copyFileSync(path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), screenFile);
+  const run = (args: string[]) => spawnSync(process.execPath, [cli, path.relative(cwd, screenFile), "--platform", "ios", ...args], { encoding: "utf8", cwd });
+  const first = run([]);
+  const lib = run(["--out", "design/audit/Login__1_1.library"]);
+  check("[review M7] `--out design/audit/<screen>.library` beside the main report is not refused as a duplicate", first.status === 0 && lib.status === 0 && fs.existsSync(path.join(cwd, "design", "audit", "Login__1_1.library.json")));
+}
+
+// ---- review round 2 of group 5
+{
+  // M1: codes that repeat per collection / mode / state are narrowed by that key; a bare entry is too broad.
+  const layers = [
+    { id: "12:1", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__12_1.json", title: "Items", texts: ["Items"] },
+    { id: "12:2", name: "Items", page: "Main", pageId: "0:1", file: "pages/Main/Items__12_2.json", title: "Items", texts: ["No items added yet.", "Something went wrong"] },
+  ];
+  const run = (overrides: NonNullable<AuditOptions["overrides"]>) => audit(g4([{ id: "12:1", type: "FRAME", name: "Items" }]), { platform: "web", neighbours: { layers, unexportedShots: [] }, overrides });
+  const bare = run([{ code: "state-in-sibling", severity: "warning", reason: "track it" }]);
+  check("[re-review M1] a bare entry on a code found twice (empty + error) is too broad", /too broad — name the finding \(.*state/.test(bare.overridesUnmatched?.[0]?.why ?? "") && bare.findings.every((f) => f.code !== "state-in-sibling" || f.severity === "info"));
+  const one = run([{ code: "state-in-sibling", state: "empty", severity: "warning", reason: "track it" }]);
+  check("[re-review M1] naming `state` decides exactly that finding", one.findings.filter((f) => f.code === "state-in-sibling" && f.severity === "warning").map((f) => f.state).join() === "empty" && !one.overridesUnmatched);
+}
+{
+  // M2 (test gaps): each M3 guard on its own.
+  const mk = (rows: Array<{ id: string; name: string; title?: string; texts: string[] }>) => rows.map((r) => ({ ...r, page: "Main", pageId: "0:1", file: `pages/Main/x__${r.id.replace(":", "_")}.json` }));
+  const cand = (layers: ReturnType<typeof mk>) => audit(g4([{ id: "13:1", type: "FRAME", name: "Popup" }], "Popup"), { platform: "web", neighbours: { layers, unexportedShots: [] } }).findings.find((f) => f.code === "state-in-sibling")?.candidates?.map((c) => c.id) ?? [];
+  check("[re-review M2] a name used 3 times on the page, no titles anywhere → not related by name",
+    cand(mk([{ id: "13:1", name: "Popup", texts: [] }, { id: "13:2", name: "Popup", texts: ["Something went wrong"] }, { id: "13:3", name: "Popup", texts: [] }])).length === 0);
+  check("[re-review M2] a name used twice but the titles disagree → not related",
+    cand(mk([{ id: "13:1", name: "Popup", title: "Add Item", texts: [] }, { id: "13:2", name: "Popup", title: "Export Report", texts: ["Something went wrong"] }])).length === 0);
+  check("[re-review M2] a name used twice, no titles → related",
+    JSON.stringify(cand(mk([{ id: "13:1", name: "Popup", texts: [] }, { id: "13:2", name: "Popup", texts: ["Something went wrong"] }]))) === JSON.stringify(["13:2"]));
+}
+{
+  // M2 (test gaps): hashed reference names count as screenshots; a sidecar of ANOTHER report never blocks a write;
+  // LOW: a sidecar run reads its report's overrides file.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-hash-"));
+  const put = (rel: string, body: string | object): string => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof body === "string" ? body : JSON.stringify(body)); return f; };
+  put("design/export/pages/index.json", { pageDirs: [{ dir: "Main", index: "pages/Main/index.json" }], layers: [{ id: "1:1", name: "Login", page: "Main", pageId: "0:1", file: "pages/Main/Login__1_1.json" }] });
+  const screenRel = "design/export/pages/Main/Login__1_1.json";
+  fs.mkdirSync(path.join(root, path.dirname(screenRel)), { recursive: true });
+  fs.copyFileSync(path.join(import.meta.dirname, "fixtures/audit/flawed-login.json"), path.join(root, screenRel));
+  put("design/export/assets/7_3_ref-a1b2c3.png", "png"); put("design/export/assets/7_4_ref-Zq9x_1.png", "png");
+  const nodeId = audit({ doc: readFixture(path.join(import.meta.dirname, "fixtures", "audit", "flawed-login.json"), isScreenExport), label: "Login" }, { platform: "ios" }).nodeIds?.[0] ?? "";
+  put("design/audit/Other__9_9.library.json", { nodeIds: [nodeId], findings: [], summary: {} });
+  const r = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios"], { encoding: "utf8", cwd: root });
+  const repFile = path.join(root, "design/audit/Login__1_1.json");
+  const rep = fs.existsSync(repFile) ? parseAs(fs.readFileSync(repFile, "utf8"), isAuditReport, "report") : { findings: [] as AuditFinding[] };
+  check("[re-review M2] another report's sidecar that covers the node does not refuse the write", r.status === 0);
+  check("[re-review M2] hashed reference names (_ref-<hash>.png, _ref-<hash>_N.png) are screenshots too", JSON.stringify(rep.findings.find((f) => f.code === "unexported-frames")?.ids) === JSON.stringify(["7:3", "7:4"]));
+  put("design/audit/Login__1_1.overrides.json", { overrides: [{ code: "missing-font", nodeId: "1:11", severity: "warning", reason: "licensed", decidedBy: "user" }] });
+  const lib = spawnSync(process.execPath, [cli, screenRel, "--platform", "ios", "--out", "design/audit/Login__1_1.library"], { encoding: "utf8", cwd: root });
+  const libRep = parseAs(fs.readFileSync(path.join(root, "design/audit/Login__1_1.library.json"), "utf8"), isAuditReport, "library report");
+  check("[re-review LOW] a `<report>.library` run applies the report's own overrides file", lib.status === 0 && libRep.summary.blockers === 0 && /overrides: design\/audit\/Login__1_1\.overrides\.json/.test(lib.stderr));
 }
 
 report();

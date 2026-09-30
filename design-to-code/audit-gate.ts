@@ -24,7 +24,9 @@ function locateAuditFile(cwd: string, screenFile: string | null | undefined, scr
   const candidates: string[] = [];
   if (base) candidates.push(path.join(dir, base + ".json"));
   let entries: string[] = [];
-  try { entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json")); } catch { entries = []; }
+  // Report pairs only: a sidecar (<screen>.cross.json, <screen>.overrides.json, <screen>.library.json) has a
+  // dot in its stem, which a report basename never does (safe() folds every non-alphanumeric to "_").
+  try { entries = fs.readdirSync(dir).filter((f) => f.endsWith(".json") && !f.slice(0, -5).includes(".")); } catch { entries = []; }
   for (const c of candidates) if (fs.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {

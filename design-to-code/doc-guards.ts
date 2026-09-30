@@ -12,7 +12,7 @@
 import { isJsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
-  AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, PageIndex, PagesRootIndex, Plan,
+  AuditOverridesDoc, AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, PageIndex, PagesRootIndex, Plan,
   ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
@@ -81,6 +81,14 @@ export function isLibrariesIndex(x: unknown): x is { libraries: LibrariesIndexEn
     && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === undefined || isStringArray(r.collectionKeys)));
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+
+// ---------------------------------------------------------------- design/audit/<screen>.overrides.json (DT-21)
+const SEVERITIES = ["blocker", "warning", "info"];
+export function isAuditOverridesDoc(x: unknown): x is AuditOverridesDoc {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity)
+    && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 
 // ---------------------------------------------------------------- design/audit/<screen>.json
 export function isAuditReport(x: unknown): x is AuditReport {

@@ -32,7 +32,8 @@
 //                     (validation only when an input was audited; empty is not-applicable for a dialog)
 //   annotations       [{ nodeId, nodeName, label }] — what the designer wrote in the file
 //   questions         [string] — plain prose, one decision the export cannot answer per entry
-//   findings          [{ severity, code, message, nodeId?, nodeName?, screen?, path?, ...extra }]
+//   overridesUnmatched [override] — only when an <out>.overrides.json entry matched no finding
+//   findings          [{ severity, code, message, nodeId?, nodeName?, screen?, path?, overridden?, ...extra }]
 //                     where `extra` is per-code (e.g. { component, missing } on
 //                     missing-component-states, { category } on low-token-binding)
 // There is no `exportedAt`/`manifest`/`screen` at this level; those stay on the export document.
@@ -44,10 +45,10 @@ import { parseHex, contrastRatio, compositeOver } from "./color.ts";
 import { isLayerFile, isScreenDoc, isScreenExport, screenRoots } from "./export-shape.ts";
 import type { Rgba } from "./color.ts";
 import { crossCheck } from "./cross-check.ts";
-import { readDocFile, readSplitFile } from "./catalog-input.ts";
-import { findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
-import type { LibraryExport } from "./design-system-dir.ts";
-import { isComponentsCatalog, isScreenAssetsDoc } from "./doc-guards.ts";
+import { readDocFile, readOptionalDoc, readSplitFile } from "./catalog-input.ts";
+import { findExportNeighbours, findLibraryExports, readDesignSystemDir } from "./design-system-dir.ts";
+import type { ExportNeighbours, LibraryExport } from "./design-system-dir.ts";
+import { isAuditOverridesDoc, isComponentsCatalog, isScreenAssetsDoc } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
@@ -56,7 +57,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isJsonObject } from "./types.ts";
 import type {
   AuditAnnotation, AuditCategory, AuditComponentRow, AuditFinding, AuditFindingCode, AuditPlatform, AuditReport, Box, CatalogComponent, ComponentsCatalog,
-  AuditCrossFile, AuditScreenStates, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
+  AuditCrossFile, AuditOverride, AuditScreenStates, BlockerCode, ControlKind, ControlState, FindingExtras, FontSpec, IrNode, MainComponentRef, Manifest, Paint, ScreenAssetsDoc, ScreenDoc,
   ScreenStateKey, ScreenStateValue, Severity, TextStylesDoc, TokenMap, TokensDoc, Variable,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -199,7 +200,11 @@ export type AuditArg = AuditInput | ScreenDoc;
 const unwrap = (d: AuditArg | null | undefined, i: number): { doc: ScreenDoc | null; label: string; vars: TokensDoc | null; assets: ScreenAssetsDoc | null } =>
   !d || isScreenDoc(d) ? { doc: d || null, label: `input${i}`, vars: null, assets: null } : { doc: d.doc || null, label: d.label || `input${i}`, vars: d.vars || null, assets: d.assets || null };
 /** The design-system split files audit() joins the screen against (all optional). */
-export interface AuditDesignSystem { tokens?: TokensDoc | null; components?: ComponentsCatalog | null; componentsLibrary?: ComponentsCatalog | null; stylesText?: TextStylesDoc | null }
+export interface AuditDesignSystem {
+  tokens?: TokensDoc | null; components?: ComponentsCatalog | null; componentsLibrary?: ComponentsCatalog | null; stylesText?: TextStylesDoc | null;
+  /** the catalog's file name as findings name it; true when the dir is a --as-library export */
+  componentsFile?: string; isLibrary?: boolean;
+}
 export interface AuditOptions {
   platform?: string;
   grid?: number;
@@ -211,6 +216,10 @@ export interface AuditOptions {
   libraries?: LibraryExport[];
   variables?: TokensDoc | null;
   sliceSources?: SliceSources | null;
+  /** DT-22: the other frames in the export (pages/index.json) and orphan screenshots */
+  neighbours?: ExportNeighbours | null;
+  /** DT-21: the user's recorded severity decisions (<out>.overrides.json) */
+  overrides?: AuditOverride[];
 }
 
 // What the walk carries about an ancestor: only what descendants read off it.
@@ -271,12 +280,17 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   const findings: AuditFinding[] = [];
   // typed on its own: spread inline in the Object.assign below, oxlint-tsgolint reads the result as `any`
   const placeOf = (ctx: Here): Pick<AuditFinding, "screen" | "path"> => ({ screen: ctx.label, ...ifDefined("path", ctx.path) });
-  const add = (severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number => findings.push(Object.assign(
-    { severity, code, message },
-    node ? { nodeId: node.id, nodeName: node.name } : {},
-    ctx ? placeOf(ctx) : {},
-    extra || {}
-  ));
+  // D1: "blocker" only with a BlockerCode — the overloads make any other blocker a compile error.
+  function add(severity: "blocker", code: BlockerCode & AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
+  function add(severity: "warning" | "info", code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number;
+  function add(severity: Severity, code: AuditFindingCode, message: string, node: IrNode | null, ctx: Here | null, extra?: FindingExtras): number {
+    return findings.push(Object.assign(
+      { severity, code, message },
+      node ? { nodeId: node.id, nodeName: node.name } : {},
+      ctx ? placeOf(ctx) : {},
+      extra || {}
+    ));
+  }
 
   const binding: Record<AuditCategory, [number, number]> = { color: [0, 0], typography: [0, 0], spacing: [0, 0], radius: [0, 0], effects: [0, 0] };
   const tally = (cat: AuditCategory, bound: boolean): void => { binding[cat][1]++; if (bound) binding[cat][0]++; };
@@ -761,7 +775,54 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     empty: "what shows when there's no data (first use vs no results vs cleared)?",
     error: "what shows when a request fails (inline vs full-screen, retry, offline)?",
   };
-  for (const s of STATE_KEYS) if (screenStates[s] === "not-found") questions.push(`No ${s} state was found in the exported layers — ${STATE_QUESTION[s]}`);
+  // DT-22 / F-18: "not found" in THIS frame is often "drawn in the frame beside it". The index carries every
+  // exported frame's visible texts, so a same-page frame whose copy reads like the missing state is named
+  // (a candidate to confirm — never marked designed on a text match alone).
+  const auditedIds = new Set(roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id));
+  const layers = (opts.neighbours && opts.neighbours.layers) || [];
+  const pageIds = new Set(layers.filter((l) => auditedIds.has(l.id)).map((l) => l.pageId).filter((p): p is string => !!p));
+  // A candidate must be RELATED to the audited screen — a page holds many screens, and "No projects yet"
+  // is not this screen's empty state: the same on-screen title, or the same layer name when that name is
+  // unique on the page and the titles don't disagree (frames named "Popup" ×11 say nothing), or state
+  // copy that names the screen ("No items added yet." for "Items"). Ranked by that, then same size.
+  const slugOf = (t: unknown): string => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const auditedRows = layers.filter((l) => auditedIds.has(l.id));
+  const ownTitles = new Set(auditedRows.map((l) => slugOf(l.title)).filter((x) => x.length >= 3));
+  const ownNames = new Set(roots.map((r) => slugOf(r.tree.name)).filter((x) => x.length >= 3));
+  const nameCount = new Map<string, number>();
+  for (const l of layers) if (l.pageId !== undefined && pageIds.has(l.pageId)) nameCount.set(slugOf(l.name), (nameCount.get(slugOf(l.name)) ?? 0) + 1);
+  const ownPhrases = [...roots.map((r) => r.tree.name), ...auditedRows.map((l) => l.title)].map((t) => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()).filter((t) => t.length >= 4);
+  const sameSize = (l: { w?: number; h?: number }): boolean => auditedRows.some((a) => a.w === l.w && a.h === l.h);
+  for (const s of STATE_KEYS) {
+    if (screenStates[s] !== "not-found") continue;
+    const candidates = layers
+      .filter((l) => !auditedIds.has(l.id) && l.pageId !== undefined && pageIds.has(l.pageId))
+      // The frame's own texts when the CLI read its export (same depth rule as the walk above), else the index's.
+      .map((l) => { const own = opts.neighbours?.textsOf?.(l); return { l, text: [l.title, ...((own && (s === "empty" ? own.all : own.shallow)) ?? l.texts ?? [])].find((t): t is string => !!t && STATE_WORDS[s].test(t)) }; })
+      .filter((c): c is { l: (typeof layers)[number]; text: string } => c.text !== undefined)
+      .map((c) => {
+        const t = slugOf(c.l.title);
+        const titleMatch = t.length >= 3 && (ownTitles.has(t) || ownNames.has(t));
+        const titlesDisagree = t.length >= 3 && ownTitles.size > 0 && !ownTitles.has(t);
+        const nameMatch = ownNames.has(slugOf(c.l.name)) && (nameCount.get(slugOf(c.l.name)) ?? 0) <= 2 && !titlesDisagree; // itself + this one
+        const named = titleMatch || nameMatch ? 3 : 0;
+        const said = ownPhrases.some((p) => c.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").includes(p)) ? 2 : 0;
+        return { id: c.l.id, name: c.l.name, text: c.text, score: named + said + (sameSize(c.l) ? 1 : 0), related: named + said > 0 };
+      })
+      .filter((c) => c.related)
+      .sort((x, y) => y.score - x.score)
+      .slice(0, 3)
+      .map(({ id, name, text }) => ({ id, name, text }));
+    if (candidates.length) {
+      const list = candidates.map((c) => `'${c.name}' (${c.id}: "${c.text}")`).join(", ");
+      add("info", "state-in-sibling", `no ${s} state in the audited frame, but ${list} on the same page read${candidates.length === 1 ? "s" : ""} like one — audit it with this screen before asking the designer`, null, null, { state: s, candidates });
+      questions.push(`No ${s} state in this frame — is ${list} this screen's ${s} state? If not: ${STATE_QUESTION[s]}`);
+    } else questions.push(`No ${s} state was found in the exported layers — ${STATE_QUESTION[s]}`);
+  }
+  const shots = (opts.neighbours && opts.neighbours.unexportedShots) || [];
+  if (shots.length) {
+    add("info", "unexported-frames", `${shots.length} frame(s) were screenshotted into assets/ but never exported (${shots.slice(0, 8).join(", ")}${shots.length > 8 ? ", …" : ""}) — look at assets/<id>_ref.png; a state of this screen among them is "designed but not exported": extract it rather than asking`, null, null, { ids: shots });
+  }
   if (screenStates.validation === "not-found") questions.push("No validation state was found for this screen's inputs — how do field errors show (inline message, when: on blur or on submit, and what does each field require)?");
   if (unchecked.length) questions.push(`The states of ${unchecked.slice(0, 6).map((n) => `'${n}'`).join(", ")}${unchecked.length > 6 ? ", …" : ""} could not be checked (no catalog defines them) — are hover/pressed/focus/disabled designed somewhere?`);
   for (const c of components.filter((c) => c.missing && c.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design — use the design-system default, or is there a spec?`);
@@ -774,6 +835,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
   // never "matches what you exported" — and a reader reasonably read it as the latter. The join lives
   // in cross-check.ts; its findings are merged in here so one report answers both questions.
   let crossFile: AuditCrossFile;
+  const crossOrigin = new Map<AuditFinding, AuditCrossFile["findings"][number]>(); // merged copy -> crossFile's own finding
   let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
     crossFile = crossCheck({
@@ -787,12 +849,16 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       components: (opts.designSystem && opts.designSystem.components) || opts.catalog || null,
       componentsLibrary: (opts.designSystem && opts.designSystem.componentsLibrary) || null,
       stylesText: (opts.designSystem && opts.designSystem.stylesText) || null,
+      ...ifDefined("componentsFile", opts.designSystem && opts.designSystem.componentsFile),
+      ...ifDefined("designSystemIsLibrary", opts.designSystem && opts.designSystem.isLibrary),
     });
     for (const f of crossFile.findings) {
       if (f.severity === "info") continue; // the coverage table below carries the informational half
       if (f.nodeId && hiddenIds.has(f.nodeId)) { hiddenFindingsOmitted++; continue; } // same rule as the walk (finding 74)
       const { severity, code, message, ...rest } = f; // key order kept: severity, code, message, crossFile, the rest
-      findings.push({ severity, code, message, crossFile: true, ...rest });
+      const merged: AuditFinding = { severity, code, message, crossFile: true, ...rest };
+      findings.push(merged);
+      crossOrigin.set(merged, f);
     }
   } else {
     crossFile = {
@@ -822,6 +888,39 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     );
   }
 
+  // DT-21 / F-10: a severity the user changed after review is recorded in <out>.overrides.json and
+  // applied HERE, so the .json (what plan-skeleton and the Stop hook gate on) and the .md say the same
+  // thing. It used to be a hand edit of the .md only — the dismissed blocker still gated the build.
+  // Rules (review of group 5): an entry must NAME its finding when the finding has a node/token/component
+  // (a bare `{code}` would also silence tomorrow's new finding of that code); only a BLOCKER_CODES code can
+  // be raised to a blocker (the closed list D1 promises); a blocker is downgraded only on a recorded
+  // decidedBy. A rule-breaking entry is not applied and is reported with why.
+  const overridesUnmatched: Array<AuditOverride & { why: string }> = [];
+  for (const o of opts.overrides || []) {
+    const hits = findings.filter((f) => f.code === o.code && OVERRIDE_KEYS.every((k) => o[k] === undefined || f[k] === o[k]));
+    const named = OVERRIDE_KEYS.some((k) => o[k] !== undefined);
+    let why: string | null = null;
+    if (!hits.length) why = "matched no finding — the finding changed or is gone";
+    else if (!named && (hits.length > 1 || hits.some((f) => OVERRIDE_KEYS.some((k) => k !== "screen" && f[k] !== undefined))))
+      why = `too broad — name the finding (${OVERRIDE_KEYS.filter((k) => hits.some((f) => f[k] !== undefined)).join(" / ")})`;
+    else if (o.severity === "blocker" && !(BLOCKER_CODES as readonly string[]).includes(o.code)) why = `only ${BLOCKER_CODES.join(", ")} can be blockers`;
+    else if (!o.decidedBy && hits.some((f) => !f.overridden && f.severity === "blocker")) why = "downgrading a blocker needs decidedBy (whose decision it was)";
+    if (why) { overridesUnmatched.push({ ...o, why }); continue; }
+    for (const f of hits) {
+      if (f.overridden || f.severity === o.severity) continue; // decided by an earlier entry, or already that severity
+      f.overridden = { from: f.severity, reason: o.reason, ...ifDefined("decidedBy", o.decidedBy), ...ifDefined("decidedAt", o.decidedAt) };
+      f.severity = o.severity;
+      // H1 of the review: the cross-file section is rendered from crossFile's own findings — decide there too.
+      const orig = crossOrigin.get(f);
+      if (orig) { orig.overridden = f.overridden; orig.severity = f.severity; }
+    }
+  }
+  if (crossOrigin.size) {
+    const cf = crossFile.findings;
+    crossFile.summary = { blockers: cf.filter((f) => f.severity === "blocker").length, warnings: cf.filter((f) => f.severity === "warning").length, info: cf.filter((f) => f.severity === "info").length };
+  }
+  // D1: a cross-file warning with a default is a question to CONFIRM — unless the user already decided it.
+  for (const f of findings) if (f.crossFile && f.confirm && !f.overridden) questions.push(`Confirm (${f.code}): ${f.confirm}`);
   findings.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.code.localeCompare(b.code));
   const count = (s: Severity): number => findings.filter((f) => f.severity === s).length;
   return {
@@ -839,6 +938,7 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     nodeIds: roots.map((r) => r.tree && r.tree.id).filter((id): id is string => !!id),
     summary: { blockers: count("blocker"), warnings: count("warning"), info: count("info") },
     hiddenLayers: { nodesSkipped: hiddenIds.size, crossFileFindingsOmitted: hiddenFindingsOmitted },
+    ...(overridesUnmatched.length ? { overridesUnmatched } : {}),
     tokenBinding,
     components,
     screenStates,
@@ -856,6 +956,11 @@ function toMarkdown(res: AuditReport): string {
     ? ` *(${res.gridAssumed ? "DEFAULT — not given" : "as given"}; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px — pass \`--grid ${res.gridMismatch}\`)*`
     : res.gridAssumed ? " *(default — not given)*" : "";
   L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED — not given)*" : ""} · grid ${res.grid}px${gridNote} · **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
+  if (res.overridesUnmatched && res.overridesUnmatched.length) {
+    L.push(`> ⚠️ ${res.overridesUnmatched.length} recorded severity decision(s) were NOT applied — review the overrides file:`);
+    for (const o of res.overridesUnmatched) L.push(`> - \`${o.code}\`${o.nodeId ? ` on ${o.nodeId}` : ""}${o.token ? ` (${o.token})` : ""}: ${o.why}`);
+    L.push("");
+  }
   if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped — they are not built, and no finding below cites one.*`, "");
   if (res.platformAssumed) {
     L.push(`> ⚠️ **No platform was given, so this audit assumed \`web\`.** Touch-target minimums, shadow`,
@@ -889,7 +994,7 @@ function toMarkdown(res: AuditReport): string {
     // reader does not "fix" this screen's correct value to match it (livetest-3 #40/#311).
     const cfBlock = cf.findings.filter((f) => f.severity !== "info" || f.code === "token-name-collision-elsewhere");
     if (cfBlock.length) {
-      for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}`);
+      for (const f of cfBlock) L.push(`- **${f.severity}** \`${f.code}\` ${f.message}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
       L.push("");
     } else if (cf.inputs && cf.inputs.tokens) {
       L.push("No cross-file problem found: the screen's tokens, text styles and components all trace to the design system you exported.", "");
@@ -927,7 +1032,7 @@ function toMarkdown(res: AuditReport): string {
     const fs = res.findings.filter((f) => f.severity === sev);
     if (!fs.length) continue;
     L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs.length})`, "");
-    for (const f of fs) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` — node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}`);
+    for (const f of fs) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` — node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}${f.overridden ? ` *(was ${f.overridden.from}: ${f.overridden.reason})*` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -958,7 +1063,10 @@ function blockerIds(auditDoc: unknown): string[] {
 function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget: string): string | null {
   if (!nodeId || !fs.existsSync(dir)) return null;
   for (const f of fs.readdirSync(dir)) {
-    if (!f.endsWith(".json")) continue;
+    // A sidecar (<screen>.cross.json, <screen>.library.json, …) has a dot in its stem; a report name never does.
+    // Writing one beside its own report (the stem before the dot) is that report's sidecar, not a duplicate.
+    if (!f.endsWith(".json") || f.slice(0, -5).includes(".")) continue;
+    if (path.basename(ownTarget, ".json").startsWith(f.slice(0, -5) + ".")) continue;
     const full = path.join(dir, f);
     if (path.resolve(full) === path.resolve(ownTarget)) continue;
     // design/audit/ also holds cross-check reports; only an object with a nodeIds[] counts.
@@ -968,7 +1076,17 @@ function findExistingAuditFor(dir: string, nodeId: string | undefined, ownTarget
   return null;
 }
 
-export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor };
+// D1/D11: the ONLY codes that can be a blocker. The audit-design SKILL's "Blocker codes:" line must list
+// exactly these (test/audit.test.ts parses both, and scans audit.ts/cross-check.ts for "blocker" emits).
+// Everything else with a sensible default is a warning — cross-file ones carry a `confirm` question.
+// What an overrides entry can name its finding by — every per-finding key a finding of one code can vary in.
+const OVERRIDE_KEYS = ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen"] as const;
+const BLOCKER_CODES: readonly BlockerCode[] = ["export-truncated", "assets-failed", "missing-font", "token-name-collision"];
+// Compile-time: BLOCKER_CODES names every BlockerCode (a code missing here is a type error below).
+const _allBlockerCodes: Record<BlockerCode, true> = { "export-truncated": true, "assets-failed": true, "missing-font": true, "token-name-collision": true };
+void _allBlockerCodes;
+
+export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_MIN, blockerIds, findExistingAuditFor, BLOCKER_CODES };
 
 // CLI: node design-to-code/audit.ts <screen.json|layer.json>... [--platform web|ios|android|react-native|flutter]
 //        [--catalog design/design-system/components.local.json] [--grid 4] [--out design/audit] [--json] [--gate]
@@ -979,7 +1097,10 @@ function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]\n` +
     "       [--design-system design/export/design-system] [--variables design/export/variables.json]\n" +
-    "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]\n" +
+    "       [--catalog components.local.json] [--grid 4] [--out design/audit] [--overrides <file>] [--json] [--gate] [--force]\n" +
+    "  --overrides defaults to <out>.overrides.json when it exists: { overrides: [{ code, nodeId?, token?,\n" +
+    "  component?, severity, reason, decidedBy?, decidedAt? }] } — the user's severity decisions, applied to\n" +
+    "  BOTH the .json and the .md (never hand-edit severities in the .md).\n" +
     "  --design-system turns on the cross-FILE pass (does this screen come from that design system?).\n" +
     "  It takes design/export/design-system or a library export, design/export/libraries/<dir>.\n" +
     "  Without it every token-binding % below means \"binds SOME variable\", not \"matches your design system\".\n" +
@@ -989,7 +1110,7 @@ function main(argv: string[]): number {
     "  directory already covers this node under a DIFFERENT name — pass --force to write a second one.";
   const OPTIONS = {
     platform: { type: "string" }, catalog: { type: "string" }, "design-system": { type: "string" }, variables: { type: "string" },
-    grid: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    grid: { type: "string" }, out: { type: "string" }, overrides: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("audit", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) { console.log(USAGE); return 0; }
@@ -1018,18 +1139,29 @@ function main(argv: string[]): number {
   // readDesignSystemDir reads either layout: design-system/ or a --as-library export's libraries/<dir>/.
   const dsRead = dsDir ? readDesignSystemDir(dsDir) : null;
   const designSystem: AuditDesignSystem | undefined = dsRead
-    ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText }
+    ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText, componentsFile: dsRead.componentsFile, isLibrary: dsRead.isLibrary }
     : undefined;
   // DT-11: the --as-library exports beside the export (libraries/index.json), found from the screen's own
   // path or the design-system dir's — never a directory the user did not already pull into.
   const libraries = findLibraryExports(firstFile, dsDir);
+  const neighbours = findExportNeighbours(firstFile);
   // `variables` is the merged union (what the screen's collections are checked against); each input
   // also carries its own slice (inputs[].vars), which is what token collisions are judged on.
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
+  // DT-21: the user's severity decisions for this report pair, beside it (or --overrides). Present but
+  // malformed is a one-line exit 2 — a decision silently not applied would re-open a dismissed blocker.
+  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
+  // A sidecar run (`--out design/audit/<report>.library`) reads its own overrides file, else its report's.
+  const ownOverrides = outBase + ".overrides.json";
+  const stem = path.basename(outBase), dot = stem.indexOf(".");
+  const parentOverrides = dot > 0 ? path.join(path.dirname(outBase), stem.slice(0, dot) + ".overrides.json") : null;
+  const overridesFile = flags.overrides || (!fs.existsSync(ownOverrides) && parentOverrides && fs.existsSync(parentOverrides) ? parentOverrides : ownOverrides);
+  const overridesDoc = flags.overrides ? readDocFile(overridesFile, "audit overrides", isAuditOverridesDoc) : readOptionalDoc(overridesFile, "audit overrides", isAuditOverridesDoc);
   const res = audit(inputs, {
+    ...(overridesDoc ? { overrides: overridesDoc.overrides } : {}),
     ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), ...ifDefined("designSystemDir", dsDir),
-    libraries, variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),
+    libraries, neighbours, variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid),
   });
   const md = jsonOnly ? "" : toMarkdown(res);
   // P3 #72/#73: one screen ended up under FIVE different report basenames across runs because the
@@ -1038,7 +1170,6 @@ function main(argv: string[]): number {
   // named `<LayerName>__<node-id>` by write-out.js/pages-layout.js — the one artefact-naming rule —
   // so two runs on the same screen land on the same report pair without either caller having to
   // agree on a name out of band. Only the first input names it when several are given at once.
-  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
   // Finding 315's sibling / P3 c6: refuse an explicit --out under a different name than an existing
   // report already covering this node, unless --force.
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
@@ -1062,6 +1193,8 @@ function main(argv: string[]): number {
     process.stdout.write(md);
   }
   // On stderr too: --json callers never render the markdown, and a piped run shows only this line.
+  if (overridesDoc) console.error(`overrides: ${overridesFile} (${overridesDoc.overrides.length} decision(s))`);
+  for (const o of res.overridesUnmatched || []) console.error(`warn  override for ${o.code}${o.nodeId ? ` on ${o.nodeId}` : ""}${o.token ? ` (${o.token})` : ""} NOT applied: ${o.why} — review ${overridesFile}`);
   if (res.platformAssumed) console.error("warn  no --platform given — assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   for (const n of (res.crossFile && res.crossFile.notChecked) || []) console.error(`note  not checked: ${n}`);

@@ -8,6 +8,9 @@ Output: `summary {blockers, warnings, info}`, `tokenBinding {color, typography, 
 is not-applicable when every audited root is a dialog; `validation` appears only when an input was audited),
 `annotations[]`, `questions[]`, `findings[] {severity, code, message, nodeId, nodeName, screen, path}`.
 It exits 0 on findings — they're advice — unless `--gate` is passed (exit 1 on any blocker; `build-screen` uses this).
+Blockers are only `export-truncated`, `assets-failed`, `missing-font` and a `token-name-collision` on a token a visible
+layer binds; cross-file warnings carry a `confirm` question (also in `questions[]`). A severity decision goes in
+`<out>.overrides.json` (read automatically, or `--overrides <file>`) and is applied to both files — see SKILL.md step 6.
 
 ## Contents
 - [Finding codes](#finding-codes)
@@ -35,6 +38,8 @@ It exits 0 on findings — they're advice — unless `--gate` is passed (exit 1 
 | `off-grid-spacing` | info | unbound gap/padding not a multiple of `--grid` or non-integer | 34pt bottom padding is often a safe-area value — fine |
 | `near-duplicate-colors` | info | unbound opaque hexes with CIE76 ΔE < 3 | |
 | `heavy-asset` | info | an entry of the screen's `<Screen>.assets.json` `heavy` list (≥ 250 KB or ≥ 400 `<path>`s) on a visible layer | import by URL / ask for a raster; never redraw |
+| `state-in-sibling` | info | a loading/empty/error state not drawn in the audited frame, but a RELATED frame on the same page (same name or on-screen title, or state copy naming the screen) has copy that reads like it — read from that frame's own export | audit both together; the state stays "not found" until confirmed |
+| `unexported-frames` | info | `assets/<id>_ref.png` / `_shot@Nx.png` files with no row in `pages/index.json` — screenshotted, never exported | look at the PNG; extract any that is a state of this screen |
 | `prototype-navigation` | info | one per destination: visible layers whose prototype `reactions` navigate / open an overlay / swap to another frame (variant `change_to` excluded) | a link copied along with a layer looks the same as a designed one |
 | `no-auto-layout` | info | non-root container with >1 child and `layout.mode:"absolute"` | groups are skipped |
 | `negative-spacing` | info | gap/padding < 0 | intentional overlap (avatar stacks) |
