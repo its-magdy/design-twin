@@ -313,10 +313,10 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   console.log("verify-screen — livetest-3: a field the probe names differently is LOUD (162/182/195):");
   const jrRep = compare(jrExp, jrMeasured);
   // before: the JR report had 0 border-radius deltas and nothing said radius was never checked.
-  ok("[lt3-radius] the real Job Roles probe wrote `radius`: the HEADLINE says borderRadius was present in 0 measurements",
-    /'borderRadius' present in 0 of \d+ measurements \(probe sent 'radius'\)/.test(jrRep.headline) && jrRep.coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius" && f.measuredOn === 0));
+  ok("[lt3-radius] the real Job Roles probe wrote `radius`: the HEADLINE says borderRadius was present on 0 of the nodes that state it",
+    /'borderRadius' present on 0 of \d+ nodes that state it \(probe sent 'radius'\)/.test(jrRep.headline) && jrRep.coverage.fieldsNeverMeasured.some((f) => f.field === "borderRadius" && f.measuredOn === 0));
   ok("[lt3-radius] …and the unknown key is named with its canonical spelling, not accepted", () => jrRep.probe.unknownKeys.some((k) => k.key === "radius" && k.canonical === "borderRadius"));
-  ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present in 0/.test(w)));
+  ok("[lt3-radius] …and that alone keeps the verdict from passing", () => jrRep.why.some((w) => /field 'borderRadius' was present on 0 of the \d+ measured node/.test(w)));
   const renamed = clone(jrMeasured);
   const asRadius = (r: unknown): MeasuredStyles["borderRadius"] => (typeof r === "number" || typeof r === "string" ? r : Array.isArray(r) && r.every((x) => typeof x === "number") ? r.map(Number) : undefined);
   for (const n of renamed.nodes || []) { if ("radius" in n) { const br = asRadius(n.radius); if (br === undefined) delete n.borderRadius; else n.borderRadius = br; delete n.radius; } }

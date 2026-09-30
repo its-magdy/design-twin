@@ -162,6 +162,25 @@ const REPORT_SCHEMA = "designtwin/verify-report@2";
 const firstSolid = (fills: Paint[] | null | undefined): SolidPaint | undefined => (fills || []).find((f): f is SolidPaint => !!f && f.type === "solid" && f.visible !== false);
 const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const r2 = (v: number): number => Math.round(v * 100) / 100;
+// A measured length as a probe hands it over (DT-42): a number, or getComputedStyle's own resolved string —
+// "20px", "0.15px", "3.35544e+07px" (a pill radius). A percentage, another unit, a keyword or an object is
+// not a px value (null): `Number("20px")` used to be NaN, and the string then "differed" from 20.
+const PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
+function cssPx(v: unknown): number | null {
+  if (num(v)) return v;
+  if (typeof v !== "string" || !PX_RE.test(v)) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+// Four sides/corners in CSS order (t r b l / tl tr br bl) from a number, a list of 1-4 lengths, or a
+// shorthand string — CSS's own 1-to-4 value expansion. null when any part is not a px length.
+function fourSides(v: unknown): [number, number, number, number] | null {
+  const parts: unknown[] = num(v) ? [v] : Array.isArray(v) ? v : typeof v === "string" ? v.trim().split(/\s+/) : [];
+  const p = parts.map(cssPx);
+  if (p.length < 1 || p.length > 4 || p.some((x) => x === null)) return null;
+  const [p0, p1 = p0, p2 = p0, p3 = p1] = p.filter((x): x is number => x !== null);
+  return p0 === undefined || p1 === undefined || p2 === undefined || p3 === undefined ? null : [p0, p1, p2, p3];
+}
 
 // A layer drawn IN an interaction state. The designer drew one table row hovered (its fill is bound
 // to `Backgrounds/Row Hover`, and only that row carries the hover-only edit button); measuring the
@@ -271,10 +290,12 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     if (w != null) spec.fontWeight = w;
     const lh = lineHeightPx(n.font.lineHeight, n.font.size);
     if (lh != null) spec.lineHeight = lh;
-    // ts-port: legacy read kept as-is — the producer's unit is "percent"; "PERCENT" is an older export's spelling.
     const ls: { value?: number; unit?: string } | undefined = n.font.letterSpacing;
-    if (ls && typeof ls.value === "number" && ls.unit !== "PERCENT") {
-      spec.letterSpacing = ls.value;
+    // Figma's percent letter-spacing is a share of the font size; the producer writes "percent" (an older
+    // export "PERCENT") — it was read as px, so -2% on 20px text expected -2px, not -0.4px.
+    if (ls && typeof ls.value === "number") {
+      if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
+      else if (typeof n.font.size === "number") spec.letterSpacing = r2((ls.value / 100) * n.font.size);
     }
     if (n.font.color) spec.color = normColor(n.font.color);
   }
@@ -570,7 +591,7 @@ const STYLE_KEY_SHAPE: Record<string, string> = {
 const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
-  "nodes[].styles": `computed values, EVERY key on every node (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].styles": `computed values, EVERY key on every node — lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) — (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null — a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill — never background-color",
   "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative — required when the id sits on a padded container (<th>, <button>, <label>)",
@@ -580,6 +601,7 @@ const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state — required for a node whose spec has drawnState",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} — `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} — present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find — the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against",
 };
 
@@ -617,32 +639,20 @@ function compareField(f: Field, want: JsonValue | undefined, got: JsonValue | un
   return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
 
-function comparePadding(want: unknown, got: unknown): Bad | null {
-  // (a null/non-numeric side is filtered out by compare() before this — DT-43)
-  if (!Array.isArray(want) || !Array.isArray(got)) return null;
-  const w: number[] = want.map(Number), g: number[] = got.map(Number);
-  if (w.some(Number.isNaN) || g.some(Number.isNaN)) return null;
-  const worst = Math.max(...w.map((v, i) => Math.abs(v - (g[i] || 0))));
-  return worst <= TOLERANCE.padding ? null : { want: w, got: g, delta: Number(worst.toFixed(3)) };
+function comparePadding(want: unknown, got: readonly number[]): Bad | null {
+  // (compare() hands over four px numbers — a null or unreadable side is listed as not measured first, DT-43/DT-42)
+  if (!Array.isArray(want)) return null;
+  const w: number[] = want.map(Number);
+  if (w.some(Number.isNaN)) return null;
+  const worst = Math.max(...w.map((v, i) => Math.abs(v - (got[i] ?? 0))));
+  return worst <= TOLERANCE.padding ? null : { want: w, got: [...got], delta: Number(worst.toFixed(3)) };
 }
 
-// A measured radius as four corners [tl,tr,br,bl]: a number, an array, or a CSS shorthand string.
+// A measured radius as four corners [tl,tr,br,bl]: a number, a list of numbers or px strings
+// (["8px","8px","8px","8px"] — DT-46: each item used to go through Number() and fail), or a CSS shorthand
+// string. A percentage or an elliptical "8px / 4px" is not a px radius here (the shipped probe resolves %).
 function radiusCorners(v: unknown): [number, number, number, number] | null {
-  if (v == null) return null;
-  if (num(v)) return [v, v, v, v];
-  if (Array.isArray(v)) {
-    const a: number[] = v.map(Number);
-    const [a0, a1, a2, a3] = a;
-    if (a.length === 4 && a.every(Number.isFinite) && a0 !== undefined && a1 !== undefined && a2 !== undefined && a3 !== undefined) return [a0, a1, a2, a3];
-    return a.length === 1 && a0 !== undefined && Number.isFinite(a0) ? [a0, a0, a0, a0] : null;
-  }
-  const p = String(v).trim().split(/\s+/).map(parseFloat);
-  const [p0, p1, p2, p3] = p;
-  if (p0 === undefined || p.some(Number.isNaN)) return null;
-  if (p1 === undefined) return [p0, p0, p0, p0];
-  if (p2 === undefined) return [p0, p1, p0, p1];
-  if (p3 === undefined) return [p0, p1, p2, p1];
-  return [p0, p1, p2, p3];
+  return v == null ? null : fourSides(v);
 }
 // CSS clamps a radius at half the shorter side, and so does Figma: `radius: 500` on a 36px box and
 // `rounded-full` (33554400px) are both a circle (finding 194). Compare the radius each side can ACTUALLY
@@ -659,13 +669,22 @@ const CONTAINER_TAGS = new Set(["th", "td", "tr", "button", "label", "li", "a", 
 // box, fill, border and padding are not the container's, so they are not graded as such.
 const LEAF_TAGS = new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 const CONTAINER_TYPES = new Set<string>(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
+// Elements whose paint is pixels (F-81): an <img src="icon.svg"> is an isolated image document, so no computed
+// style on it carries the SVG's fill — `fill` on the <img> is the inherited default, black. Such a spec's
+// fill is unverifiable by this method, never a mismatch and never "not measured".
+const PIXEL_TAGS = new Set(["img", "picture", "canvas", "object", "embed"]);
+// Lengths CSS cannot make negative (F-93): a negative one is a measuring artefact (a gap read across children
+// that are not laid out in one line, rows in different columns), listed as not measured — never compared.
+const NON_NEGATIVE = new Set<string>(["fontSize", "lineHeight", "borderWidth", "gap", "width", "height", "opacity"]);
 const LEAF_FIELDS = new Set<string>(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
-const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase())) || (Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0)));
+const isContainer = (got: MeasuredStyles): boolean => !!((got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase())) || (Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0)));
 
 const LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) — read `rotate` too before calling a rotation missing (finding 198).",
+  "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
+  "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
 ];
 
@@ -696,6 +715,16 @@ const MATCH_LABEL: Record<string, string> = {
 const TYPO_FIELDS = new Set<string>(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 
 const SEVERITY_RANK: Record<DeltaSeverity, number> = { high: 0, medium: 1, low: 2 };
+const NEVER_MEASURED_HEADLINE_MIN = 2;
+
+// Every top-level key of a measured file (F-94). Typed against VerifyMeasured, so a key added to the type
+// must be added here; any other key is listed in report.probe.unknownTopLevelKeys, never silently read.
+const MEASURED_TOP_KEYS = {
+  measuredAt: true, renderer: true, viewport: true, theme: true, artifacts: true, expectationSha256: true, mode: true, reason: true,
+  nodes: true, components: true, interactions: true, consoleErrors: true, notMeasured: true, componentsMissing: true, probe: true,
+  frame: true, frames: true, navigation: true, matchedByCensus: true, notes: true,
+} as const satisfies Record<keyof VerifyMeasured, true>;
+const TOP_KEY_HINTS: Record<string, string> = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes" };
 
 /**
  * compare(expectation, measured, opts?) -> report.
@@ -714,13 +743,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const byId = new Map<string, MeasuredNode>();
   let duplicateNodeIds = 0;
   const unknownKeys = new Map<string, number>();
+  const keysSeen = new Set<string>(); // every styles key any measured node carries
   for (const m of measured.nodes || []) {
     if (!m || m.nodeId == null) continue;
     const id = String(m.nodeId);
     if (byId.has(id)) { duplicateNodeIds++; continue; }
     byId.set(id, m);
     const s = m.styles || m;
-    for (const k of Object.keys(s)) if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1);
+    for (const k of Object.keys(s)) { keysSeen.add(k); if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1); }
   }
   // A shared implementation (one AppShell rendered on two routes) carries the node ids of the frame it
   // was built from: `I10970:111588;1910:23337` on Job Roles is `I10970:109860;1910:23337` here — the
@@ -819,13 +849,17 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       // gapVisual wins when it holds a value; the shipped probe sends every key, so a null gapVisual (not a
       // table) must not hide a measured gap.
       if (f.key === "gap" && got.gapVisual !== undefined && (got.gapVisual !== null || val == null)) { val = got.gapVisual; present = true; nullKeys = ["gapVisual", "gap"]; }
+      if (f.key === "fill" && (PIXEL_TAGS.has(tagLc) || m.fillSource === "img")) {
+        unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: `drawn by an <${PIXEL_TAGS.has(tagLc) ? tagLc : "img"}>: its paint is pixels, not a CSS property — the SVG's own fill cannot be read from the element's computed style` });
+        continue;
+      }
       tally(f.key, present);
 
       if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) { gap(spec, f.label, stateWhy); continue; }
       if (onLeaf && LEAF_FIELDS.has(f.key)) { gap(spec, f.label, leafWhy); continue; }
       if (isText && f.box && container && !tb) {
         if (got.textBox === null && f.key !== "height") { gapNull(f.label, "textBox"); continue; }
-        gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0) ? " with padding" : ""}, whose box is not the text's — report textBox (a Range over the text) instead`);
+        gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's — report textBox (a Range over the text) instead`);
         continue;
       }
       if (isText && tb && f.key === "height") { continue; } // a Range's height is the font's content area, not the line box
@@ -839,12 +873,41 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
         gap(spec, f.label, "the probe did not report this property");
         continue;
       }
-      if (val === null) { gapNull(f.label, ...nullKeys); continue; }
+      if (val === null || (Array.isArray(val) && val.includes(null))) { gapNull(f.label, ...nullKeys); continue; }
+      // A measured value the normaliser cannot read (fontWeight "bolder", an object) is not measured — never
+      // "cannot be known, so no mismatch" (that allowance is for the spec side only; DT-43).
+      if (f.norm && (f.norm(val) == null || (typeof val !== "string" && typeof val !== "number"))) { gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as ${f.label}`); continue; }
+      // A numeric field reads a number or a px string (DT-42) — the delta then carries the number, so the
+      // report never prints "28pxpx" (DT-32). `letter-spacing: normal` is 0; any other keyword, unit or shape
+      // is not a px value and is listed as not measured, never compared as a string.
+      if (f.tol != null && !f.norm && f.key !== "borderRadius") {
+        // `gap: normal` is 0 in flex and grid (the only layouts it applies to); without `display` it is unknown
+        const flexOrGrid = typeof got.display === "string" && /(^|-)(flex|grid)$/.test(got.display.trim());
+        const n = val === "normal" && (f.key === "letterSpacing" || (f.key === "gap" && flexOrGrid)) ? 0 : cssPx(val);
+        if (n === null) {
+          const kw = val !== "normal" ? "" : f.key === "gap" ? " (0 in flex/grid, not applicable in block layout — report display, or a number)" : " (its px value depends on the font's metrics)";
+          gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as a px number${kw}`);
+          continue;
+        }
+        const box = Math.max(cssPx(got.width) ?? 0, cssPx(got.height) ?? 0);
+        // (a negative design gap — overlapping avatars — may render as a negative distance; a computed CSS gap
+        // is a real value, so only a rendered distance, gapVisual, is bounded by the element's box)
+        const why = NON_NEGATIVE.has(f.key) && n < 0 && !(f.key === "gap" && num(want0) && want0 < 0) ? `${r2(n)} is impossible for ${f.label} (CSS cannot make it negative)`
+          : f.key === "opacity" && n > 1 ? `${r2(n)} is impossible for opacity (0 to 1)`
+          : f.key === "gap" && nullKeys[0] === "gapVisual" && box > 0 && n > box ? `${r2(n)}px is larger than the element measured (${r2(box)}px)`
+          : null;
+        // a rendered distance (gapVisual) that is an artefact does not hide a readable computed gap
+        const cssGap = why && nullKeys[0] === "gapVisual" && !table ? cssPx(got.gap) : null;
+        if (cssGap !== null && cssGap >= 0) val = cssGap;
+        else if (why) { gap(spec, f.label, `${why} — a measuring artefact (children not laid out in one line, or rows read across columns?); not compared`); continue; }
+        else val = n;
+      }
       fieldsChecked++;
       let want: JsonValue = want0, have: JsonValue = val;
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
-        if (!c) { gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a radius`); fieldsChecked--; continue; }
+        if (!c) { gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a px radius`); fieldsChecked--; continue; }
+        if (c.some((r) => r < 0)) { gap(spec, f.label, `${JSON.stringify(val)} is impossible for a radius (CSS cannot make it negative) — a measuring artefact; not compared`); fieldsChecked--; continue; }
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
         // (a borderRadius spec is a number — expectNode writes it from the node's radius)
         if (typeof want === "number") want = clampRadius(want, spec.width, spec.height);
@@ -869,8 +932,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== undefined);
-      if (got.borderRadius === null) gapNull("border-radius", "borderRadius");
-      else if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
+      if (got.borderRadius === null || (Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null))) gapNull("border-radius", "borderRadius");
+      else if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`);
+      else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) — a measuring artefact; not compared`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
         const [ctl, ctr, cbr, cbl] = c;
@@ -885,16 +949,17 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     }
     if (spec.padding !== undefined) {
       tally("padding", got.padding !== undefined);
+      const pad = fourSides(got.padding);
       if (got.padding === undefined) gap(spec, "padding", "the probe did not report this property");
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells — report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
-      else if (got.padding === null || !Array.isArray(got.padding) || got.padding.some((v) => v === null)) {
-        if (got.padding === null || Array.isArray(got.padding)) gapNull("padding", "padding");
-        else gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as padding [t,r,b,l]`);
-      } else {
+      else if (got.padding === null || (Array.isArray(got.padding) && got.padding.some((v) => v === null))) gapNull("padding", "padding");
+      else if (!pad) gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as px padding [t,r,b,l]`);
+      else if (pad.some((v) => v < 0)) gap(spec, "padding", `${JSON.stringify(got.padding)} is impossible for padding (CSS cannot make it negative) — a measuring artefact; not compared`);
+      else {
         fieldsChecked++;
-        const bad = comparePadding(spec.padding, got.padding);
-        const allZero = got.padding.every((v) => Number(v) === 0);
+        const bad = comparePadding(spec.padding, pad);
+        const allZero = pad.every((v) => v === 0);
         if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")),
           ...(allZero && !got.tag ? { note: "measured 0 on every side — if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" } : {}) });
       }
@@ -1080,7 +1145,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
-  for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' — the canonical key is '${f.field}')` : ""} — ${f.expectedOn} expectation(s) went unchecked`);
+  for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' — the canonical key is '${f.field}')` : ""}`);
   if (notMeasured.length) reasons.push(`${notMeasured.length} of ${nodesExpected} node spec(s) were never measured`);
   if (high) reasons.push(`${high} high-severity value mismatch(es)`);
   if (medium) reasons.push(`${medium} medium-severity value mismatch(es)`);
@@ -1133,10 +1198,17 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   }
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
+  // The headline's NEVER MEASURED slot is for a key the probe got wrong everywhere (finding 182). One node
+  // that states a field says nothing about the probe — its gap is already listed under that node (F-59:
+  // "'y' present in 0 of 74 measurements" was the frame root's one y).
+  // A key no measured node carries at all is systemic too, however few specs state it (DT-23: `fill`).
+  const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
   const headline =
     `${mark} — ` +
-    (fieldsNeverMeasured.length ? `NEVER MEASURED: ${fieldsNeverMeasured.map((f) => `'${f.field}' present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} · ` : "") +
+    (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} · ` : "") +
     `nodes measured ${nodesMeasured}/${nodesExpected} · ${fieldsChecked} values compared · ${high} high, ${medium} medium · ` +
+    // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
+    (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method · ` : "") +
     `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} · ` +
     `data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` +
     (against && fell ? ` · COVERAGE FELL ${against.nodesMeasured.before}→${against.nodesMeasured.after} vs ${against.report}` : "") +
@@ -1166,6 +1238,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     notComparable: expectation.notComparable || [],
     probe: {
       unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
+      unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
@@ -1235,7 +1308,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   if (r.deltas.length) {
     L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token |", "|---|---|---|---|---|---|");
     for (const d of r.deltas) {
-      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${fmt(d.expected)}${d.unit || ""} | ${fmt(d.actual)}${d.unit || ""} | ${d.token || "—"} |`);
+      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} |`);
     }
     L.push("");
   }
@@ -1277,9 +1350,10 @@ function reportToMarkdown(r: VerifyReportV2): string {
     L.push("");
   }
   const p: Partial<VerifyReportV2["probe"]> = r.probe || {};
-  if ((p.unknownKeys && p.unknownKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || (p.inputNotes && p.inputNotes.length)) {
+  if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || (p.inputNotes && p.inputNotes.length)) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}×) is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
+    for (const k of p.unknownTopLevelKeys || []) L.push(`- top-level key \`${k.key}\` is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
     if (p.duplicateNodeIds) L.push(`- ${p.duplicateNodeIds} duplicate node id(s) in nodes[] — the first measurement of each id was used`);
     if (p.measuredIdsOnHiddenLayers) L.push(`- ${p.measuredIdsOnHiddenLayers} measurement(s) are for hidden layers and were ignored`);
     for (const n of p.inputNotes || []) L.push(`- ${n}`);
@@ -1292,6 +1366,8 @@ function reportToMarkdown(r: VerifyReportV2): string {
   return L.join("\n") + "\n";
 }
 const fmt = (v: unknown): string => (Array.isArray(v) ? v.join("/") : String(v));
+// A value that already ends in its unit is printed once (DT-32: a probe's "28px" printed as "28pxpx").
+const withUnit = (v: unknown, unit: string | undefined): string => { const t = fmt(v); return unit && !t.endsWith(unit) ? t + unit : t; };
 
 // P3 round 3, finding 315 ("--expect still writes two artefact sets for one screen" — Prompt 3
 // criterion 6 reopened): defaulting `--out` to the input's own basename (round 1's fix) only helps

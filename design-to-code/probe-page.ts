@@ -359,9 +359,7 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     const sides = (prop: (side: string) => string): Array<number | null> => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
     const fill = (): { v: string | null; why: string; source?: MeasureResult["fillSource"] } => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node — its colour is backgroundColor" };
-      if (tag === "img" || tag === "canvas" || tag === "picture" || (el.querySelectorAll("img, canvas").length > 0 && el.querySelectorAll("svg").length === 0)) {
-        return { v: null, why: `an <${tag === "img" || tag === "canvas" || tag === "picture" ? tag : "img"}>: its paint is pixels, not a CSS property`, source: "img" };
-      }
+      if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
       const shapes = [...(el.matches(SHAPES) ? [el] : []), ...Array.from(el.querySelectorAll(SHAPES))];
       let stroke: string | null = null;
       for (const s of shapes) {
@@ -378,6 +376,8 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       const mask = (cs.getPropertyValue("mask-image") || cs.getPropertyValue("-webkit-mask-image")).trim();
       const bg = rgba(cs.getPropertyValue("background-color"));
       if (bg && bg !== "transparent" && !/,\s*0\)$/.test(bg)) return { v: bg, why: "", source: "background" };
+      // a wrapper around an <img>/<canvas> (no <svg>, no painted background of its own): the paint is the image's
+      if (el.querySelectorAll("img, canvas").length > 0) return { v: null, why: "an <img>: its paint is pixels, not a CSS property", source: "img" };
       if (mask && mask !== "none") return { v: null, why: "a mask-drawn icon with a transparent background", source: "background" };
       return { v: null, why: shapes.length ? "no SVG shape has a fill" : "no SVG shape, no background: nothing paints this node", source: "css" };
     };
@@ -425,15 +425,21 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
           if (!flexish) { put(k, null, `display: ${display} — gap does not apply; spacing comes from margins`); break; }
           const column = /column/.test(cs.getPropertyValue("flex-direction")) && /flex/.test(display);
           const v = cs.getPropertyValue(column ? "row-gap" : "column-gap").trim();
-          put(k, v === "normal" ? 0 : px(v), "unreadable gap"); // `normal` computes to 0 in flex and grid
+          // `normal` computes to 0 in flex and grid; a percentage gap stays a percentage in the computed style (F-93)
+          put(k, v === "normal" ? 0 : v.endsWith("%") ? null : px(v), v.endsWith("%") ? `a percentage gap (${v}) — its px value depends on the container` : "unreadable gap");
           break;
         }
         case "gapVisual": {
           if (!/^(table|thead|tbody|tfoot)$/.test(tag)) { put(k, null, "measured only for a table (row spacing is border-spacing, not gap)"); break; }
-          const rows = Array.from(el.querySelectorAll("tr")).map((r) => r.getBoundingClientRect()).filter((r) => r.height > 0);
+          // this table's own rows — a nested table's rows sit inside one of them and read as negative distances (F-93)
+          const own = tag === "table" ? el : el.closest("table");
+          const rows = Array.from(el.querySelectorAll("tr")).filter((r) => r.closest("table") === own).map((r) => r.getBoundingClientRect()).filter((r) => r.height > 0);
           const gaps: number[] = [];
           for (let i = 1; i < rows.length; i++) { const a = rows[i - 1], b = rows[i]; if (a && b) gaps.push(r2(b.y - (a.y + a.height))); }
-          put(k, gaps.length ? (gaps.sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? null) : null, "fewer than two rendered rows");
+          const median = gaps.length ? (gaps.sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? null) : null;
+          // A negative distance is rows that are not stacked top to bottom (a nested table, rows side by side) —
+          // a measuring artefact, not a gap (F-93).
+          put(k, median !== null && median < 0 ? null : median, median === null ? "fewer than two rendered rows" : `the rows are not stacked top to bottom (median distance ${median}px) — not a row gap`);
           break;
         }
         case "width": case "height": case "x": case "y": {

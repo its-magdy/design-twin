@@ -253,9 +253,7 @@ function measureElements(input) {
     const sides = (prop) => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
     const fill = () => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node \u2014 its colour is backgroundColor" };
-      if (tag === "img" || tag === "canvas" || tag === "picture" || el.querySelectorAll("img, canvas").length > 0 && el.querySelectorAll("svg").length === 0) {
-        return { v: null, why: `an <${tag === "img" || tag === "canvas" || tag === "picture" ? tag : "img"}>: its paint is pixels, not a CSS property`, source: "img" };
-      }
+      if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
       const shapes = [...el.matches(SHAPES) ? [el] : [], ...Array.from(el.querySelectorAll(SHAPES))];
       let stroke = null;
       for (const s of shapes) {
@@ -272,6 +270,7 @@ function measureElements(input) {
       const mask = (cs.getPropertyValue("mask-image") || cs.getPropertyValue("-webkit-mask-image")).trim();
       const bg = rgba(cs.getPropertyValue("background-color"));
       if (bg && bg !== "transparent" && !/,\s*0\)$/.test(bg)) return { v: bg, why: "", source: "background" };
+      if (el.querySelectorAll("img, canvas").length > 0) return { v: null, why: "an <img>: its paint is pixels, not a CSS property", source: "img" };
       if (mask && mask !== "none") return { v: null, why: "a mask-drawn icon with a transparent background", source: "background" };
       return { v: null, why: shapes.length ? "no SVG shape has a fill" : "no SVG shape, no background: nothing paints this node", source: "css" };
     };
@@ -352,7 +351,7 @@ function measureElements(input) {
           }
           const column = /column/.test(cs.getPropertyValue("flex-direction")) && /flex/.test(display);
           const v = cs.getPropertyValue(column ? "row-gap" : "column-gap").trim();
-          put(k, v === "normal" ? 0 : px(v), "unreadable gap");
+          put(k, v === "normal" ? 0 : v.endsWith("%") ? null : px(v), v.endsWith("%") ? `a percentage gap (${v}) \u2014 its px value depends on the container` : "unreadable gap");
           break;
         }
         case "gapVisual": {
@@ -360,13 +359,15 @@ function measureElements(input) {
             put(k, null, "measured only for a table (row spacing is border-spacing, not gap)");
             break;
           }
-          const rows = Array.from(el.querySelectorAll("tr")).map((r) => r.getBoundingClientRect()).filter((r) => r.height > 0);
+          const own = tag === "table" ? el : el.closest("table");
+          const rows = Array.from(el.querySelectorAll("tr")).filter((r) => r.closest("table") === own).map((r) => r.getBoundingClientRect()).filter((r) => r.height > 0);
           const gaps = [];
           for (let i = 1; i < rows.length; i++) {
             const a = rows[i - 1], b = rows[i];
             if (a && b) gaps.push(r2(b.y - (a.y + a.height)));
           }
-          put(k, gaps.length ? gaps.sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? null : null, "fewer than two rendered rows");
+          const median = gaps.length ? gaps.sort((x, y) => x - y)[Math.floor(gaps.length / 2)] ?? null : null;
+          put(k, median !== null && median < 0 ? null : median, median === null ? "fewer than two rendered rows" : `the rows are not stacked top to bottom (median distance ${median}px) \u2014 not a row gap`);
           break;
         }
         case "width":
@@ -1023,7 +1024,7 @@ var STYLE_KEY_SHAPE = {
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
-  "nodes[].styles": `computed values, EVERY key on every node (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
   "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
@@ -1033,6 +1034,7 @@ var MEASURED_KEYS_DOC = {
   "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state \u2014 required for a node whose spec has drawnState",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against"
 };
 if (false) process.exitCode = main(process.argv.slice(2));

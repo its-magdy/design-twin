@@ -660,6 +660,8 @@ export interface VerifyMeasured {
   navigation?: ProbeNavigation;
   /** the probe's own count per matchedBy value (compare recomputes its census from nodes[]) */
   matchedByCensus?: Record<string, number>;
+  /** the shipped probe's run notes (settling, frame fallbacks, state measurement) — informational */
+  notes?: string[];
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -718,7 +720,9 @@ export interface VerifyReport {
   fieldsNotMeasured?: Array<{ nodeId: string; name?: string; field: string; why: string }>;
   unverifiable?: Array<{ nodeId: string; name?: string; field: string; expected: JsonValue; why: string }>;
   notComparable?: NotComparable[];
-  probe?: { unknownKeys: Array<{ key: string; count: number; canonical?: string }>; duplicateNodeIds: number; interactionEvidenceOnHiddenLayers: number; interactionEvidenceNotInExpectation: number; measuredIdsOnHiddenLayers: number;
+  probe?: { unknownKeys: Array<{ key: string; count: number; canonical?: string }>;
+    /** top-level keys of the measured file verify-screen does not read (F-94: `notFound`, `extra`) — listed, never used */
+    unknownTopLevelKeys?: Array<{ key: string; canonical?: string }>; duplicateNodeIds: number; interactionEvidenceOnHiddenLayers: number; interactionEvidenceNotInExpectation: number; measuredIdsOnHiddenLayers: number;
     /** measured node ids that match no spec, instance or hidden layer of the expectation (and no shared path) */
     measuredIdsNotInExpectation?: number; measuredIdsNotInExpectationSample?: string[];
     /** malformed optional extras of the measured file that were ignored (a hand-written `probe`, a non-list notMeasured) */
