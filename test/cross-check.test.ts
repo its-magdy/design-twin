@@ -76,7 +76,15 @@ console.log("cross-check — the screen's token library vs the design system's:"
     variables: [{ name: "Text/Main", collection: "Sem", key: "screen-k1", type: "COLOR", values: { Dark: "#fff", Light: "#000" } }],
   });
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", null, "Text/Main")])], variables: duplicated, tokens: DS_TOKENS });
-  ok("[tokens] a screen whose collections are ALL re-keyed is a blocker, not a warning", sev(res, "foreign-token-library") === "blocker");
+  // D11: a warning to CONFIRM (the default is the screen's own values), no longer a blocker.
+  ok("[tokens/D11] a screen whose collections are ALL re-keyed is a warning with a confirm question (was: a blocker)",
+    sev(res, "foreign-token-library") === "warning" && /None of the screen's variable collections/.test(get(res, "foreign-token-library").confirm ?? ""));
+  const partial = crossCheck({ screens: [screen("S", [])], variables: tokens({ collections: [...(duplicated.collections ?? []), { name: "Sem", key: "ds-sem", modes: ["Dark", "Light"], default: "Dark" }], variables: [] }), tokens: DS_TOKENS });
+  const n = (partial.findings.find((f) => f.code === "foreign-token-library")?.collections ?? []).length;
+  ok("[review M2] a partial foreign library's confirm question counts the collections that ARE in the design system",
+    /^Only 1 of \d+ of the screen's variable collections are in the design system/.test(get(partial, "foreign-token-library").confirm ?? "") && n >= 1);
+  ok("[F-19] the hint names the MCP twin of `dtwin list libraries`, and says the library export is CLI only",
+    /figma_list_libraries/.test(get(res, "foreign-token-library").message) && /CLI only/.test(get(res, "foreign-token-library").message));
   ok("[tokens] and the message names the duplicated-file cause rather than just 'not found'",
     /DUPLICATED Figma file/.test(get(res, "foreign-token-library").message));
   ok("[tokens] it names the ONE command that can attribute a collection to a library",
@@ -105,7 +113,13 @@ console.log("cross-check — two libraries, one name, two values:");
     variables: [{ name: "(Space 3)", collection: "Spacing", key: "screen-k2", type: "FLOAT", values: { Desktop: 12, Tablet: 8 } }],
   });
   const res = crossCheck({ screens: [screen("S", [])], variables: vars, tokens: DS_TOKENS });
-  ok("[collision] a punctuation-only name twin with disjoint values is a blocker", sev(res, "token-name-collision") === "blocker");
+  // D1: a clash blocks only when a visible layer on the screen binds the token.
+  ok("[collision/D1] a punctuation-only name twin nobody on the screen binds is a warning to confirm (was: a blocker)",
+    sev(res, "token-name-collision") === "warning" && /no visible layer on this screen binds it/.test(get(res, "token-name-collision").confirm ?? ""));
+  const bound = crossCheck({ screens: [screen("S", [{ id: "3:1", type: "FRAME", name: "Row", tokens: { itemSpacing: "(Space 3)" } }])], variables: vars, tokens: DS_TOKENS });
+  ok("[collision/D1] …and a blocker once a visible layer binds it", sev(bound, "token-name-collision") === "blocker" && get(bound, "token-name-collision").confirm === undefined);
+  const hiddenBound = crossCheck({ screens: [screen("S", [{ id: "3:2", type: "FRAME", name: "Row", hidden: true, tokens: { itemSpacing: "(Space 3)" } }])], variables: vars, tokens: DS_TOKENS });
+  ok("[collision/D1] a HIDDEN layer binding it does not make it a blocker", sev(hiddenBound, "token-name-collision") === "warning");
   ok("[collision] the message carries BOTH values so the reader can pick", /12/.test(get(res, "token-name-collision").message) && /16/.test(get(res, "token-name-collision").message));
   ok("[collision] and says why no per-mode comparison was possible",
     /no mode name is shared/.test(get(res, "token-name-collision").message));
@@ -129,7 +143,8 @@ console.log("cross-check — does the catalog cover the screen:");
     screens: [screen("S", [instance("2:1", "other-a", "Widget"), instance("2:2", "other-b", "Gadget"), instance("2:3", "other-b", "Gadget")])],
     components: DS_COMPONENTS,
   });
-  ok("[coverage] 0% by key is a BLOCKER, not an empty success", sev(res, "catalog-covers-nothing") === "blocker");
+  ok("[coverage/D11] 0% by key is a warning with a confirm question, not an empty success (was: a blocker)",
+    sev(res, "catalog-covers-nothing") === "warning" && /components.local.json by key — is that the component library/.test(get(res, "catalog-covers-nothing").confirm ?? ""));
   ok("[coverage] it counts distinct components, not instances", res.coverage?.distinct === 2 && res.coverage?.instances === 3);
   ok("[coverage] and says outright that a catalog-vs-map count means nothing here",
     /measures the catalog against itself/.test(get(res, "catalog-covers-nothing").message));
@@ -154,8 +169,8 @@ console.log("cross-check — does the catalog cover the screen:");
   });
   ok("[coverage] a library-catalog hit does NOT count towards local coverage",
     res.coverage?.matchedByKey === 1 && res.coverage?.matchedByLocalKey === 0 && res.coverage?.localPct === 0);
-  ok("[coverage] and the blocker still fires, saying what the library hit actually means",
-    sev(res, "catalog-covers-nothing") === "blocker" && /same third-party set/.test(get(res, "catalog-covers-nothing").message));
+  ok("[coverage] and the finding still fires, saying what the library hit actually means",
+    sev(res, "catalog-covers-nothing") === "warning" && /same third-party set/.test(get(res, "catalog-covers-nothing").message));
 }
 {
   // Name fallback: a unique name with overlapping props is a LEAD. An ambiguous one is a coin flip
@@ -192,7 +207,8 @@ console.log("cross-check — fonts and text styles:");
 {
   // One capital letter apart. This is a blocker because a name-based mapping binds it silently.
   const res = crossCheck({ screens: [screen("S", [text("2:1", "Poppins", "Medium/14 Medium")])], stylesText: DS_TEXT_STYLES });
-  ok("[styles] a case-only near-miss is a BLOCKER, not a missing style", sev(res, "text-style-near-miss") === "blocker");
+  ok("[styles/D1] a case-only near-miss is a warning to confirm, not a missing style (was: a blocker)",
+    sev(res, "text-style-near-miss") === "warning" && /the same style\?/.test(get(res, "text-style-near-miss").confirm ?? ""));
   ok("[styles] and it prints both spellings side by side",
     /'Medium\/14 Medium' vs 'Medium\/14 medium'/.test(get(res, "text-style-near-miss").message));
 }
@@ -216,6 +232,27 @@ console.log("cross-check — sentinel values and missing modes:");
     /visually broken/.test(get(res, "single-mode-export").message));
 }
 
+// F-20: the "dark surface" example belongs to colour collections; a number collection gets its own.
+{
+  const sizes = tokens({
+    collections: [{ name: "Font Sizes", key: "c-fs", modes: ["Desktop", "Mobile"], default: "Desktop" }],
+    variables: [{ name: "Body", collection: "Font Sizes", key: "fs-1", type: "FLOAT", values: { Desktop: 16, Mobile: 14 } }],
+  });
+  const doc = screenExport([{ type: "FRAME", id: "1:1", resolvedModes: { "Font Sizes": "Desktop" } }], { screen: "S" });
+  const res = crossCheck({ screens: [{ doc, label: "S" }], variables: sizes });
+  const m = get(res, "single-mode-export").message;
+  ok("[F-20] a single-mode FLOAT collection's message has no 'dark surface' example", !/dark surface/.test(m) && /size or spacing value that should differ in 'Mobile'/.test(m));
+  const colour = crossCheck({ screens: [screen("S", [])], tokens: DS_TOKENS });
+  ok("[F-20] …while a colour collection keeps it", /dark surface/.test(get(colour, "single-mode-export").message));
+}
+// Group 4 owed: a library dir's catalog is components.json, and the advice is not "export the library you just exported".
+{
+  const res = crossCheck({ screens: [screen("S", [instance("2:1", "other-a", "Widget")])], components: DS_COMPONENTS, componentsFile: "components.json", designSystemIsLibrary: true });
+  const m = get(res, "catalog-covers-nothing").message;
+  ok("[library-dir] findings name the catalog actually read (components.json), not components.local.json", /in components\.json by key/.test(m) && !/components\.local\.json/.test(m));
+  ok("[library-dir] and the advice checks the passed library instead of saying to export one", /check that the library export you passed is the one the screen consumes/.test(m));
+}
+
 // ---------------------------------------------------------------- the mode nobody ever saw
 console.log("cross-check — contrast in a mode that was derived, not drawn:");
 {
@@ -234,7 +271,8 @@ console.log("cross-check — contrast in a mode that was derived, not drawn:");
     children: [text("2:1", "Poppins", null, "Neutrals/Neutral 500")],
   });
   const res = crossCheck({ screens: [{ doc: { screen: "S", nodes: [sidebar] }, label: "S" }], variables: vars });
-  ok("[contrast] a derived mode's unreadable pair is a BLOCKER", sev(res, "derived-mode-contrast") === "blocker");
+  ok("[contrast/D11] a derived mode's unreadable pair is a warning to confirm (was: a blocker)",
+    sev(res, "derived-mode-contrast") === "warning" && /was never drawn/.test(get(res, "derived-mode-contrast").confirm ?? ""));
   ok("[contrast] it names the mode that was never drawn, not the one that was",
     get(res, "derived-mode-contrast").mode === "Light");
   ok("[contrast] and reports the actual ratio, not a verdict",

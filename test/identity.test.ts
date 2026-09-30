@@ -184,8 +184,9 @@ const blockerOn = (res: Pick<CrossCheckReport, "findings">, code: string, token?
     const refRows = refEntry.names;
     const refMatched = Object.entries(refRows).filter(([, r]) => r.match);
     const refResidual = Object.entries(refRows).filter(([, r]) => !r.match);
-    ok(`[226] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed), not catalog-covers-nothing`,
-      blockerOn(res, "catalog-rekeyed") && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
+    // D1 (field tests): catalog-rekeyed is a warning with a confirm question now, no longer a blocker.
+    ok(`[226/D1] ${k}: reports the copy/re-key case as its own finding (catalog-rekeyed, a warning to confirm), not catalog-covers-nothing`,
+      res.findings.some((f) => f.code === "catalog-rekeyed" && f.severity === "warning" && !!f.confirm) && !res.findings.some((f) => f.code === "catalog-covers-nothing"));
     ok(`[226] ${k}: proposes ≥ 20 name+prop-signature matches (reference: ${min}) — ${props.length}`, props.length >= 20 && props.length === refMatched.length);
     ok(`[226] ${k}: name-for-name AND id-for-id the same as scripts-test/map-components.mjs`,
       refMatched.every(([n, r]) => props.some((p) => p.name === n && p.catalog?.id === r.match)) && props.every((p) => { const row = refRows[p.name]; return row && row.match === p.catalog?.id; }));

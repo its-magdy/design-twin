@@ -169,9 +169,9 @@ Copy this checklist into your notes and keep it updated:
      so, and the build generated 24 "new" components with invented names that reproduce the visuals
      and are not a port of the catalog.
 
-     A `catalog-covers-nothing` or `foreign-token-library` blocker changes what you do next, so surface
-     it to the user before building: the fix is to find the owning file (right-click an instance in
-     Figma → **Go to main component**), connect it, and `dtwin pull --as-library "<name>"`.
+     A `catalog-covers-nothing` or `foreign-token-library` warning changes what you do next, so ask its
+     `confirm` question before building: the fix is to find the owning file (right-click an instance in
+     Figma → **Go to main component**), connect it, and `dtwin pull --as-library "<name>"` (CLI only).
      If the user would rather proceed, that is fine — but then every instance really is `verdict:"new"`,
      and the step-6 report says why.
 
@@ -189,9 +189,10 @@ Copy this checklist into your notes and keep it updated:
      match hides.
 
      Token collisions are judged against the screen's OWN variables (its `.vars.json`), so a
-     `token-name-collision` blocker is this screen's problem; a `token-name-collision-elsewhere` note
-     is another screen's, and this screen's value must not be "fixed" to match it.
-     Note what the check does NOT say: a token *name* collision with a different value is a blocker
+     `token-name-collision` is this screen's problem (a blocker when a visible layer binds the token, a
+     warning otherwise); a `token-name-collision-elsewhere` note is another screen's, and this screen's
+     value must not be "fixed" to match it.
+     Note what the check does NOT say: a token *name* collision with a different value is a finding
      (`(Space 3)` = 12 on the screen vs `Space 3` = 16 in the design system — slug them together and
      you silently get 16), while identical values under different keys are safe and are not reported.
 

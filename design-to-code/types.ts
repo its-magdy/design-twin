@@ -152,6 +152,9 @@ export interface ComponentProposal {
 // ================================================================ findings (audit.js / cross-check.js / drift-lint.js)
 
 export type Severity = "blocker" | "warning" | "info";
+/** D1/D11: the ONLY codes that may be emitted as a blocker (audit.ts `add` / cross-check.ts `push` accept
+ *  "blocker" with these codes only — a compile error otherwise). audit.ts BLOCKER_CODES lists them at runtime. */
+export type BlockerCode = "export-truncated" | "assets-failed" | "missing-font" | "token-name-collision";
 export interface SeverityCounts { blockers: number; warnings: number; info: number }
 
 export type AuditPlatform = "web" | "ios" | "android" | "react-native" | "flutter";
@@ -161,7 +164,7 @@ export type AuditFindingCode =
   | "stroke-align" | "fixed-size-text" | "contrast-manual" | "low-contrast" | "negative-spacing" | "off-grid-spacing"
   | "corner-smoothing" | "shadow-spread" | "background-blur" | "progressive-blur" | "exotic-effect" | "blend-mode"
   | "small-touch-target" | "near-duplicate-colors" | "missing-component-states" | "component-states-unchecked"
-  | "low-token-binding" | "heavy-asset" | "prototype-navigation";
+  | "low-token-binding" | "heavy-asset" | "prototype-navigation" | "state-in-sibling" | "unexported-frames";
 export type CrossCheckFindingCode =
   | "foreign-token-library" | "token-library-matches" | "token-name-collision" | "token-name-collision-elsewhere"
   | "token-absent-from-design-system" | "unresolvable-token" | "catalog-rekeyed" | "catalog-covers-nothing"
@@ -197,10 +200,16 @@ export interface FindingExtras {
   file?: string; bytes?: number; paths?: number;
   /** prototype-navigation: where the prototype goes, and from how many visible layers */
   destination?: string; destinationId?: string; navigation?: string; sources?: number;
+  /** state-in-sibling: the undrawn state, and the same-page frames whose copy reads like it */
+  state?: ScreenStateKey; candidates?: Array<{ id: string; name: string; text: string }>;
+  /** unexported-frames: node ids screenshotted into assets/ but never exported */
+  ids?: string[];
   /** low-token-binding */
   category?: AuditCategory;
   /** near-duplicate-colors (the hexes, as the export spells them) */
   colors?: string[];
+  /** D1/D11: a cross-file warning to CONFIRM with the user before building on its default — the question */
+  confirm?: string;
   // ---- cross-check.ts
   /** foreign-token-library: the screen's collections the design system does not have */
   collections?: Array<{ name: string; key?: string; twinKey?: string; twinName?: string }>;
@@ -237,10 +246,20 @@ export interface Finding<Code extends string = string> extends FindingExtras {
   nodeName?: string;
   screen?: string;
   path?: string;
+  /** set when a <out>.overrides.json entry changed this finding's severity (DT-21) */
+  overridden?: { from: Severity; reason: string; decidedBy?: string; decidedAt?: string };
 }
 export type CrossCheckFinding = Finding<CrossCheckFindingCode>;
-/** audit.js findings: its own codes, plus cross-check's (merged in with `crossFile: true`). */
+/** audit.js findings: its own codes, plus cross-check's (merged in with `crossFile: true`); `overridden`
+ *  when a <out>.overrides.json entry changed its severity (DT-21). */
 export type AuditFinding = Finding<AuditFindingCode | CrossCheckFindingCode> & { crossFile?: true };
+/** One entry of design/audit/<screen>.overrides.json: which finding(s) (code, narrowed by nodeId / token /
+ *  component when given), the severity the user decided, and why. */
+export interface AuditOverride {
+  code: string; nodeId?: string; token?: string; component?: string; collection?: string; mode?: string; category?: string; state?: string; screen?: string;
+  severity: Severity; reason: string; decidedBy?: string; decidedAt?: string;
+}
+export interface AuditOverridesDoc { overrides: AuditOverride[] }
 
 export type CoverageBucket = "localKey" | "libraryKey" | "proposed" | "nameOnly" | "ambiguous" | "newWork";
 export interface CoverageEntry {
@@ -310,6 +329,8 @@ export interface AuditReport {
   nodeIds?: string[];
   summary: SeverityCounts;
   hiddenLayers?: { nodesSkipped: number; crossFileFindingsOmitted: number };
+  /** overrides entries NOT applied, each with why (matched nothing / too broad / not a blocker code / no decidedBy) */
+  overridesUnmatched?: Array<AuditOverride & { why: string }>;
   tokenBinding: Record<AuditCategory, { bound: number; total: number; pct: number | null }>;
   components: AuditComponentRow[];
   screenStates: AuditScreenStates;

@@ -397,6 +397,11 @@ function isLibrariesIndex(x) {
   return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
 }
 isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
+var SEVERITIES = ["blocker", "warning", "info"];
+function isAuditOverridesDoc(x) {
+  return isObj(x) && Array.isArray(x.overrides) && x.overrides.every((o) => isObj(o) && typeof o.code === "string" && typeof o.severity === "string" && SEVERITIES.includes(o.severity) && typeof o.reason === "string" && o.reason.trim() !== "" && ["nodeId", "token", "component", "collection", "mode", "category", "state", "screen", "decidedBy", "decidedAt"].every((k) => optStr(o[k])));
+}
+isAuditOverridesDoc.expected = "an audit overrides file: { overrides: [{ code, severity: blocker|warning|info, reason (non-empty), nodeId?, token?, component?, collection?, mode?, category?, state?, screen?, decidedBy?, decidedAt? }] }";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
@@ -478,7 +483,9 @@ function readDesignSystemDir(dir) {
     tokens: readOptionalDoc(path.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
     components: readOptionalDoc(isLibrary ? path.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
     componentsLibrary: readOptionalDoc(path.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path.join(dir, "styles.text.json"), "text styles", isTextStylesDoc)
+    stylesText: readOptionalDoc(path.join(dir, "styles.text.json"), "text styles", isTextStylesDoc),
+    componentsFile: isLibrary ? "components.json" : "components.local.json",
+    isLibrary
   };
 }
 
@@ -629,9 +636,14 @@ function crossCheck(input) {
   const components = input.components || null;
   const componentsLibrary = input.componentsLibrary || null;
   const stylesText = input.stylesText || null;
+  const catFile = input.componentsFile || "components.local.json";
+  const LIST_LIBRARIES = "`dtwin list libraries --client <the screen's file>` (MCP: `figma_list_libraries`)";
+  const EXPORT_LIBRARY = input.designSystemIsLibrary ? 'check that the library export you passed is the one the screen consumes (a DUPLICATED library file re-keys everything \u2014 re-export the original with `dtwin pull --as-library "<name>"`, CLI only)' : 'export it with `dtwin pull --as-library "<name>"` (CLI only \u2014 the MCP server has no library export)';
   const findings = [];
   const notChecked = [];
-  const push = (severity, code, message, extra) => findings.push(Object.assign({ severity, code, message }, extra || {}));
+  const push = (severity, code, message, extra) => {
+    findings.push(Object.assign({ severity, code, message }, extra || {}));
+  };
   const usedTokenNames = /* @__PURE__ */ new Map();
   const instances = [];
   const fonts = /* @__PURE__ */ new Map();
@@ -694,12 +706,12 @@ function crossCheck(input) {
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
-      const severity = foreign.length === screenColls.length ? "blocker" : "warning";
+      const all = foreign.length === screenColls.length;
       push(
-        severity,
+        "warning",
         "foreign-token-library",
-        `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export \u2014 the screen consumes a DIFFERENT library than the one you pulled. ` + (sameNameDifferentKey.length ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key (${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. ` : "") + `Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run \`dtwin list libraries --client <the screen's file>\` \u2014 variable collections are the ONE thing Figma attributes to a library by name \u2014 then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
-        { collections: foreign }
+        `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export \u2014 the screen consumes a DIFFERENT library than the one you pulled. ` + (sameNameDifferentKey.length ? `${sameNameDifferentKey.length} of them carry a design-system collection's name under a different key (${sameNameDifferentKey.slice(0, 3).map((f) => `'${f.name}'`).join(", ")}), which is the signature of a DUPLICATED Figma file: duplicating a library re-keys everything while leaving names and values identical. ` : "") + `Names and values may still line up (check the collisions below), but nothing here is the same variable. To find the real owner: run ${LIST_LIBRARIES} \u2014 variable collections are the ONE thing Figma attributes to a library by name \u2014 then open that file and ${EXPORT_LIBRARY}.`,
+        { collections: foreign, confirm: `${all ? "None" : `Only ${screenColls.length - foreign.length} of ${screenColls.length}`} of the screen's variable collections are in the design system you passed \u2014 is it the library this screen uses? Until confirmed, values come from the screen's own .vars.json.` }
       );
     } else {
       push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
@@ -794,13 +806,11 @@ function crossCheck(input) {
     const scopeNote = varScope === "own" ? "" : varScope === "union-by-source" ? " (read from the merged variables.json, restricted to the variables its slice records for this screen \u2014 pass the screen's .vars.json to be exact)" : " (read from the MERGED variables.json: this screen's own .vars.json was not available, so this may be another screen's variable \u2014 check its key)";
     for (const c of collisions) {
       const twinNote = c.twins.length > 1 ? ` This screen's own variables include ${c.twins.length} DIFFERENT variables called '${c.name}': ` + c.twins.map((t) => `${shortKey(t) ? "key " + shortKey(t) : "'" + (t.collection || "") + "'"} = ${JSON.stringify(flatten(t))}${fromWhere(t)}`).join(" vs ") + ` \u2014 only the one(s) listed as colliding differ from the design system.` : "";
-      push(
-        "blocker",
-        "token-name-collision",
-        // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
-        `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote,
-        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
-      );
+      const used = c.usedAt.length > 0;
+      const message = `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` + (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " \u2014 no mode name is shared and the two value sets are disjoint. ") + `Slugging the name onto the existing token would silently apply the wrong value \u2014 namespace the screen's copy, or confirm which library is authoritative.` + twinNote + scopeNote;
+      const extra = { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope };
+      if (used) push("blocker", "token-name-collision", message, extra);
+      else push("warning", "token-name-collision", message, { ...extra, confirm: `'${c.name}' has different values here and in the design system, but no visible layer on this screen binds it \u2014 which one is authoritative if it is used later?` });
     }
     if (variables && varScope !== "union") {
       const mine = new Set(screenVars.map((v) => v.key).filter(Boolean));
@@ -855,7 +865,7 @@ function crossCheck(input) {
   const localKeys = new Set(localComps.map((c) => c.key).filter((k) => !!k));
   const catalog = localComps.concat(componentsLibrary && componentsLibrary.components || []);
   if (!catalog.length) {
-    notChecked.push("component coverage \u2014 no components.local.json was given, so every instance counts as new by default.");
+    notChecked.push(`component coverage \u2014 no ${catFile} was given, so every instance counts as new by default.`);
   } else if (!instances.length) {
     notChecked.push("component coverage \u2014 the screen export contains no INSTANCE nodes to compare.");
   } else {
@@ -940,27 +950,27 @@ function crossCheck(input) {
       const s = rekeyedBy.summary, props = rekeyedBy.proposals;
       const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
-        "blocker",
+        "warning",
         "catalog-rekeyed",
-        `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in components.local.json` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run the map-bootstrap script (\`<components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\`) \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
-        { rekey: s, proposals: props.length }
+        `0 of ${s.names} component(s) on this screen resolve to ${catFile} by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in ${catFile}` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run the map-bootstrap script (\`<${catFile}> --out design/codeconnect.local.json --from-proposals <this report>.json\`) \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+        { rekey: s, proposals: props.length, confirm: `${s.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) \u2014 confirm the proposed matches before reusing them as mappings.` }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
       push(
-        "blocker",
+        "warning",
         "catalog-covers-nothing",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key \u2014 the catalog you exported is not the library this screen is built from. ` + (coverage.matchedByKey > coverage.matchedByLocalKey ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. ` : "") + (coverage.matchedByName ? `${coverage.matchedByName} match BY NAME only and are marked unverified: a lead, not a mapping. ` : "") + (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") + `A "318/318 mapped" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > "Go to main component" \u2014 it jumps to the file that defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` + (rekey && rekey.summary.withCandidates ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature \u2014 too few to call it the same library under new keys.)` : ""),
-        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct } }
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in ${catFile} by key \u2014 the catalog you exported is not the library this screen is built from. ` + (coverage.matchedByKey > coverage.matchedByLocalKey ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. ` : "") + (coverage.matchedByName ? `${coverage.matchedByName} match BY NAME only and are marked unverified: a lead, not a mapping. ` : "") + (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") + `A "318/318 mapped" count measures the catalog against itself and means nothing here. To find the owning library: open any instance in Figma and use right-click > "Go to main component" \u2014 it jumps to the file that defines it. Then connect that file and ${EXPORT_LIBRARY}. Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` + (rekey && rekey.summary.withCandidates ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature \u2014 too few to call it the same library under new keys.)` : ""),
+        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct }, confirm: `Only ${coverage.localPct}% of this screen's components are in ${catFile} by key \u2014 is that the component library this screen is built from? Until confirmed, every instance is new work.` }
       );
     } else if (coverage.localPct < 100) {
       push(
         "warning",
         "partial-catalog-coverage",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to components.local.json by key` + (coverage.matchedByName ? `, ${coverage.matchedByName} more by name only (unverified)` : "") + `. The rest are new work: ${coverage.entries.filter((e) => !e.matchedBy).slice(0, 6).map((e) => "'" + e.setName + "'").join(", ")}.`,
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to ${catFile} by key` + (coverage.matchedByName ? `, ${coverage.matchedByName} more by name only (unverified)` : "") + `. The rest are new work: ${coverage.entries.filter((e) => !e.matchedBy).slice(0, 6).map((e) => "'" + e.setName + "'").join(", ")}.`,
         { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, localPct: coverage.localPct } }
       );
     } else {
-      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to components.local.json by key.`, {});
+      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to ${catFile} by key.`, {});
     }
     const named = coverage.entries.filter((e) => e.matchedBy === "name" && !proposedNames.has(e.setName));
     if (named.length) {
@@ -1019,10 +1029,10 @@ function crossCheck(input) {
     }
     if (nearMiss.length) {
       push(
-        "blocker",
+        "warning",
         "text-style-near-miss",
         `${nearMiss.length} text style name(s) differ from a design-system style ONLY by case or punctuation: ` + nearMiss.map((n) => `'${n.name}' vs '${n.near}'`).join(", ") + `. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.`,
-        { styles: nearMiss }
+        { styles: nearMiss, confirm: `${nearMiss.map((n) => `'${n.name}' = '${n.near}'`).join(", ")} \u2014 the same style? Until confirmed, use the screen's own text values, not the design-system style.` }
       );
     }
     if (absent.length) {
@@ -1071,10 +1081,12 @@ function crossCheck(input) {
     const only = seen.size === 1 ? [...seen][0] : void 0;
     if (only !== void 0 && c.modes.length > 1) {
       const rest = c.modes.filter((m) => m !== only);
+      const colour = [...tokens && tokens.variables || [], ...variables && variables.variables || []].some((v) => v.collection === c.name && v.type === "COLOR");
+      const example = colour ? "a dark surface token that stays dark in Light" : `a size or spacing value that should differ in '${rest[0] ?? "another mode"}' but keeps its '${only}' value`;
       push(
         "warning",
         "single-mode-export",
-        `every exported frame resolved collection '${c.name}' in mode '${only}', but it defines ${c.modes.length} modes (${c.modes.join(", ")}). The other ${rest.length} mode(s) are DERIVED from variable values, never seen rendered \u2014 so any element whose ${only}-mode token has no sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. Export a frame in ${rest.map((m) => `'${m}'`).join(" / ")} too, or have the designer confirm the derivation before it ships.`,
+        `every exported frame resolved collection '${c.name}' in mode '${only}', but it defines ${c.modes.length} modes (${c.modes.join(", ")}). The other ${rest.length} mode(s) are DERIVED from variable values, never seen rendered \u2014 so any element whose ${only}-mode token has no sensible counterpart (${example}) will be mechanically correct and visually broken. Export a frame in ${rest.map((m) => `'${m}'`).join(" / ")} too, or have the designer confirm the derivation before it ships.`,
         { collection: c.name, exportedMode: only, modes: c.modes }
       );
     }
@@ -1195,10 +1207,10 @@ function contrastPerMode(screens, variables, tokens, push, resolvedModes) {
   }
   for (const [mode, list] of byMode) {
     push(
-      "blocker",
+      "warning",
       "derived-mode-contrast",
       `in mode '${mode}', ${list.length} text/background token pair(s) fall below WCAG AA (${MIN_CONTRAST}:1): ` + list.slice(0, 4).map((f) => `'${f.fg}' on '${f.bg}' = ${f.ratio}:1 (e.g. ${f.sample})`).join("; ") + (list.length > 4 ? ", \u2026" : "") + `. No frame was exported in '${mode}', so this mode is DERIVED from variable values and nobody has ever seen it rendered \u2014 the derivation is mechanically correct and visually broken. Export a '${mode}' frame, or get the designer to say which token each of these should use there. Do not invent an override and call it done.`,
-      { mode, pairs: list }
+      { mode, pairs: list, confirm: `Mode '${mode}' was never drawn and ${list.length} derived text/background pair(s) in it fail contrast \u2014 ship '${mode}' as derived, or will the designer supply it?` }
     );
   }
 }
@@ -1225,7 +1237,7 @@ function toMarkdown(res) {
     L.push(`| visible instances on the screen | ${c.instances} |`);
     L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
     const b = c.buckets || {};
-    L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
+    L.push(`| in **the component catalog** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
     L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
     if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry \u2014 proposed, confirm below | ${b.proposed || 0} |`);
     L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
@@ -1251,7 +1263,7 @@ function toMarkdown(res) {
     if (res.componentResidual && res.componentResidual.length) {
       const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
       const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
-      L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` + (known.length ? `${known.length} are in (or named like an entry of) components.library.json \u2014 third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") + `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
+      L.push(`**Not in the component catalog (${res.componentResidual.length}):** ` + (known.length ? `${known.length} are in (or named like an entry of) components.library.json \u2014 third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") + `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
@@ -1308,7 +1320,9 @@ function main(argv) {
     tokens: ds.tokens,
     components: ds.components,
     componentsLibrary: ds.componentsLibrary,
-    stylesText: ds.stylesText
+    stylesText: ds.stylesText,
+    componentsFile: ds.componentsFile,
+    designSystemIsLibrary: ds.isLibrary
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

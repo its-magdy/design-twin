@@ -365,7 +365,8 @@ async function main(argv: string[]): Promise<number> {
           `ERROR  [screen-coverage] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key.\n` +
             `       The catalog you exported is not the library this screen is built from — a green "mapped" count above measures\n` +
             `       the catalog against itself. Open an instance in Figma and use "Go to main component" to find the owning file,\n` +
-            `       then export it with \`dtwin pull --as-library "<name>"\`. Until then build every instance as new.`
+            `       then export it with \`dtwin pull --as-library "<name>"\` (CLI only — the MCP server has no library export).\n` +
+            `       Until then build every instance as new.`
         );
       } else if (cov.unmapped.length) {
         console.error(

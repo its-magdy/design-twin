@@ -240,7 +240,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/cross-check.js" design/export/pages/<Page>/<
   --design-system design/export/design-system
 ```
 
-Run it after any pull that produced both, and report its blockers before offering to build. It reads
+Run it after any pull that produced both, and report its blockers and every warning that carries a
+`confirm` question (asked, with the default the build takes) before offering to build. It reads
 the screen's own `.vars.json` beside it, so a token collision is reported against the screen that
 actually carries the colliding variable; a collision that belongs to another screen is only an
 `info` note naming that screen — do not "fix" this screen's value to match it.
@@ -312,7 +313,7 @@ it; show the user the difference and ask which is the source of truth.
 ## Then hand off
 
 Report briefly: what landed, anything the manifest flagged, whether the PNG exists, and any
-cross-check blocker. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
+cross-check blocker or `confirm` question. Then **`/designtwin:audit-design <screen>`** to check the design is buildable
 (missing states, contrast, touch targets, designer questions), and
 **`/designtwin:build-screen <screen>`** to build it.
 

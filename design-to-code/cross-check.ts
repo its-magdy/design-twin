@@ -45,7 +45,7 @@ import type { SliceSources } from "./slice-sources.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import type {
   CatalogComponent, ComponentsCatalog, ContrastFailure, CoverageBucket, FindingExtras, CrossCheckCoverage, CrossCheckFinding, CrossCheckFindingCode, CrossCheckReport,
-  IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
+  BlockerCode, IrNode, MatchResult, ScreenDoc, Severity, TextStyle, TextStylesDoc, TokensDoc, Variable, VariableCollection, VariableValue,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -73,9 +73,18 @@ export interface CrossCheckInput {
   components?: ComponentsCatalog | null;
   componentsLibrary?: ComponentsCatalog | null;
   stylesText?: TextStylesDoc | null;
+  /** the component catalog's file as findings should name it (default "components.local.json"; a
+   *  --as-library export's is "components.json") */
+  componentsFile?: string;
+  /** the design-system dir given IS a --as-library export — changes the "export the library" advice */
+  designSystemIsLibrary?: boolean;
 }
 
-type Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: FindingExtras) => void;
+// D1: "blocker" only with a BlockerCode — any other blocker is a compile error.
+interface Push {
+  (severity: "blocker", code: BlockerCode & CrossCheckFindingCode, message: string, extra?: FindingExtras): void;
+  (severity: "warning" | "info", code: CrossCheckFindingCode, message: string, extra?: FindingExtras): void;
+}
 
 // Visible layers only: a token bound on a layer the designer switched off is not built, so it is not
 // a token the build has to resolve (livetest-3 P2a — the same rule as audit.ts and verify-screen.ts).
@@ -107,10 +116,17 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const components = input.components || null;
   const componentsLibrary = input.componentsLibrary || null;
   const stylesText = input.stylesText || null;
+  const catFile = input.componentsFile || "components.local.json";
+  // F-19: the remediation hints named only the CLI. Listing libraries has an MCP twin; exporting a
+  // library does not (the MCP export tool's own description points at the CLI's --as-library).
+  const LIST_LIBRARIES = "`dtwin list libraries --client <the screen's file>` (MCP: `figma_list_libraries`)";
+  const EXPORT_LIBRARY = input.designSystemIsLibrary
+    ? "check that the library export you passed is the one the screen consumes (a DUPLICATED library file re-keys everything — re-export the original with `dtwin pull --as-library \"<name>\"`, CLI only)"
+    : "export it with `dtwin pull --as-library \"<name>\"` (CLI only — the MCP server has no library export)";
 
   const findings: CrossCheckFinding[] = [];
   const notChecked: string[] = [];
-  const push: Push = (severity, code, message, extra) => findings.push(Object.assign({ severity, code, message }, extra || {}));
+  const push: Push = (severity: Severity, code: CrossCheckFindingCode, message: string, extra?: FindingExtras): void => { findings.push(Object.assign({ severity, code, message }, extra || {})); };
 
   // ---------------------------------------------------------------- what the screens actually use
   const usedTokenNames = new Map<string, UsedAt[]>(); // name -> [{screen, nodeId, field}]
@@ -186,9 +202,11 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     }
     if (foreign.length) {
       const sameNameDifferentKey = foreign.filter((f) => f.twinKey);
-      const severity: Severity = foreign.length === screenColls.length ? "blocker" : "warning";
+      // D11: a warning to confirm, never a blocker — "you passed the wrong design system" has a default
+      // (build from the screen's own .vars.json values) and a question, not a hard stop.
+      const all = foreign.length === screenColls.length;
       push(
-        severity,
+        "warning",
         "foreign-token-library",
         `${foreign.length} of ${screenColls.length} variable collection(s) the screen binds are NOT in the design-system export — ` +
           `the screen consumes a DIFFERENT library than the one you pulled. ` +
@@ -198,9 +216,9 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
               `duplicating a library re-keys everything while leaving names and values identical. `
             : "") +
           `Names and values may still line up (check the collisions below), but nothing here is the same variable. ` +
-          `To find the real owner: run \`dtwin list libraries --client <the screen's file>\` — variable collections are the ONE thing ` +
-          `Figma attributes to a library by name — then open that file and export it with \`dtwin pull --as-library "<name>"\`.`,
-        { collections: foreign }
+          `To find the real owner: run ${LIST_LIBRARIES} — variable collections are the ONE thing ` +
+          `Figma attributes to a library by name — then open that file and ${EXPORT_LIBRARY}.`,
+        { collections: foreign, confirm: `${all ? "None" : `Only ${screenColls.length - foreign.length} of ${screenColls.length}`} of the screen's variable collections are in the design system you passed — is it the library this screen uses? Until confirmed, values come from the screen's own .vars.json.` }
       );
     } else {
       push("info", "token-library-matches", `all ${screenColls.length} variable collection(s) the screen binds resolve to the design-system export by key.`, {});
@@ -333,18 +351,20 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           c.twins.map((t) => `${shortKey(t) ? "key " + shortKey(t) : "'" + (t.collection || "") + "'"} = ${JSON.stringify(flatten(t))}${fromWhere(t)}`).join(" vs ") +
           ` — only the one(s) listed as colliding differ from the design system.`
         : "";
-      push(
-        "blocker",
-        "token-name-collision",
-        // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+      // D1: a clash blocks only when the screen really USES the token (a visible layer binds it); a clash on
+      // a variable the slice merely carries is a warning to confirm.
+      const used = c.usedAt.length > 0;
+      // Both subjects are named, whether the names are identical or only near-identical (livetest-3 #326).
+      const message =
         `The screen's '${c.name}'${shortKey(c.sv) ? ` (key ${shortKey(c.sv)})` : ""} and the design system's '${c.alsoKnownAs || c.name}' ` +
           `${c.alsoKnownAs ? "differ only by case or punctuation" : "share a name"} but resolve DIFFERENTLY: ` +
           `screen ${JSON.stringify(c.screen)} vs design system ${JSON.stringify(c.designSystem)}` +
           (Object.keys(c.screen).some((m) => m in c.designSystem) ? ". " : " — no mode name is shared and the two value sets are disjoint. ") +
           `Slugging the name onto the existing token would silently apply the wrong value — namespace the screen's copy, or confirm which library is authoritative.` +
-          twinNote + scopeNote,
-        { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope }
-      );
+          twinNote + scopeNote;
+      const extra: FindingExtras = { token: c.name, ...ifDefined("key", c.key), ...ifDefined("alsoKnownAs", c.alsoKnownAs), screenValue: c.screen, designSystemValue: c.designSystem, usedAt: c.usedAt, scope: varScope };
+      if (used) push("blocker", "token-name-collision", message, extra);
+      else push("warning", "token-name-collision", message, { ...extra, confirm: `'${c.name}' has different values here and in the design system, but no visible layer on this screen binds it — which one is authoritative if it is used later?` });
     }
     // The union's own ambiguity, when it is NOT this screen's: said once, as a note naming the other
     // screen, so nobody "fixes" this screen's correct value to match someone else's variable.
@@ -428,7 +448,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   const localKeys = new Set(localComps.map((c) => c.key).filter((k): k is string => !!k));
   const catalog: CatalogComponent[] = localComps.concat((componentsLibrary && componentsLibrary.components) || []);
   if (!catalog.length) {
-    notChecked.push("component coverage — no components.local.json was given, so every instance counts as new by default.");
+    notChecked.push(`component coverage — no ${catFile} was given, so every instance counts as new by default.`);
   } else if (!instances.length) {
     notChecked.push("component coverage — the screen export contains no INSTANCE nodes to compare.");
   } else {
@@ -542,28 +562,28 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
       const s = rekeyedBy.summary, props = rekeyedBy.proposals;
       const residual = rekeyedBy.rows.filter((r) => !r.match);
       push(
-        "blocker",
+        "warning",
         "catalog-rekeyed",
-        `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog ` +
+        `0 of ${s.names} component(s) on this screen resolve to ${catFile} by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog ` +
           `also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. ` +
           `That is not a foreign library — it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every ` +
           `component key), or the library was re-published. Proposed matches (confirm each before reuse — nothing is auto-accepted): ` +
           props.slice(0, 12).map((r) => `'${r.name}' → ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare — weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") +
           (props.length > 12 ? `, … (${props.length} in all — see componentProposals)` : "") + `. ` +
-          `${residual.length} name(s) are not in components.local.json` +
+          `${residual.length} name(s) are not in ${catFile}` +
           (buckets.libraryKey + buckets.nameOnly
             ? ` — of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work`
             : ` and stay new work`) +
           (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", …" : ""})` : "") + `. ` +
           `To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run ` +
-          `the map-bootstrap script (\`<components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\`) — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
-        { rekey: s, proposals: props.length }
+          `the map-bootstrap script (\`<${catFile}> --out design/codeconnect.local.json --from-proposals <this report>.json\`) — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+        { rekey: s, proposals: props.length, confirm: `${s.proposed} component(s) match the catalog by name and prop signature but not by key (a duplicated or re-published file) — confirm the proposed matches before reusing them as mappings.` }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
       push(
-        "blocker",
+        "warning",
         "catalog-covers-nothing",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in components.local.json by key — ` +
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) used on this screen (${coverage.localPct}%) are in ${catFile} by key — ` +
           `the catalog you exported is not the library this screen is built from. ` +
           (coverage.matchedByKey > coverage.matchedByLocalKey
             ? `${coverage.matchedByKey - coverage.matchedByLocalKey} more match components.library.json, which only means both files consume the same third-party set. `
@@ -572,25 +592,25 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           (coverage.ambiguousName ? `${coverage.ambiguousName} more share a name with SEVERAL catalog entries ('Component 1'-class names) and are deliberately left unmatched. ` : "") +
           `A "318/318 mapped" count measures the catalog against itself and means nothing here. ` +
           `To find the owning library: open any instance in Figma and use right-click > "Go to main component" — it jumps to the file that ` +
-          `defines it. Then connect that file and run \`dtwin pull --as-library "<name>"\`. ` +
+          `defines it. Then connect that file and ${EXPORT_LIBRARY}. ` +
           `Until then every instance is correctly a \`verdict:"new"\` build, not a port of the catalog.` +
           (rekey && rekey.summary.withCandidates
             ? ` (Checked for the duplicated-file case too: only ${rekey.summary.proposedWithSignature} of the ${rekey.summary.withCandidates} name twin(s) also agree on prop signature — ` +
               `too few to call it the same library under new keys.)`
             : ""),
-        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct } }
+        { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, ambiguousName: coverage.ambiguousName, localPct: coverage.localPct }, confirm: `Only ${coverage.localPct}% of this screen's components are in ${catFile} by key — is that the component library this screen is built from? Until confirmed, every instance is new work.` }
       );
     } else if (coverage.localPct < 100) {
       push(
         "warning",
         "partial-catalog-coverage",
-        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to components.local.json by key` +
+        `${coverage.matchedByLocalKey} of ${coverage.distinct} component(s) on this screen (${coverage.localPct}%) resolve to ${catFile} by key` +
           (coverage.matchedByName ? `, ${coverage.matchedByName} more by name only (unverified)` : "") +
           `. The rest are new work: ${coverage.entries.filter((e) => !e.matchedBy).slice(0, 6).map((e) => "'" + e.setName + "'").join(", ")}.`,
         { coverage: { distinct: coverage.distinct, byLocalKey: coverage.matchedByLocalKey, byKey: coverage.matchedByKey, byName: coverage.matchedByName, localPct: coverage.localPct } }
       );
     } else {
-      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to components.local.json by key.`, {});
+      push("info", "catalog-covers-screen", `all ${coverage.distinct} component(s) on this screen resolve to ${catFile} by key.`, {});
     }
     // ONE finding for the whole name-matched set. Emitting one per component produced 37 identical
     // paragraphs on the live run — a list nobody reads is the same as no list.
@@ -665,12 +685,12 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     }
     if (nearMiss.length) {
       push(
-        "blocker",
+        "warning",
         "text-style-near-miss",
         `${nearMiss.length} text style name(s) differ from a design-system style ONLY by case or punctuation: ` +
           nearMiss.map((n) => `'${n.name}' vs '${n.near}'`).join(", ") +
           `. That is the exact near-miss a name-based mapping binds wrongly and silently. Confirm they are the same style before reusing it.`,
-        { styles: nearMiss }
+        { styles: nearMiss, confirm: `${nearMiss.map((n) => `'${n.name}' = '${n.near}'`).join(", ")} — the same style? Until confirmed, use the screen's own text values, not the design-system style.` }
       );
     }
     if (absent.length) {
@@ -731,12 +751,16 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     const only = seen.size === 1 ? [...seen][0] : undefined; // a Set<string>: set exactly when size is 1
     if (only !== undefined && c.modes.length > 1) {
       const rest = c.modes.filter((m) => m !== only);
+      // F-20: the example fits the collection — a colour theme's failure is a surface that stays dark; a
+      // number collection's (sizes, spacing — often one mode per breakpoint) is a value that never changes.
+      const colour = [...((tokens && tokens.variables) || []), ...((variables && variables.variables) || [])].some((v) => v.collection === c.name && v.type === "COLOR");
+      const example = colour ? "a dark surface token that stays dark in Light" : `a size or spacing value that should differ in '${rest[0] ?? "another mode"}' but keeps its '${only}' value`;
       push(
         "warning",
         "single-mode-export",
         `every exported frame resolved collection '${c.name}' in mode '${only}', but it defines ${c.modes.length} modes (${c.modes.join(", ")}). ` +
           `The other ${rest.length} mode(s) are DERIVED from variable values, never seen rendered — so any element whose ${only}-mode token has no ` +
-          `sensible counterpart (a dark surface token that stays dark in Light) will be mechanically correct and visually broken. ` +
+          `sensible counterpart (${example}) will be mechanically correct and visually broken. ` +
           `Export a frame in ${rest.map((m) => `'${m}'`).join(" / ")} too, or have the designer confirm the derivation before it ships.`,
         { collection: c.name, exportedMode: only, modes: c.modes }
       );
@@ -904,7 +928,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
   }
   for (const [mode, list] of byMode) {
     push(
-      "blocker",
+      "warning",
       "derived-mode-contrast",
       `in mode '${mode}', ${list.length} text/background token pair(s) fall below WCAG AA (${MIN_CONTRAST}:1): ` +
         list.slice(0, 4).map((f) => `'${f.fg}' on '${f.bg}' = ${f.ratio}:1 (e.g. ${f.sample})`).join("; ") +
@@ -912,7 +936,7 @@ function contrastPerMode(screens: CrossCheckScreen[], variables: TokensDoc | nul
         `. No frame was exported in '${mode}', so this mode is DERIVED from variable values and nobody has ever seen it rendered — ` +
         `the derivation is mechanically correct and visually broken. Export a '${mode}' frame, or get the designer to say ` +
         `which token each of these should use there. Do not invent an override and call it done.`,
-      { mode, pairs: list }
+      { mode, pairs: list, confirm: `Mode '${mode}' was never drawn and ${list.length} derived text/background pair(s) in it fail contrast — ship '${mode}' as derived, or will the designer supply it?` }
     );
   }
 }
@@ -947,7 +971,7 @@ function toMarkdown(res: CrossCheckReport): string {
     L.push(`| visible instances on the screen | ${c.instances} |`);
     L.push(`| **distinct components** (each lands in exactly one row below) | **${c.distinct}** |`);
     const b: Partial<Record<CoverageBucket, number>> = c.buckets || {};
-    L.push(`| in **components.local.json** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
+    L.push(`| in **the component catalog** by key (verified) | ${b.localKey || 0} (${c.localPct}%) |`);
     L.push(`| in components.library.json by key (a shared third-party set) | ${b.libraryKey || 0} |`);
     if (c.rekey && c.rekey.rekeyed) L.push(`| same name **and** prop signature as a catalog entry — proposed, confirm below | ${b.proposed || 0} |`);
     L.push(`| exact name twin only (**unverified**) | ${b.nameOnly || 0} |`);
@@ -971,7 +995,7 @@ function toMarkdown(res: CrossCheckReport): string {
     if (res.componentResidual && res.componentResidual.length) {
       const twin = new Set((c && c.entries ? c.entries : []).filter((e) => e.bucket === "nameOnly" || e.bucket === "libraryKey").map((e) => e.setName));
       const fresh = res.componentResidual.filter((r) => !twin.has(r.name)), known = res.componentResidual.filter((r) => twin.has(r.name));
-      L.push(`**Not in components.local.json (${res.componentResidual.length}):** ` +
+      L.push(`**Not in the component catalog (${res.componentResidual.length}):** ` +
         (known.length ? `${known.length} are in (or named like an entry of) components.library.json — third-party, see the table: ${known.map((r) => `\`${r.name}\``).join(", ")}. ` : "") +
         `${fresh.length} are new work${fresh.length ? ": " + fresh.map((r) => `\`${r.name}\``).join(", ") : ""}.`, "");
     }
@@ -1041,6 +1065,8 @@ function main(argv: string[]): number {
     components: ds.components,
     componentsLibrary: ds.componentsLibrary,
     stylesText: ds.stylesText,
+    componentsFile: ds.componentsFile,
+    designSystemIsLibrary: ds.isLibrary,
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
