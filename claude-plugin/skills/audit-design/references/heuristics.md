@@ -1,9 +1,11 @@
 # Automated checks — what `audit.js` computes, how to read it, how to do it by hand
 
-`node "<scripts>/audit.js" <screen.json>... --platform <p> [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
+`node "<scripts>/audit.js" <screen.json>... --platform <p> [--design-system design/export/design-system | design/export/libraries/<dir>] [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
 
 Output: `summary {blockers, warnings, info}`, `tokenBinding {color, typography, spacing, radius, effects}`
-(`bound/total/pct`), `components[]` (state coverage), `screenStates {loading, empty, error}`,
+(`bound/total/pct`), `components[]` (state coverage, each row naming its `catalog` and `matchedBy`),
+`screenStates {loading, empty, error, validation?}` (`designed` / `not-found` / `not-applicable` — `empty`
+is not-applicable when every audited root is a dialog; `validation` appears only when an input was audited),
 `annotations[]`, `questions[]`, `findings[] {severity, code, message, nodeId, nodeName, screen, path}`.
 It exits 0 on findings — they're advice — unless `--gate` is passed (exit 1 on any blocker; `build-screen` uses this).
 
@@ -23,13 +25,17 @@ It exits 0 on findings — they're advice — unless `--gate` is passed (exit 1 
 | `fake-status-bar` / `fake-home-indicator` | warning | mobile only; within 2 levels of root, name/component matches status bar / 9:41 / battery (h ≤ 64) or home indicator (h ≤ 40) | screenshot |
 | `small-touch-target` | warning | tappable node (`reactions` with click/press/tap/drag, control-like component instance, or control-like frame name) with `box` below web 24 / iOS 44 / Android 48 / RN 44 / Flutter 48; children of an already-checked tappable are skipped | a larger parent may be the real hit area |
 | `fixed-size-text` | warning | TEXT with no `autoResize`, `truncate`, or `maxLines` | single-word labels in hugging parents are lower risk |
-| `low-contrast` | warning (info if background assumed white) | WCAG ratio of text color composited over ancestor fills (+ earlier siblings in non-auto-layout parents) below 4.5 (3 for ≥24px or ≥18.66px bold) | overlapping siblings in auto layout aren't composited |
+| `low-contrast` | warning (info if background assumed white) | WCAG ratio of text color composited over ancestor fills (+ earlier non-TEXT, non-icon siblings under it in non-auto-layout parents or under an `absolute` child; a sibling whose page box does not overlap is skipped) below 4.5 (3 for ≥24px or ≥18.66px bold). The message quotes the layer's text beside its name | overlapping siblings in auto layout aren't composited |
 | `contrast-manual` | info | an image/gradient/video is in the background stack | eyedropper the screenshot |
-| `missing-component-states` | warning (info for library components) | control kind from component name → required states vs variant option values + boolean prop names | the state may be a separate component or a boolean |
+| `missing-component-states` | warning (info when the catalog row is sampled from instances — `components.library.json`) | control kind from component name → required states vs variant option values + boolean prop names. Lookup (the row's `catalog`/`matchedBy` say which hit): by KEY in `--catalog`, the `--design-system` dir's catalog (`components.local.json`, or a library dir's `components.json`), then each `libraries/<dir>/components.json` beside the export; else by NAME in the same order (a discovered library only if it shares a variable collection with the screen; rows sharing a name are read together), plus the states `components.library.json` saw in use; else `components.library.json` alone (sampled → info) | the state may be a separate component or a boolean |
+| `component-states-unchecked` | warning | a control (not an icon exported as an asset) that no catalog defines — its states were not checked; also asked as a question | pass the catalog that defines it (usually a library export) |
 | `detached-instance` | warning | `detachedFrom` | |
+| `self-inconsistent-geometry` | warning | padding + the FLOW children's heights (hidden and `absolute` children excluded) contradict `box.h`: content overflows a fixed/fill box, or differs either way from a hug box | compare with the screenshot |
 | `low-token-binding` | warning | a category with ≥5 values under 50% bound | |
 | `off-grid-spacing` | info | unbound gap/padding not a multiple of `--grid` or non-integer | 34pt bottom padding is often a safe-area value — fine |
 | `near-duplicate-colors` | info | unbound opaque hexes with CIE76 ΔE < 3 | |
+| `heavy-asset` | info | an entry of the screen's `<Screen>.assets.json` `heavy` list (≥ 250 KB or ≥ 400 `<path>`s) on a visible layer | import by URL / ask for a raster; never redraw |
+| `prototype-navigation` | info | one per destination: visible layers whose prototype `reactions` navigate / open an overlay / swap to another frame (variant `change_to` excluded) | a link copied along with a layer looks the same as a designed one |
 | `no-auto-layout` | info | non-root container with >1 child and `layout.mode:"absolute"` | groups are skipped |
 | `negative-spacing` | info | gap/padding < 0 | intentional overlap (avatar stacks) |
 | `stroke-align` | info | stroke with `align` outside/center — code borders draw inside, so rendered size and layout differ | profile's Strokes section |

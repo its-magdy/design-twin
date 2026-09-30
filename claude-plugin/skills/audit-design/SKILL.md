@@ -138,6 +138,18 @@ full turn; a clean summary can be reported from the JSON alone.
    `derived-mode-contrast`) are merged into the findings list. Without it the report says, in the
    report, which checks it could not run — which is the honest outcome, not a clean one.
 
+   **A library export changes which directory to pass.** `dtwin pull --as-library` writes the full
+   catalog of a LIBRARY file to `design/export/libraries/<dir>/` (listed in
+   `design/export/libraries/index.json` with each library's `collectionKeys`), beside the design file's
+   own `design/export/design-system/`. When the screen's tokens and components come from that library,
+   `design-system/` is the wrong yardstick — the field run saw 30 "missing" token names against it and
+   6 plus a real collision against the library. `--design-system` takes either directory. The audit
+   finds `libraries/` on its own: it reads each library's `components.json` for the component-state
+   check, and when it was not run against a library it says so under **Not checked**, with how many of
+   the screen's variable collections that library owns by key and the exact `--design-system
+   design/export/libraries/<dir>` re-run. Run that when the library owns the screen's collections, and
+   say in the report which directory the cross-file half used.
+
    `--variables` is found automatically (the merged `variables.json`, else the screen's own
    `.vars.json`); pass it only if your project keeps it somewhere unusual.
 
@@ -149,10 +161,13 @@ full turn; a clean summary can be reported from the JSON alone.
    to the export document you passed in, not to the audit. The header comment of `audit.js` is the
    full schema.
 
-   Pass several layer files at once to audit a flow; check `design/export/design-system/tokens.json`
-   (or `design/export/variables.json` after a single-screen pull) or `layoutGrids` for the design's
-   real spacing step and pass it as `--grid` (default 4px silently under-flags an 8px-grid system —
-   don't skip this). Both `--design-system` and the older `--catalog` are optional: a project that has
+   Pass several layer files at once to audit a flow. `--grid` is the design's SPACING step: read it off
+   the spacing scale in `design/export/design-system/tokens.json` (FLOAT variables in a spacing
+   collection or scoped to `GAP` — e.g. 4/8/16/24/… steps by 4) and pass it (the 4px default silently
+   under-flags an 8px system). Not `layoutGrids`: those are column guides, and passing a frame's 8px
+   layout grid for a 4-step scale produced 61 false `off-grid-spacing` notes. With `--design-system`
+   the audit derives the step itself and, when it differs from the grid used, says so in the headline
+   (`gridMismatch`) with the `--grid` to pass. Both `--design-system` and the older `--catalog` are optional: a project that has
    only ever run a single-screen pull has no design system to point at, so drop the flag rather than
    passing a path that isn't there — and then say in the report that the cross-file half did not run.
 

@@ -2,8 +2,8 @@
 
 
 // design-to-code/cross-check.ts
-import fs5 from "node:fs";
-import path3 from "node:path";
+import fs6 from "node:fs";
+import path4 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -352,6 +352,10 @@ function readOptionalDoc(file, what, guard) {
   return fs2.existsSync(file) ? readDocFile(file, what, guard) : null;
 }
 
+// design-to-code/design-system-dir.ts
+import fs3 from "node:fs";
+import path from "node:path";
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -385,6 +389,14 @@ function isTextStylesDoc(x) {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number") && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
@@ -458,13 +470,25 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/design-system-dir.ts
+function readDesignSystemDir(dir) {
+  const local = path.join(dir, "components.local.json");
+  const isLibrary = !fs3.existsSync(local) && fs3.existsSync(path.join(dir, "components.json"));
+  return {
+    tokens: readOptionalDoc(path.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path.join(dir, "styles.text.json"), "text styles", isTextStylesDoc)
+  };
+}
+
 // design-to-code/cli-args.ts
-import path from "node:path";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -513,8 +537,8 @@ ${usage}`);
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -523,12 +547,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path2.dirname(docPath) : ".";
+  const base = docPath ? path3.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path3.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -540,7 +564,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path3.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -558,30 +582,30 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path2.resolve(path2.dirname(firstFile), "..", "..");
-    const rootVars = path2.join(exportRoot, "variables.json");
-    const sibling = path2.join(path2.dirname(firstFile), "variables.json");
-    if (fs3.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs3.existsSync(sibling)) variablesPath = sibling;
+    const exportRoot = path3.resolve(path3.dirname(firstFile), "..", "..");
+    const rootVars = path3.join(exportRoot, "variables.json");
+    const sibling = path3.join(path3.dirname(firstFile), "variables.json");
+    if (fs4.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs4.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy = path2.join(path2.resolve(path2.dirname(firstFile), "..", ".."), "..", "variables.json");
-    if (fs3.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
+    const legacy = path3.join(path3.resolve(path3.dirname(firstFile), "..", ".."), "..", "variables.json");
+    if (fs4.existsSync(legacy) && path3.resolve(legacy) !== path3.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
 
 // bridge/src/is-main.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
+    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1231,10 +1255,10 @@ function toMarkdown(res) {
     }
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs6 = res.findings.filter((f) => f.severity === sev);
-    if (!fs6.length) continue;
-    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs6.length})`, "");
-    for (const f of fs6) L.push(`- \`${f.code}\` ${f.message}`);
+    const fs7 = res.findings.filter((f) => f.severity === sev);
+    if (!fs7.length) continue;
+    L.push(`## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
+    for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}`);
     L.push("");
   }
   if (res.notChecked.length) {
@@ -1245,7 +1269,7 @@ function toMarkdown(res) {
   return L.join("\n") + "\n";
 }
 function main(argv) {
-  const USAGE = `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
+  const USAGE = `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
   const OPTIONS = {
     "design-system": { type: "string" },
     variables: { type: "string" },
@@ -1268,29 +1292,30 @@ function main(argv) {
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
+  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path4.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
   if (variablesPath) console.error(`variables: ${variablesPath}`);
   if (ctx.staleLegacy) {
     console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   }
+  const ds = readDesignSystemDir(dsBase);
   const res = crossCheck({
     screens,
     sliceSources: ctx.sliceSources,
     variables: variablesDoc,
     variablesPath,
-    tokens: readOptionalDoc(path3.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(path3.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path3.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path3.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc)
+    tokens: ds.tokens,
+    components: ds.components,
+    componentsLibrary: ds.componentsLibrary,
+    stylesText: ds.stylesText
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (out) {
-    fs5.mkdirSync(path3.dirname(out), { recursive: true });
-    fs5.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs5.writeFileSync(out + ".md", toMarkdown(res));
+    fs6.mkdirSync(path4.dirname(out), { recursive: true });
+    fs6.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs6.writeFileSync(out + ".md", toMarkdown(res));
     console.error(`wrote ${out}.json and ${out}.md`);
   } else {
     process.stdout.write(toMarkdown(res));

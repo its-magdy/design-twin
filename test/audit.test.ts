@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawnSync, execFileSync } from "node:child_process";
 import { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind } from "../design-to-code/audit.ts";
 import type { AuditInput } from "../design-to-code/audit.ts";
-import type { AuditFinding, CrossCheckFinding, IrNode, TokensDoc } from "../design-to-code/types.ts";
+import type { AuditFinding, CatalogComponent, ComponentsCatalog, CrossCheckFinding, IrNode, ScreenAssetsDoc, TokensDoc } from "../design-to-code/types.ts";
 import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.ts";
 import { check, report } from "./assert.ts";
 import { catalog as catalog1, malformed, must, node, parseAs, readFixture, screenExport } from "./fixtures.ts";
@@ -261,6 +261,9 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 // child box.h=24, declared box.h=44 — content computes 56, OVERFLOWING a fixed box) and every table row
 // 20173:142081/086/091/.../137 (heightMode:"hug", padding [16,24,16,24], declared box.h=48, content
 // computes 56 — a hug box's declared size must equal its content, in EITHER direction).
+// DT-13 correction (field tests): the rows' 24-high child is a menu instance with `hidden: true`; the
+// visible content is 16+14…16+16 = 48, exactly as declared, so the rows were a false positive and no
+// longer fire. The header stays: its only FLOW child is 24 high (the other four are `absolute`).
 //
 // Round-2 correction: the first cut also fired on ordinary auto-layout — a FIXED-height sidebar row
 // (I10970:111588;1910:23337 'Component 2', box.h=40, padding [0,4,0,12]) whose tallest child is a
@@ -275,9 +278,8 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   const hits = res.findings.filter((f) => f.code === "self-inconsistent-geometry");
   const rowIds = ["20173:142081", "20173:142086", "20173:142091", "20173:142096", "20173:142102", "20173:142107", "20173:142112", "20173:142117", "20173:142122", "20173:142127", "20173:142132", "20173:142137"];
   check("[172] table header (20173:142077, fixed, overflow 56>44) fires", hits.some((f) => f.nodeId === "20173:142077"));
-  check("[172] every table row (hug, declared 48 != computed 56) fires — 12 rows", rowIds.every((id) => hits.some((f) => f.nodeId === id)));
+  check("[172/DT-13] no table row fires — their 24px child is hidden, the visible content is the declared 48", rowIds.every((id) => !hits.some((f) => f.nodeId === id)));
   check("[172] the message names the stated box.h, heightMode and the resulting mismatch", hits.some((f) => f.nodeId === "20173:142077" && /box\.h=44/.test(f.message) && /heightMode:"fixed"/.test(f.message) && /= 56/.test(f.message)));
-  check("[172] the hug row's message says a hug box's height IS the content height", hits.some((f) => f.nodeId === "20173:142081" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
   check("[172] round-2: the sidebar's FIXED 40-high row (I10970:111588;1910:23337, 24-high icon centred, content fits) does NOT fire", !hits.some((f) => f.nodeId === "I10970:111588;1910:23337"));
   check("[172] round-2: its siblings Component 5 / License Health Check (same shape) do NOT fire either", !hits.some((f) => /Component 5|License Health Check/.test(f.nodeName || "")));
 
@@ -320,11 +322,10 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
 
 // ---------- --grid default is echoed, and flagged when the design system's own scale disagrees (P4 #43) ----------
 {
-  const dsTokens = malformed<TokensDoc>({
-    collections: [{ name: "Spacing", variables: [
-      { valuesByMode: { Mode1: 8 } }, { valuesByMode: { Mode1: 16 } }, { valuesByMode: { Mode1: 24 } },
-    ] }],
-  }); // the legacy {collections[].variables[].valuesByMode} shape audit's grid probe still reads
+  // The REAL tokens.json shape (F-16): a flat variables[] naming its collection. The legacy
+  // {collections[].variables[].valuesByMode} shape this test used to feed exists in no export.
+  const step = (name: string, v: number) => ({ name, type: "FLOAT" as const, collection: "Spacing", tier: "primitive" as const, values: { "Mode 1": v } });
+  const dsTokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], theming: false }], variables: [step("Space 1", 8), step("Space 2", 16), step("Space 3", 24)] };
   const withDefault = audit([{ doc: screen, label: "s" }], { catalog, designSystem: { tokens: dsTokens } });
   check("[grid] the default (no --grid given) is recorded as assumed", withDefault.gridAssumed === true && withDefault.grid === 4);
   check("[grid] an 8px design-system spacing scale is detected and reported as a mismatch", withDefault.gridMismatch === 8);
@@ -410,5 +411,246 @@ check("[no-snap] the off-grid finding says to keep exact values, not to snap to 
   check("[gate-shape] an audit file that is not an audit report is reported unreadable (was: read blindly as 0 blockers)",
     g.auditFile === "design/audit/Home__1_1.json" && g.unreadable === true && g.blockers.length === 0);
 })();
+
+// ================================================================ field tests, group 4 (audit correctness)
+// Shapes below are the plugin's real ones (serialize.ts / write-out.ts / library-layout.ts) as seen in
+// the field-test exports; names are invented.
+console.log("field-test group 4:");
+const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): AuditInput => ({ doc: screenExport(nodes, { screen: screenName }), label: screenName });
+
+// ---- DT-13 / DT-17 / F-14: hidden and absolute children take no part in the flow height
+{
+  const res = audit(g4([{ id: "1:1", type: "FRAME", name: "Items", box: { w: 800, h: 600 }, children: [
+    // hug row, padding 16/16, one visible 16px label and a HIDDEN 24px menu → 16+16+16 = 48 as declared
+    { id: "1:2", type: "FRAME", name: "Row", heightMode: "hug", box: { w: 800, h: 48 }, layout: { display: "flex", flexDirection: "row", padding: [16, 24, 16, 24] }, children: [
+      { id: "1:3", type: "TEXT", name: "Label", text: "Label", autoResize: "width_and_height", box: { w: 100, h: 16 } },
+      { id: "1:4", type: "INSTANCE", name: "Row Menu", hidden: true, box: { w: 24, h: 24 } },
+    ] },
+    // hug column, gap 24, padding 40: 130 + 36 + one gap; the close icon is layoutPositioning ABSOLUTE
+    { id: "1:5", type: "FRAME", name: "Dialog Body", heightMode: "hug", box: { w: 400, h: 270 }, layout: { display: "flex", flexDirection: "column", gap: 24, padding: [40, 24, 40, 24] }, children: [
+      { id: "1:6", type: "FRAME", name: "Art", box: { w: 352, h: 130 } },
+      { id: "1:7", type: "TEXT", name: "Title", text: "Title", autoResize: "height", box: { w: 352, h: 36 } },
+      { id: "1:8", type: "INSTANCE", name: "Close Icon", absolute: true, box: { w: 24, h: 24, x: 360, y: 16 } },
+    ] },
+    // control: a hug row that really contradicts itself is still reported
+    { id: "1:9", type: "FRAME", name: "Broken Row", heightMode: "hug", box: { w: 800, h: 40 }, layout: { display: "flex", flexDirection: "row", padding: [16, 24, 16, 24] }, children: [
+      { id: "1:10", type: "TEXT", name: "Label", text: "Label", autoResize: "width_and_height", box: { w: 100, h: 24 } },
+    ] },
+  ] }]), { platform: "web" });
+  check("[DT-13] a hidden child does not count toward a hug row's height (was: 56 ≠ 48)", !onNode(res, "self-inconsistent-geometry", "1:2"));
+  check("[DT-17] an absolute child and its gap do not count toward a column's height (was: 318 ≠ 270)", !onNode(res, "self-inconsistent-geometry", "1:5"));
+  check("[DT-13] a real hug mismatch is still reported (16+24+16 = 56 ≠ 40)", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && f.expectedH === 56));
+  check("[172] the hug row's message says a hug box's height IS the content height", codes(res, "self-inconsistent-geometry").some((f) => f.nodeId === "1:9" && /heightMode:"hug"/.test(f.message) && /IS the content height/.test(f.message)));
+}
+
+// ---- F-15 / DT-14(1): TEXT siblings' glyph fills are not a backdrop; a disjoint sibling is not either
+{
+  const white = [{ type: "solid" as const, color: "#ffffff" }];
+  const res = audit(g4([{ id: "2:1", type: "FRAME", name: "Items", fills: [{ type: "solid", color: "#ffffff" }], box: { w: 1112, h: 600, x: 0, y: 0 }, children: [
+    { id: "2:2", type: "FRAME", name: "table header", fills: [{ type: "solid", color: "#46464f" }], box: { w: 1112, h: 44 }, layout: { display: "flex", flexDirection: "row", gap: 146, padding: [16, 32, 16, 32] }, children: [
+      { id: "2:3", type: "TEXT", name: "Table Header", text: "Name", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 102, h: 24 } },
+      { id: "2:4", type: "TEXT", name: "Table Header", text: "Amount", autoResize: "width_and_height", absolute: true, fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 120, h: 24, x: 1025, y: 10 } },
+      { id: "2:5", type: "TEXT", name: "Table Header", text: "Date", autoResize: "width_and_height", absolute: true, fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 121, h: 24, x: 578, y: 10 } },
+    ] },
+    // no auto layout: a pale chip UNDER the caption is a real backdrop; one far away is not
+    { id: "2:6", type: "FRAME", name: "Card", fills: [{ type: "solid", color: "#46464f" }], box: { w: 400, h: 200, x: 0, y: 100 }, children: [
+      { id: "2:7", type: "RECTANGLE", name: "Chip", fills: [{ type: "solid", color: "#eeeeee" }], box: { w: 100, h: 30, x: 10, y: 110 } },
+      { id: "2:8", type: "TEXT", name: "Option 1", text: "Pick a category for this entry", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 80, h: 20, x: 15, y: 115 } },
+      { id: "2:9", type: "RECTANGLE", name: "Far Chip", fills: [{ type: "solid", color: "#eeeeee" }], box: { w: 50, h: 30, x: 300, y: 250 } },
+      { id: "2:10", type: "TEXT", name: "Caption", text: "Caption", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 80, h: 20, x: 150, y: 150 } },
+    ] },
+  ] }]), { platform: "web" });
+  check("[F-15] white absolute header labels after a white TEXT sibling are not 1:1 (was: low-contrast on both)", !onNode(res, "low-contrast", "2:4") && !onNode(res, "low-contrast", "2:5"));
+  check("[F-15] white text over an overlapping pale chip IS low contrast", onNode(res, "low-contrast", "2:8"));
+  check("[F-15] a sibling that does not overlap the text is not its backdrop", !onNode(res, "low-contrast", "2:10"));
+  const lc = codes(res, "low-contrast").find((f) => f.nodeId === "2:8");
+  check("[DT-14(2)/F-25] a contrast finding quotes the layer's text beside its name", !!lc && /'Option 1' \("Pick a category for this entry"\)/.test(lc.message) && lc.text === "Pick a category for this entry");
+}
+
+// ---- F-23 / DT-14(3,4): empty-state copy at any depth; dialogs; validation
+{
+  const deep = (depth: number, leaf: Parameters<typeof node>[0]): Parameters<typeof node>[0] => depth ? { id: `3:d${depth}`, type: "FRAME", name: `Level ${depth}`, children: [deep(depth - 1, leaf)] } : leaf;
+  const res = audit(g4([{ id: "3:1", type: "FRAME", name: "Items", children: [deep(8, { id: "3:2", type: "TEXT", name: "Main Text", text: "No items added yet.", autoResize: "height" })] }]), { platform: "web" });
+  check("[F-23] 'No items added yet.' 8 levels down (with a non-breaking space) → empty: designed", res.screenStates.empty === "designed" && !res.questions.some((q) => /No empty state/.test(q)));
+  const neg = audit(g4([{ id: "3:3", type: "FRAME", name: "Items", children: [{ id: "3:4", type: "TEXT", name: "Answer", text: "No, keep editing", autoResize: "height" }] }]), { platform: "web" });
+  check("[F-23] ordinary 'No, …' copy is not an empty state", neg.screenStates.empty === "not-found");
+  check("[DT-14(4)] a page with no inputs has no validation state at all", !("validation" in res.screenStates));
+  const field = (id: string, variant: string): Parameters<typeof node>[0] => ({ id, type: "INSTANCE", name: "Name Field", mainComponent: { name: variant, setName: "input Field", key: `k-${id}`, setKey: "k-field", remote: true }, box: { w: 300, h: 48 } });
+  const dialog = audit(g4([{ id: "3:5", type: "FRAME", name: "Popup", children: [field("3:6", "Status=Default")] }], "Popup"), { platform: "web" });
+  check("[DT-14(4)] a dialog's empty state is not-applicable and not asked", dialog.screenStates.empty === "not-applicable" && !dialog.questions.some((q) => /No empty state/.test(q)));
+  check("[DT-14(4)] a dialog with an input asks about validation", dialog.screenStates.validation === "not-found" && dialog.questions.some((q) => /validation state/.test(q)));
+  check("[DT-14(4)] a dialog's loading question is about its action, not data", dialog.questions.some((q) => /No loading state.*action runs/.test(q)));
+  const withError = audit(g4([{ id: "3:7", type: "FRAME", name: "Popup", children: [field("3:8", "Status=Default"), field("3:9", "Status=Error")] }], "Popup"), { platform: "web" });
+  check("[DT-14(4)] an input drawn in its Error variant → validation: designed", withError.screenStates.validation === "designed");
+  const md4 = toMarkdown(dialog);
+  check("[DT-14(4)] markdown says not-applicable in words", /- empty: not applicable/.test(md4) && /- validation: \*\*not in this frame — ask\*\*/.test(md4));
+}
+
+// ---- F-25 / DT-14(5): heavy assets from <Screen>.assets.json; prototype links
+{
+  const assets: ScreenAssetsDoc = {
+    heavy: [{ file: "assets/Illustration.svg", bytes: 2465864, paths: 1523 }, { file: "assets/Hidden_Art.svg", bytes: 900000, paths: 800 }],
+    files: [{ file: "assets/Illustration.svg", node: "4:3" }, { file: "assets/Hidden_Art.svg", node: "4:4" }],
+  };
+  const click = (destination: string, navigation: string) => [{ trigger: "on_click", actions: [{ type: "node", destinationId: "9:1", destination, navigation }] }];
+  const res = audit({ ...g4([{ id: "4:1", type: "FRAME", name: "Items", children: [
+    { id: "4:3", type: "FRAME", name: "Art", asset: "assets/Illustration.svg" },
+    { id: "4:4", type: "FRAME", name: "Old Art", hidden: true, asset: "assets/Hidden_Art.svg" },
+    { id: "4:5", type: "INSTANCE", name: "Row", reactions: click("Item Details", "navigate") },
+    { id: "4:6", type: "INSTANCE", name: "Row", reactions: click("Item Details", "navigate") },
+    { id: "4:7", type: "INSTANCE", name: "Add Button", reactions: click("Add Item", "overlay") },
+    { id: "4:8", type: "INSTANCE", name: "Menu Item", reactions: [{ trigger: "on_hover", actions: [{ type: "node", destinationId: "9:2", destination: "state=hover", navigation: "change_to" }] }] },
+  ] }]), assets }, { platform: "web" });
+  const heavy = codes(res, "heavy-asset");
+  check("[F-25] a heavy asset in <Screen>.assets.json is an info finding on its node", heavy.length === 1 && heavy[0]?.nodeId === "4:3" && heavy[0]?.severity === "info" && heavy[0]?.bytes === 2465864 && /2\.35 MB \/ 1523 <path>/.test(heavy[0]?.message ?? ""));
+  check("[F-25] a hidden layer's heavy asset is not reported", !heavy.some((f) => f.file === "assets/Hidden_Art.svg"));
+  const nav = codes(res, "prototype-navigation");
+  check("[DT-14(5)] prototype links: one info per destination, counted", nav.length === 2 && nav.some((f) => f.destination === "Item Details" && f.sources === 2) && nav.some((f) => f.destination === "Add Item" && f.navigation === "overlay"));
+  check("[DT-14(5)] a hover variant swap (change_to) is not a link", !nav.some((f) => f.destination === "state=hover"));
+}
+
+// ---- DT-80 / DT-11: state coverage reads every catalog, and says so when it cannot run
+{
+  const button = (key: string): Parameters<typeof node>[0] => ({ id: `5:${key}`, type: "INSTANCE", name: "Button", mainComponent: { name: "Type=Primary, Status=Default", setName: "Button", key: `v-${key}`, setKey: key, remote: true }, box: { w: 120, h: 40 } });
+  const buttonSet = (key: string): CatalogComponent => ({ name: "Button", id: "1:10", type: "COMPONENT_SET", key, props: {
+    Type: { key: "Type", type: "VARIANT", options: ["Primary", "Secondary"] },
+    Status: { key: "Status", type: "VARIANT", options: ["Default", "Hover", "Disabled"] },
+    "Show Text": { key: "Show Text#2007:0", type: "BOOLEAN", default: true },
+  } });
+  const cat = (components: CatalogComponent[]): ComponentsCatalog => ({ components });
+  const screen5 = g4([{ id: "5:1", type: "FRAME", name: "Items", children: [button("k-set"), { id: "5:9", type: "INSTANCE", name: "icons/line/magnifier-search", component: "icons/line/magnifier-search", asset: "assets/magnifier-search.svg", mainComponent: { name: "icons/line/magnifier-search", id: "18:31", key: "k-icon", remote: true } }] }]);
+  const dsOnly = audit(screen5, { platform: "web", designSystem: { components: cat([buttonSet("k-set")]) } });
+  const b = codes(dsOnly, "missing-component-states")[0];
+  check("[DT-80] --design-system alone checks states (was: nothing, no finding)", !!b && b.severity === "warning" && JSON.stringify(b.missing) === JSON.stringify(["pressed", "focus"]));
+  check("[DT-80] the row says which catalog and how it matched", dsOnly.components.some((c) => c.name === "Button" && c.known && c.matchedBy === "key" && c.catalog === "the design system"));
+  check("[DT-80] an icon instance (exported as an asset) is not a control to check", !dsOnly.components.some((c) => /search/.test(c.name)) && !codes(dsOnly, "component-states-unchecked").length);
+  const none = audit(screen5, { platform: "web" });
+  const u = codes(none, "component-states-unchecked")[0];
+  check("[DT-80] no catalog → a warning that states could not be checked, plus a question", !!u && u.severity === "warning" && JSON.stringify(u.controls) === JSON.stringify(["Button"]) && none.questions.some((q) => /could not be checked/.test(q)));
+  // A library export's FULL definitions, found under libraries/: matched by name (the screen's copy is re-keyed); a warning, not "sampled".
+  const lib = audit(screen5, { platform: "web", designSystem: { components: cat([]) }, designSystemDir: "design/export/design-system", libraries: [{ rel: "design/export/libraries/shared-kit-ab12cd34", name: "Shared Kit", collectionKeys: ["c-1", "c-2"], components: cat([buttonSet("k-lib")]) }] });
+  check("[DT-11] a --as-library export's components.json feeds the state check (by name, a warning — full definitions)", lib.components.some((c) => c.name === "Button" && c.catalog === "design/export/libraries/shared-kit-ab12cd34" && c.matchedBy === "name" && c.sampled === false) && codes(lib, "missing-component-states")[0]?.severity === "warning");
+  check("[DT-11] the report names the library export and the command to check against it", lib.crossFile?.notChecked.some((n) => /libraries\/shared-kit-ab12cd34 \('Shared Kit'\).*--design-system design\/export\/libraries\/shared-kit-ab12cd34/.test(n)) === true);
+  const self = audit(screen5, { platform: "web", designSystem: { components: cat([buttonSet("k-lib")]) }, designSystemDir: "design/export/libraries/shared-kit-ab12cd34", libraries: [{ rel: "design/export/libraries/shared-kit-ab12cd34", name: "Shared Kit", collectionKeys: [], components: cat([buttonSet("k-lib")]) }] });
+  check("[DT-11] no hint when the audit already runs against that library", !self.crossFile?.notChecked.some((n) => /library export/.test(n)));
+  // components.library.json: one sampled row per variant in use, values under `observed` → info, present from what was seen
+  const sampledRow = (variant: string, status: string): CatalogComponent => ({ name: "Button", key: `v-${status}`, type: "COMPONENT", remote: true, source: "unknown-library", uses: 8, variant, props: { Status: { key: "Status", type: "VARIANT", observed: [status] } }, derivedFrom: "instances" });
+  const sampled = audit(screen5, { platform: "web", designSystem: { componentsLibrary: cat([sampledRow("Type=Primary, Status=Default", "Default"), sampledRow("Type=Primary, Status=Hover", "Hover")]) } });
+  const sRow = sampled.components.find((c) => c.name === "Button");
+  check("[DT-80] a sampled library catalog: every row of the set is read, severity info", !!sRow && sRow.sampled === true && sRow.present.includes("hover") && codes(sampled, "missing-component-states")[0]?.severity === "info");
+}
+
+// ---- F-16: the spacing step comes from the REAL tokens.json shape, and a given --grid is checked too
+{
+  const space = (name: string, v: number) => ({ name, type: "FLOAT" as const, collection: "Spacing", tier: "primitive" as const, values: { "Mode 1": v }, scopes: ["WIDTH_HEIGHT", "GAP"], key: `s-${v}` });
+  const tokens: TokensDoc = { collections: [{ name: "Spacing", modes: ["Mode 1"], default: "Mode 1", theming: false, key: "c-1" }], variables: [
+    space("Space 1", 4), space("Space 2", 8), space("Space 3", 16), space("Space 4", 24), space("Space 5", 32), space("Space 6", 40), space("Space 7", 48),
+    { name: "Cards Padding", type: "FLOAT", collection: "Semantic", tier: "semantic", values: { Dark: { aliasOf: "Space 4" } }, scopes: ["WIDTH_HEIGHT", "GAP"] },
+    { name: "Radius 1", type: "FLOAT", collection: "Border Radius", tier: "primitive", values: { "Mode 1": 6 }, scopes: ["CORNER_RADIUS"] },
+  ] };
+  const s6 = g4([{ id: "6:1", type: "FRAME", name: "Items" }]);
+  const given8 = audit(s6, { platform: "web", grid: 8, designSystem: { tokens } });
+  check("[F-16] --grid 8 on a 4-step spacing scale → gridMismatch 4 (was: never, the reader looked for collections[].variables)", given8.gridMismatch === 4 && /as given; this system's own spacing tokens step by 4px, not 8px/.test(toMarkdown(given8)));
+  check("[F-16] the default 4 on a 4-step scale → no mismatch", audit(s6, { platform: "web", designSystem: { tokens } }).gridMismatch === null);
+  const eight: TokensDoc = { variables: [space("S1", 8), space("S2", 16), space("S3", 24)] };
+  check("[F-16] an 8-step scale with the default grid → gridMismatch 8", audit(s6, { platform: "web", designSystem: { tokens: eight } }).gridMismatch === 8);
+}
+
+// ---- DT-11 end to end: the CLI reads a library dir's components.json and finds libraries/ beside the export
+{
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-lib-"));
+  const put = (rel: string, doc: unknown): string => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(doc)); return f; };
+  const libDir = "design/export/libraries/shared-kit-ab12cd34";
+  put("design/export/design-system/tokens.json", { collections: [{ name: "Local", modes: ["Mode 1"], key: "c-local" }], variables: [] });
+  put("design/export/design-system/components.local.json", { components: [{ name: "Header", type: "COMPONENT_SET", key: "k-header", props: {} }] });
+  put("design/export/libraries/index.json", { libraries: [{ dir: "shared-kit-ab12cd34", libraryName: "Shared Kit", file: "Shared Kit", collectionKeys: ["c-1"], exportedAt: "2026-01-01T00:00:00.000Z", counts: { collections: 1, variables: 0, stylesPaint: 0, stylesText: 0, stylesEffect: 0, stylesGrid: 0, components: 1, hygiene: 0 }, index: "shared-kit-ab12cd34/index.json" }], generatedAt: "2026-01-01T00:00:00.000Z" });
+  put(`${libDir}/tokens.json`, { collections: [{ name: "Spacing", modes: ["Mode 1"], key: "c-1" }], variables: [] });
+  put(`${libDir}/components.json`, { components: [{ name: "Button", id: "1:10", type: "COMPONENT_SET", key: "k-lib", props: { Status: { key: "Status", type: "VARIANT", options: ["Default", "Hover", "Disabled"] } } }] });
+  const screenFile = put("design/export/pages/Main/Items__1_1.json", screenExport([{ id: "1:1", type: "FRAME", name: "Items", children: [{ id: "1:2", type: "INSTANCE", name: "Button", mainComponent: { name: "Status=Default", setName: "Button", key: "v-1", setKey: "k-copy", remote: true }, box: { w: 120, h: 40 } }] }], { screen: "Items" }));
+  put("design/export/pages/Main/Items__1_1.vars.json", { collections: [{ name: "Spacing", modes: ["Mode 1"], key: "c-1" }, { name: "Local", modes: ["Mode 1"], key: "c-local" }], variables: [] });
+  const runAudit = (ds: string) => parseAs(execFileSync(process.execPath, [cli, path.relative(root, screenFile), "--platform", "web", "--design-system", ds, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isAuditReport, "audit --json");
+  const viaDs = runAudit("design/export/design-system");
+  check("[DT-11 CLI] with design-system/, the library beside it still defines the Button's states", viaDs.components.some((c) => c.name === "Button" && c.known && c.catalog === libDir));
+  check("[DT-11 CLI] …and the report names it, with its by-key share of the screen's collections", viaDs.crossFile?.notChecked.some((n) => n.includes(`--design-system ${libDir}`) && /binds 1 of its 2 variable collection/.test(n)) === true);
+  const viaLib = runAudit(libDir);
+  check("[DT-11 CLI] --design-system <library dir> reads its components.json (was: silently none)", viaLib.crossFile?.inputs.components === true && viaLib.components.some((c) => c.name === "Button" && c.catalog === libDir) && !viaLib.crossFile?.notChecked.some((n) => /library export/.test(n)));
+  const cc = parseAs(execFileSync(process.execPath, [path.join(import.meta.dirname, "..", "design-to-code", "cross-check.ts"), path.relative(root, screenFile), "--design-system", libDir, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), isCrossCheckOut, "cross-check --json");
+  check("[DT-11 CLI] cross-check reads a library dir's components.json too", !cc.findings.some((f) => /no components\.local\.json/.test(f.message)) && (cc as { inputs?: { components?: boolean } }).inputs?.components === true);
+}
+
+// ---- review round 1 of group 4
+{
+  const white = [{ type: "solid" as const, color: "#ffffff" }];
+  // H1: an ELLIPSE avatar disc and a photo RECTANGLE are exported as assets but ARE surfaces; a VECTOR icon is ink
+  const res = audit(g4([{ id: "7:1", type: "FRAME", name: "Items", fills: [{ type: "solid", color: "#ffffff" }], box: { w: 600, h: 400, x: 0, y: 0 }, children: [
+    { id: "7:2", type: "FRAME", name: "Avatar", box: { w: 40, h: 40, x: 10, y: 10 }, children: [
+      { id: "7:3", type: "ELLIPSE", name: "Disc", asset: "assets/Disc.svg", fills: [{ type: "solid", color: "#1d4ed8" }], box: { w: 40, h: 40, x: 10, y: 10 } },
+      { id: "7:4", type: "TEXT", name: "Initials", text: "AB", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 20, h: 16, x: 20, y: 22 } },
+    ] },
+    { id: "7:5", type: "FRAME", name: "Hero", box: { w: 300, h: 200, x: 100, y: 10 }, children: [
+      { id: "7:6", type: "RECTANGLE", name: "Photo", asset: "assets/Photo.png", fills: [{ type: "image", scaleMode: "fill" }], box: { w: 300, h: 200, x: 100, y: 10 } },
+      { id: "7:7", type: "TEXT", name: "Caption", text: "Summer sale", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 100, h: 16, x: 120, y: 150 } },
+    ] },
+    { id: "7:11", type: "FRAME", name: "Banner", box: { w: 200, h: 100, x: 100, y: 250 }, children: [
+      { id: "7:12", type: "FRAME", name: "Banner Image", asset: "assets/Banner_Image.png", fills: [{ type: "image", scaleMode: "fill" }], box: { w: 200, h: 100, x: 100, y: 250 } },
+      { id: "7:13", type: "TEXT", name: "Banner Title", text: "Welcome", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 80, h: 16, x: 110, y: 300 } },
+    ] },
+    { id: "7:8", type: "FRAME", name: "Badge", fills: [{ type: "solid", color: "#1f2937" }], box: { w: 40, h: 40, x: 450, y: 10 }, children: [
+      { id: "7:9", type: "VECTOR", name: "Star Icon", asset: "assets/Star.svg", fills: white, box: { w: 40, h: 40, x: 450, y: 10 } },
+      { id: "7:10", type: "TEXT", name: "Count", text: "3", autoResize: "width_and_height", fills: white, font: { color: "#ffffff", size: 14 }, box: { w: 10, h: 16, x: 465, y: 22 } },
+    ] },
+  ] }]), { platform: "web" });
+  check("[review H1] white initials on a blue ELLIPSE asset disc are not 1:1", !onNode(res, "low-contrast", "7:4"));
+  check("[review H1] a caption on a photo RECTANGLE asset → manual check, not 1:1", onNode(res, "contrast-manual", "7:7") && !onNode(res, "low-contrast", "7:7"));
+  check("[review H1] a VECTOR icon's ink is still not a backdrop", !onNode(res, "low-contrast", "7:10"));
+  check("[re-review L1] an image-filled FRAME asset leaf is a surface (manual check), not ink", onNode(res, "contrast-manual", "7:13") && !onNode(res, "low-contrast", "7:13"));
+}
+{
+  // H2: key matches (sampled included) beat name matches; an unrelated library is not name-matched; same-name rows read together
+  const btn: Parameters<typeof node>[0] = { id: "8:2", type: "INSTANCE", name: "Button", mainComponent: { name: "Status=Default", setName: "Button", key: "v-default", setKey: "set-remote", remote: true }, box: { w: 120, h: 40 } };
+  const sampledRow = (status: string): CatalogComponent => ({ name: "Button", key: status === "Default" ? "v-default" : `v-${status}`, type: "COMPONENT", remote: true, source: "unknown-library", uses: 3, variant: `Status=${status}`, props: { Status: { key: "Status", type: "VARIANT", observed: [status] } }, derivedFrom: "instances" });
+  const unrelated: CatalogComponent = { name: "Button", id: "1:1", type: "COMPONENT_SET", key: "k-other", props: { Size: { key: "Size", type: "VARIANT", options: ["Small", "Large"] } } };
+  const vars: TokensDoc = { collections: [{ name: "Brand", modes: ["Mode 1"], theming: false, key: "c-brand" }], variables: [] };
+  const input: AuditInput = { doc: screenExport([{ id: "8:1", type: "FRAME", name: "Items", children: [btn] }], { screen: "Items" }), label: "Items", vars };
+  const res = audit(input, { platform: "web", designSystem: { componentsLibrary: { components: ["Default", "Hover", "Pressed", "Focus", "Disabled"].map(sampledRow) } },
+    libraries: [{ rel: "design/export/libraries/other-kit-00000000", name: "Other Kit", collectionKeys: ["c-other"], components: { components: [unrelated] } }] });
+  const row = res.components.find((c) => c.name === "Button");
+  const noSample = audit(input, { platform: "web", libraries: [{ rel: "design/export/libraries/other-kit-00000000", name: "Other Kit", collectionKeys: ["c-other"], components: { components: [unrelated] } }] });
+  check("[review H2] a library sharing no variable collection with the screen is not name-matched", codes(noSample, "component-states-unchecked").length === 1 && !codes(noSample, "missing-component-states").length);
+  const related = audit(input, { platform: "web", libraries: [{ rel: "design/export/libraries/brand-kit-22222222", name: "Brand Kit", collectionKeys: ["c-brand"], components: { components: [unrelated] } }] });
+  check("[review H2] …one that does share a collection is", related.components.some((c) => c.name === "Button" && c.matchedBy === "name" && c.catalog === "design/export/libraries/brand-kit-22222222"));
+  const defined: CatalogComponent = { name: "Button", id: "1:2", type: "COMPONENT_SET", key: "k-brand", props: { Status: { key: "Status", type: "VARIANT", options: ["Default", "Hover", "Disabled"] } } };
+  const both = audit(input, { platform: "web", designSystem: { componentsLibrary: { components: ["Default", "Pressed"].map(sampledRow) } },
+    libraries: [{ rel: "design/export/libraries/brand-kit-22222222", name: "Brand Kit", collectionKeys: ["c-brand"], components: { components: [defined] } }] });
+  const bothRow = both.components.find((c) => c.name === "Button");
+  check("[review H2] a related library's definition gives the list, states seen in use are added: only focus missing, a warning", !!bothRow && bothRow.sampled === false && JSON.stringify(bothRow.missing) === JSON.stringify(["focus"]) && codes(both, "missing-component-states")[0]?.severity === "warning");
+  const unknownLib = audit(input, { platform: "web", designSystem: { componentsLibrary: { components: ["Default"].map(sampledRow) } },
+    libraries: [{ rel: "design/export/libraries/old-kit-33333333", name: "Old Kit", collectionKeys: [], components: { components: [unrelated] } }] });
+  check("[re-review M1] a library related only because its keys are unknown does not outrank a sampled key match", unknownLib.components.find((c) => c.name === "Button")?.catalog === "components.library.json" && codes(unknownLib, "missing-component-states")[0]?.severity === "info");
+  check("[review H2] a sampled KEY match wins over a same-named row in an unrelated library", !!row && row.matchedBy === "key" && row.catalog === "components.library.json" && row.missing.length === 0);
+  const toggleUse: Parameters<typeof node>[0] = { id: "8:4", type: "INSTANCE", name: "Toggle", mainComponent: { name: "Status=Checked", setName: "Toggle", key: "v-t", setKey: "set-copy", remote: true }, box: { w: 40, h: 24 } };
+  const toggleLib = { components: [
+    { name: "Toggle", id: "2:1", type: "COMPONENT" as const, key: "k-bare" },
+    { name: "Toggle", id: "2:2", type: "COMPONENT_SET" as const, key: "k-set-a", props: { Status: { key: "Status", type: "VARIANT" as const, options: ["Checked", "Unchecked", "Disabled"] } } },
+  ] };
+  const t = audit(g4([{ id: "8:3", type: "FRAME", name: "Items", children: [toggleUse] }]), { platform: "web", libraries: [{ rel: "design/export/libraries/kit-copy-11111111", name: "Kit Copy", collectionKeys: [], components: toggleLib }] });
+  check("[review H2] a bare COMPONENT sharing the name does not hide the set's states (was: toggle has no selected/disabled)", !codes(t, "missing-component-states").length && t.components.some((c) => c.name === "Toggle" && c.present.includes("selected") && c.present.includes("disabled")));
+}
+{
+  const inst = (id: string, name: string, extra: Partial<IrNode> = {}): Parameters<typeof node>[0] => ({ id, type: "INSTANCE", name, mainComponent: { name: "Status=Default", setName: name, key: `v-${id}`, setKey: `s-${id}`, remote: true }, box: { w: 200, h: 40 }, ...extra });
+  const list = audit(g4([{ id: "9:1", type: "FRAME", name: "Items", children: [inst("9:2", "search bar"), inst("9:3", "filter button")] }]), { platform: "web" });
+  check("[review M1] a list page whose only input is a search bar is not asked about validation", !("validation" in list.screenStates));
+  const iconBtn = audit(g4([{ id: "9:4", type: "FRAME", name: "Items", children: [inst("9:5", "Icon Button", { asset: "assets/Icon_Button.svg" })] }]), { platform: "web" });
+  check("[review M3] an Icon Button exported as an asset is still a control (row + unchecked warning)", iconBtn.components.some((c) => c.name === "Icon Button") && codes(iconBtn, "component-states-unchecked").length === 1);
+  const skipped = audit(g4([{ id: "9:10", type: "FRAME", name: "Items", children: [inst("9:11", "icons/line/magnifier-search", { assetSkipped: true })] }]), { platform: "web" });
+  check("[re-review L2] an icon whose asset was skipped (--no-assets) is still an icon, not an input", !skipped.components.length && !("validation" in skipped.screenStates));
+  const sheet = audit(g4([{ id: "9:6", type: "FRAME", name: "Time Sheet" }], "Time Sheet"), { platform: "web" });
+  check("[review L1] a page named '… Sheet' is not a dialog", sheet.screenStates.empty === "not-found");
+  const two = audit(g4([{ id: "9:7", type: "FRAME", name: "Items", children: [
+    { id: "9:8", type: "INSTANCE", name: "Row", reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "20:1", destination: "Details", navigation: "navigate" }] }] },
+    { id: "9:9", type: "INSTANCE", name: "Row", reactions: [{ trigger: "on_click", actions: [{ type: "node", destinationId: "30:1", destination: "Details", navigation: "navigate" }] }] },
+  ] }]), { platform: "web" });
+  check("[review L3] two different frames that share a name are two destinations, told apart by id", codes(two, "prototype-navigation").length === 2 && codes(two, "prototype-navigation").some((f) => f.destinationId === "30:1" && /\(30:1\)/.test(f.message)));
+}
 
 report();

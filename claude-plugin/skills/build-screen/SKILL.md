@@ -241,8 +241,13 @@ Copy this checklist into your notes and keep it updated:
    - **Audit.** If `design/audit/<screen>.json` exists, read its verdict, findings, `crossFile` and
      questions. If not, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" <screen json> --platform <p>
      --design-system design/export/design-system --out design/audit/<screen> --gate --grid <N>`, where
-     `<N>` is the design's real spacing step from `design/export/design-system/tokens.json`/`layoutGrids`,
-     not the 4px default (which silently under-flags an 8px-grid system) (or invoke
+     `<N>` is the design's real spacing step from the spacing scale in `design/export/design-system/tokens.json`
+     (not `layoutGrids`, which are column guides; the audit's `gridMismatch` names the step when they
+     differ), not the 4px default (which silently under-flags an 8px-grid system). If the audit's **Not
+     checked** list names a `design/export/libraries/<dir>` export that owns most of the screen's variable
+     collections by key, re-run with that directory as `--design-system` and `--out design/audit/<screen>.library`
+     (no `--gate` — the first report stays the gate's input) and read both; with only
+     a few collections in common, keep `design-system/` (or invoke
      the `designtwin:audit-design` skill for a full review on a big or unfamiliar screen, passing the
      screen name as its argument — it runs in its own context, sees nothing of this conversation,
      and hands back the verdict and `design/audit/<screen>.md`). This command

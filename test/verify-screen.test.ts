@@ -455,11 +455,13 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   // P6 verify-only pins (findings 171/174/172/168 — no plugin change beyond audit.js's 172 finding).
   ok("[P6-174] every sidebar nav item (I10970:111588;1910:23337) is still reported 220 → 224",
     () => jrRep.deltas.some((d) => d.nodeId === "I10970:111588;1910:23337" && d.field === "width" && d.expected === 220 && d.actual === 224));
-  ok("[P6-172] the table header/row contradiction (box.h vs padding+children) is now reported by audit.js's self-inconsistent-geometry, not only as a bare verify-screen delta",
+  // DT-13 (field tests): the row half was a false positive — the row's 24px child is hidden, and its
+  // visible content (16+16+16) is exactly the declared 48. Only the header's contradiction is real.
+  ok("[P6-172/DT-13] the table header's contradiction (box.h vs padding+children) is reported by audit.js's self-inconsistent-geometry; the row (hidden 24px child) is not",
     () => {
       const ares = audit([{ doc: jrDoc, label: "positions___7314_87192" }], { platform: "web" });
       return ares.findings.some((f) => f.code === "self-inconsistent-geometry" && f.nodeId === "20173:142077")
-        && ares.findings.some((f) => f.code === "self-inconsistent-geometry" && f.nodeId === "20173:142081");
+        && !ares.findings.some((f) => f.code === "self-inconsistent-geometry" && f.nodeId === "20173:142081");
     });
 
   console.log("verify-screen — livetest-3: 'components never built' is gone; tag coverage is named as such (129/159/169/185):");

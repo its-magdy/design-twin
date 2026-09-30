@@ -13,7 +13,7 @@ import { isJsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
   AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, PageIndex, PagesRootIndex, Plan,
-  TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
 
@@ -64,6 +64,23 @@ export function isTextStylesDoc(x: unknown): x is TextStylesDoc {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, …}";
+
+// ---------------------------------------------------------------- <Screen>.assets.json (write-out.ts writeScreenAssets)
+export function isScreenAssetsDoc(x: unknown): x is ScreenAssetsDoc {
+  return isObj(x)
+    && optArrayOf(x.heavy, (h): h is { file: string; bytes: number } => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number")
+    && optArrayOf(x.files, (f): f is { file: string } => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+
+// ---------------------------------------------------------------- libraries/index.json (bridge/src/library-layout.ts)
+/** The two fields of one libraries/index.json row the audit reads. */
+export interface LibrariesIndexEntry { dir: string; libraryName?: string; collectionKeys?: string[] }
+export function isLibrariesIndex(x: unknown): x is { libraries: LibrariesIndexEntry[] } {
+  return isObj(x) && Array.isArray(x.libraries)
+    && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === undefined || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 
 // ---------------------------------------------------------------- design/audit/<screen>.json
 export function isAuditReport(x: unknown): x is AuditReport {

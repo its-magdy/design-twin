@@ -160,7 +160,8 @@ export type AuditFindingCode =
   | "self-inconsistent-geometry" | "fake-status-bar" | "fake-home-indicator" | "diamond-gradient" | "image-scale-mode"
   | "stroke-align" | "fixed-size-text" | "contrast-manual" | "low-contrast" | "negative-spacing" | "off-grid-spacing"
   | "corner-smoothing" | "shadow-spread" | "background-blur" | "progressive-blur" | "exotic-effect" | "blend-mode"
-  | "small-touch-target" | "near-duplicate-colors" | "missing-component-states" | "low-token-binding";
+  | "small-touch-target" | "near-duplicate-colors" | "missing-component-states" | "component-states-unchecked"
+  | "low-token-binding" | "heavy-asset" | "prototype-navigation";
 export type CrossCheckFindingCode =
   | "foreign-token-library" | "token-library-matches" | "token-name-collision" | "token-name-collision-elsewhere"
   | "token-absent-from-design-system" | "unresolvable-token" | "catalog-rekeyed" | "catalog-covers-nothing"
@@ -186,8 +187,16 @@ export interface FindingExtras {
   size?: { w: number; h: number }; min?: number;
   /** low-contrast */
   ratio?: number; required?: number;
+  /** low-contrast / contrast-manual / fixed-size-text: the layer's own text (truncated) — the layer NAME often isn't it */
+  text?: string;
   /** missing-component-states */
   component?: string; missing?: ControlState[];
+  /** component-states-unchecked: the controls no catalog defines */
+  controls?: string[];
+  /** heavy-asset (the row of <Screen>.assets.json `heavy`) */
+  file?: string; bytes?: number; paths?: number;
+  /** prototype-navigation: where the prototype goes, and from how many visible layers */
+  destination?: string; destinationId?: string; navigation?: string; sources?: number;
   /** low-token-binding */
   category?: AuditCategory;
   /** near-duplicate-colors (the hexes, as the export spells them) */
@@ -273,10 +282,20 @@ export type AuditCrossFile = CrossCheckReport | (Omit<CrossCheckReport, "inputs"
 
 export type ControlKind = "button" | "input" | "toggle" | "tab" | "link";
 export type ControlState = "hover" | "pressed" | "focus" | "disabled" | "error" | "selected" | "loading";
-export interface AuditComponentRow { name: string; kind: ControlKind; known: boolean; sampled?: boolean; present: ControlState[]; missing: ControlState[]; note?: string }
+/** One control's state coverage. `catalog` says which catalog defined it and `matchedBy` how it was found there. */
+export interface AuditComponentRow { name: string; kind: ControlKind; known: boolean; sampled?: boolean; present: ControlState[]; missing: ControlState[]; note?: string; catalog?: string; matchedBy?: "key" | "name" }
 export interface AuditAnnotation { nodeId: string; nodeName: string; screen: string; label?: string }
 export type AuditCategory = "color" | "typography" | "spacing" | "radius" | "effects";
 export type ScreenStateKey = "loading" | "empty" | "error";
+/** "not-applicable": a state that does not exist for what was audited (an empty LIST state of a dialog). */
+export type ScreenStateValue = "designed" | "not-found" | "not-applicable";
+/** The fixed three, plus `validation` only when the audited roots hold an input. */
+export type AuditScreenStates = Record<ScreenStateKey, ScreenStateValue> & { validation?: ScreenStateValue };
+/** The two fields of <Screen>.assets.json (bridge/src/write-out.ts writeScreenAssets) the audit reads. */
+export interface ScreenAssetsDoc {
+  heavy?: Array<{ file: string; bytes: number; paths?: number }>;
+  files?: Array<{ file: string; node?: string }>;
+}
 /** audit.js audit() — also what --out writes to <out>.json. */
 export interface AuditReport {
   platform: AuditPlatform;
@@ -293,7 +312,7 @@ export interface AuditReport {
   hiddenLayers?: { nodesSkipped: number; crossFileFindingsOmitted: number };
   tokenBinding: Record<AuditCategory, { bound: number; total: number; pct: number | null }>;
   components: AuditComponentRow[];
-  screenStates: Record<ScreenStateKey, "designed" | "not-found">;
+  screenStates: AuditScreenStates;
   annotations: AuditAnnotation[];
   questions: string[];
   findings: AuditFinding[];
