@@ -4,7 +4,7 @@
 // design-to-code/verify-screen.ts
 import fs4 from "node:fs";
 import path3 from "node:path";
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -269,7 +269,7 @@ function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
-var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
+var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
 function planProblem(x) {
@@ -278,7 +278,7 @@ function planProblem(x) {
   for (const k of PLAN_OBJECTS) if (x[k] !== void 0 && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== void 0 && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== void 0 && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"]) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"]) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -296,10 +296,39 @@ function isPlan(x) {
   return planProblem(x) === null;
 }
 isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+var reqStr = (v) => typeof v === "string" && v.trim() !== "";
+function isPlanWaiver(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== void 0 && x.built !== void 0 && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === void 0 || typeof x.tolerance === "number" && x.tolerance >= 0) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+function isPlanDescope(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
+
+// design-to-code/plan-waivers.ts
+import crypto2 from "node:crypto";
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return crypto2.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+}
 
 // design-to-code/cli-args.ts
 import path2 from "node:path";
@@ -591,6 +620,8 @@ function expectNodeRow(n, ctxOrPath) {
     else spec.backgroundColor = normColor(fill.color);
   }
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
+  const paints = Array.isArray(n.fills) ? n.fills : [];
+  if (Array.isArray(n.effects) && n.effects.length > 0 || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
   if (isPlaceholder(n)) {
     spec.placeholder = true;
     if (spec.text !== void 0) {
@@ -667,7 +698,47 @@ function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
 }
 var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x is its INK start (the export's renderBox) \u2014 measure it with a Range over the text and report it as textBox {x,w}. TEXT nodes carry no y (vertical ink depends on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
-function buildExpectation(docs) {
+function rowSignature(n) {
+  const mc = n.type === "INSTANCE" ? n.mainComponent : void 0;
+  if (mc) return `I:${mc.setKey || mc.key || mc.setName || mc.name || ""}`;
+  return `${n.type}(${(Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden).map(rowSignature).join(",")})`;
+}
+function markRepeatedText(root, specById) {
+  const visibleKids = (n) => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden);
+  const texts = (n, rel, out) => {
+    if (n.type === "TEXT" && typeof n.text === "string" && n.id) getOrInit(out, rel, () => []).push({ id: n.id, text: n.text.trim() });
+    visibleKids(n).forEach((c, i) => texts(c, rel ? `${rel}/${i}` : String(i), out));
+  };
+  (function go(p) {
+    if (p.hidden) return;
+    const kids = visibleKids(p);
+    const bySig = /* @__PURE__ */ new Map();
+    for (const k of kids) getOrInit(bySig, rowSignature(k), () => []).push(k);
+    for (const rows of bySig.values()) {
+      if (rows.length < 3) continue;
+      const slots = /* @__PURE__ */ new Map();
+      for (const r of rows) texts(r, "", slots);
+      for (const [rel, list] of slots) {
+        const byText = /* @__PURE__ */ new Map();
+        for (const e of list) if (e.text) getOrInit(byText, e.text, () => []).push(e.id);
+        let k = 0;
+        for (const ids of byText.values()) {
+          if (ids.length < 3) continue;
+          const group = `${p.id}>${rel || "."}#${k++}`;
+          for (const id of ids) {
+            const spec = specById.get(id);
+            if (spec && spec.type === "TEXT" && spec.text !== void 0 && !spec.repeatedText) {
+              spec.repeatedText = true;
+              spec.repeatedTextGroup = group;
+            }
+          }
+        }
+      }
+    }
+    for (const k of kids) go(k);
+  })(root);
+}
+function buildExpectation(docs, opts) {
   const nodes = [];
   const instances = [];
   const interactions = [];
@@ -676,8 +747,14 @@ function buildExpectation(docs) {
   const frames = [];
   const seen = /* @__PURE__ */ new Set();
   let screen = void 0, exportedAt = void 0, reference = null;
+  const idsByFile = /* @__PURE__ */ new Map();
+  const interactionFile = /* @__PURE__ */ new Map();
+  const roots = [];
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
+    const sf = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : void 0;
+    const sourceFile = typeof sf === "string" && sf ? sf : void 0;
+    const fileIds = getOrInit(idsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Set());
     if (!screen) screen = exp && exp.screen || label;
     if (!exportedAt) exportedAt = exp ? exp.exportedAt : void 0;
     for (const root of screenRoots(doc)) {
@@ -688,7 +765,10 @@ function buildExpectation(docs) {
       const frameId = frames.length > 1 ? root.id : void 0;
       const stateOf = /* @__PURE__ */ new WeakMap();
       const chainOf = /* @__PURE__ */ new WeakMap();
+      const fixedNodes = /* @__PURE__ */ new WeakSet();
+      roots.push(root);
       walkWithHidden(root, (n, c) => {
+        if (n.id) fileIds.add(n.id);
         if (c.hidden) {
           if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
           if (n.id) hidden.ids.push(n.id);
@@ -705,6 +785,14 @@ function buildExpectation(docs) {
         if (n.id) seen.add(n.id);
         const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         spec.ancestorIds = ancestorIds;
+        if (n.absolute) spec.absolute = true;
+        const par = c.parent;
+        const sibs = par && Array.isArray(par.children) ? par.children : [];
+        const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
+        if (par && (fixedNodes.has(par) || nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed)) {
+          fixedNodes.add(n);
+          spec.fixed = true;
+        }
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
         notComparable.push(...gaps);
@@ -724,17 +812,36 @@ function buildExpectation(docs) {
           const trigger = r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger) || r.on || "on_click";
           for (const a of actions) {
             if (!a || !(a.type || a.navigation)) continue;
-            interactions.push({
+            const row = {
               nodeId: n.id,
               name: n.name,
               trigger: String(trigger).toLowerCase(),
               ...ifDefined("action", a.navigation || a.type),
               ...ifDefined("destinationId", a.destinationId),
               ...ifDefined("destination", a.destination)
-            });
+            };
+            interactions.push(row);
+            interactionFile.set(row, sourceFile ?? "");
           }
         }
       });
+    }
+  }
+  const specById = new Map(nodes.map((s) => [s.nodeId, s]));
+  for (const r of roots) markRepeatedText(r, specById);
+  const index = opts && opts.index;
+  const rowFile = (l) => l.sourceFile ?? index?.sourceFile;
+  const named = index ? index.layers.filter((l) => !!rowFile(l)).length : 0;
+  const consistent = !!index && (named === 0 || named === index.layers.length);
+  if (index && consistent) {
+    for (const row of interactions) {
+      const file = interactionFile.get(row);
+      if (!row.destinationId || file === void 0 || file === "" !== (named === 0)) continue;
+      const known = idsByFile.get(file);
+      if (known && known.has(row.destinationId)) continue;
+      const ofFile = index.layers.filter((l) => (rowFile(l) ?? "") === file);
+      if (!known || !ofFile.some((l) => known.has(l.id))) continue;
+      if (!ofFile.some((l) => l.id === row.destinationId)) row.destinationExported = false;
     }
   }
   const f0 = frames[0] || {};
@@ -922,6 +1029,32 @@ var LIMITS = [
   'Numbers are read as px: a number or a px string ("20px"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).',
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared."
 ];
+function fieldTolerance(label) {
+  const f = FIELDS.find((x) => x.label === label);
+  if (f) return f.tol;
+  if (label === "padding") return TOLERANCE.padding;
+  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
+  if (label === "placement") return TOLERANCE.position;
+  return null;
+}
+var NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
+function sameWithin(a, b, tol) {
+  const t = tol ?? 0;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= t + 1e-9;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => {
+    const y = b[i];
+    return y !== void 0 && sameWithin(x, y, tol);
+  });
+  if (typeof a === "string" && typeof b === "string") {
+    if (tol == null) return a.trim() === b.trim();
+    if (a.replace(NUM_IN_TEXT, "#") !== b.replace(NUM_IN_TEXT, "#")) return false;
+    const na = a.match(NUM_IN_TEXT) || [], nb = b.match(NUM_IN_TEXT) || [];
+    return na.length === nb.length && na.every((x, i) => Math.abs(Number(x) - Number(nb[i])) <= t + 1e-9);
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+var PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"];
+var paintOf = (s) => PAINT_KEYS.filter((k) => s[k] !== void 0);
 var MATCH_BUCKET = {
   tag: "tag",
   "data-dt-node": "tag",
@@ -1044,6 +1177,18 @@ function compare(expectation, measured, opts) {
     actual: bad.got,
     delta: bad.delta
   }, extra));
+  const anchors = opts.anchors && isJsonObject(opts.anchors) ? opts.anchors : {};
+  const folded = [];
+  const probeFrames = [...Array.isArray(measured.frames) ? measured.frames : [], ...measured.frame ? [measured.frame] : []];
+  const multiFrame = (expectation.frames || []).length > 1;
+  const frameMeasured = (id) => probeFrames.some((f) => f.nodeId === id);
+  const builtTexts = /* @__PURE__ */ new Map();
+  for (const s of specs) {
+    if (!s.repeatedTextGroup) continue;
+    const mm = byId.get(String(s.nodeId));
+    const t = mm ? (mm.styles || mm).text : void 0;
+    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(t.replace(/\u00a0/g, " ").trim());
+  }
   for (const spec of specs) {
     let m = byId.get(String(spec.nodeId));
     let matchedBy = m ? m.matchedBy || "id" : null;
@@ -1056,7 +1201,23 @@ function compare(expectation, measured, opts) {
       }
     }
     if (!m) {
-      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why: probeWhy.get(String(spec.nodeId)) ?? "no measurement for this node id" });
+      let why = probeWhy.get(String(spec.nodeId)) ?? "no measurement for this node id";
+      const anchor = anchors[spec.nodeId];
+      const into = anchor && typeof anchor.foldedInto === "string" && anchor.foldedInto.trim() ? anchor.foldedInto.trim() : null;
+      const paint = paintOf(spec);
+      const frameId = frameOf(spec).nodeId;
+      if (into) {
+        const refuse = paint.length ? `it states ${paint.join("/")} \u2014 a node that paints or carries copy is built, never folded` : !((spec.ancestorIds || []).includes(into) || into === frameId) ? `${into} is not an ancestor of this node in the export` : !(byId.has(into) || viaSharedPath(into) || frameMeasured(into)) ? `${into} was not measured, so nothing stands in for this node` : null;
+        if (!refuse) {
+          folded.push({ nodeId: spec.nodeId, name: spec.name, into, why: `plan anchor foldedInto ${into}: a layout-only wrapper the build merged into that measured ancestor` });
+          continue;
+        }
+        why += ` \u2014 plan anchor foldedInto ${into} refused: ${refuse}`;
+      } else if (!paint.length) {
+        const parent = (spec.ancestorIds || [])[0] ?? frameId;
+        why += ` \u2014 foldable (no paint \u2014 anchor it foldedInto its parent${parent ? ` ${parent}` : ""} if the build merged it there)`;
+      }
+      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why });
       continue;
     }
     nodesMeasured++;
@@ -1275,8 +1436,12 @@ function compare(expectation, measured, opts) {
         if (w !== g) {
           const caseOnly = w.toLowerCase() === g.toLowerCase();
           const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
-          push(spec, "text", caseOnly || extraGlyphs ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
-            ...ifDefined("note", caseOnly ? "differs only in case \u2014 check for a text-transform, which Figma applies at render time while storing the original" : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : void 0)
+          const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : void 0;
+          const distinct = rowTexts ? new Set(rowTexts).size : 0;
+          const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
+          const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
+          push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
+            ...ifDefined("note", caseOnly ? "differs only in case \u2014 check for a text-transform, which Figma applies at render time while storing the original" : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) \u2014 check the copy is the data the design means` : void 0)
           });
         }
         if (/ /.test(String(spec.text))) {
@@ -1300,12 +1465,43 @@ function compare(expectation, measured, opts) {
       const tol = TOLERANCE.position;
       const inDesign = (!num(spec.x) || spec.x >= -tol && spec.x + (spec.width || 0) <= fr.w + tol) && (!num(spec.y) || spec.y >= -tol && spec.y + (spec.height || 0) <= fr.h + tol);
       const out = [];
-      if (num(bx.y) && bx.y + h > fr.h + tol) out.push(`bottom edge at y=${r2(bx.y + h)} in a ${fr.h}-high frame`);
-      if (num(bx.y) && bx.y < -tol) out.push(`top edge at y=${r2(bx.y)}`);
-      if (num(bx.x) && bx.x + w > fr.w + tol) out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`);
-      if (num(bx.x) && bx.x < -tol) out.push(`left edge at x=${r2(bx.x)}`);
+      const over = [];
+      let bottomOnly = true;
+      if (num(bx.y) && bx.y + h > fr.h + tol) {
+        out.push(`bottom edge at y=${r2(bx.y + h)} in a ${fr.h}-high frame`);
+        over.push(bx.y + h - fr.h);
+      }
+      if (num(bx.y) && bx.y < -tol) {
+        out.push(`top edge at y=${r2(bx.y)}`);
+        over.push(-bx.y);
+        bottomOnly = false;
+      }
+      if (num(bx.x) && bx.x + w > fr.w + tol) {
+        out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`);
+        over.push(bx.x + w - fr.w);
+        bottomOnly = false;
+      }
+      if (num(bx.x) && bx.x < -tol) {
+        out.push(`left edge at x=${r2(bx.x)}`);
+        over.push(-bx.x);
+        bottomOnly = false;
+      }
       if (inDesign && out.length && !zeroAtRest) {
-        deltas.push({ severity: "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "), note: "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
+        const pf = probeFrames.find((f) => f.nodeId === fr.nodeId) ?? (!multiFrame && probeFrames.length === 1 ? probeFrames[0] : void 0);
+        const pageGrew = !!pf && (pf.via === "viewport" || isJsonObject(pf.rect) && num(pf.rect.h) && pf.rect.h > fr.h + tol);
+        const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
+        deltas.push({
+          severity: belowFold ? "medium" : "high",
+          nodeId: spec.nodeId,
+          name: spec.name,
+          ...ifDefined("path", spec.path),
+          field: "placement",
+          expected: "inside the frame",
+          actual: out.join(", "),
+          delta: r2(Math.max(...over)),
+          // px past the frame (no `unit`: `actual` is prose, printed as-is)
+          note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge \u2014 reachable by scrolling; accept it (verify-screen --accept) if the longer page is intended" : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling"
+        });
       }
     }
   }
@@ -1371,9 +1567,30 @@ function compare(expectation, measured, opts) {
     }
     exercised.set(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase(), r);
   }
+  const exportSha = expectation.exportContentSha256;
+  const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
+  const reopened = [];
+  const unused = [];
+  const descopeRows = [];
+  (Array.isArray(opts.descopes) ? opts.descopes : []).forEach((d, i) => {
+    if (isPlanDescope(d)) descopeRows.push(d);
+    else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`);
+  });
+  const descopeUsed = /* @__PURE__ */ new Set();
+  const descopeFor = (i) => {
+    const hits = descopeRows.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === void 0 || d.destinationId === i.destinationId));
+    for (const d of hits) descopeUsed.add(d);
+    const live = hits.find((d) => d.exportContentSha256 === exportSha);
+    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
+    return live;
+  };
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
-    const row = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId) };
+    const row = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...i.destinationExported === false ? { destinationExported: false } : {} };
+    const worked = !!hit && hit.ok === true && hit.result !== "not-probed" && !!hit.selector && Number(hit.selectorCount) >= 1;
+    const scoped = descopeFor(i);
+    if (scoped) return Object.assign(row, { result: "descoped", detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {} });
+    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail) });
@@ -1387,9 +1604,68 @@ function compare(expectation, measured, opts) {
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
   const interactionsNotProbed = interactions.filter((i) => i.result === "not-probed");
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
-  const high = deltas.filter((d) => d.severity === "high").length;
-  const medium = deltas.filter((d) => d.severity === "medium").length;
-  const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
+  const interactionsUndesigned = interactions.filter((i) => i.result === "undesigned");
+  const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
+  for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
+  const notWaivable = /* @__PURE__ */ new Map();
+  for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured \u2014 only a measured delta can be accepted");
+  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable (D5) \u2014 descope it (plan.descopes, owner-only) if it is deliberately inert");
+  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT \u2014 a missing component is never waivable (D5)`);
+  let applied = 0;
+  (Array.isArray(opts.waivers) ? opts.waivers : []).forEach((w, i) => {
+    if (!isPlanWaiver(w)) {
+      inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`);
+      return;
+    }
+    const cands = deltas.filter((d2) => d2.nodeId === w.nodeId && d2.field === w.field && !d2.accepted);
+    if (!cands.length) {
+      const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round \u2014 only a measured delta can be accepted" : void 0;
+      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? "no such delta this round \u2014 fixed? drop the waiver" });
+      return;
+    }
+    if (!exportSha || w.exportContentSha256 !== exportSha) {
+      reopened.push({ nodeId: w.nodeId, field: w.field, why: exportSha ? "design re-exported: the export content changed since the waiver was accepted" : "the expectation records no export content hash \u2014 regenerate it with --expect" });
+      return;
+    }
+    const tol = fieldTolerance(w.field);
+    const d = cands.find((x) => sameWithin(w.designed, x.expected, tol) && sameWithin(w.built, x.actual, w.tolerance ?? tol));
+    if (d) {
+      d.accepted = { reason: w.reason, decidedBy: w.decidedBy, decidedAt: w.decidedAt, ...ifDefined("cause", w.cause) };
+      applied++;
+      return;
+    }
+    const c0 = cands.find((x) => sameWithin(w.designed, x.expected, tol));
+    reopened.push({
+      nodeId: w.nodeId,
+      field: w.field,
+      why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}`
+    });
+  });
+  const specOf = new Map(specs.map((sp) => [String(sp.nodeId), sp]));
+  const placed = /* @__PURE__ */ new Map();
+  for (const d of deltas) if (d.field === "placement") placed.set(String(d.nodeId), d);
+  for (const d of placed.values()) {
+    const anc = (specOf.get(String(d.nodeId))?.ancestorIds || []).filter((a) => placed.has(a));
+    const root = anc[anc.length - 1];
+    if (root) {
+      d.group = `placement:${root}`;
+      const r = placed.get(root);
+      if (r) r.group = `placement:${root}`;
+    }
+  }
+  const sameKey = /* @__PURE__ */ new Map();
+  for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
+  for (const [k, list] of sameKey) {
+    if (list.length < 2) continue;
+    const gid = `same:${crypto3.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    for (const d of list) d.group = gid;
+  }
+  const open = deltas.filter((d) => !d.accepted);
+  const high = open.filter((d) => d.severity === "high").length;
+  const medium = open.filter((d) => d.severity === "medium").length;
+  const accepted = deltas.length - open.length;
+  const openHigh = open.filter((d) => d.severity === "high");
+  const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
   const probeRaw = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : void 0;
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
@@ -1404,13 +1680,14 @@ function compare(expectation, measured, opts) {
     ...ifDefined("code", opts.code || void 0),
     // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
-    probe: probeIdentity ?? "unknown"
+    probe: probeIdentity ?? "unknown",
+    ...ifDefined("waivers", opts.waiversInput || void 0)
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
   const artifactCheck = Array.isArray(opts.artifactCheck) ? opts.artifactCheck : null;
   const noRender = !!artifactCheck && !artifactCheck.some((a) => a.exists && a.image);
-  const nodesExpected = specs.length;
+  const nodesExpected = specs.length - folded.length;
   const reasons = [];
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
@@ -1425,7 +1702,7 @@ function compare(expectation, measured, opts) {
   if (interactionsNotProbed.length) reasons.push(`${interactionsNotProbed.length} designed interaction(s) were not probed`);
   const fieldGapsOther = fieldsNotMeasured.length;
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null \u2014 the probe could not read them)` : ""}`);
-  const verdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
+  const verdict = reasons.length === 0 ? accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
   const coverage = {
     nodesExpected,
     nodesMeasured,
@@ -1444,6 +1721,10 @@ function compare(expectation, measured, opts) {
     interactionsPassed: interactionsPassed.length,
     interactionsFailed: interactionsFailed.length,
     interactionsNotProbed: interactionsNotProbed.length,
+    interactionsUndesigned: interactionsUndesigned.length,
+    interactionsDescoped: interactionsDescoped.length,
+    deltasAccepted: accepted,
+    nodesFolded: folded.length,
     matchedBy: matchedByCensus
   };
   let against;
@@ -1464,8 +1745,8 @@ function compare(expectation, measured, opts) {
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
   const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
-  const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected} \xB7 ${fieldsChecked} values compared \xB7 ${high} high, ${medium} medium \xB7 ` + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
-  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
+  const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""} \xB7 ${fieldsChecked} values compared \xB7 ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` + (accepted ? ` \xB7 ${accepted} accepted` : "") + (reopened.length ? ` \xB7 ${reopened.length} waiver(s) REOPENED` : "") + " \xB7 " + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
+  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
   return {
     schema: REPORT_SCHEMA,
     ...ifDefined("screen", expectation.screen),
@@ -1479,7 +1760,18 @@ function compare(expectation, measured, opts) {
     headline,
     why: reasons,
     coverage,
-    summary: { high, medium, low: deltas.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length },
+    summary: {
+      high,
+      medium,
+      low: open.filter((d) => d.severity === "low").length,
+      componentsAbsent: componentsAbsent.length,
+      interactionsFailed: interactionsFailed.length,
+      interactionsNotProbed: interactionsNotProbed.length,
+      accepted,
+      descoped: interactionsDescoped.length,
+      undesigned: interactionsUndesigned.length,
+      highCauses
+    },
     deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
     untaggedInstanceSets,
@@ -1488,6 +1780,8 @@ function compare(expectation, measured, opts) {
     fieldsNotMeasured,
     unverifiable,
     notComparable: expectation.notComparable || [],
+    waivers: { applied, reopened, unused },
+    folded,
     probe: {
       unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
       unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
@@ -1527,7 +1821,7 @@ function reportToMarkdown(r) {
   const c = r.coverage;
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
-  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""} |`);
+  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
   L.push(`| individual values compared | ${c.fieldsChecked} |`);
   L.push(`| values on measured nodes the probe did not report | ${c.fieldsNotMeasured} |`);
   if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
@@ -1535,7 +1829,9 @@ function reportToMarkdown(r) {
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) \xB7 ${c.hiddenLayersSkipped.specsSkipped} spec(s) \xB7 ${c.hiddenLayersSkipped.instancesSkipped} instance(s) \xB7 ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence \u2014 coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
-  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected} |`, "");
+  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}${c.interactionsUndesigned ? ` \xB7 ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` \xB7 ${c.interactionsDescoped} descoped by the owner` : ""} |`);
+  if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
+  L.push("");
   if (r.against) {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
@@ -1547,10 +1843,35 @@ function reportToMarkdown(r) {
   for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
   if (r.deltas.length) {
-    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token |", "|---|---|---|---|---|---|");
-    for (const d of r.deltas) {
-      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "\u2014"} |`);
+    const groups = /* @__PURE__ */ new Map();
+    for (const d of r.deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
+    if (groups.size) {
+      L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
+      for (const [g, list] of groups) {
+        const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
+        const root = rootId ? list.find((d) => d.nodeId === rootId) : void 0;
+        const open = list.filter((d) => !d.accepted);
+        L.push(`- \`${g}\` \u2014 ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} \u2192 ${fmt(list[0]?.actual)})`}${open.length < list.length ? ` \xB7 ${list.length - open.length} accepted` : ""} \u2014 accept together: \`--accept <report> --group ${g} --reason \u2026 --by \u2026\``);
+      }
+      L.push("");
     }
+    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
+    for (const d of r.deltas) {
+      const status = d.accepted ? `accepted \u2014 ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "\u2014"} | ${status} |`);
+    }
+    L.push("");
+  }
+  const wv = r.waivers;
+  if (wv && (wv.reopened.length || wv.unused.length)) {
+    L.push("## Plan waivers that no longer apply", "");
+    for (const w of wv.reopened) L.push(`- **reopened** \`${w.nodeId}\` (${w.field}) \u2014 ${w.why}`);
+    for (const w of wv.unused) L.push(`- unused \`${w.nodeId}\` (${w.field})${w.why ? ` \u2014 ${w.why}` : ""}`);
+    L.push("");
+  }
+  if (r.folded && r.folded.length) {
+    L.push(`## Folded into a measured ancestor (${r.folded.length} node specs, out of the count)`, "");
+    for (const f of r.folded) L.push(`- \`${f.nodeId}\` ${f.name || ""} \u2192 \`${f.into}\` \u2014 ${f.why}`);
     L.push("");
   }
   if (r.componentsAbsent.length) {
@@ -1569,10 +1890,16 @@ function reportToMarkdown(r) {
     if (r.untaggedInstanceSets.length > 40) L.push(`- \u2026and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");
   }
-  const bad = r.interactions.filter((i) => i.result !== "pass");
+  const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
     for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} \u2014 ${i.trigger} \u2192 ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` \u2014 ${i.detail}` : ""}`);
+    L.push("");
+  }
+  const ungraded = r.interactions.filter((i) => i.result === "undesigned" || i.result === "descoped");
+  if (ungraded.length) {
+    L.push(`## Interactions not graded (${ungraded.length})`, "", "*undesigned: the destination was never exported; descoped: the owner removed it (plan.descopes).*", "");
+    for (const i of ungraded) L.push(`- \`${i.nodeId}\` ${i.name || ""} \u2014 ${i.trigger} \u2192 ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` \u2014 ${i.detail}` : ""}${i.note ? ` \u2014 ${i.note}` : ""}`);
     L.push("");
   }
   if (r.notMeasured.length) {
@@ -1625,8 +1952,36 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
   }
   return null;
 }
+function plansFor(frameId, stem) {
+  const planDir = path3.join("design", "plan");
+  const hits = [];
+  for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    const p = readJsonOrNull(path3.join(planDir, f), isPlan);
+    if (!p) continue;
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path3.basename(f, ".json")));
+    const byName = path3.basename(f, ".json") === stem || p.file && path3.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path3.join(planDir, f).split(path3.sep).join("/"), plan: p });
+  }
+  return hits;
+}
+function selectForAccept(rep, sel) {
+  const deltas = Array.isArray(rep.deltas) ? rep.deltas : [];
+  const picked = sel.group !== void 0 ? deltas.filter((d) => d.group === sel.group) : deltas.filter((d) => d.nodeId === sel.node && (sel.field === void 0 || d.field === sel.field));
+  if (picked.length) return { deltas: picked };
+  if (sel.group !== void 0) {
+    const gs = [...new Set(deltas.map((d) => d.group).filter((g) => !!g))];
+    return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
+  }
+  const id = sel.node;
+  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT \u2014 a missing component is never waivable (D5); build it` };
+  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction \u2014 never waivable (D5); fix it, or have the owner descope it in plan.descopes (D20)` };
+  if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured \u2014 there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
+  if (sel.field !== void 0 && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured \u2014 there is no delta to accept` };
+  const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);
+  return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
+}
 function main(argv) {
-  const sha = (file) => crypto2.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto3.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -1634,25 +1989,57 @@ function main(argv) {
       Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this
       directory \u2014 pass --force to write a second one anyway.
   ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] --out design/verify/<Screen>
-      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares
+      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares
       two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
       (a JSON array, or {interactions:[\u2026], components:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail};
       components[] rows {setName|nodeId, present} are merged with measured.json's).
       --out defaults to design/verify/<the .expected.json file's own basename>.
       Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes
-      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.`;
+      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.
+      The plan for this frame (design/plan/, or --plan <plan.json>) supplies waivers[] and descopes[]: an accepted
+      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).
+  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
+      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed
+      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:
+      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     return argv.length ? 0 : 2;
   }
-  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const OPTIONS = {
+    out: { type: "string" },
+    interactions: { type: "string" },
+    against: { type: "string" },
+    force: { type: "boolean" },
+    expect: { type: "boolean" },
+    compare: { type: "boolean" },
+    accept: { type: "boolean" },
+    node: { type: "string" },
+    field: { type: "string" },
+    group: { type: "string" },
+    reason: { type: "string" },
+    by: { type: "string" },
+    plan: { type: "string" },
+    "all-fields": { type: "boolean" },
+    help: { type: "boolean", short: "h" }
+  };
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
-  const { out, interactions: interactionsFile, against: againstFile } = flags;
-  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
-  if (doExpect === doCompare) {
-    console.error("pass exactly one of --expect / --compare\n" + USAGE);
+  const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
+  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
+  if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) {
+    console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE);
     return 2;
   }
+  for (const k of ["node", "field", "group", "reason", "by", "all-fields"]) if (flags[k] !== void 0 && !doAccept) {
+    console.error(`--${k} only applies to --accept
+` + USAGE);
+    return 2;
+  }
+  if (planFlag !== void 0 && doExpect) {
+    console.error("--plan only applies to --compare / --accept\n" + USAGE);
+    return 2;
+  }
+  if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
     return 2;
@@ -1678,7 +2065,24 @@ function main(argv) {
       return 2;
     }
     const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json") }));
-    const exp = buildExpectation(docs);
+    const indexFile = path3.join("design", "export", "pages", "index.json");
+    const idx = readJson(indexFile, isPagesRootIndex);
+    if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
+    const pagesDir = path3.join("design", "export", "pages");
+    const pageRows = [];
+    let dirs = [];
+    try {
+      dirs = fs4.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+    }
+    for (const d of dirs) {
+      const pi = readJson(path3.join(pagesDir, d, "index.json"), isPageIndex);
+      if ("doc" in pi) pageRows.push(...pi.doc.layers);
+    }
+    const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
+    const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
+    const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers, ...ifDefined("sourceFile", "doc" in idx ? idx.doc.sourceFile : void 0) } } : null);
     const outBase = out || path3.join("design", "verify", path3.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path3.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
@@ -1691,7 +2095,7 @@ function main(argv) {
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs4.existsSync(target) ? fs4.readFileSync(target, "utf8") : null;
     write(outBase, exp);
-    const h = crypto2.createHash("sha256").update(next).digest("hex");
+    const h = crypto3.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
     try {
       if (prev !== null) {
@@ -1704,7 +2108,7 @@ function main(argv) {
     else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto2.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto3.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs4.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
@@ -1752,25 +2156,35 @@ function main(argv) {
     return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : void 0) };
   });
   let code;
+  let planHit;
+  if (planFlag !== void 0) {
+    const r = readJson(planFlag, isPlan);
+    if (!("doc" in r)) {
+      console.error(`--plan '${planFlag}' ${r.error}`);
+      return 2;
+    }
+    planHit = { file: planFlag.split(path3.sep).join("/"), plan: r.doc };
+  }
   {
-    const planDir = path3.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path3.basename(expFile, ".json").replace(/\.expected$/, "");
-    const hits = [];
-    for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      const p = readJsonOrNull(path3.join(planDir, f), isPlan);
-      if (!p) continue;
-      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path3.basename(f, ".json")));
-      const byName = path3.basename(f, ".json") === stem || p.file && path3.basename(String(p.file), ".json") === stem;
-      if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
-    }
+    const all = planHit ? [planHit] : plansFor(frameId, stem);
+    const hits = all.filter((h) => h.plan.files);
     const onlyHit = hits.length === 1 ? hits[0] : void 0;
-    if (onlyHit) {
-      code = { plan: path3.join(planDir, onlyHit.f).split(path3.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    if (!planHit) planHit = all.length === 1 ? all[0] : onlyHit;
+    if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) \u2014 no waivers/descopes applied; pass --plan <plan.json>`);
+    if (onlyHit && onlyHit.plan.files) {
+      code = { plan: onlyHit.file, files: fileHashes(onlyHit.plan.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
-      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
+      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.file).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : all.length ? `note  ${all.map((h) => h.file).join(", ")} list${all.length === 1 ? "s" : ""} no files[] \u2014 the report records no code hashes, so verify-build --status cannot tie it to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
   }
+  const planInputs = planHit ? {
+    ...ifDefined("waivers", planHit.plan.waivers),
+    ...ifDefined("descopes", planHit.plan.descopes),
+    ...ifDefined("anchors", planHit.plan.anchors),
+    waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
+  } : {};
   const compareBase = out || path3.join("design", "verify", path3.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
@@ -1786,14 +2200,93 @@ function main(argv) {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
-  const rep = compare(expectation, measured, { ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against) });
+  const rep = compare(expectation, measured, { ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
   console.error(probeLine(rep));
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) \u2014 measured against another screen or an older expectation?`);
-  return rep.verdict === "pass" ? 0 : 1;
+  for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
+  if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} \u2014 fixed? drop them`);
+  return isPassingVerdict(rep.verdict) ? 0 : 1;
+}
+function acceptMain(files, flags, USAGE) {
+  const reportFile = files[0];
+  if (!reportFile || files.length > 1) {
+    console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE);
+    return 2;
+  }
+  if (flags.node === void 0 === (flags.group === void 0)) {
+    console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE);
+    return 2;
+  }
+  if ((flags.field !== void 0 || flags["all-fields"]) && flags.group !== void 0) {
+    console.error("--field / --all-fields go with --node, not --group\n" + USAGE);
+    return 2;
+  }
+  if (flags.node !== void 0 && flags.field === void 0 === !flags["all-fields"]) {
+    console.error('--accept --node needs exactly one of --field "<label>" / --all-fields\n' + USAGE);
+    return 2;
+  }
+  const reason = (flags.reason || "").trim(), by = (flags.by || "").trim();
+  if (!reason || !by) {
+    console.error(`--accept needs ${!reason ? '--reason "<why this deviation is intended>"' : ""}${!reason && !by ? " and " : ""}${!by ? '--by "<who decided>"' : ""} \u2014 a waiver without a reason and a decider is not recorded
+` + USAGE);
+    return 2;
+  }
+  const r = readJson(reportFile, isVerifyReport);
+  if (!("doc" in r)) {
+    console.error(`error  report: '${reportFile}' ${r.error}`);
+    return 2;
+  }
+  const report = r.doc;
+  const exportSha = report.inputs && report.inputs.exportContentSha256;
+  if (!exportSha) {
+    console.error(`error  ${reportFile} records no inputs.exportContentSha256 \u2014 re-run --expect and --compare, then accept against the new report`);
+    return 1;
+  }
+  const sel = selectForAccept(report, { node: flags.node, field: flags.field, group: flags.group });
+  if ("error" in sel) {
+    console.error(`refused  ${sel.error}`);
+    return 1;
+  }
+  const stem = path3.basename(reportFile, ".json").replace(/\.report$/, "");
+  const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
+  let planFile = flags.plan ?? (recorded && fs4.existsSync(recorded) ? recorded : void 0);
+  if (!planFile) {
+    const hits = plansFor(report.nodeId, stem);
+    const only = hits.length === 1 ? hits[0] : void 0;
+    if (!only) {
+      console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) \u2014 pass --plan <plan.json>` : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)");
+      return 1;
+    }
+    planFile = only.file;
+  }
+  const pr = readJson(planFile, isPlan);
+  if (!("doc" in pr)) {
+    console.error(`error  plan: '${planFile}' ${pr.error}`);
+    return 1;
+  }
+  const plan = pr.doc;
+  const decidedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const waivers = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
+  const wrote = [];
+  for (const d of sel.deltas) {
+    const row = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
+    const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
+    if (at >= 0) waivers[at] = row;
+    else waivers.push(row);
+    wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
+  }
+  plan.waivers = waivers;
+  const tmp = `${planFile}.${process.pid}.tmp`;
+  fs4.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
+  fs4.renameSync(tmp, planFile);
+  console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
+  for (const w of wrote) console.error(`  ${w}`);
+  console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);
+  return 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
@@ -1814,5 +2307,6 @@ export {
   probeLine,
   radiusCorners,
   reportToMarkdown,
+  selectForAccept,
   tokenFor
 };

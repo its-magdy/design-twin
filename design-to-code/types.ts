@@ -373,7 +373,7 @@ export type PlanLifecycle = "pending" | "awaiting-user" | "abandoned";
 /** What a PERSON sets; "verified"/"static-only" were written by an older hook and are ignored by verify-build.js. */
 export type PlanStoredStatus = PlanLifecycle | "verified" | "static-only" | (string & {});
 /** verify-build.js computeStatus() */
-export type PlanComputedStatus = PlanLifecycle | "failed" | "blocked" | "stale" | "unverified" | "static-only" | "verified";
+export type PlanComputedStatus = PlanLifecycle | "failed" | "blocked" | "stale" | "unverified" | "static-only" | "verified" | "verified-with-deviations";
 export type TokenKind =
   | "color" | "fontStyle" | "string" | "boolean" | "radius" | "fontSize" | "fontWeight" | "lineHeight" | "letterSpacing"
   | "spacing" | "borderWidth" | "size" | "opacity" | "number";
@@ -426,9 +426,42 @@ export interface PlanComponentRow {
   repoPath?: string;
 }
 /** anchors{}[nodeId]. A node is ANCHORED when one of mapModule/file/symbol/omitted is a non-blank string. */
-export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string }
+export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string;
+  /** F-77: a layout-only wrapper (no paint) the build folded into this ancestor id; --compare checks the claim */
+  foldedInto?: string }
 export interface PlanHiddenRoot { id: string; name: string; type: IrNodeType; nodes: number }
 export interface PlanDeviation { id?: string; nodeId?: string; nodeIds?: string[]; field?: string; designed?: JsonValue; built?: JsonValue; reason?: string; what?: string }
+/** D5: a person's acceptance of ONE report delta (node + field), bound to the export content and the built value.
+ *  Written by `verify-screen --accept`; --compare re-checks every field and reopens it when any moved. */
+export interface PlanWaiver {
+  nodeId: string;
+  /** the exact report delta `field` label ("font-size", "placement", "border-radius (top-left)") */
+  field: string;
+  /** = delta.expected at accept time */
+  designed: JsonValue;
+  /** = delta.actual at accept time */
+  built: JsonValue;
+  /** numeric slack on `built`; default = the field's own tolerance */
+  tolerance?: number;
+  /** D21: the whole-export content hash at accept time */
+  exportContentSha256: string;
+  reason: string;
+  decidedBy: string;
+  /** ISO date */
+  decidedAt: string;
+  /** the report group id when accepted with --group */
+  cause?: string;
+}
+/** D20: an interaction the owner deliberately left unwired (removed from the graded set before grading). */
+export interface PlanDescope {
+  nodeId: string;
+  trigger: string;
+  destinationId?: string;
+  exportContentSha256: string;
+  reason: string;
+  decidedBy: string;
+  decidedAt: string;
+}
 /** A person's exemption. Only one WITH a reason counts (verify-build.ts ignores a reasonless entry — so it may lack one). */
 export interface AllowedLiteral { value?: string; file?: string; reason?: string }
 /** Pre-filled from an audit with blockers (finding 136); overridden/reason/decidedBy/decidedAt are a person's. */
@@ -490,6 +523,10 @@ export interface Plan {
   anchors?: Record<string, PlanAnchor>;
   hidden?: PlanHiddenRoot[];
   deviations?: PlanDeviation[];
+  /** D5: accepted report deltas (verify-screen --accept); excluded from verify-build's planHash */
+  waivers?: PlanWaiver[];
+  /** D20: interactions deliberately not wired (owner-only); excluded from verify-build's planHash */
+  descopes?: PlanDescope[];
   auditGate?: PlanAuditGate | null;
   counts?: { tokens: number; tokensVisible: number; instances: number; anchors: number; hiddenNodes: number };
   allowedLiterals?: AllowedLiteral[];
@@ -504,6 +541,8 @@ export type DrawnState = "hover" | "pressed" | "focus";
 /** One expectation row: ONLY values the export states (a field the export does not define is absent). */
 export interface VerifySpec {
   nodeId: string;
+  /** the node draws paint this method does not compare (visible effects, a gradient/image fill) — never foldable */
+  decorated?: true;
   name: string;
   type: IrNodeType;
   path?: string;
@@ -542,12 +581,22 @@ export interface VerifySpec {
   /** node ids of every ancestor, nearest first, the frame root excluded (a probe scopes a text match to a
    *  tagged ancestor with it; --compare does not read it). Absent on expectations written before group 7. */
   ancestorIds?: string[];
+  /** the node is absolutely positioned in its auto-layout parent (IrNode.absolute) — never "below the fold" (F-61) */
+  absolute?: true;
+  /** the node or an ancestor is one of a frame's fixed children (pinned while scrolling) — never "below the fold" (F-61) */
+  fixed?: true;
+  /** F-104: a TEXT whose identical string repeats in >=3 sibling rows (placeholder copy); compare may demote its text delta */
+  repeatedText?: true;
+  /** F-104: the rows' group — every spec sharing it is the same text slot in a sibling row */
+  repeatedTextGroup?: string;
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean }
 /** A root frame as an expectation lists it (no position). */
 export type VerifyRootFrame = Omit<VerifyFrame, "x" | "y">;
 export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues }
-export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string }
+export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string;
+  /** F-60/D22: false when destinationId is no node of the export for the SAME Figma file (only false is written) */
+  destinationExported?: boolean }
 export interface NotComparable { nodeId: string; name: string; field: string; value: JsonValue; why: string }
 /** <Screen>.expected.json (verify-screen.js buildExpectation) */
 export interface VerifyExpectation {
@@ -678,12 +727,27 @@ export interface VerifyDelta {
   measuredIn?: string;
   matchedBy?: string;
   note?: string;
+  /** D5: a plan waiver matched this delta — it stays listed, but leaves the counts and the verdict */
+  accepted?: { reason: string; decidedBy: string; decidedAt: string; cause?: string };
+  /** F-76: presentational group id (one cause) — counts and verdict stay per delta */
+  group?: string;
 }
-export interface VerifyInteractionResult extends VerifyInteraction { result: "pass" | "fail" | "not-probed"; detail?: string; selector?: string; selectorCount?: number }
+/** "undesigned" (D22): the destination was never exported; "descoped" (D20): the owner removed it from the graded set. */
+export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
+export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string }
 export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string }
 /** report.inputs.code (finding 317): which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
-export type VerifyVerdict = "pass" | "fail" | "incomplete";
+export type VerifyVerdict = "pass" | "pass-with-deviations" | "fail" | "incomplete";
+/** report.waivers (D5): how the plan's waivers fared against this round's deltas. */
+export interface VerifyWaiverResult {
+  /** waivers that matched a delta (the delta carries `accepted`) */
+  applied: number;
+  /** waivers (and descopes) that matched a node + field but no longer hold, and why */
+  reopened: Array<{ nodeId: string; field: string; why: string }>;
+  /** waivers (and descopes) that match nothing this round (fixed? drop them) */
+  unused: Array<{ nodeId: string; field: string; why?: string }>;
+}
 /** <Screen>.report.json (verify-screen.js compare(), schema @2). An @1 report carries only screen/exportedAt/
  *  measuredAt/renderer/viewport/artifacts/verdict/why/coverage/summary/deltas/missingComponents/interactions/notMeasured. */
 export interface VerifyReport {
@@ -696,7 +760,9 @@ export interface VerifyReport {
   artifacts?: Array<string | ArtifactCheck>;
   inputs?: { expectationSchema?: string; expectationSha256?: string; measuredSha256?: string; measuredAgainst?: string; exportContentSha256?: string; code?: CodeInputs;
     /** the shipped probe's identity, or "unknown" for a hand-written measured.json (group 7) */
-    probe?: ProbeIdentity | "unknown" };
+    probe?: ProbeIdentity | "unknown";
+    /** the plan whose waivers/descopes were applied, and waiversHash() of them (verify-build: stale when it differs) */
+    waivers?: { plan: string; sha256: string } };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
   why?: string[];
@@ -706,10 +772,18 @@ export interface VerifyReport {
     valuesNotComparable?: number; valuesUnverifiable?: number; hiddenLayersSkipped?: { layers: number; nodes: number; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number };
     instanceSets?: number; instanceSetsWithEvidence?: number; instanceSetsViaSharedPath?: number; componentsBuilt?: number;
     interactionsExpected?: number; interactionsPassed?: number; interactionsFailed?: number; interactionsNotProbed?: number;
+    interactionsUndesigned?: number; interactionsDescoped?: number; deltasAccepted?: number; nodesFolded?: number;
     /** measured specs per matching rule (tag, tagSharedPath, text, textOrdinal, position, frame, sharedComponentPath, other, unstated) */
     matchedBy?: Record<string, number>;
   };
-  summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number };
+  /** high/medium/low count OPEN deltas only; `accepted` = deltas a plan waiver matched */
+  summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number;
+    accepted?: number; descoped?: number; undesigned?: number;
+    /** distinct causes among the open high deltas (F-76: a group counts once) */
+    highCauses?: number };
+  waivers?: VerifyWaiverResult;
+  /** F-77: specs a plan anchor folded into a measured ancestor — out of the denominator */
+  folded?: Array<{ nodeId: string; name?: string; into: string; why: string }>;
   deltas?: VerifyDelta[];
   componentsAbsent?: Array<{ setName: string; nodeIds: string[]; detail?: string }>;
   untaggedInstanceSets?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
@@ -750,6 +824,7 @@ export interface VerifyCoverageV2 extends VerifyCoverage {
   fieldsNeverMeasured: NonNullable<VerifyCoverage["fieldsNeverMeasured"]>; valuesNotComparable: number; valuesUnverifiable: number;
   instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
   interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
+  interactionsUndesigned: number; interactionsDescoped: number; deltasAccepted: number; nodesFolded: number;
   matchedBy: Record<string, number>;
 }
 /**
@@ -771,6 +846,8 @@ export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   fieldsNotMeasured: NonNullable<VerifyReport["fieldsNotMeasured"]>;
   unverifiable: NonNullable<VerifyReport["unverifiable"]>;
   notComparable: NotComparable[];
+  waivers: VerifyWaiverResult;
+  folded: NonNullable<VerifyReport["folded"]>;
   probe: NonNullable<VerifyReport["probe"]>;
   limits: string[];
 }

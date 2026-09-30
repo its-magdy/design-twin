@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { check, report } from "./assert.ts";
+import { PASSING_VERDICTS } from "../design-to-code/plan-waivers.ts";
 
 const root = process.env.BUILD_SCREEN_DOCS_ROOT ?? path.join(import.meta.dirname, "..");
 const read = (rel: string): string => {
@@ -65,4 +66,23 @@ check("[G7] the verify skill: implicit baseline, --against, COVERAGE FELL, and a
 check("[G7] build-screen step 5 names verify-probe.js and says web measurements are never hand-written", /verify-probe\.js/.test(step(5)) && /never a hand-written one/i.test(step(5)));
 check("[G7] references/verify.md: readiness on web is the probe's (fonts.ready, reduced motion, --ready), and networkidle is not used", /verify-probe\.js/.test(verifyRef) && /document\.fonts\.ready/.test(verifyRef) && /reduced motion/i.test(verifyRef) && /does not use `networkidle`/.test(verifyRef));
 
+
+console.log("verify docs (group 9, pass-with-deviations and waivers):");
+{
+  const raw = read("claude-plugin/skills/verify/SKILL.md");
+  const sec4 = raw.split(/^## 4\. /m)[1]?.split(/^## /m)[0] ?? "";
+  const named = [...sec4.matchAll(/^- \*\*([a-z-]+)\*\* —/gm)].map((m) => m[1] ?? "").sort();
+  const code = [...PASSING_VERDICTS, "fail", "incomplete"].sort();
+  check(`[DT-28] the verdicts verify/SKILL.md §4 names = PASSING_VERDICTS + fail + incomplete (doc: ${named.join(", ")})`, JSON.stringify(named) === JSON.stringify(code));
+  const accept = verifySkill.split("--accept")[0]?.slice(-600) ?? "";
+  check("[DT-28] the verify skill runs --accept only on the user's explicit word, then re-runs the compare",
+    /verify-screen\.js" --accept/.test(verifySkill) && /only on their explicit word/i.test(accept) && /re-run step 4/i.test(verifySkill));
+  check("[DT-28] the verify skill: a waiver binds node id + field + designed + built + export hash and reopens; never waivable: missing component, failed interaction, not measured; descopes are the user's",
+    /node id \+ field \+ designed value \+ built value.{0,80}whole export/.test(verifySkill) && /reopens/.test(verifySkill)
+    && /Never waivable: a missing component, a failed interaction, anything not measured/.test(verifySkill) && /descope.{0,200}only the user decides/i.test(verifySkill)
+    && /`undesigned`.{0,200}never blocks a pass/.test(verifySkill));
+  check("[DT-28] the screen-builder never writes waivers/descopes or runs --accept", /never write `waivers\[\]` or `descopes\[\]`.{0,80}never run `verify-screen\.js --accept`/.test(builder));
+  check("[DT-28] build-screen names verified-with-deviations; sync-design says a re-export reopens waivers",
+    /`verified-with-deviations`/.test(skill) && /reopens every waiver/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
+}
 report();

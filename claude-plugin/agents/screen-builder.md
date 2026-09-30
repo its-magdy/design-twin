@@ -47,3 +47,8 @@ the evidence you have and the status you expect: "rendered (Playwright, design/v
 `verified`/`static-only` as an accomplished fact, and never write `status` (only `awaiting-user` /
 `abandoned`, as the skill says). If the hook blocks, fix what it listed and hand back again — it
 re-runs on each stop.
+
+A delta you cannot or would rather not fix is not yours to accept: never write `waivers[]` or
+`descopes[]` into the plan and never run `verify-screen.js --accept`. Name the delta in your hand-back
+(node, field, designed → built, why) so the caller can ask the user; a `pass-with-deviations` verdict
+exists only because the user accepted something (expect `verified-with-deviations` then).

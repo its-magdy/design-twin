@@ -519,7 +519,9 @@ Copy this checklist into your notes and keep it updated:
      `interactions[]`, or a separate `--interactions <file>`), then writes
      `design/verify/<Screen>.report.json`. Driving each designed interaction is the probe's job — the
      `visual-verifier` agent records the selector it drove; anything nobody drove is reported
-     `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass`.
+     `not-probed`, never `pass`. It exits non-zero unless the verdict is `pass` or
+     `pass-with-deviations` (nothing open, and ≥1 delta the user accepted or interaction the user
+     descoped — see the verify skill; waivers and descopes are the user's word, never yours).
      That verdict is computed, and it is what you report — three passes on one live build all said
      "pass" while a third of the sampled values were wrong, because each compared screenshots and
      structure and none compared numbers.
@@ -576,8 +578,10 @@ Copy this checklist into your notes and keep it updated:
      design/plan/<screen>.json` derives the status: `verified` only when the hook passed, no listed
      file changed since, **and** the screen's `design/verify/<…>.report.json` (schema @2, `--compare`
      run from the project root) says `pass` and measured this design and these files — compared by
-     content hash, never by time, so a no-change re-pull or a `touch` changes nothing — else
-     `failed`, `stale`, `unverified` (no, old or out-of-date report), `static-only`, `blocked` or
+     content hash, never by time, so a no-change re-pull or a `touch` changes nothing —
+     `verified-with-deviations` when it says `pass-with-deviations` instead, else
+     `failed`, `stale`, `unverified` (no, old or out-of-date report — including one computed before
+     the plan's `waivers[]`/`descopes[]` last changed), `static-only`, `blocked` or
      `pending`. Write `status` yourself only as `"abandoned"` (not to be finished) or `"awaiting-user"`
      when you end the turn to ask something the build is blocked on (MISSING token, audit blocker,
      map review; a step-1 pause creates `{screen, status:"awaiting-user", files:[]}`), and back to
@@ -598,6 +602,9 @@ Copy this checklist into your notes and keep it updated:
 
    > Verification: rendered (`<renderer>`, `design/verify/<screen>.png`); `--compare` verdict `pass`,
    > 180/254 nodes measured. Expected computed status after the Stop hook: `verified`.
+
+   With `pass-with-deviations`, expect `verified-with-deviations` and list each accepted delta (node,
+   field, designed → built, the user's reason) under verification evidence — accepted is not "matches".
 
    `static-only` means "built, not visually verified" — never "matches the design". If the hook
    blocks, fix what it listed and hand back again; it re-runs on every stop.

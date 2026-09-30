@@ -39,9 +39,10 @@
 //   { result: "pass"|"blocked", checkedAt, blocking:[…], warnings:N, planHash, files:{<path>: <sha256/16>|null} }
 // and `computeStatus()` derives the status at read time from THREE facts that must all hold:
 //   hook result "pass"  AND  every file in files[] still hashes the same  AND  the verify report
-//   (design/verify/<…>.report.json, schema @2) says "pass" and measured THIS design and THIS code —
-//   by content: its inputs.exportContentSha256 equals the export's (timestamps stripped) and its
-//   inputs.code.files equal the files' hashes now. No clock is consulted (livetest-4 314/317).
+//   (design/verify/<…>.report.json, schema @2) says "pass" (or "pass-with-deviations") and measured THIS
+//   design and THIS code — by content: its inputs.exportContentSha256 equals the export's (timestamps
+//   stripped), its inputs.code.files equal the files' hashes now, and its inputs.waivers.sha256 equals the
+//   hash of the plan's waivers[]/descopes[] now (absent = none). No clock is consulted (livetest-4 314/317).
 // A stored "verified"/"static-only" (written by an older hook) is ignored by computeStatus and
 // deleted the next time the hook checks that plan. `status` keeps only the states a PERSON sets:
 // "pending" (default) · "awaiting-user" (paused on a question — skipped, never closed) ·
@@ -49,9 +50,11 @@
 // `verify-build.js --status` instead of trusting a field.
 //
 // Computed statuses: pending (hook has not checked this version of the plan) · blocked · stale (a
-// file changed since the hook passed) · failed (a verify report exists and does not say pass) ·
+// file changed since the hook passed) · failed (a verify report exists and says fail) ·
 // unverified (no report; a report that is "incomplete", older than schema @2, or that measured a
-// different design or different code) · static-only · verified.
+// different design, different code or different waivers) · static-only · verified ·
+// verified-with-deviations (every report passes and ≥1 says "pass-with-deviations": accepted deltas or
+// descoped interactions, D5/D20).
 //
 // ---------------------------------------------------------------- when it runs
 // Fast path: a plan is OPEN when its status is "pending" (or absent/legacy), it was touched within
@@ -77,6 +80,7 @@ import { auditGateStatus } from "./audit-gate.ts";
 import { isJsonObject } from "./types.ts";
 import { colorKey } from "./color.ts";
 import { scriptCmd } from "./cli-args.ts";
+import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { isPageIndex, isPagesRootIndex, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
@@ -184,7 +188,7 @@ function rootOfPlan(file: string, fallback?: string): string {
 // older hook) is a computed value that must not be trusted, and counts as pending.
 const REPORT_SCHEMA_V2 = "designtwin/verify-report@2";
 const LIFECYCLE = new Set<string>(["pending", "awaiting-user", "abandoned"]);
-const COMPUTED_STORED = new Set<string>(["verified", "static-only"]);
+const COMPUTED_STORED = new Set<string>(["verified", "verified-with-deviations", "static-only"]);
 const isLifecycle = (s: string): s is PlanLifecycle => LIFECYCLE.has(s);
 const lifecycleOf = (plan: Plan | null | undefined): PlanLifecycle => {
   const s = String((plan && plan.status) || "pending").trim().toLowerCase();
@@ -199,10 +203,14 @@ function fileHashes(plan: Plan | null | undefined, cwd: string): Record<string, 
   return contentHash.fileHashes(plan && plan.files, cwd); // the same hashes verify-screen --compare records
 }
 
-// The plan's own content, minus what the hook writes and what is not the plan's substance.
+// The plan's own content, minus what the hook writes and what is not the plan's substance. The owner's
+// waivers[]/descopes[] are left out too — accepting a delta must not send the hook back to pending; a
+// report records their hash instead (inputs.waivers.sha256), and reportVerdict() compares that.
 function planHash(plan: Plan | null | undefined): string {
   const copy: Plan = structuredClone(plan || {});
   delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
   if (copy.verification) {
     delete copy.verification.hook;
     if (!Object.keys(copy.verification).length) delete copy.verification;
@@ -583,6 +591,8 @@ export interface ReportRef {
   rel: string; matchedBy: ReportMatch; schema: string | null; verdict: VerifyReport["verdict"] | null; headline: string | null; why: string[]; deltas: VerifyDelta[] | null;
   exportedAt: string | null; measuredAt: string | null; mtimeMs: number; exportContentSha256: string | null; code: CodeInputs | null;
   expectationChanged: boolean; expectationRel: string | null;
+  /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
+  waiversSha256: string | null;
 }
 
 // Finding 156: the verification block contradicting itself in adjacent keys.
@@ -604,7 +614,9 @@ function verificationContradictions(plan: Plan, reports: ReportRef[] | null | un
     for (const k of ["verifyScreenVerdict", "verdict"] as const) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
-      if (typeof s === "string" && /pass/i.test(s) && r.verdict !== "pass") out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
+      if (typeof s === "string" && /pass/i.test(s) && !isPassingVerdict(r.verdict)) out.push(`verification.${k} says ${JSON.stringify(s)} but ${r.rel} says verdict ${JSON.stringify(r.verdict)} — the report is the verdict; the plan cannot overrule it`);
+      // accepted deviations are not a plain pass: the plan must not summarise them away
+      else if (typeof s === "string" && /^\s*pass\s*$/i.test(s) && r.verdict === "pass-with-deviations") out.push(`verification.${k} says "pass" but ${r.rel} says "pass-with-deviations" — say the accepted deviations, not a plain pass`);
     }
   }
   return out;
@@ -1115,8 +1127,9 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // `<stem>.expected.json` is this frame's (`frame.nodeId`, verify-expectation@2), or whose `screen` is
 // the frame's layer name when that name is unique in the export (the pre-P3 `JobRoles.report.json`
 // naming carries only the layer name). Every match counts; ONE failing report is enough to fail.
-// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|fail|incomplete,
-// `headline`, `inputs.expectationSha256` — the expectation it was computed against).
+// Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
+// incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,
+// `inputs.waivers.sha256` — the plan waivers/descopes it applied).
 function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
   const dir = path.join(cwd, "design", "verify");
   if (!fs.existsSync(dir)) return [];
@@ -1153,7 +1166,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
     out.push({ rel: path.relative(cwd, abs).split(path.sep).join("/"), matchedBy: by, schema: r.schema || null, verdict: r.verdict || null, headline: r.headline || null,
       why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
       exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
-      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null });
+      expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
+      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null });
   }
   return out;
 }
@@ -1163,7 +1177,12 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
 interface Verdict { status: PlanComputedStatus; reasons: string[] }
 
 // What the verify report(s) say about this plan, on their own: { status, reasons }. status is one of
-// failed | unverified | static-only | verified. Never empty reasons.
+// failed | unverified | static-only | verified | verified-with-deviations. Never empty reasons.
+// A report that recorded no inputs.waivers (older than group 9) applied none: it stays fresh while the
+// plan has none, and goes stale once the owner accepts one.
+const NO_WAIVERS = waiversHash(null);
+const waiversChanged = (r: ReportRef, now: string): boolean => (r.waiversSha256 || NO_WAIVERS) !== now;
+const WAIVERS_CHANGED = "waivers changed since the last compare — re-run --compare (with --plan <plan.json> when several plans describe the frame)";
 function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: ReportRef[]): Verdict {
   const v = plan.verification;
   if (!reports.length) {
@@ -1175,11 +1194,13 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
   if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
+  const waiversNow = waiversHash(plan);
   const failing = reports.filter((r) => r.verdict === "fail");
-  if (failing.length) return { status: "failed", reasons: failing.map(said) };
+  // A fail stays a fail until it is re-compared — but say when the owner has since accepted something.
+  if (failing.length) return { status: "failed", reasons: failing.map((r) => said(r) + (waiversChanged(r, waiversNow) ? ` — ${WAIVERS_CHANGED}` : "")) };
   // "incomplete" (@2: nothing failed, but not everything was measured/probed) or no verdict at all is
   // not a pass — and not a failure the build caused either.
-  const notPass = reports.filter((r) => r.verdict !== "pass");
+  const notPass = reports.filter((r) => !isPassingVerdict(r.verdict));
   if (notPass.length) return { status: "unverified", reasons: notPass.map(said) };
   // Freshness is decided by CONTENT, never by a clock (findings 314/317): not exportedAt (a no-change
   // re-pull rewrites it), not mtimes (a `touch` or a fresh clone reorders them).
@@ -1196,9 +1217,12 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
     const now = fileHashes(plan, cwd);
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
+    if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
   const head = reports.map((r) => r.code && r.code.gitHead).find(Boolean);
-  return { status: "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} says pass and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
+  const withDeviations = reports.filter((r) => r.verdict === "pass-with-deviations");
+  const says = withDeviations.length ? `says pass (${withDeviations.map((r) => r.rel).join(", ")}: pass-with-deviations — accepted deltas / descoped interactions are listed in the report)` : "says pass";
+  return { status: withDeviations.length ? "verified-with-deviations" : "verified", reasons: [`${reports.map((r) => r.rel).join(", ")} ${says} and measured this design and exactly these files (by content)${head ? ` — at git ${head.slice(0, 12)}` : ""}`] };
 }
 
 /** computeStatus()'s options: where the plan lives (for locating its export/reports), or those pre-located. */
@@ -1212,7 +1236,7 @@ export interface StatusResult { status: PlanComputedStatus; reasons: string[]; r
 //   3. blocked   — the Stop hook's last check blocked
 //   4. stale     — a file in files[] changed since the hook passed
 //   5. pending   — the hook has not checked this version of the plan
-//   6. unverified / static-only / verified — what the report says (see reportVerdict)
+//   6. unverified / static-only / verified / verified-with-deviations — what the report says (see reportVerdict)
 // `reasons` is never empty for a non-verified status: it always carries the hook's state AND what the
 // report(s) say (a report too old to trust is named with its schema), plus a note when a stored
 // "verified"/"static-only" was ignored.
@@ -1239,7 +1263,7 @@ function computeStatus(plan: Plan, opts?: StatusOptions): StatusResult {
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
   if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
   if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
 }
 
 // ================================================================ fan-out scoping
@@ -1421,9 +1445,11 @@ const USAGE = [
   "  3. blocked      the Stop hook's last check blocked",
   "  4. stale        a file in files[] changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
-  "  6. unverified | static-only | verified   what the report says: verified only for an @2 'pass' that",
-  "     measured this design and these files, by content hash (no report / a pre-@2 report / other",
-  "     design or code -> unverified). A stored \"verified\" is ignored.",
+  "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
+  "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
+  "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
+  "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
+  "     A stored \"verified\" is ignored. waivers[]/descopes[] are not part of the hook's planHash.",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}.",
 ].join("\n");

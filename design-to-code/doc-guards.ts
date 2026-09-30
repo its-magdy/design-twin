@@ -14,7 +14,7 @@ import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
   AuditOverridesDoc, AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
-  ProbeFrame, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  PlanDescope, PlanWaiver, ProbeFrame, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
 
@@ -215,7 +215,7 @@ isVerifyReport.expected = "a verify report (the verify-screen script's --compare
 // A plan is written by plan-skeleton.js and then FILLED by a model or a person, so it is the one document
 // here whose shape is genuinely in doubt. parsePlan names the first field that is the wrong kind of value
 // rather than answering a bare yes/no.
-const PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"] as const;
+const PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"] as const;
 const PLAN_OBJECTS = ["anchors", "verification", "counts"] as const;
 const PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"] as const;
 /** Why `x` is not a plan (one line, naming the field), or null when it is one. */
@@ -225,7 +225,7 @@ function planProblem(x: unknown): string | null {
   for (const k of PLAN_OBJECTS) if (x[k] !== undefined && !isObj(x[k])) return `is not a valid plan: \`${k}\` must be an object`;
   for (const k of PLAN_STRINGS) if (x[k] !== undefined && x[k] !== null && typeof x[k] !== "string") return `is not a valid plan: \`${k}\` must be a string`;
   if (x.files !== undefined && !isStringArray(x.files)) return "is not a valid plan: `files` must be an array of paths (strings)";
-  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden"] as const) {
+  for (const k of ["tokens", "components", "allowedLiterals", "deviations", "hidden", "waivers", "descopes"] as const) {
     const list = x[k];
     if (Array.isArray(list) && !list.every(isObj)) return `is not a valid plan: every \`${k}\` entry must be an object`;
   }
@@ -249,6 +249,21 @@ isPlan.expected = "a plan (started by the plan-skeleton script): an object whose
 export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
 }
+
+// plan.waivers[] / plan.descopes[] rows (D5/D20). The plan guard only asks for objects (a hand-edited row must
+// not make the whole plan unreadable); --compare applies the rows these accept and lists the others.
+const reqStr = (v: unknown): boolean => typeof v === "string" && v.trim() !== "";
+/** One plan.waivers[] row a --compare can apply: every binding field present. */
+export function isPlanWaiver(x: unknown): x is PlanWaiver {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.field) && x.designed !== undefined && x.built !== undefined && reqStr(x.exportContentSha256)
+    && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt) && (x.tolerance === undefined || (typeof x.tolerance === "number" && x.tolerance >= 0)) && optStr(x.cause);
+}
+isPlanWaiver.expected = "a plan waiver {nodeId, field, designed, built, exportContentSha256, reason, decidedBy, decidedAt, tolerance?, cause?}";
+/** One plan.descopes[] row a --compare can apply. */
+export function isPlanDescope(x: unknown): x is PlanDescope {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
+}
+isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
 
 /** A JSON object whose every value is a string (an asset-hash sidecar: path -> hash). */
 export function isStringRecord(x: unknown): x is Record<string, string> {
