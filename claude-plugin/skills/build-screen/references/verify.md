@@ -122,17 +122,47 @@ rendered frame is a legitimate result; an unstated one is not, because the repor
 A full verify pass is minutes, not seconds, and every stack's render step is silent while it works —
 a dev server booting, a simulator coming up, a Gradle task compiling, a golden test warming. Observed
 in practice: a pass that ran ~25 minutes with the caller unable to distinguish progress from a hang.
-So **write a status file as you go**: `design/verify/<screen>.status.json`, rewritten at each step
-with `{"screen", "phase", "detail", "at": "<ISO>"}`, where `phase` is
+So **report status as you go**, through the tool, never by hand-writing the file:
+`node <scripts>/verify-screen.js --status <screen> --phase <p> --run <id> [--detail "<one line>"]`
+(first call `--new-run`; it prints `run <id> rev <n>`; without `--run` it only continues a run that has not ended).
+The tool owns the status (`designtwin/verify-status@2`: `runId`, `rev`, `phase`, `detail`, `at`, and the shas of
+the expectation, measured and evidence files), so `at` is never a hand-written clock. The LIVE status is in the run
+cache, `node_modules/.cache/designtwin-verify/<screen>.status.json` (the project's own, beside the nearest
+`package.json` at or above `design/verify` — the workspace root's in a hoisted monorepo, never past the repo's
+`.git`, created if missing; `--status` prints the path) — no dev server watches
+it, so heartbeats are free; `done` publishes the final status as `design/verify/<screen>.status.json`, the durable
+record. With no `package.json` (or Yarn PnP) the run cache is under the OS temp dir, which sandboxed and
+unsandboxed commands do not share: run every `--status`, `--wait`, probe and `--compare` of one run the same way. Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it —
+the sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow
+writes there; the probe only prints the same as a warning and keeps its exit codes. `--status` and
+`--wait` resolve `--dir` (default `design/verify`) against the current directory; from elsewhere pass `--dir` (an
+absolute path works). Never reinstall dependencies (`npm ci`, `npm install`) during a verify run: it clears
+`node_modules/.cache`, the live status and staged artefacts with it. `phase` is
 
-`starting` → `renderer-found` → `renderer-ready` → `rendered` → `comparing` → `done` (or `failed`)
+`queued` → `starting` → `renderer-found` → `renderer-ready` → `measuring` → `measured` → `driving` → `done` (or `failed`, or `blocked`)
 
 `renderer-ready` is whatever "ready to capture" means on your stack — dev server answering, simulator
-booted, emulator up, test harness compiled. One Write per phase is the whole cost.
+booted, emulator up, test harness compiled. On web the probe writes `measuring`/`measured` itself with `--run <id>`. `measured` and `done` check
+the file: `<Screen>.measured.json` must exist and name the current expectation (on native, write it first).
+`blocked` means a permission denial stopped the run (detail = the denied command): hand back "blocked on
+permissions: done / remaining" and suggest a narrow allow rule; never `dangerouslyDisableSandbox`. Retry a
+transient no-verdict ("temporarily unavailable …, so auto mode cannot determine the safety of …") only twice,
+unchanged; "a safety check separate from auto mode blocked this request" is no verdict, and retrying will not fix it —
+finish other work, then `blocked`; a block naming a rule is never retried or rephrased.
 
-The caller polls that file instead of guessing: a changed `at` means working, an `at` that has not
-moved in several minutes means genuinely stuck, and `phase` says which step to blame. Delete nothing
-— the final `done`/`failed` record is useful afterwards.
+The caller waits with `node <scripts>/verify-screen.js --wait <screen> --run <id>` (exit 0 done, 1 failed or
+blocked, 5 timeout or no progress, 6 run cache not accessible; default `--timeout 1200` s, `--stall 300` s) instead of a poll loop: a changed `rev`
+means working, a `rev` that has not moved for minutes means genuinely stuck, and `phase` says which step to blame.
+Stage the other artefacts (`evidence.json`, state PNGs) in the run's stage dir,
+`node_modules/.cache/designtwin-verify/stage/<runId>/` (printed as `stage` by `--status`), and publish them with
+`--phase done --run <id> --publish <stageDir>` after closing the browser (`done` checks the measured file first,
+then copies): nothing is written into the project while a page of the app is open — on a Vite + Tailwind v4 app a
+rewrite under `design/` fully reloads it. The probe and `--compare` write into `design/verify/` as well, so close
+every page and browser of the app you opened BEFORE running the probe or `--compare` (the probe opens and closes its
+own browser and writes only after closing it). Close only what you opened; stop only a PID you started and recorded; never
+`pkill -f`, `killall` or a pattern kill. After a probe exit 4 (incl. `--max-time`), one re-run, then `failed`.
+Rebuild before measuring a preview/static build; the report prints the build identity and warns
+`SAME BUILD SERVED`.
 
 **On timings, so nobody chases a phantom:** the same verifier legitimately takes far longer inside a
 build than standalone, and that is not a bug. Standalone is one capture against finished code with

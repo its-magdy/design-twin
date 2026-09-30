@@ -12,6 +12,7 @@
 //
 //   verify-probe.js --expected design/verify/<S>.expected.json --url <url> [--out design/verify/<S>]
 //                   [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]
+//                   [--run <id>] [--max-time <ms>]
 //   verify-probe.js --check [--project <dir>]
 //
 // Playwright is the PROJECT's (D2): resolved with createRequire(<project>/package.json) — playwright, then
@@ -19,7 +20,13 @@
 // downloaded by this script. Its types are `import type` only (erased from the bundle).
 //
 // Exit: 0 wrote · 2 usage · 3 renderer unavailable (nothing written) · 4 the page kept navigating, reloaded
-// twice during measurement, was unreachable or timed out (nothing written).
+// twice during measurement, was unreachable or timed out, or the whole run passed --max-time (nothing written).
+//
+// Group 10: the whole run is bounded (--max-time, F-107: a page whose script never yields used to hang the
+// verifier for good); with --run <id> the probe writes the run's status itself — `measuring` before the browser
+// starts, `measured` + the measured file's sha256 after it is closed, and nothing while a page is open (F-72,
+// F-91); files are written atomically, the screenshot first and measured.json last (a reader that sees the
+// measured file sees its picture); measured.build records what was served (DT-81: a stale preview).
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -28,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page } from "playwright";
+import { spawnSync } from "node:child_process";
 import { collectCandidates, focusablePath, focusInfo, measureElements } from "./probe-page.ts";
 import type { Candidate, CollectOutput, MeasureItem, Rect } from "./probe-page.ts";
 import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
@@ -35,9 +43,12 @@ import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-screen.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
-import { cliParse, scriptCmd } from "./cli-args.ts";
+import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
-import type { MeasuredComponent, MeasuredNode, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, VerifyMeasured, VerifySpec } from "./types.ts";
+import type { BuildIdentity, MeasuredComponent, MeasuredNode, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, VerifyMeasured, VerifySpec } from "./types.ts";
+import { gitHead } from "./content-hash.ts";
+import { RunCacheUnwritable, liveStatusFile, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
+import type { StatusWrite } from "./verify-run.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { errMsg } from "../bridge/src/errmsg.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts";
@@ -115,6 +126,25 @@ function probeVersion(): string | null {
   return null;
 }
 const selfSha256 = (): string => crypto.createHash("sha256").update(fs.readFileSync(SELF)).digest("hex");
+
+// DT-81: what was SERVED. Every same-origin document/script/stylesheet response body is hashed (by path, the
+// query dropped: Vite's ?v=/?t= stamps change without the code changing), so two runs against an unchanged
+// `vite preview` of a stale dist carry the same assetsSha256 whatever the source tree says.
+type ServedBuild = Omit<BuildIdentity, "gitHead" | "gitDirty">;
+const BUILD_TYPES = new Set(["document", "script", "stylesheet"]);
+export function buildFrom(url: string, served: ReadonlyMap<string, string>, viteClient: boolean): ServedBuild {
+  const lines = [...served].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, h]) => `${p} ${h}`);
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")) };
+}
+/** The project's git state — null when it is not a git work tree. Changes under design/ (the verifier's own files) do not count. */
+function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | null } {
+  const head = gitHead(dir);
+  if (!head) return { gitHead: null, gitDirty: null };
+  try {
+    const r = spawnSync("git", ["status", "--porcelain", "--", ".", ":(exclude)design"], { cwd: dir, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return { gitHead: head, gitDirty: r.status === 0 ? String(r.stdout || "").trim() !== "" : null };
+  } catch { return { gitHead: head, gitDirty: null }; }
+}
 
 // ---------------------------------------------------------------- readiness + navigation (DT-39, D19)
 // Injected before any page script, on every navigation: no transitions, no animations, no caret — so what
@@ -349,7 +379,7 @@ function hoverTarget(c: Candidate | null, byTag: Map<string, Candidate[]>): stri
 }
 
 export type ProbeRun =
-  | { kind: "ok"; result: PassResult; navigation: ProbeNavigation; consoleErrors: string[] }
+  | { kind: "ok"; result: PassResult; navigation: ProbeNavigation; consoleErrors: string[]; build: ServedBuild }
   | { kind: "navigation"; why: string; navigation: ProbeNavigation }
   | { kind: "browser-gone"; why: string; navigation: ProbeNavigation };
 
@@ -357,7 +387,24 @@ export type ProbeRun =
 export async function runProbe(browser: Browser, o: ProbeOptions): Promise<ProbeRun> {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
   const page = await context.newPage();
+  // F-107: every Playwright action waits at most --timeout (the default is 30 s, but only for some calls)
+  page.setDefaultTimeout(o.timeout);
   await page.addInitScript({ content: INIT_SCRIPT });
+  // DT-81: same-origin responses of the current pass (a re-run starts a new generation)
+  let origin = "";
+  try { origin = new URL(o.url).origin; } catch { /* goto reports the bad url */ }
+  const served = new Map<string, string>();
+  const bodies: Array<Promise<void>> = [];
+  let gen = 0, viteClient = false;
+  page.on("response", (res) => {
+    if (!BUILD_TYPES.has(res.request().resourceType())) return;
+    let u: URL;
+    try { u = new URL(res.url()); } catch { return; }
+    if (u.origin !== origin) return;
+    if (u.pathname === "/@vite/client") viteClient = true;
+    const g = gen;
+    bodies.push(res.body().then((b) => { if (g === gen) served.set(u.pathname, sha256Of(b)); }, () => undefined)); // a redirect has no body
+  });
   const log: NavLog = { events: [], navs: 0, gotos: 0, t0: Date.now() };
   const consoleErrors: string[] = [];
   page.on("framenavigated", (f) => { if (f === page.mainFrame()) { log.navs++; log.events.push({ type: "framenavigated", url: f.url(), at: Date.now() - log.t0 }); } });
@@ -369,8 +416,10 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
   try {
     for (;;) {
       try {
+        gen++; served.clear(); viteClient = false;
         const result = await pass(page, log, o);
-        return { kind: "ok", result, navigation: nav(reruns), consoleErrors };
+        await Promise.allSettled(bodies);
+        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient) };
       } catch (e) {
         if (e instanceof BrowserGoneError) return { kind: "browser-gone", why: e.message, navigation: nav(reruns) };
         if (e instanceof KeptNavigatingError) return { kind: "navigation", why: e.message, navigation: nav(reruns) };
@@ -388,14 +437,20 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
 const USAGE =
   "usage:\n" +
   `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
-  "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]\n" +
+  "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
   "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
   "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
+  "      --run <id> (from verify-screen --status … --new-run): writes the run's LIVE status (the run cache,\n" +
+  "      node_modules/.cache/designtwin-verify/<Screen>.status.json — never the project tree a dev server watches) — `measuring`\n" +
+  "      before the browser starts, `measured` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev.\n" +
+  "      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).\n" +
   `  ${scriptCmd("verify-probe")} --check [--project <dir>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
-  "      navigating / reloaded twice during measurement / was unreachable / timed out (nothing written).";
+  "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time (nothing written).";
+
+const MAX_TIME_DEFAULT = 180_000, CLOSE_CAP_MS = 10_000;
 
 export async function main(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
@@ -403,11 +458,15 @@ export async function main(argv: string[]): Promise<number> {
   const OPTIONS = {
     expected: { type: "string" }, url: { type: "string" }, out: { type: "string" }, ready: { type: "string" }, viewport: { type: "string" },
     project: { type: "string" }, position: { type: "boolean" }, timeout: { type: "string" }, check: { type: "boolean" }, help: { type: "boolean", short: "h" },
+    run: { type: "string" }, "max-time": { type: "string" },
   } as const;
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: false }));
   const project = path.resolve(f.project ?? ".");
   const timeout = f.timeout === undefined ? 30_000 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) { console.error(`verify-probe: --timeout must be a positive number of milliseconds\n${USAGE}`); return 2; }
+  const maxTime = f["max-time"] === undefined ? MAX_TIME_DEFAULT : Number(f["max-time"]);
+  if (!Number.isFinite(maxTime) || maxTime <= 0) { console.error(`verify-probe: --max-time must be a positive number of milliseconds\n${USAGE}`); return 2; }
+  if (f.run !== undefined && (f.check || !/^[\w.:-]+$/.test(f.run))) { console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}\n${USAGE}`); return 2; }
 
   if (!f.check) {
     if (!f.expected || !f.url) { console.error(`verify-probe: --expected and --url are both required\n${USAGE}`); return 2; }
@@ -429,44 +488,99 @@ export async function main(argv: string[]): Promise<number> {
     else notes.push("the expectation states no frame size — measured at 1280x800; pass --viewport");
   }
 
+  const outBase = f.out ?? (f.expected ? path.join(path.dirname(f.expected), path.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  // F-72: the run's status is the one of the expectation's verify dir (design/verify/<S>), even when --out stages
+  // the files elsewhere; H1: it is written to the run cache (liveStatusFile), never into the watched project tree
+  const statusBase = f.expected ? path.join(path.dirname(f.expected), path.basename(outBase)) : "";
+  const expSha = expBytes ? sha256Of(expBytes) : undefined;
+  const runId = f.run !== undefined && !f.check && statusBase ? f.run : undefined;
+  // M-a: a status write the run cache refuses (the sandbox's write scope) is a warning — the probe keeps its exit
+  // contract (0/2/3/4) and never crashes on it. Returns false when the write was refused.
+  const status = (w: StatusWrite): boolean => {
+    try { writeStatus(statusBase, w); return true; } catch (e) {
+      if (!(e instanceof RunCacheUnwritable)) throw e;
+      console.error(`warning  ${e.message}`);
+      return false;
+    }
+  };
+  // an exit 3/4 with --run: the status says so (rev bumped, phase stays measuring — the one allowed re-run follows)
+  const ended = (code: number): number => {
+    if (runId !== undefined && (code === 3 || code === 4)) {
+      status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} — nothing written`, ...(expSha ? { expectationSha256: expSha } : {}) });
+    }
+    return code;
+  };
   const res = resolvePlaywright(project);
-  if (!res.ok) return rendererUnavailable(res.reason, res.hint);
-  const launched = await launch(res, project);
-  if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
-  const browser = launched.browser;
-  const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
+  if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
+  // written BEFORE the browser starts, and outside the project tree (F-91/H1); false when refused (or no --run)
+  const measuringRecorded = runId !== undefined && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...(expSha ? { expectationSha256: expSha } : {}) });
+  if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
 
-  if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
-    await browser.close();
-    console.log(`ok  ${res.pkg} ${res.version} (from ${path.relative(project, res.file) || res.file}) · chromium ${identity.browser.version} · verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…)`);
-    return 0;
-  }
+  // F-107: one bound over launch → measure → close. Past it the browser is closed (at most 10 s more) and nothing is written.
+  const held: { browser?: Browser; timedOut?: boolean } = {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), maxTime); });
+  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity }> => {
+    const launched = await launch(res, project);
+    if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
+    const browser = launched.browser;
+    held.browser = browser;
+    const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
 
-  let run: ProbeRun;
-  try {
-    run = await runProbe(browser, { expectation, url: f.url, ...(f.ready !== undefined ? { ready: f.ready } : {}), viewport, position: !!f.position, timeout });
-  } catch (e) {
+    if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
+      await browser.close();
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path.relative(project, res.file) || res.file}) · chromium ${identity.browser.version} · verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…)`);
+      return 0;
+    }
+
+    let run: ProbeRun;
+    try {
+      run = await runProbe(browser, { expectation, url: f.url, ...(f.ready !== undefined ? { ready: f.ready } : {}), viewport, position: !!f.position, timeout });
+    } catch (e) {
+      await browser.close().catch(() => undefined);
+      if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
+      if (/Timeout .*exceeded/i.test(errMsg(e))) { console.error(`verify-probe: timed out — ${errMsg(e).split("\n")[0]} — nothing written.`); return 4; }
+      throw e;
+    }
     await browser.close().catch(() => undefined);
-    if (e instanceof UnreachableError) { console.error(`verify-probe: ${e.message} — nothing written.`); return 4; }
-    if (/Timeout .*exceeded/i.test(errMsg(e))) { console.error(`verify-probe: timed out — ${errMsg(e).split("\n")[0]} — nothing written.`); return 4; }
-    throw e;
-  }
-  await browser.close().catch(() => undefined);
 
-  if (run.kind === "browser-gone") {
-    console.error(`verify-probe: ${run.why} — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
-    return 4;
+    if (held.timedOut) return 4; // the watchdog closed it — its own message says so
+    if (run.kind === "browser-gone") {
+      console.error(`verify-probe: ${run.why} — nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
+      return 4;
+    }
+    if (run.kind === "navigation") {
+      console.error(`verify-probe: ${run.why} — nothing written.\n` +
+        "  the page reloaded during measurement: move writes out of the dev-server watch tree (see verify.md), or serve a production build.\n" +
+        "  navigation log:\n" + run.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
+      return 4;
+    }
+    return { run, identity };
+  })();
+  const first = await Promise.race([work, watchdog]);
+  clearTimeout(timer);
+  if (first === "timeout") {
+    held.timedOut = true;
+    work.catch(() => undefined); // it rejects once its browser is gone
+    const b = held.browser;
+    // browser.close() closes each page first, and a page whose script never yields does not close — so ask the
+    // browser PROCESS to quit (CDP Browser.close, Chromium), then close the handle; each step capped
+    if (b) {
+      // (unref'd caps: a pending cap must not keep the process alive once the browser is gone)
+      const cap = (): Promise<void> => sleep(CLOSE_CAP_MS, undefined, { ref: false });
+      await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => undefined), cap()]);
+      await Promise.race([b.close().catch(() => undefined), cap()]);
+    }
+    console.error(`verify-probe: timed out after ${maxTime / 1000}s (--max-time) — the browser was closed, nothing written.\n` +
+      "  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).");
+    return ended(4);
   }
-  if (run.kind === "navigation") {
-    console.error(`verify-probe: ${run.why} — nothing written.\n` +
-      "  the page reloaded during measurement: move writes out of the dev-server watch tree (see verify.md), or serve a production build.\n" +
-      "  navigation log:\n" + run.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
-    return 4;
-  }
+  if (typeof first === "number") return ended(first);
+  const { run, identity } = first;
+  if (!expectation || !expBytes || !f.expected || !f.url) return 2; // (--check returned above)
 
   // Everything below runs after browser.close(): nothing is written while the page is live (a write into the
   // dev server's watch tree is what reloaded it mid-measurement, F-91).
-  const outBase = f.out ?? path.join(path.dirname(f.expected), path.basename(f.expected, ".json").replace(/\.expected$/, ""));
   const png = outBase + ".png";
   const r = run.result;
   const frameOut = (fr: ResolvedFrame): ProbeFrame => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
@@ -476,7 +590,7 @@ export async function main(argv: string[]): Promise<number> {
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
     artifacts: [png.split(path.sep).join("/")],
-    expectationSha256: crypto.createHash("sha256").update(expBytes).digest("hex"),
+    expectationSha256: sha256Of(expBytes),
     probe: identity,
     ...(firstFrame ? { frame: frameOut(firstFrame) } : {}),
     ...(r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {}),
@@ -486,18 +600,35 @@ export async function main(argv: string[]): Promise<number> {
     notMeasured: r.notMeasured,
     components: r.components,
     ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
+    ...(f.run !== undefined ? { runId: f.run } : {}),
+    build: { ...run.build, ...gitState(project) },
   };
   const allNotes = [...notes, ...r.notes];
-  fs.mkdirSync(path.dirname(path.resolve(outBase)), { recursive: true });
-  fs.writeFileSync(outBase + ".measured.json", JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n");
-  fs.writeFileSync(png, r.png);
+  // F-72: atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
+  const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+  writeFileAtomic(png, r.png);
+  writeFileAtomic(outBase + ".measured.json", measuredText);
+  // the measured file stays when this write is refused: the run's status still says measuring, so say what records it
+  const statusRefused = runId !== undefined && !status({ runId, phase: "measured", by: "verify-probe", detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+    ...(expSha ? { expectationSha256: expSha } : {}), measuredSha256: sha256Of(measuredText) });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
     ` · frame root via ${firstFrame ? firstFrame.via : "none"} · navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}`);
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${f.expected} ${outBase}.measured.json --out ${outBase}`);
+  if (statusRefused && runId !== undefined) {
+    // M-1: say which write was refused and what --compare will make of it; the recovery records the measured file's
+    // sha after the same checks `done` applies (it reads <verify dir>/<S>.measured.json, else the run's stage dir)
+    const outDir = path.resolve(path.dirname(outBase)), verifyDir = path.resolve(path.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` +
+      (measuringRecorded ? " — the live status still says measuring, so --compare reports the run incomplete"
+        : " (its `measuring` write was refused too) — no live status of the run exists, so --compare will report the run as unrecorded") +
+      `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` +
+      (findable ? "" : ` — after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+  }
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }
 

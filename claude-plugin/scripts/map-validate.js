@@ -5,7 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/read-json.ts

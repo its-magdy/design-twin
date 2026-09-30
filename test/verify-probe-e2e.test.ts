@@ -15,6 +15,7 @@ import type { AddressInfo } from "node:net";
 import { isVerifyMeasured } from "../design-to-code/doc-guards.ts";
 import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-screen.ts";
+import { liveStatusFile, stageDirOf } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 import type { MeasuredNode, VerifyMeasured } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
@@ -23,10 +24,40 @@ const ROOT = path.join(import.meta.dirname, "..");
 const BUNDLE = path.join(ROOT, "claude-plugin", "scripts", "verify-probe.js");
 const FIX = path.join(import.meta.dirname, "fixtures", "probe");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-probe-e2e-"));
+fs.writeFileSync(path.join(tmp, "asset.js"), "window.__plotsBuild = 1;\n");
 
 // ---- a static server on an ephemeral port (no dev server: nothing here reloads unless the page asks to)
+// (group 10: asset.js is served from the temp dir so a test can change the build; /@vite/client stands in for a
+// dev server; every page request records what the run's LIVE status said at that moment, and the state of the
+// project tree outside node_modules — F-91/H1: nothing may be written there while the page is connected)
+const pageSeen: Array<{ status: string | null; tree: string }> = [];
+let statusWatch: { live: string; project: string } | null = null;
+// M-a: runs once when the next page is requested (the probe's `measuring` write is done by then)
+let onPage: (() => void) | null = null;
+function treeState(root: string): string {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === "node_modules") continue;
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else { const st = fs.statSync(f); out.push(`${path.relative(root, f)} ${st.mtimeMs} ${st.size}`); }
+    }
+  };
+  walk(root);
+  return out.sort().join("\n");
+}
 const server = http.createServer((req, res) => {
-  const name = path.basename(new URL(req.url || "/", "http://x").pathname);
+  const pathname = new URL(req.url || "/", "http://x").pathname;
+  if (pathname === "/asset.js" || pathname === "/@vite/client") {
+    const body = pathname === "/asset.js" && fs.existsSync(path.join(tmp, "asset.js")) ? fs.readFileSync(path.join(tmp, "asset.js")) : "/* vite client stand-in */";
+    res.writeHead(200, { "content-type": "text/javascript" });
+    res.end(body);
+    return;
+  }
+  const name = path.basename(pathname);
+  if (onPage !== null) { const f = onPage; onPage = null; f(); }
+  if (statusWatch !== null) pageSeen.push({ status: fs.existsSync(statusWatch.live) ? fs.readFileSync(statusWatch.live, "utf8") : null, tree: treeState(statusWatch.project) });
   const file = path.join(FIX, name);
   if (!name.endsWith(".html") || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -170,6 +201,99 @@ check("[D19] a page that keeps reloading after load → exit 4, nothing written"
 const b6 = path.join(tmp, "run6", "Staff");
 const r6 = await probe(["--expected", expected, "--url", `http://127.0.0.1:${port}/missing.html`, "--out", b6, "--project", ROOT, "--ready", "#never", "--timeout", "1500"]);
 check("[D19] --ready never visible → exit 4, nothing written", r6.status === 4 && !fs.existsSync(b6 + ".measured.json"));
+
+// ---- group 10: F-107 watchdog, F-91/F-72 --run status, DT-81 build identity
+const b7 = path.join(tmp, "run7", "Staff");
+const t7 = Date.now();
+const r7 = await probe(["--expected", expected, "--url", url("busy"), "--out", b7, "--project", ROOT, "--max-time", "4000"]);
+const took7 = Date.now() - t7;
+check(`[F-107] a page whose script never yields + --max-time 4000 → exit 4 within ~8 s (took ${took7} ms), nothing written, says --max-time`,
+  r7.status === 4 && took7 < 12_000 && !fs.existsSync(b7 + ".measured.json") && !fs.existsSync(b7 + ".png") && /--max-time/.test(r7.stderr) && /nothing written/.test(r7.stderr));
+if (r7.status !== 4) console.log(r7.stderr);
+check("[F-107] --max-time must be a positive number → exit 2", (await probe(["--expected", expected, "--url", url(), "--max-time", "0"])).status === 2);
+
+// --run: the status of the expectation's verify dir, written LIVE in the run cache (a consumer project: package.json +
+// node_modules beside design/verify); --out elsewhere (a staging dir) holds the files
+const projDir = path.join(tmp, "app");
+const vdir = path.join(projDir, "design", "verify");
+fs.mkdirSync(vdir, { recursive: true });
+fs.mkdirSync(path.join(projDir, "node_modules"));
+fs.writeFileSync(path.join(projDir, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
+fs.copyFileSync(expected, path.join(vdir, "Staff.expected.json"));
+const liveFile = liveStatusFile(path.join(vdir, "Staff"));
+const stage = path.join(tmp, "stage", "Staff");
+const treeBefore = treeState(projDir);
+statusWatch = { live: liveFile, project: projDir };
+const r8 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage, "--project", ROOT, "--run", "run-e2e-1"]);
+statusWatch = null;
+const readStatus = (f: string): { phase?: unknown; rev?: unknown; runId?: unknown; measuredSha256?: unknown; by?: unknown } | null => readJsonOrNull(f, isJsonObject);
+const seenStatus = pageSeen.map((p) => (p.status === null ? null : ((): unknown => { try { const v: unknown = JSON.parse(p.status); return v; } catch { return null; } })()));
+check("[F-91] with --run, every page request saw the live status the probe wrote BEFORE launch (measuring, rev 1) in node_modules/.cache/designtwin-verify/",
+  r8.status === 0 && pageSeen.length > 0 && liveFile.includes(path.join("node_modules", ".cache", "designtwin-verify")) && seenStatus.every((v) => isJsonObject(v) && v.phase === "measuring" && v.rev === 1 && v.runId === "run-e2e-1"));
+check("[H1] while the page was connected, nothing in the project tree (outside node_modules) was created or modified",
+  pageSeen.length > 0 && pageSeen.every((p) => p.tree === treeBefore) && !fs.existsSync(path.join(vdir, "Staff.status.json")));
+const st8 = readStatus(liveFile);
+const m8 = read(stage);
+check("[F-72] after close: status `measured` rev 2 by verify-probe, measuredSha256 = sha256 of the measured file; measured.runId = the run",
+  st8?.phase === "measured" && st8.rev === 2 && st8.by === "verify-probe" && st8.runId === "run-e2e-1" && fs.existsSync(stage + ".measured.json")
+  && st8.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(stage + ".measured.json")).digest("hex") && m8?.runId === "run-e2e-1");
+check("[F-72] the status is the verify dir's (live, run cache), not in the --out staging dir, and not in design/verify until done; no tmp files left", !fs.existsSync(stage + ".status.json") && treeState(projDir) === treeBefore && fs.existsSync(path.dirname(stage)) && !fs.readdirSync(path.dirname(stage)).some((f) => f.includes(".tmp-")));
+
+// M-a: the run cache turns read-only while the page is measured — the `measured` status write is refused: the
+// measured file stays, exit 0, and a warning names the --status command that records it
+const cache10 = path.dirname(liveFile);
+const stage10 = path.join(tmp, "stage10", "Staff");
+onPage = () => fs.chmodSync(cache10, 0o555);
+const r10 = await probe(["--expected", path.join(vdir, "Staff.expected.json"), "--url", url(), "--out", stage10, "--project", ROOT, "--run", "run-e2e-10"]);
+onPage = null;
+fs.chmodSync(cache10, 0o755);
+const st10 = readStatus(liveFile);
+check("[M-a] a refused post-measure status write → exit 0, the measured file stays, a warning naming the cache and `--status Staff --phase measured --run run-e2e-10`, no stack",
+  r10.status === 0 && fs.existsSync(stage10 + ".measured.json") && /warning {2}run cache \S+ is not writable \(sandbox write scope\?\)/.test(r10.stderr)
+  && /--status Staff --phase measured --run run-e2e-10 --dir /.test(r10.stderr) && !/\n\s+at /.test(r10.stderr) && st10?.phase === "measuring" && st10.runId === "run-e2e-10");
+if (r10.status !== 0) console.log(r10.stderr);
+check("[M-1] …the warning says which write was refused and that the live status still says measuring (compare: incomplete)",
+  /the run cache refused the probe's `measured` status write for run run-e2e-10 — the live status still says measuring/.test(r10.stderr));
+
+// M-1 / L-3: a project whose path holds a space, and a run cache refusing every status write of the run (measuring
+// too): the warning says no live status exists (compare: unrecorded); its recovery command and the `next` line
+// run as printed; the recovery records the measured file's sha
+const spaced = path.join(tmp, "staff app");
+const svdir = path.join(spaced, "design", "verify");
+fs.mkdirSync(svdir, { recursive: true });
+fs.mkdirSync(path.join(spaced, "node_modules"));
+fs.writeFileSync(path.join(spaced, "package.json"), "{\"name\":\"staff-app\",\"private\":true}\n");
+fs.copyFileSync(expected, path.join(svdir, "Staff.expected.json"));
+const sBase = path.join(svdir, "Staff");
+const sLive = liveStatusFile(sBase);
+const sStage = stageDirOf(sBase, "run-e2e-11");
+fs.mkdirSync(sStage, { recursive: true });
+fs.chmodSync(path.dirname(sLive), 0o555);
+const r11 = await probe(["--expected", path.join(svdir, "Staff.expected.json"), "--url", url(), "--out", path.join(sStage, "Staff"), "--project", ROOT, "--run", "run-e2e-11"]);
+fs.chmodSync(path.dirname(sLive), 0o755);
+const recovery = /with: (node .*--phase measured --run run-e2e-11 --dir .*)$/m.exec(r11.stderr)?.[1] ?? "";
+check("[M-1] every status write refused → exit 0, the warning says no live status exists and --compare will report the run as unrecorded",
+  r11.status === 0 && !fs.existsSync(sLive) && /no live status of the run exists, so --compare will report the run as unrecorded/.test(r11.stderr) && recovery !== "");
+if (r11.status !== 0) console.log(r11.stderr);
+const next11 = /^next {2}(.+)$/m.exec(r11.stderr)?.[1] ?? "";
+const c11 = spawnSync("/bin/sh", ["-c", next11], { cwd: os.tmpdir(), encoding: "utf8" });
+check("[M-1/L-3] the printed `next` --compare runs as printed from another directory (paths with a space) → incomplete: 'no status of that run records it'",
+  c11.status === 1 && /no status of that run records it/.test(fs.existsSync(path.join(sStage, "Staff.report.json")) ? fs.readFileSync(path.join(sStage, "Staff.report.json"), "utf8") : ""));
+const rec11 = spawnSync("/bin/sh", ["-c", recovery], { cwd: os.tmpdir(), encoding: "utf8" });
+const st11 = readStatus(sLive);
+check("[M-1/L-3] the printed recovery runs as printed → status measured, measuredSha256 = the staged measured file",
+  rec11.status === 0 && st11?.phase === "measured" && st11.runId === "run-e2e-11" && st11.measuredSha256 === crypto.createHash("sha256").update(fs.readFileSync(path.join(sStage, "Staff.measured.json"))).digest("hex"));
+if (rec11.status !== 0) console.log(rec11.stderr);
+
+const bd = m1?.build;
+check("[DT-81] measured.build: the url, mode static, same-origin assets hashed (document + asset.js), git state of the project", bd !== undefined && bd.url === url() && bd.mode === "static" && bd.assets === 2
+  && /^[0-9a-f]{64}$/.test(bd.assetsSha256) && (bd.gitHead === null || /^[0-9a-f]{40}$/.test(bd.gitHead)) && (bd.gitDirty === null || typeof bd.gitDirty === "boolean"));
+check("[DT-81] the same build served again → the same assetsSha256", m8?.build?.assetsSha256 !== undefined && m8.build.assetsSha256 === bd?.assetsSha256);
+fs.writeFileSync(path.join(tmp, "asset.js"), "window.__plotsBuild = 2;\n");
+const b9 = path.join(tmp, "run9", "Staff");
+const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT]);
+const m9 = read(b9);
+check("[DT-81] the fixture's JS changed → a different assetsSha256; /@vite/client served → mode vite-dev", r9.status === 0 && m9?.build !== undefined && m9.build.assetsSha256 !== bd?.assetsSha256 && m9.build.mode === "vite-dev");
 
 finish();
 report();

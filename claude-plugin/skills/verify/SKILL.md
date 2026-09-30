@@ -134,7 +134,13 @@ Pass several screen files if the build covers a flow; the expectation merges the
 `verify-screen.js` has **no browser**. `--compare` diffs two JSON files; rendering, measuring and
 driving interactions happen here, in the agent, and arrive as data.
 
-On web the verifier runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> [--ready '[data-dt-node="<frame id>"]']` — which matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: designed interactions (and pressed states) and components it judges absent, in `design/verify/<Screen>.evidence.json`. Exit 4 (kept navigating, reloaded, unreachable, timeout) writes nothing: report it.
+On web the verifier first closes every page and browser of the app it opened, then runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> --run <id> [--ready '[data-dt-node="<frame id>"]']` — which matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: designed interactions (and pressed states) and components it judges absent, in `<Screen>.evidence.json` — staged in the run's stage dir and published into `design/verify/` at `done`, never written there directly. Exit 4 (kept navigating, reloaded, unreachable, `--ready` timeout, or the probe's own `--max-time` bound, default 180000 ms) writes nothing: the agent re-runs it ONCE, then records status `failed` and reports the navigation log.
+
+**Rebuild before measuring a preview.** A `vite preview` or static server serves the last build, so rebuild first; the probe records the build identity, and the report prints it and warns `SAME BUILD SERVED` (never verdict-changing) when the served build did not change although the code did.
+
+**Run integrity (status v2).** The agent reports progress with `verify-screen.js --status <Screen> --phase <p> --run <id>` (phases `queued` → `starting` → `renderer-found` → `renderer-ready` → `measuring` → `measured` → `driving` → `done`, or `failed` / `blocked`; never a hand-written file), so pass it a run id (make one with `--new-run`) and wait with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --wait <Screen> --run <id>` (exit 0 done and measured file matches, 1 failed/blocked, 5 timeout or no progress for 300 s, 6 run cache not accessible) instead of a hand-rolled poll loop. Status writes are free: the live status lives in the run cache, `node_modules/.cache/designtwin-verify/<Screen>.status.json` (printed by `--status`; the project's own, beside the nearest `package.json` at or above `design/verify` — the workspace root's in a hoisted monorepo, never past the repo's `.git` — created if missing), which no dev server watches; `done` publishes the final status as `design/verify/<Screen>.status.json`. With no `package.json` (or Yarn PnP) the run cache is under the OS temp dir, which sandboxed and unsandboxed commands do not share — run every `--status`, `--wait`, probe and `--compare` of one run the same way (all sandboxed or all not). Exit 6 from `--status` or `--wait` means the run cache is not writable (or readable) from where you ran it — the sandbox's write scope is the current directory and the temp dir — so run from the project root, or allow writes there; the probe only prints the same as a warning and keeps its exit codes. `--status` and `--wait` resolve `--dir` (default `design/verify`) against the current directory; from anywhere but the project root pass `--dir` (an absolute path works). Never reinstall dependencies (`npm ci`, `npm install`) during a verify run: it clears `node_modules/.cache` — the live status and the staged artefacts with it. It stages `evidence.json` and state PNGs in `node_modules/.cache/designtwin-verify/stage/<runId>/` and publishes them with `--phase done --publish <stageDir>` once its browser is closed — `done` checks the measured file first, then copies — so nothing is written into the project while a page of the app is open (on a Vite + Tailwind v4 app a rewrite under `design/` fully reloads it). The probe and `--compare` write into `design/verify/` too, so close every page and browser of the app you opened BEFORE running the probe or `--compare` (the probe opens and closes its own browser and writes only after closing it). If the page reloads anyway, suggest Vite `server.watch.ignored: ['**/design/**']` or a Tailwind `@source not`, never edit their config. `--compare` reports `incomplete` when the measured file names no expectation, does not match it, or the status says the verifier had not finished or names another measured file, or no status of the measured file's run records it — even with high mismatches: those numbers belong to an unverified run, so they are listed but never graded `fail`.
+
+**Processes and permissions.** Close only what you opened; stop only a PID you started and recorded; never `pkill -f`, `killall` or any pattern kill; reuse a dev server the user already runs. A permission denial is not a sandbox violation: never use `dangerouslyDisableSandbox`, never ask the user to approve a bypass. If the denial is transient ("temporarily unavailable …, so auto mode cannot determine the safety of …", "gave no verdict"), retry the same command unchanged at most twice; if it is "a safety check separate from auto mode blocked this request" (no verdict, but retrying will not help), do not retry — finish other work, then stop; if it is a real block (the classifier names a rule or reason), do not retry or rephrase it. Then status `blocked`, and hand back "blocked on permissions: done / remaining", suggesting the user approve it or add a narrow allow rule for `node …/verify-probe.js` and `node …/verify-screen.js`.
 
 Invoke `designtwin:visual-verifier` with: the screen name, the expectation path, the reference PNG
 path, the code files from `files[]`, the profile, and any state/theme/size the user asked about.
@@ -144,10 +150,9 @@ the expectation's `measuredKeys` lists — `borderRadius`, not `radius`), the sc
 `design/verify/<Screen>.png` it measured, and one result per designed interaction naming the
 selector it drove. It never edits app code, and it never writes the report it is graded by.
 
-**Interaction evidence has its own input channel.** Results go in `design/verify/<Screen>.evidence.json`
-(an object `{interactions: [...], components: [...]}`), passed as `--interactions` (a bare JSON array of `{nodeId, trigger, ok, selector, selectorCount, detail}` also works).
-`ok: true` counts only with the `selector` that was driven and a `selectorCount` of at least 1; a
-result with no evidence, or `ok: null`, is `not-probed`.
+**Interaction evidence has its own input channel.** Results go in `<Screen>.evidence.json` (staged, then published into `design/verify/` by `--phase done --publish`;
+an object `{interactions: [...], components: [...]}`), passed as `--interactions` (a bare JSON array of `{nodeId, trigger, ok, selector, selectorCount, outcome, navEvents, detail}` also works).
+`nodeId` and `trigger` are copied VERBATIM from the expectation row; a result matching no row is listed as "matched no designed interaction". `ok: true` counts only with the `selector` that was driven, exactly ONE match (`selectorCount` 1), an `outcome` (`url-changed` | `dialog-opened` | `selector-appeared` | `state-changed` | `none`) allowed for the designed action, and `navEvents` (documents LOADED during that interaction — a reload or a full navigation, counted from page `load` events or a window marker; a `pushState`/hash change loads none) of 0 — a navigate, back or url action may have `url-changed` with `navEvents` >= 1, and an in-page `url-changed` (`navEvents` 0) passes wherever the action allows it. Anything else, evidence with no `outcome`/`navEvents`, `ok: null`, or no evidence, is `not-probed`.
 
 ## 4. Compute the verdict
 
@@ -179,10 +184,12 @@ How the verdict is computed, all of it deliberate. It is one of four values:
 - **fail** — a high-severity mismatch (type, colour, copy, or a node the design places inside the
   frame rendering outside it — except below the fold of a page that scrolls: a non-fixed node pushed
   down past the frame's bottom edge by a longer page is medium, so incomplete), a designed interaction that was driven and did not work, or a
-  component the probe explicitly reported absent (`present: false`).
+  component the probe explicitly reported absent (`present: false`) — unless the run's integrity failed (below).
 - **incomplete** — medium mismatches (size, spacing, radius, position), interactions nobody probed,
-  node specs never measured, fields the probe did not report, a measurement taken against a different
-  expectation, or no screenshot on disk. A screen can match every pixel and still be the dead mockup
+  node specs never measured, fields the probe did not report, or no screenshot on disk. An integrity
+  failure — a measurement taken against a different expectation or naming none, a run whose status had not
+  finished, or a status naming another measured file — is listed first and makes the verdict `incomplete`
+  even when there are high mismatches: those numbers belong to an unverified run. A screen can match every pixel and still be the dead mockup
   the tooling exists to avoid.
 - **An unmeasured expectation is not a passed one.** `notMeasured` has one row per node spec that got
   no measurement (so `nodesExpected − nodesMeasured` is exactly its length); `fieldsNotMeasured` lists
@@ -207,6 +214,8 @@ How the verdict is computed, all of it deliberate. It is one of four values:
   not block the verdict, and it is not a pass — compare the asset file.
 
 ## 5. Report the file, not an impression of it
+
+**Every claim that is not a measurement carries its evidence** — a reload, a count, a timing, "concurrent edits": the command and its count, the path and its `stat` mtime, or the probe's navigation log. What you could not prove goes in a separate list labelled "unproven leads".
 
 Lead with the report's `headline`, verbatim — it is the coverage line, and that sentence is what
 tells the user how much the verdict is worth. Right after it read the probe/census line and any

@@ -496,7 +496,9 @@ Copy this checklist into your notes and keep it updated:
      architecture than the host) commonly needs one platform-specific flag before it boots; treat that
      failure as a one-line environment fix to make and record, not a reason to fall back to
      `static-only`. Only fall back once starting it has genuinely been tried and failed.
-   - **Measure per node, against the design's own numbers.** Generate the expectation and diff it:
+   - **Measure per node, against the design's own numbers.** Generate the expectation and diff it —
+     close every page and browser of the app you opened BEFORE running the probe or `--compare` (both write
+     into `design/verify/`, and a dev server reloads a page still open on it):
 
      ```
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify/<Screen>
@@ -625,8 +627,10 @@ records which components exist and which designed interactions actually work, an
 the plan's `verification` block, fix the high-severity ones, and re-verify.
 
 It runs for minutes and prints nothing while it does, so it also writes a progress file you can poll
-— `design/verify/<screen>.status.json`, defined in `references/verify.md` ("Saying you're alive").
-**Poll it rather than assuming it hung**: a moving `at` means work is happening, a frozen one is a
+— written by `verify-screen.js --status` into the run cache (`node_modules/.cache/designtwin-verify/`, outside every
+dev-server watch; published as `design/verify/<screen>.status.json` at `done`) and defined in `references/verify.md` ("Saying you're alive").
+**Wait with `verify-screen.js --wait <Screen> --run <id>` rather than assuming it hung** (exit 0 done, 1 failed or
+`blocked` on permissions, 5 timeout or no progress, 6 run cache not accessible): a moving `rev` means work is happening, a frozen one is a
 real stall, and `phase` names the step to blame. Budget for it taking longer inside a build than run
 on its own, since it re-runs once per fix round — that reference explains why.
 

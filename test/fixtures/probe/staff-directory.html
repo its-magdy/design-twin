@@ -37,6 +37,8 @@
   .card { width: 100px; height: 40px; margin-top: 12px; background: #333333; }
   .shift { width: 560px; height: 24px; margin-top: 4px; background: #202020; color: #ffffff; font: 14px/20px Arial, sans-serif; }
 </style>
+<!-- DT-81: a same-origin script the e2e server serves from its temp dir (build identity) -->
+<script src="asset.js"></script>
 </head>
 <body>
 <dialog><h2>Shift Planner</h2><p>Add Rule</p></dialog>
@@ -80,6 +82,10 @@
     setTimeout(() => location.reload(), 200);
   }
   if (mode === "reload-forever") setTimeout(() => location.reload(), 200);
+  // F-107: a script that never yields once the page has loaded — every evaluate after it hangs
+  if (mode === "busy") addEventListener("load", () => setTimeout(() => { for (;;) { /* never yields */ } }, 50));
+  // DT-81: a dev server's client module, as Vite serves it
+  if (mode === "vite") { const s = document.createElement("script"); s.type = "module"; s.src = "/@vite/client"; document.head.appendChild(s); }
   if (mode === "reload-on-first-hover" || mode === "reload-on-every-hover") {
     document.querySelector(".row").addEventListener("mouseenter", () => {
       if (mode === "reload-on-every-hover" || !sessionStorage.getItem("hovered")) { sessionStorage.setItem("hovered", "1"); location.reload(); }

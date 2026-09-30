@@ -13,7 +13,7 @@ import { isJsonObject } from "./types.ts";
 import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
-  AuditOverridesDoc, AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
+  AuditOverridesDoc, AuditReport, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
   PlanDescope, PlanWaiver, ProbeFrame, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
@@ -134,6 +134,11 @@ export function isProbeIdentity(x: unknown): x is ProbeIdentity {
   return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string"
     && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
+/** measured.build — what the probe was served (DT-81). */
+export function isBuildIdentity(x: unknown): x is BuildIdentity {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number"
+    && typeof x.assetsSha256 === "string" && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
 const isProbeFrame = (x: unknown): x is ProbeFrame => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 const isCountMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 const isNavigation = (x: unknown): boolean => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
@@ -148,6 +153,9 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
   ["notMeasured", Array.isArray, "a list — the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) — the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} — read as build: unknown"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {
@@ -207,7 +215,7 @@ isMeasuredComponentList.expected = "component evidence: a JSON array of {setName
 /** <Screen>.report.json (either schema): only the fields verify-build reads are checked. */
 export function isVerifyReport(x: unknown): x is VerifyReport {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline)
-    && (x.why === undefined || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+    && (x.why === undefined || isStringArray(x.why)) && (x.integrity === undefined || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 

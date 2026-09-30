@@ -85,4 +85,93 @@ console.log("verify docs (group 9, pass-with-deviations and waivers):");
   check("[DT-28] build-screen names verified-with-deviations; sync-design says a re-export reopens waivers",
     /`verified-with-deviations`/.test(skill) && /reopens every waiver/.test(flat(read("claude-plugin/skills/sync-design/SKILL.md"))));
 }
+
+console.log("verify docs (group 10, run integrity + agent safety):");
+{
+  // The one phase list: STATUS_PHASES in design-to-code/verify-run.ts (read as text, like STATUSES above);
+  // until that file lands, the list the group's interface fixed.
+  const runSrc = fs.existsSync(path.join(root, "design-to-code/verify-run.ts")) ? read("design-to-code/verify-run.ts") : "";
+  const fromCode = /STATUS_PHASES\s*=\s*\[([^\]]*)\]/.exec(runSrc)?.[1]?.match(/"([^"]+)"/g)?.map((x) => x.slice(1, -1));
+  const phases = fromCode ?? ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+  const chain = (t: string): string[] => {
+    const m = [...t.matchAll(/`queued`[^.]*?(?:`blocked`)/g)][0]?.[0] ?? "";
+    return [...m.matchAll(/`([a-z-]+)`/g)].map((x) => x[1] ?? "");
+  };
+  const inDoc = (t: string): string => phases.map((p) => "`" + p + "`").every((p) => t.includes(p)) ? "ok" : "missing";
+  check("[F-72] the verifier and references/verify.md list exactly STATUS_PHASES, in order, and the old `comparing`/`rendered` phases are gone",
+    JSON.stringify(chain(verifier)) === JSON.stringify(phases) && JSON.stringify(chain(verifyRef)) === JSON.stringify(phases)
+    && inDoc(verifySkill) === "ok" && !/`comparing`|`rendered`|`starting\|renderer-found/.test(verifier + verifyRef));
+  check("[F-72] status is written with verify-screen.js --status --phase --run (never by hand) and waited on with --wait --run, in the verifier, the verify skill, references/verify.md and build-screen",
+    [verifier, verifySkill, verifyRef].every((t) => /--status <Screen> --phase <(phase|p)> --run <id>|--status <screen> --phase <p> --run <id>/.test(t) && /--wait <(Screen|screen)> --run <id>/.test(t))
+    && /never by hand/.test(verifier) && /--wait <Screen> --run <id>/.test(skill) && !/"at": "<ISO timestamp>"|date -u \+%Y-%m-%dT%H:%M:%SZ`\. A/.test(verifier));
+  check("[F-72] the probe is given --run <id> and writes measuring/measured itself", /verify-probe\.js".{0,300}--run <id>/.test(verifier) && /verify-probe\.js.{0,300}--run <id>/.test(verifySkill));
+  // (phrases matched loosely: whitespace and line breaks collapse, case-insensitive where it is prose)
+  const ws = (t: string): string => t.replace(/\s+/g, " ");
+  check("[D9] [F-91] the verifier stages evidence.json and state PNGs in node_modules/.cache/designtwin-verify/stage/<runId>/ and publishes with --phase done --publish; nothing written into the project while a page is open; watch-ignore is only a suggestion",
+    [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/stage\/<runId>\//.test(t) && /--publish <stageDir>/.test(t) && !/<os tmpdir>\/designtwin-verify/.test(t))
+    && /never write into the project tree while a page of the app is open/i.test(verifier) && /server\.watch\.ignored/.test(verifier) && /@source not/.test(verifier) && /suggestions, never edits/i.test(verifier));
+  check("[F-99] every non-measurement claim carries its evidence (command + count, path + stat mtime, navigation log) and unproven leads are listed separately and labelled (verifier and verify skill)",
+    [verifier, verifySkill].every((t) => /not a measurement carries its evidence/i.test(t) && /stat` mtime/.test(t) && /navigation log/.test(t) && /unproven leads/.test(t)));
+  check("[F-105] close only what you opened, stop only a PID you started and recorded, never pkill -f / killall / pattern kills, reuse the user's dev server",
+    [verifier, verifySkill].every((t) => /only what you opened/i.test(t) && /PID you started and recorded/.test(t) && /never `pkill -f`, `killall`/i.test(t) && /(reuse|reusing) a dev server the user/i.test(t)) && /never `pkill -f`/.test(verifyRef));
+  check("[H1] the live status lives in the run cache (node_modules/.cache/designtwin-verify/), so heartbeats never touch the project; done publishes design/verify/<S>.status.json (verifier, verify skill, references/verify.md, build-screen)",
+    [verifier, verifySkill, verifyRef].every((t) => /node_modules\/\.cache\/designtwin-verify\/<(Screen|screen)>\.status\.json/.test(t) && /heartbeats are free|status writes are free/i.test(ws(t)) && /publish\w* the final status/i.test(ws(t)))
+    && /node_modules\/\.cache\/designtwin-verify/.test(skill) && /published as `design\/verify\/<screen>\.status\.json` at `done`/.test(ws(skill)));
+  check("[M3] done checks the measured file before it copies anything (verifier, verify skill, references/verify.md)",
+    /`done` checks first and publishes only then/.test(ws(verifier)) && [verifySkill, verifyRef].every((t) => /`done` checks the measured file first, then copies/.test(ws(t))));
+  check("[F-106] 'a safety check separate from auto mode blocked this request' is labelled a no-verdict denial that retrying will not fix (not a real block); the transient form is 'temporarily unavailable …, so auto mode cannot determine the safety of'",
+    [verifier, verifySkill, verifyRef].every((t) => { const x = ws(t); return /safety check separate from auto mode blocked this request.{0,300}(retrying will not|do not retry)/i.test(x) && /temporarily unavailable.{0,20}so auto mode cannot determine the safety of/i.test(x); })
+    && !/real\* block \(the classifier names a rule or reason, or "a safety check/.test(ws(verifier)));
+  check("[F-106] a permission denial is not a sandbox violation: never dangerouslyDisableSandbox, transient no-verdict retried unchanged at most 2 times, a real block is neither retried nor rephrased, then status blocked + hand-back with a narrow allow rule",
+    [verifier, verifySkill].every((t) => /never (set|use) `dangerouslyDisableSandbox`/i.test(t) && /(at most 2 retries|at most twice)/i.test(t) && /(do not rephrase|do not retry or rephrase)/i.test(t) && /blocked on permissions: done \/ remaining/.test(t) && /narrow allow rule/.test(t))
+    && /`blocked`/.test(verifyRef) && /dangerouslyDisableSandbox/.test(verifyRef));
+  check("[F-107] the probe is bounded by --max-time (exit 4); one re-run after exit 4, then status failed — never a loop", [verifier, verifySkill].every((t) => /--max-time/.test(t) && /ONCE/.test(t) && /status `failed`/.test(t)) && /one re-run/.test(verifyRef));
+  check("[DT-29] nodeId and trigger are copied VERBATIM from the expectation row; a pair that matches no row is reported", /VERBATIM from the\s+expectation row/.test(verifier) && /VERBATIM from the expectation row/.test(verifySkill) && /matched no designed interaction/.test(verifier + verifySkill));
+  check("[F-102] each interaction records outcome (url-changed | dialog-opened | selector-appeared | state-changed | none) and navEvents; a pass needs exactly one match, an allowed outcome, no unexpected navigation; else not-probed; the example carries both fields",
+    [verifier, verifySkill].every((t) => /`url-changed`.{0,20}`dialog-opened`.{0,20}`selector-appeared`.{0,20}`state-changed`.{0,20}`none`/.test(t) && /navEvents/.test(t) && /ONE (matched )?(element|match)/.test(t) && /not-probed/.test(t))
+    && /"outcome": "dialog-opened", "navEvents": 0/.test(verifier));
+  check("[M1] navEvents counts DOCUMENTS LOADED (a reload or a full navigation) — not framenavigated / pushState / hash changes; navigate, back or url may load one; an in-page url-changed passes wherever allowed",
+    [verifier, verifySkill].every((t) => { const x = ws(t); return /documents loaded/i.test(x) && /pushState/.test(x) && /navigate, back or url/.test(x); })
+    && /never count `framenavigated`/.test(ws(verifier)) && /load` events/.test(ws(verifier)) && !/probe's navigation log or your own `framenavigated`/.test(ws(verifier)) && !/Only a designed navigation may have/.test(ws(verifier)));
+  check("[DT-81] rebuild before measuring a preview/static build; the report prints the build identity and warns SAME BUILD SERVED", [verifier, verifySkill, verifyRef].every((t) => /[Rr]ebuild/.test(t) && /SAME BUILD SERVED/.test(t)));
+
+  // ---- group 10 review fix 2
+  // M-1: the probe and --compare write into design/verify too, so every page of the app the agent opened is closed
+  // BEFORE either runs — the rule is stated in each doc, and where a doc shows the probe command, it comes first.
+  const closeRule = /[Cc]lose every page and browser of the app you opened BEFORE running the probe or `--compare`/;
+  const closeAt = (t: string): number => t.search(/close(s)? every page and browser of the app (you|it) opened/i);
+  const probeAt = (t: string): number => t.search(/verify-probe\.js"? \\? ?--expected/);
+  check("[M-1] verifier, verify skill, references/verify.md and build-screen: close every page and browser of the app you opened BEFORE running the probe or --compare",
+    [verifier, verifySkill, verifyRef, skill].every((t) => closeRule.test(t)));
+  check("[M-1] …and the close rule comes BEFORE the probe command wherever a doc shows it (verifier §4, verify skill, build-screen)",
+    [verifier, verifySkill, skill].every((t) => probeAt(t) > 0 && closeAt(t) >= 0 && closeAt(t) < probeAt(t))
+    && /First close every page and browser of the app you opened \(§2\)/.test(verifier) && /first closes every page and browser of the app it opened, then runs the shipped probe/.test(verifySkill));
+  check("[M-1] the probe writes only after closing its own browser (verifier, verify skill, references/verify.md)",
+    [verifier, verifySkill, verifyRef].every((t) => /opens and closes its own browser,? and writes only after closing it/.test(t)));
+  check("[M-1] the verifier no longer says only `done` writes into the project; it names the probe's and --compare's own writes, each with no page open",
+    !/Only `done` writes into the project/.test(verifier) && /Three things write into the project, each with no page of the app open: the probe .{0,200}`--compare` .{0,120}`done`/.test(verifier));
+  // M-2 / M-a: the run cache is the project's own node_modules (nearest package.json, or the hoisted workspace root,
+  // never past .git); the tmpdir fallback (no package.json, PnP) is not shared across the sandbox
+  check("[M-2] [M-a] the run cache is beside the nearest package.json at or above design/verify (a hoisted monorepo's workspace root, never past .git); without one (or PnP) the OS temp dir, not shared by sandboxed and unsandboxed commands — run them all the same way",
+    [verifier, verifySkill, verifyRef].every((t) => /nearest `package\.json` at or above `design\/verify`/.test(t) && /workspace root/.test(t) && /never past the repo's `\.git`/.test(t)
+      && /With no `package\.json` \(or Yarn\s+PnP\)/.test(t) && /sandboxed and unsandboxed commands do not share/.test(t) && /the same way/.test(t) && !/nearest (one|`node_modules`) at or above/.test(t)));
+  check("[M-a] exit 6 = the run cache is not accessible: in every --wait exit list, and each doc says run from the project root or allow writes there; the probe only warns",
+    [verifier, verifySkill, verifyRef, skill].every((t) => /5 timeout or no progress[^)]{0,40}, 6 run cache not accessible/.test(t))
+    && [verifier, verifySkill, verifyRef].every((t) => /Exit 6 from `--status` or `--wait` means the run cache is not writable/.test(t) && /run from the project root, or allow\s+writes there/.test(t) && /the probe only prints the same as a warning/.test(t)));
+  check("[L-b] the verifier says the probe measures in its own browser, so a write reloads the agent's OWN open page and its later interaction evidence",
+    /the probe measures in its own browser, so what a write\s+reloads is YOUR page/.test(verifier) && /interaction evidence you record on it afterwards/.test(verifier) && !/the measurement records 1 document loaded/.test(verifier));
+  // L-4: evidence is staged and published, never written into design/verify directly
+  check("[L-4] the verify skill never has the agent write design/verify/<Screen>.evidence.json directly: staged, then published at done",
+    !/judges absent, in `design\/verify\/<Screen>\.evidence\.json`/.test(verifySkill) && /in `<Screen>\.evidence\.json` — staged in the run's stage dir and published into `design\/verify\/` at `done`, never written there directly/.test(verifySkill));
+  // L-5 / L-7 / L-8
+  check("[L-5] --wait exit 5 is 'timeout or no progress' everywhere (never 'no timeout/progress')",
+    [verifier, verifySkill, verifyRef].every((t) => /5 timeout or no progress/.test(t) && !/no timeout\/progress/.test(t)));
+  check("[L-7] never reinstall dependencies (npm ci / npm install) during a verify run — it clears node_modules/.cache (live status + staged files)",
+    [verifier, verifySkill, verifyRef].every((t) => /Never reinstall dependencies \(`npm ci`, `npm install`\) during a verify run/.test(t) && /clears `node_modules\/\.cache`/.test(t)));
+  check("[L-8] --status/--wait resolve --dir (default design/verify) against the current directory; from elsewhere pass --dir (absolute works)",
+    [verifier, verifySkill, verifyRef].every((t) => /`--status` and `--wait` resolve `--dir` \(default `design\/verify`\) against the current directory/.test(t) && /an absolute path works/.test(t)));
+  // L-6: integrity failures outrank the grades
+  check("[L-6] the verify skill says an integrity failure makes the verdict incomplete even with high mismatches (the numbers belong to an unverified run)",
+    /even when there are high mismatches: those numbers belong to an unverified run/.test(verifySkill) && /even with high mismatches/.test(verifySkill));
+}
 report();

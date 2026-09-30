@@ -2,21 +2,21 @@
 
 
 // design-to-code/verify-screen.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
-import crypto3 from "node:crypto";
+import fs5 from "node:fs";
+import path4 from "node:path";
+import crypto4 from "node:crypto";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path4, parent, depth) {
+  (function go(node, parentHidden, path5, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path5, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path5 ? path5 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -213,6 +213,9 @@ var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof 
 function isProbeIdentity(x) {
   return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
 var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
@@ -223,7 +226,10 @@ var MEASURED_EXTRAS = [
   ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
-  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"]
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -266,7 +272,7 @@ function isMeasuredComponentList(x) {
 }
 isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
@@ -330,12 +336,20 @@ function waiversHash(plan) {
   return crypto2.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
 }
 
+// design-to-code/verify-run.ts
+import fs3 from "node:fs";
+import os from "node:os";
+import path3 from "node:path";
+import crypto3 from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+
 // design-to-code/cli-args.ts
 import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
@@ -380,6 +394,420 @@ ${usage}`);
     process.exit(exitCode);
   }
 }
+
+// design-to-code/verify-run.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var TERMINAL_PHASES = ["done", "failed", "blocked"];
+var MEASURED_PHASES = ["measured", "done"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var statusFile = (base) => base + ".status.json";
+var sha256Of = (data) => crypto3.createHash("sha256").update(data).digest("hex");
+function sha256File(file) {
+  try {
+    return sha256Of(fs3.readFileSync(file));
+  } catch {
+    return null;
+  }
+}
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Of(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs3.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs3.existsSync(p);
+function realpath(p) {
+  if (typeof fs3.realpathSync.native === "function") {
+    try {
+      return fs3.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs3.realpathSync(p);
+}
+function canonical2(p) {
+  const abs = path3.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path3.dirname(abs);
+    return parent === abs ? abs : path3.join(canonical2(parent), path3.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path3.join(d, ".pnp.cjs")) || exists(path3.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path3.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path3.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path3.dirname(d)) {
+    if (exists(path3.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) return null;
+  }
+  if (isDir(path3.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path3.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path3.join(d, ".git")) || path3.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path3.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical2(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path3.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path3.relative(root, v).split(path3.sep).join("/");
+    return { dir: rel === "design/verify" ? cache : path3.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path3.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+var errCode2 = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there (L-4) */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
+function inRunCache(verifyDir, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    const code = errCode2(e);
+    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
+      const c = runCacheOf(verifyDir);
+      throw new RunCacheUnwritable(c.dir, c.root, code);
+    }
+    throw e;
+  }
+}
+var EXIT_RUN_CACHE = 6;
+var liveStatusFile = (base) => path3.join(runCacheDir(path3.dirname(base)), path3.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path3.join(runCacheDir(path3.dirname(base)), "stage", runId);
+function writeFileAtomic(file, data) {
+  fs3.mkdirSync(path3.dirname(path3.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs3.writeFileSync(tmp, data);
+    fs3.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs3.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function newRunId() {
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto3.randomBytes(3).toString("hex");
+}
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function readStatusAt(base) {
+  for (const file of [liveStatusFile(base), statusFile(base)]) {
+    const status = readStatusFile(file);
+    if (status !== null) return { file, status };
+  }
+  return null;
+}
+function readStatus(base) {
+  const r = readStatusAt(base);
+  return r ? r.status : null;
+}
+function writeStatus(base, p) {
+  const prev = readStatus(base);
+  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  const pick = (k) => {
+    const v = p[k] ?? (same ? same[k] : void 0);
+    return v !== void 0 ? { [k]: v } : {};
+  };
+  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
+  const doc = {
+    schema: STATUS_SCHEMA,
+    screen: path3.basename(base),
+    runId: p.runId,
+    rev: same ? same.rev + 1 : 1,
+    phase: p.phase,
+    detail: p.detail ?? "",
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    by: p.by,
+    ...pick("expectationSha256"),
+    ...pick("measuredSha256"),
+    ...pick("evidenceSha256"),
+    ...published !== void 0 ? { published } : {}
+  };
+  const live = liveStatusFile(base);
+  inRunCache(path3.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  return doc;
+}
+function publishStatus(base, doc) {
+  writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
+}
+var TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json)$/;
+function publishStaged(stageDir, destDir) {
+  let entries;
+  try {
+    entries = fs3.readdirSync(stageDir, { withFileTypes: true });
+  } catch (e) {
+    return { error: `--publish ${stageDir}: ${errMsg(e).split("\n")[0]}` };
+  }
+  if (canonical2(stageDir) === canonical2(destDir)) return { error: `--publish ${stageDir} is the verify directory itself \u2014 stage outside the project (D9)` };
+  const files = entries.filter((d) => d.isFile()).map((d) => d.name).sort();
+  const owned = files.filter((f) => TOOL_OWNED.test(f));
+  if (owned.length) return { error: `--publish refuses ${owned.join(", ")} \u2014 expected/report/status files are written by verify-screen itself, never copied in` };
+  fs3.mkdirSync(destDir, { recursive: true });
+  for (const f of files) {
+    const dest = path3.join(destDir, f), tmp = `${dest}.tmp-${process.pid}`;
+    try {
+      fs3.copyFileSync(path3.join(stageDir, f), tmp);
+      fs3.renameSync(tmp, dest);
+    } catch (e) {
+      try {
+        fs3.rmSync(tmp, { force: true });
+      } catch {
+      }
+      return { error: `--publish: copying ${f} failed (${errMsg(e).split("\n")[0]}) \u2014 files before it were published` };
+    }
+  }
+  return { published: files };
+}
+function runBase(screen, dir) {
+  const s = screen.replace(/\.(status|measured|expected|evidence)\.json$/, "");
+  return /[\\/]/.test(s) && dir === void 0 ? s : path3.join(dir ?? path3.join("design", "verify"), s);
+}
+function measuredExpectation(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return { error: `${file} ${r.error}` };
+  if (!isJsonObject(r.doc)) return { error: `${file} is not a JSON object` };
+  const v = r.doc.expectationSha256, run = r.doc.runId;
+  return typeof v === "string" && v ? { sha: v, ...typeof run === "string" && run ? { runId: run } : {} } : { error: `${file} names no expectation (expectationSha256)` };
+}
+function checkMeasured(base, measFile, runId, sameRun, prev) {
+  const exp = sha256File(base + ".expected.json");
+  if (!exp) return { refused: `${base}.expected.json does not exist \u2014 nothing to be done against` };
+  const meas = sha256File(measFile);
+  if (!meas) return { refused: `${measFile} does not exist \u2014 measure first (the probe on web; on native write it with expectationSha256) (phase stays ${prev ? prev.phase : "unset"})` };
+  const named = measuredExpectation(measFile);
+  if ("error" in named) return { refused: `${named.error} \u2014 re-run the probe` };
+  if (named.sha !== exp) return { refused: `${measFile} was measured against expectation ${short(named.sha)}, not the current ${short(exp)} \u2014 re-run the probe` };
+  if (named.runId !== void 0 && named.runId !== runId) return { refused: `${measFile} was measured in run ${named.runId}, not ${runId} \u2014 re-run the probe with --run ${runId}` };
+  if (sameRun && sameRun.measuredSha256 && sameRun.measuredSha256 !== meas) {
+    return { refused: `run ${runId} recorded measured file ${short(sameRun.measuredSha256)} (by the probe), but ${measFile} is ${short(meas)} \u2014 measured again outside this run? re-run the probe with --run ${runId}` };
+  }
+  return { expectationSha256: exp, measuredSha256: meas };
+}
+var RUN_ID = /^[\w.:-]+$/;
+var short = (sha) => sha ? `${sha.slice(0, 12)}\u2026` : "none";
+function statusMain(screen, f, usage) {
+  try {
+    return statusRun(screen, f, usage);
+  } catch (e) {
+    if (e instanceof RunCacheUnwritable) {
+      console.error(e.message);
+      return EXIT_RUN_CACHE;
+    }
+    throw e;
+  }
+}
+function statusRun(screen, f, usage) {
+  if (!screen) {
+    console.error("--status needs the screen name: --status <Screen> --phase <phase>\n" + usage);
+    return 2;
+  }
+  if (!isPhase(f.phase)) {
+    console.error(`--status needs --phase ${STATUS_PHASES.join("|")}${f.phase !== void 0 ? ` (got '${f.phase}')` : ""}
+` + usage);
+    return 2;
+  }
+  if (f.run !== void 0 && f["new-run"]) {
+    console.error("pass --run <id> or --new-run, not both\n" + usage);
+    return 2;
+  }
+  if (f.run !== void 0 && !RUN_ID.test(f.run)) {
+    console.error(`--run must be a run id (letters, digits, . : _ -), got '${f.run}'
+` + usage);
+    return 2;
+  }
+  if (f.by !== void 0 && f.by !== "agent" && f.by !== "orchestrator") {
+    console.error(`--by must be agent or orchestrator (got '${f.by}')
+` + usage);
+    return 2;
+  }
+  const by = f.by === "orchestrator" ? "orchestrator" : "agent";
+  const base = runBase(screen, f.dir);
+  const phase = f.phase;
+  const prev = readStatus(base);
+  const prevV2 = prev && prev !== "v1" ? prev : null;
+  let runId;
+  if (f.run !== void 0) runId = f.run;
+  else if (f["new-run"]) runId = newRunId();
+  else if (prevV2 && !TERMINAL_PHASES.includes(prevV2.phase)) runId = prevV2.runId;
+  else {
+    console.error(`pass --run <id> or --new-run \u2014 ${prevV2 ? `the last run (${prevV2.runId}) ended at ${prevV2.phase}` : prev === "v1" ? "the status on disk is an older hand-written one" : "there is no run in progress"}, so there is nothing to continue
+` + usage);
+    return 2;
+  }
+  const sameRun = prevV2 && prevV2.runId === runId ? prevV2 : null;
+  const S = path3.basename(base), dir = path3.dirname(base);
+  const cache = runCacheDir(dir);
+  inRunCache(dir, () => {
+    fs3.mkdirSync(cache, { recursive: true });
+    const probe = path3.join(cache, `.w-${process.pid}`);
+    fs3.writeFileSync(probe, "");
+    fs3.rmSync(probe, { force: true });
+  });
+  const shas = {};
+  if (phase === "done" || phase === "measured") {
+    const staged = phase === "done" ? f.publish !== void 0 ? path3.join(f.publish, S + ".measured.json") : null : path3.join(stageDirOf(base, runId), S + ".measured.json");
+    const measFile = staged !== null && fs3.existsSync(staged) ? staged : base + ".measured.json";
+    const checked = checkMeasured(base, measFile, runId, sameRun, prevV2);
+    if ("refused" in checked) {
+      console.error(`refused  ${checked.refused}`);
+      return 1;
+    }
+    shas.expectationSha256 = checked.expectationSha256;
+    shas.measuredSha256 = checked.measuredSha256;
+  }
+  let published;
+  if (f.publish !== void 0) {
+    const r = publishStaged(f.publish, dir);
+    if ("error" in r) {
+      console.error(`refused  ${r.error}`);
+      return 1;
+    }
+    published = r.published;
+    console.error(`published ${published.length} file(s) from ${f.publish} into ${dir}${published.length ? `: ${published.join(", ")}` : ""}`);
+  }
+  if (phase === "done") {
+    const evName = S + ".evidence.json";
+    const ours = (published || []).includes(evName) || !!(sameRun && sameRun.published && sameRun.published.includes(evName));
+    const ev = ours ? sha256File(base + ".evidence.json") : null;
+    if (ev) shas.evidenceSha256 = ev;
+    else if (fs3.existsSync(base + ".evidence.json")) console.error(`note  ${base}.evidence.json was not published in run ${runId} \u2014 not recorded as this run's evidence`);
+  }
+  const doc = writeStatus(base, { runId, phase, by, ...f.detail !== void 0 ? { detail: f.detail } : {}, ...shas, ...published ? { published } : {} });
+  if (phase === "done") publishStatus(base, doc);
+  const stage = stageDirOf(base, runId);
+  if (!TERMINAL_PHASES.includes(phase)) inRunCache(dir, () => fs3.mkdirSync(stage, { recursive: true }));
+  console.log(`run ${doc.runId} rev ${doc.rev}`);
+  console.error(`status ${shellArg(liveStatusFile(base))}${phase === "done" ? ` (published to ${shellArg(statusFile(base))})` : ""}`);
+  if (!TERMINAL_PHASES.includes(phase)) console.error(`stage  ${shellArg(stage)}`);
+  return 0;
+}
+var seconds = (v, dflt) => {
+  if (v === void 0) return dflt;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+async function waitMain(screen, f, usage) {
+  if (!screen || f.run === void 0) {
+    console.error("--wait needs the screen name and the run: --wait <Screen> --run <id>\n" + usage);
+    return 2;
+  }
+  const timeout = seconds(f.timeout, 1200), stall = seconds(f.stall, 300), interval = seconds(f.interval, 2);
+  if (timeout === null || stall === null || interval === null) {
+    console.error("--timeout / --stall / --interval must be positive numbers of seconds\n" + usage);
+    return 2;
+  }
+  const base = runBase(screen, f.dir);
+  console.error(`wait  run ${f.run} on ${liveStatusFile(base)} (then ${statusFile(base)})`);
+  const t0 = Date.now();
+  let lastKey = "", lastChange = Date.now(), noted = "";
+  for (; ; ) {
+    const unreadable = cacheUnreadable(base);
+    if (unreadable) {
+      console.error(unreadable.message);
+      return EXIT_RUN_CACHE;
+    }
+    const at = readStatusAt(base);
+    const st = at ? at.status : null;
+    const key = st && st !== "v1" ? `${st.runId}#${st.rev}` : String(st);
+    if (key !== lastKey) {
+      lastKey = key;
+      lastChange = Date.now();
+    }
+    if (st && st !== "v1" && st.runId === f.run) {
+      if (st.phase === "failed" || st.phase === "blocked") {
+        console.error(`run ${st.runId} ${st.phase} (rev ${st.rev}, ${st.at})${st.detail ? `: ${st.detail}` : ""}`);
+        return 1;
+      }
+      if (st.phase === "done") {
+        const onDisk = sha256File(base + ".measured.json");
+        if (st.measuredSha256 && onDisk === st.measuredSha256) {
+          const ev = st.evidenceSha256 && sha256File(base + ".evidence.json") === st.evidenceSha256 ? ` --interactions ${shellArg(base + ".evidence.json")}` : "";
+          console.error(`run ${st.runId} done (rev ${st.rev}, ${st.at})`);
+          console.log(`${scriptCmd("verify-screen")} --compare ${shellArg(base + ".expected.json")} ${shellArg(base + ".measured.json")}${ev} --out ${shellArg(base)}`);
+          return 0;
+        }
+        const why = `run ${st.runId} says done, but ${base}.measured.json ${onDisk ? `is not the file it names (sha ${onDisk.slice(0, 12)}\u2026 vs ${(st.measuredSha256 || "none").slice(0, 12)}\u2026)` : "does not exist"} \u2014 still waiting`;
+        if (why !== noted) {
+          console.error(`note  ${why}`);
+          noted = why;
+        }
+      }
+    } else if (st && st !== "v1" && noted !== st.runId) {
+      console.error(`note  ${at ? at.file : liveStatusFile(base)} is run ${st.runId} (${st.phase}), not ${f.run} \u2014 waiting for run ${f.run}`);
+      noted = st.runId;
+    }
+    const now = Date.now();
+    if (now - t0 >= timeout * 1e3) {
+      console.error(`timed out after ${timeout}s waiting for run ${f.run} (${describe(st)})`);
+      return 5;
+    }
+    if (now - lastChange >= stall * 1e3) {
+      console.error(`stalled: ${at ? at.file : liveStatusFile(base)} has not changed for ${stall}s (${describe(st)}) \u2014 the verifier may be stuck; check it before re-running`);
+      return 5;
+    }
+    await sleep(Math.min(interval * 1e3, Math.max(1, timeout * 1e3 - (now - t0))));
+  }
+}
+function cacheUnreadable(base) {
+  const c = runCacheOf(path3.dirname(base));
+  const checks = [[c.dir, fs3.constants.R_OK | fs3.constants.X_OK], [liveStatusFile(base), fs3.constants.R_OK]];
+  for (const [p, mode] of checks) {
+    try {
+      fs3.accessSync(p, mode);
+    } catch (e) {
+      const code = errCode2(e);
+      if (code === "EACCES" || code === "EPERM") return new RunCacheUnwritable(c.dir, c.root, "read");
+    }
+  }
+  return null;
+}
+var describe = (st) => st === null ? "no status file" : st === "v1" ? "an older v1 status file, not written by the tools" : `last: run ${st.runId} rev ${st.rev} ${st.phase} at ${st.at}`;
 
 // design-to-code/verify-screen.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -432,13 +860,13 @@ function getOrInit(m, k, init) {
 }
 
 // bridge/src/is-main.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
+    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1037,6 +1465,77 @@ function fieldTolerance(label) {
   if (label === "placement") return TOLERANCE.position;
   return null;
 }
+var fieldBase = (f) => f.replace(/\s*\(.*\)$/, "");
+var INTEGRITY_PHRASES = {
+  otherExpectation: "the measurements were taken against a DIFFERENT expectation",
+  noExpectation: "measured file names no expectation (expectationSha256)",
+  unfinished: "\u2014 the verifier had not finished",
+  otherMeasured: "names a different measured file",
+  unrecorded: "no status of that run records it"
+};
+var isIntegrityReason = (w) => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
+function deltaChanges(prev, cur, now) {
+  const keyOf = (d) => typeof d.nodeId === "string" && typeof d.field === "string" ? `${d.nodeId}\0${d.field}` : null;
+  const curByKey = /* @__PURE__ */ new Map();
+  for (const d of cur) {
+    const k = keyOf(d);
+    if (k !== null && !curByKey.has(k)) curByKey.set(k, d);
+  }
+  const prevByKey = /* @__PURE__ */ new Map();
+  for (const d of prev) {
+    const k = isJsonObject(d) ? keyOf(d) : null;
+    if (k !== null && !prevByKey.has(k)) prevByKey.set(k, d);
+  }
+  const out = { fixed: 0, new: 0, unchanged: 0, lostCoverage: [] };
+  const was = (d) => d.actual === void 0 ? null : d.actual;
+  if (now.sameMeasured) {
+    const reclassified = [];
+    for (const [k, d] of curByKey) if (!prevByKey.has(k)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "new", was: null });
+    for (const [k, d] of prevByKey) {
+      if (curByKey.has(k)) out.unchanged++;
+      else if (now.specIds.has(d.nodeId)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "gone", was: was(d) });
+    }
+    return { ...out, sameMeasured: true, reclassified };
+  }
+  for (const k of curByKey.keys()) if (!prevByKey.has(k)) out.new++;
+  const unmeasuredNodes = new Set(now.notMeasured.map((n) => n.nodeId));
+  const nowUnverifiable = [];
+  const sameField = (g, d) => g.nodeId === d.nodeId && (g.field === d.field || fieldBase(g.field) === fieldBase(d.field));
+  for (const [k, d] of prevByKey) {
+    if (curByKey.has(k)) {
+      out.unchanged++;
+      continue;
+    }
+    if (!now.specIds.has(d.nodeId)) continue;
+    if (unmeasuredNodes.has(d.nodeId)) {
+      out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the node was not measured this round" });
+      continue;
+    }
+    const gapRow = now.fieldsNotMeasured.find((g) => sameField(g, d));
+    const absent = gapRow ? now.absent.has(`${gapRow.nodeId}\0${gapRow.field}`) : now.absent.has(k) || [...now.absent].some((a) => a.startsWith(`${d.nodeId}\0`) && fieldBase(a.slice(d.nodeId.length + 1)) === fieldBase(d.field));
+    if (absent) {
+      out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${gapRow ? gapRow.why : "the probe did not report this property"}` });
+      continue;
+    }
+    const derived = d.field === "placement" ? now.placementGaps?.get(d.nodeId) : void 0;
+    if (derived && derived.absent) {
+      out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${derived.why}` });
+      continue;
+    }
+    if (derived) {
+      nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: derived.why });
+      continue;
+    }
+    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d));
+    if (method) {
+      nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: method.why });
+      continue;
+    }
+    out.fixed++;
+  }
+  return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
+}
+var sortKeys = (o) => Object.entries(o).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 var NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
 function sameWithin(a, b, tol) {
   const t = tol ?? 0;
@@ -1099,9 +1598,41 @@ var MEASURED_TOP_KEYS = {
   frames: true,
   navigation: true,
   matchedByCensus: true,
-  notes: true
+  notes: true,
+  runId: true,
+  build: true
 };
-var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes" };
+var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
+var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
+var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
+var OUTCOMES_FOR_ACTION = {
+  navigate: ["url-changed", "selector-appeared"],
+  overlay: ["dialog-opened", "selector-appeared"],
+  change_to: ["state-changed", "selector-appeared"],
+  swap: ["state-changed", "selector-appeared"],
+  other: ANY_BUT_NONE
+};
+var URL_ACTIONS = /* @__PURE__ */ new Set(["navigate", "back", "url"]);
+var isOutcome = (x) => typeof x === "string" && INTERACTION_OUTCOMES.some((o) => o === x);
+function outcomesFor(action) {
+  return action === "navigate" || action === "overlay" || action === "change_to" || action === "swap" ? OUTCOMES_FOR_ACTION[action] : OUTCOMES_FOR_ACTION.other;
+}
+function evidenceGaps(hit, action) {
+  const gaps = [];
+  const count = Number(hit.selectorCount);
+  if (!hit.selector) gaps.push("no selector named");
+  else if (!(count >= 1)) gaps.push(`selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`);
+  else if (count !== 1) gaps.push(`selector '${hit.selector}' matched ${count} elements \u2014 which one was driven? (needs exactly 1)`);
+  const allowed = outcomesFor(action);
+  if (hit.outcome === void 0) gaps.push("no outcome recorded (url-changed | dialog-opened | selector-appeared | state-changed | none)");
+  else if (!isOutcome(hit.outcome)) gaps.push(`outcome '${String(hit.outcome)}' is not one of ${INTERACTION_OUTCOMES.join(" | ")}`);
+  else if (!allowed.includes(hit.outcome)) gaps.push(`outcome '${hit.outcome}' is not what ${action ? `${/^[aeiou]/.test(action) ? "an" : "a"} ${action}` : "this action"} does (${allowed.join(" or ")})`);
+  const nav = hit.navEvents;
+  if (nav === void 0) gaps.push("no navEvents recorded (documents loaded during the interaction: a reload or a full navigation)");
+  else if (typeof nav !== "number" || !Number.isInteger(nav) || nav < 0) gaps.push(`navEvents ${JSON.stringify(nav)} is not a count`);
+  else if (nav > 0 && !(action !== void 0 && URL_ACTIONS.has(action) && hit.outcome === "url-changed")) gaps.push(`${nav} document(s) loaded during the interaction (a reload or a full navigation) \u2014 a reload is not an outcome${hit.outcome === "url-changed" ? `; only a navigate, back or url action may load a document` : ""}`);
+  return gaps;
+}
 function compare(expectation, measured, opts) {
   opts = opts || {};
   measured = measured || {};
@@ -1166,7 +1697,12 @@ function compare(expectation, measured, opts) {
   const matchedByCensus = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
   const positionMatched = /* @__PURE__ */ new Set();
   const typographyOn = /* @__PURE__ */ new Map();
-  const gap = (spec, field, why) => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  const absentGaps = /* @__PURE__ */ new Set();
+  const placementGaps = /* @__PURE__ */ new Map();
+  const gap = (spec, field, why, absent = false) => {
+    if (absent) absentGaps.add(`${spec.nodeId}\0${field}`);
+    return fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  };
   const push = (spec, field, severity, bad, extra) => deltas.push(Object.assign({
     severity,
     nodeId: spec.nodeId,
@@ -1228,12 +1764,12 @@ function compare(expectation, measured, opts) {
     const base = m.styles || m;
     let got = base, measuredIn = "rest";
     const state = spec.drawnState;
-    const st = state && m.states && m.states[state];
-    if (st) {
-      got = Object.assign({}, base, st.styles || st);
+    const st2 = state && m.states && m.states[state];
+    if (st2) {
+      got = Object.assign({}, base, st2.styles || st2);
       measuredIn = state;
     }
-    const stUm = st ? st.unmeasured : void 0;
+    const stUm = st2 ? st2.unmeasured : void 0;
     const um = { ...isJsonObject(m.unmeasured) ? m.unmeasured : {}, ...isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e) => typeof e[1] === "string")) : {} };
     const nullWhy = (...keys) => {
       for (const k of keys) {
@@ -1244,7 +1780,7 @@ function compare(expectation, measured, opts) {
     };
     const gapNull = (field, ...keys) => {
       fieldsReportedNull++;
-      gap(spec, field, nullWhy(...keys));
+      gap(spec, field, nullWhy(...keys), true);
     };
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
     const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
@@ -1253,6 +1789,7 @@ function compare(expectation, measured, opts) {
         tally(f.key, false);
         gap(spec, f.label, `renders 0\xD70 at rest: ${stateWhy}`);
       }
+      placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0\xD70 at rest: ${stateWhy}` });
       continue;
     }
     const isText = spec.type === "TEXT";
@@ -1316,7 +1853,7 @@ function compare(expectation, measured, opts) {
           unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: "a ::placeholder colour is not readable from getComputedStyle(el) \u2014 report placeholderColor to have it checked" });
           continue;
         }
-        gap(spec, f.label, "the probe did not report this property");
+        gap(spec, f.label, "the probe did not report this property", true);
         continue;
       }
       if (val === null || Array.isArray(val) && val.includes(null)) {
@@ -1381,7 +1918,7 @@ function compare(expectation, measured, opts) {
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
       if (got.borderRadius === null || Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null)) gapNull("border-radius", "borderRadius");
-      else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`);
+      else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`, got.borderRadius === void 0);
       else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
@@ -1398,7 +1935,7 @@ function compare(expectation, measured, opts) {
     if (spec.padding !== void 0) {
       tally("padding", got.padding !== void 0);
       const pad = fourSides(got.padding);
-      if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property");
+      if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property", true);
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
       else if (got.padding === null || Array.isArray(got.padding) && got.padding.some((v) => v === null)) gapNull("padding", "padding");
@@ -1417,7 +1954,7 @@ function compare(expectation, measured, opts) {
     }
     if (spec.placeholderText !== void 0) {
       tally("placeholderText", got.placeholderText !== void 0);
-      if (got.placeholderText === void 0) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')");
+      if (got.placeholderText === void 0) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')", true);
       else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
       else {
         fieldsChecked++;
@@ -1428,8 +1965,9 @@ function compare(expectation, measured, opts) {
       tally("text", got.text !== void 0);
       if (got.text === null) {
         fieldsReportedNull++;
-        gap(spec, "text", um.text || "the probe reported text: null \u2014 an element with child elements still has text; report its textContent");
-      } else if (got.text !== void 0) {
+        gap(spec, "text", um.text || "the probe reported text: null \u2014 an element with child elements still has text; report its textContent", true);
+      } else if (got.text === void 0) absentGaps.add(`${spec.nodeId}\0text`);
+      else if (got.text !== void 0) {
         fieldsChecked++;
         const w = String(spec.text).replace(/ /g, " ").trim();
         const g = String(got.text).replace(/ /g, " ").trim();
@@ -1460,6 +1998,13 @@ function compare(expectation, measured, opts) {
     }
     const fr = frameOf(spec);
     const bx = got;
+    if (num(fr.w) && num(fr.h)) {
+      const BOX_KEYS = ["x", "y", "width", "height"];
+      const missing = BOX_KEYS.filter((k) => bx[k] === void 0 || bx[k] === null);
+      const unread = BOX_KEYS.filter((k) => bx[k] !== void 0 && bx[k] !== null && !num(bx[k]));
+      if (missing.length) placementGaps.set(String(spec.nodeId), { absent: true, why: `the probe did not report ${missing.join("/")} (placement is derived from the box)` });
+      else if (unread.length) placementGaps.set(String(spec.nodeId), { absent: false, why: `could not read ${unread.join("/")} as px numbers (placement is derived from the box)` });
+    }
     if (num(fr.w) && num(fr.h) && (num(bx.x) || num(bx.y))) {
       const w = num(bx.width) ? bx.width : 0, h = num(bx.height) ? bx.height : 0;
       const tol = TOLERANCE.position;
@@ -1587,20 +2132,39 @@ function compare(expectation, measured, opts) {
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
     const row = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...i.destinationExported === false ? { destinationExported: false } : {} };
-    const worked = !!hit && hit.ok === true && hit.result !== "not-probed" && !!hit.selector && Number(hit.selectorCount) >= 1;
+    const gaps = hit && hit.ok === true && hit.result !== "not-probed" ? evidenceGaps(hit, i.action) : null;
+    const worked = gaps !== null && gaps.length === 0;
+    const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : void 0), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : void 0) } : {};
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped", detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {} });
     if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail) });
-    if (hit.ok === false) return Object.assign(row, { result: "fail", ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector) });
-    if (!hit.selector || !(count >= 1)) {
-      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${!hit.selector ? "no selector named" : `selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`}${hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+    if (hit.ok === false) return Object.assign(row, { result: "fail", ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
+    if (!worked || !hit.selector) {
+      return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
-    return Object.assign(row, { result: "pass", ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count });
+    return Object.assign(row, { result: "pass", ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
-  const unexpectedInteractionEvidence = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase())).length;
+  const unexpectedRows = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase()));
+  const unexpectedInteractionEvidence = unexpectedRows.length;
+  const designed = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const specAnc = new Map(specs.map((sp) => [String(sp.nodeId), sp.ancestorIds || []]));
+  const unmatchedInteractionEvidence = [];
+  const unmatchedSeen = /* @__PURE__ */ new Set();
+  for (const r of unexpectedRows) {
+    const nodeId = String(r.nodeId), trigger = String(r.trigger || "on_click");
+    const key = nodeId + "|" + trigger.toLowerCase();
+    if (unmatchedSeen.has(key)) continue;
+    unmatchedSeen.add(key);
+    const bare = trigger.toLowerCase().replace(/\s*[(:[].*$/, "").trim();
+    const sameNode = designed.filter((i) => String(i.nodeId) === nodeId);
+    const exact = sameNode.find((i) => i.trigger === bare);
+    const kin = designed.find((i) => i.trigger === bare && (specAnc.get(String(i.nodeId)) || []).includes(nodeId)) ?? designed.find((i) => i.trigger === bare && (specAnc.get(nodeId) || []).includes(String(i.nodeId)));
+    const hint = exact ? `use the expectation's trigger \`${exact.trigger}\` verbatim (not \`${trigger}\`)` : sameNode.length ? `this node's designed trigger is ${sameNode.map((i) => `\`${i.trigger}\``).join(" / ")}, not \`${trigger}\`` : kin ? `${(specAnc.get(String(kin.nodeId)) || []).includes(nodeId) ? "an ancestor" : "a descendant"} of the designed \`${kin.nodeId}\` ${kin.name || ""} (${kin.trigger}) \u2014 report the result under the designed node's id`.replace("  (", " (") : void 0;
+    unmatchedInteractionEvidence.push({ nodeId, trigger, ...ifDefined("hint", hint) });
+  }
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
   const interactionsNotProbed = interactions.filter((i) => i.result === "not-probed");
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
@@ -1657,7 +2221,7 @@ function compare(expectation, measured, opts) {
   for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
   for (const [k, list] of sameKey) {
     if (list.length < 2) continue;
-    const gid = `same:${crypto3.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    const gid = `same:${crypto4.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
     for (const d of list) d.group = gid;
   }
   const open = deltas.filter((d) => !d.accepted);
@@ -1668,6 +2232,12 @@ function compare(expectation, measured, opts) {
   const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
   const probeRaw = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : void 0;
+  const buildRaw = measured.build;
+  const buildNow = isBuildIdentity(buildRaw) ? buildRaw : void 0;
+  if (buildRaw !== void 0 && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
+  const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
+  if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) \u2014 not checked; write it with verify-screen --status`);
+  const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : void 0;
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs = {
     expectationSchema: expectation.schema || "(none)",
@@ -1681,7 +2251,10 @@ function compare(expectation, measured, opts) {
     // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
-    ...ifDefined("waivers", opts.waiversInput || void 0)
+    ...ifDefined("waivers", opts.waiversInput || void 0),
+    // DT-81: the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
+    build: buildNow ?? "unknown",
+    ...ifDefined("runId", runId)
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1689,8 +2262,19 @@ function compare(expectation, measured, opts) {
   const noRender = !!artifactCheck && !artifactCheck.some((a) => a.exists && a.image);
   const nodesExpected = specs.length - folded.length;
   const reasons = [];
+  if (stale) reasons.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
+  if (opts.expectationSha256 && !measured.expectationSha256) reasons.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
+  if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
+    reasons.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st) {
+    const stFile = opts.status ? opts.status.file : "status.json";
+    if (!MEASURED_PHASES.includes(st.phase)) reasons.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) reasons.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
+  }
+  const integrity = [...reasons];
+  const integrityFailed = integrity.length > 0;
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
-  if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
   for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' \u2014 the canonical key is '${f.field}')` : ""}`);
@@ -1702,7 +2286,7 @@ function compare(expectation, measured, opts) {
   if (interactionsNotProbed.length) reasons.push(`${interactionsNotProbed.length} designed interaction(s) were not probed`);
   const fieldGapsOther = fieldsNotMeasured.length;
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null \u2014 the probe could not read them)` : ""}`);
-  const verdict = reasons.length === 0 ? accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
+  const verdict = reasons.length === 0 ? accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass" : integrityFailed ? "incomplete" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
   const coverage = {
     nodesExpected,
     nodesMeasured,
@@ -1730,6 +2314,8 @@ function compare(expectation, measured, opts) {
   let against;
   if (opts.against) {
     const prev = opts.against.report;
+    const pb = prev.inputs ? prev.inputs.build : void 0;
+    const prevBuild = isBuildIdentity(pb) ? pb : null;
     const pc = prev.coverage;
     const shaOf = (p) => isJsonObject(p) && typeof p.sha256 === "string" ? p.sha256 : null;
     const prevSha = shaOf(prev.inputs && prev.inputs.probe), curSha = probeIdentity ? probeIdentity.sha256 : null;
@@ -1739,14 +2325,30 @@ function compare(expectation, measured, opts) {
       nodesMeasured: { before: pc && num(pc.nodesMeasured) ? pc.nodesMeasured : null, after: nodesMeasured },
       nodesExpected: { before: pc && num(pc.nodesExpected) ? pc.nodesExpected : null, after: nodesExpected },
       probeChanged: prevSha === null && curSha === null ? null : prevSha !== curSha,
-      expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null
+      expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
+      ...Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, {
+        notMeasured,
+        fieldsNotMeasured,
+        unverifiable,
+        specIds: new Set(specs.map((sp) => String(sp.nodeId))),
+        absent: absentGaps,
+        placementGaps,
+        sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256)
+      }) } : {},
+      sameBuild: prevBuild && buildNow ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null
     };
   }
+  const prevCode = opts.against && opts.against.report.inputs ? opts.against.report.inputs.code : void 0;
+  const codeChanged = prevCode && opts.code ? Object.keys(prevCode.files).length && Object.keys(opts.code.files).length ? JSON.stringify(sortKeys(prevCode.files)) !== JSON.stringify(sortKeys(opts.code.files)) : !!(prevCode.gitHead && opts.code.gitHead && prevCode.gitHead !== opts.code.gitHead) : false;
+  const sameBuildServed = !!(against && against.sameBuild === true && codeChanged);
+  const lost = against && against.deltas ? against.deltas.lostCoverage.length : 0;
+  const unmatchedCount = unmatchedInteractionEvidence.length;
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
   const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
   const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""} \xB7 ${fieldsChecked} values compared \xB7 ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` + (accepted ? ` \xB7 ${accepted} accepted` : "") + (reopened.length ? ` \xB7 ${reopened.length} waiver(s) REOPENED` : "") + " \xB7 " + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
-  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
+  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "") + // group 10 — informational, never the verdict
+  (unmatchedCount ? ` \xB7 ${unmatchedCount} probe result(s) matched no designed interaction` : "") + (lost ? ` \xB7 LOST COVERAGE on ${lost} earlier delta(s)` : "") + (sameBuildServed && against ? ` \xB7 SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
   return {
     schema: REPORT_SCHEMA,
     ...ifDefined("screen", expectation.screen),
@@ -1759,6 +2361,7 @@ function compare(expectation, measured, opts) {
     verdict,
     headline,
     why: reasons,
+    integrity,
     coverage,
     summary: {
       high,
@@ -1788,6 +2391,7 @@ function compare(expectation, measured, opts) {
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
+      ...unmatchedInteractionEvidence.length ? { unmatchedInteractionEvidence } : {},
       measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length,
       measuredIdsNotInExpectation: measuredIdsNotInExpectation.length,
       measuredIdsNotInExpectationSample: measuredIdsNotInExpectation.slice(0, 5),
@@ -1812,7 +2416,9 @@ function reportToMarkdown(r) {
   const L = [];
   L.push(`# Verify \u2014 ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
-  L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} \xB7 measured ${r.measuredAt}` + (r.inputs && r.inputs.expectationSha256 ? ` \xB7 against expectation ${r.inputs.expectationSha256.slice(0, 12)}\u2026` : ""), "");
+  L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} \xB7 measured ${r.measuredAt}` + (r.inputs && r.inputs.expectationSha256 ? ` \xB7 against expectation ${r.inputs.expectationSha256.slice(0, 12)}\u2026` : "") + (r.inputs && r.inputs.runId ? ` \xB7 run ${r.inputs.runId}` : ""), "");
+  const b = r.inputs && r.inputs.build;
+  L.push(b && b !== "unknown" ? `Build served: ${b.mode} ${b.url} \xB7 ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}\u2026 \xB7 git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}` : "Build served: build identity unknown (the measured file records none \u2014 measured by a hand-written or older probe).", "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");
     for (const w of r.why) L.push(`- ${w}`);
@@ -1835,12 +2441,39 @@ function reportToMarkdown(r) {
   if (r.against) {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
+    const d = a.deltas;
+    if (d && d.sameMeasured) {
+      const rc = d.reclassified || [];
+      L.push(`Previous deltas (node + field): **the same measured file as last round** \u2014 nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+      if (rc.length) {
+        L.push(`## Reclassified (${rc.length})`, "", "*Same measured file \u2014 the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
+        for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
+        if (rc.length > 40) L.push(`| \u2026and ${rc.length - 40} more | | | |`);
+        L.push("");
+      }
+    } else if (d) {
+      const nu = d.nowUnverifiable || [];
+      L.push(`Previous deltas (node + field): ${d.fixed} fixed \xB7 ${d.unchanged} still open \xB7 ${d.new} new \xB7 ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}${nu.length ? ` \xB7 ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
+      if (nu.length) {
+        L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it \u2014 not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+        for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+        if (nu.length > 40) L.push(`| \u2026and ${nu.length - 40} more | | | |`);
+        L.push("");
+      }
+    }
+    if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** \u2014 a stale preview or dist? Rebuild before measuring a preview.", "");
+    if (d && d.lostCoverage.length) {
+      L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured \u2014 not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+      for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+      if (d.lostCoverage.length > 40) L.push(`| \u2026and ${d.lostCoverage.length - 40} more | | | |`);
+      L.push("");
+    }
   }
   L.push("## How nodes were matched", "");
   const ip = r.inputs && r.inputs.probe;
   L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} \xB7 sha256 ${ip.sha256.slice(0, 12)}\u2026 \xB7 ${ip.playwright.package} ${ip.playwright.version} \xB7 ${ip.browser.name} ${ip.browser.version}` : "Probe: unknown (a hand-written measured.json \u2014 its numbers are not comparable round to round).", "");
   L.push("| rule | node specs |", "|---|---|");
-  for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
+  for (const b2 of MATCH_BUCKETS) if ((c.matchedBy[b2] ?? 0) > 0 || b2 === "tag") L.push(`| ${MATCH_LABEL[b2] ?? b2} | ${c.matchedBy[b2] ?? 0} |`);
   L.push("");
   if (r.deltas.length) {
     const groups = /* @__PURE__ */ new Map();
@@ -1896,6 +2529,13 @@ function reportToMarkdown(r) {
     for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} \u2014 ${i.trigger} \u2192 ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` \u2014 ${i.detail}` : ""}`);
     L.push("");
   }
+  const um = r.probe && r.probe.unmatchedInteractionEvidence || [];
+  if (um.length) {
+    L.push(`## Probe results that matched no designed interaction (${um.length})`, "", "*Copy nodeId and trigger verbatim from the expectation's interactions[]; these results were not graded.*", "");
+    for (const u of um.slice(0, 40)) L.push(`- \`${u.nodeId}\` ${u.trigger}${u.hint ? ` \u2014 ${u.hint}` : ""}`);
+    if (um.length > 40) L.push(`- \u2026and ${um.length - 40} more`);
+    L.push("");
+  }
   const ungraded = r.interactions.filter((i) => i.result === "undesigned" || i.result === "descoped");
   if (ungraded.length) {
     L.push(`## Interactions not graded (${ungraded.length})`, "", "*undesigned: the destination was never exported; descoped: the owner removed it (plan.descopes).*", "");
@@ -1942,29 +2582,31 @@ var withUnit = (v, unit) => {
   return unit && !t.endsWith(unit) ? t + unit : t;
 };
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs4.existsSync(dir)) return null;
-  for (const f of fs4.readdirSync(dir)) {
+  if (!nodeId || !fs5.existsSync(dir)) return null;
+  for (const f of fs5.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path3.join(dir, f);
-    if (path3.resolve(full) === path3.resolve(ownTarget)) continue;
+    const full = path4.join(dir, f);
+    if (path4.resolve(full) === path4.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
 function plansFor(frameId, stem) {
-  const planDir = path3.join("design", "plan");
+  const planDir = path4.join("design", "plan");
   const hits = [];
-  for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-    const p = readJsonOrNull(path3.join(planDir, f), isPlan);
+  for (const f of fs5.existsSync(planDir) ? fs5.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    const p = readJsonOrNull(path4.join(planDir, f), isPlan);
     if (!p) continue;
-    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path3.basename(f, ".json")));
-    const byName = path3.basename(f, ".json") === stem || p.file && path3.basename(String(p.file), ".json") === stem;
-    if (byId || byName) hits.push({ file: path3.join(planDir, f).split(path3.sep).join("/"), plan: p });
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path4.basename(f, ".json")));
+    const byName = path4.basename(f, ".json") === stem || p.file && path4.basename(String(p.file), ".json") === stem;
+    if (byId || byName) hits.push({ file: path4.join(planDir, f).split(path4.sep).join("/"), plan: p });
   }
   return hits;
 }
 function selectForAccept(rep, sel) {
+  const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
+  if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) \u2014 nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
   const deltas = Array.isArray(rep.deltas) ? rep.deltas : [];
   const picked = sel.group !== void 0 ? deltas.filter((d) => d.group === sel.group) : deltas.filter((d) => d.nodeId === sel.node && (sel.field === void 0 || d.field === sel.field));
   if (picked.length) return { deltas: picked };
@@ -1981,7 +2623,7 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => crypto3.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto4.createHash("sha256").update(fs5.readFileSync(file)).digest("hex");
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
@@ -1996,12 +2638,31 @@ function main(argv) {
       --out defaults to design/verify/<the .expected.json file's own basename>.
       Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes
       measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.
+      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another
+      measured file, makes the verdict 'incomplete' even with high mismatches (the numbers belong to an unverified run).
       The plan for this frame (design/plan/, or --plan <plan.json>) supplies waivers[] and descopes[]: an accepted
       delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).
   ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
       writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed
       and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:
-      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.`;
+      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.
+  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "\u2026"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]
+      writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache \u2014
+      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the
+      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed
+      commands, with no package.json or Yarn PnP) \u2014 <dir> resolves against the cwd \u2014 outside every dev-server
+      watch, so a heartbeat never reloads the page being measured \u2014 and prints \`run <id> rev <n>\` (stdout), the live file and the run's
+      stage dir (stderr). Without --run it continues only a run that has not ended (else exit 2). \`done\` checks first \u2014 refuses (exit 1)
+      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or
+      not the one the probe recorded in this run \u2014 then publishes, records the sha256 of <Screen>.expected/.measured.json (and
+      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every
+      file of a staging directory into <dir> (tmp file in <dir>, then rename) \u2014 stage in the run cache while any page of the app is open.
+  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]
+      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json is the file it
+      names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);
+      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,
+      6 when the run cache exists but cannot be read.
+exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not writable (sandbox write scope? \u2014 run from the project root).`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     return argv.length ? 0 : 2;
@@ -2021,9 +2682,54 @@ function main(argv) {
     by: { type: "string" },
     plan: { type: "string" },
     "all-fields": { type: "boolean" },
+    status: { type: "string" },
+    wait: { type: "string" },
+    phase: { type: "string" },
+    run: { type: "string" },
+    "new-run": { type: "boolean" },
+    detail: { type: "string" },
+    dir: { type: "string" },
+    publish: { type: "string" },
+    timeout: { type: "string" },
+    stall: { type: "string" },
+    interval: { type: "string" },
     help: { type: "boolean", short: "h" }
   };
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
+  const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"];
+  if (flags.status !== void 0 || flags.wait !== void 0) {
+    if (flags.status !== void 0 && flags.wait !== void 0) {
+      console.error("pass --status or --wait, not both\n" + USAGE);
+      return 2;
+    }
+    const other = ["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields"].filter((k) => flags[k] !== void 0);
+    if (other.length || files.length) {
+      console.error(`--${flags.status !== void 0 ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}
+` + USAGE);
+      return 2;
+    }
+    if (flags.wait !== void 0) {
+      const bad2 = ["phase", "new-run", "detail", "publish", "by"].filter((k) => flags[k] !== void 0);
+      if (bad2.length) {
+        console.error(`--wait takes none of ${bad2.map((k) => `--${k}`).join(", ")}
+` + USAGE);
+        return 2;
+      }
+      return waitMain(flags.wait, flags, USAGE);
+    }
+    const bad = ["timeout", "stall", "interval"].filter((k) => flags[k] !== void 0);
+    if (bad.length) {
+      console.error(`--status takes none of ${bad.map((k) => `--${k}`).join(", ")}
+` + USAGE);
+      return 2;
+    }
+    return statusMain(flags.status, flags, USAGE);
+  }
+  for (const k of runFlags) if (flags[k] !== void 0) {
+    console.error(`--${k} only applies to --status / --wait
+` + USAGE);
+    return 2;
+  }
   const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
   if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) {
@@ -2053,9 +2759,8 @@ function main(argv) {
       process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
       return;
     }
-    fs4.mkdirSync(path3.dirname(base), { recursive: true });
-    fs4.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md2) fs4.writeFileSync(base + ".report.md", md2);
+    writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+    if (md2) writeFileAtomic(base + ".report.md", md2);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
   };
   if (doExpect) {
@@ -2064,28 +2769,28 @@ function main(argv) {
       console.error("--expect needs at least one screen export\n" + USAGE);
       return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json") }));
-    const indexFile = path3.join("design", "export", "pages", "index.json");
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path4.basename(f, ".json") }));
+    const indexFile = path4.join("design", "export", "pages", "index.json");
     const idx = readJson(indexFile, isPagesRootIndex);
     if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} \u2014 interaction destinations are checked against the given export(s) only`);
-    const pagesDir = path3.join("design", "export", "pages");
+    const pagesDir = path4.join("design", "export", "pages");
     const pageRows = [];
     let dirs = [];
     try {
-      dirs = fs4.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+      dirs = fs5.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     } catch {
     }
     for (const d of dirs) {
-      const pi = readJson(path3.join(pagesDir, d, "index.json"), isPageIndex);
+      const pi = readJson(path4.join(pagesDir, d, "index.json"), isPageIndex);
       if ("doc" in pi) pageRows.push(...pi.doc.layers);
     }
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
     const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers, ...ifDefined("sourceFile", "doc" in idx ? idx.doc.sourceFile : void 0) } } : null);
-    const outBase = out || path3.join("design", "verify", path3.basename(firstFile, ".json"));
+    const outBase = out || path4.join("design", "verify", path4.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path3.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    const dup = findExistingExpectedFor(path4.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). Use that existing name, or pass --force to write this one anyway.`
@@ -2093,9 +2798,9 @@ function main(argv) {
       return 1;
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
-    const prev = fs4.existsSync(target) ? fs4.readFileSync(target, "utf8") : null;
+    const prev = fs5.existsSync(target) ? fs5.readFileSync(target, "utf8") : null;
     write(outBase, exp);
-    const h = crypto3.createHash("sha256").update(next).digest("hex");
+    const h = crypto4.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
     try {
       if (prev !== null) {
@@ -2108,8 +2813,8 @@ function main(argv) {
     else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto3.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
-      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs4.existsSync(f));
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto4.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
+      const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs5.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
     const hc = exp.counts.hidden;
@@ -2152,8 +2857,8 @@ function main(argv) {
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
     const p = typeof a === "string" ? a : a && a.path;
-    const exists = !!p && fs4.existsSync(p);
-    return { ...ifDefined("path", p), exists, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists ? sha(p) : void 0) };
+    const exists2 = !!p && fs5.existsSync(p);
+    return { ...ifDefined("path", p), exists: exists2, image: !!p && /\.(png|jpe?g|webp)$/i.test(p), ...ifDefined("sha256", exists2 ? sha(p) : void 0) };
   });
   let code;
   let planHit;
@@ -2163,11 +2868,11 @@ function main(argv) {
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    planHit = { file: planFlag.split(path3.sep).join("/"), plan: r.doc };
+    planHit = { file: planFlag.split(path4.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path3.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path4.basename(expFile, ".json").replace(/\.expected$/, "");
     const all = planHit ? [planHit] : plansFor(frameId, stem);
     const hits = all.filter((h) => h.plan.files);
     const onlyHit = hits.length === 1 ? hits[0] : void 0;
@@ -2185,7 +2890,7 @@ function main(argv) {
     ...ifDefined("anchors", planHit.plan.anchors),
     waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) }
   } : {};
-  const compareBase = out || path3.join("design", "verify", path3.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path4.join("design", "verify", path4.basename(expFile, ".json").replace(/\.expected$/, ""));
   let against;
   if (againstFile !== void 0) {
     const r = readJson(againstFile, isVerifyReport);
@@ -2200,7 +2905,11 @@ function main(argv) {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
   }
-  const rep = compare(expectation, measured, { ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
+  const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path4.join(path4.dirname(expFile), path4.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path4.resolve(probeBase) !== path4.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path4.basename(found.file) : `${path4.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
+  const rep = compare(expectation, measured, { ...statusOpt, ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
@@ -2251,9 +2960,9 @@ function acceptMain(files, flags, USAGE) {
     console.error(`refused  ${sel.error}`);
     return 1;
   }
-  const stem = path3.basename(reportFile, ".json").replace(/\.report$/, "");
+  const stem = path4.basename(reportFile, ".json").replace(/\.report$/, "");
   const recorded = report.inputs && report.inputs.waivers && report.inputs.waivers.plan || report.inputs && report.inputs.code && report.inputs.code.plan || void 0;
-  let planFile = flags.plan ?? (recorded && fs4.existsSync(recorded) ? recorded : void 0);
+  let planFile = flags.plan ?? (recorded && fs5.existsSync(recorded) ? recorded : void 0);
   if (!planFile) {
     const hits = plansFor(report.nodeId, stem);
     const only = hits.length === 1 ? hits[0] : void 0;
@@ -2281,18 +2990,29 @@ function acceptMain(files, flags, USAGE) {
   }
   plan.waivers = waivers;
   const tmp = `${planFile}.${process.pid}.tmp`;
-  fs4.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
-  fs4.renameSync(tmp, planFile);
+  fs5.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
+  fs5.renameSync(tmp, planFile);
   console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
   for (const w of wrote) console.error(`  ${w}`);
   console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);
   return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
+  const code = main(process.argv.slice(2));
+  if (typeof code === "number") process.exitCode = code;
+  else code.then((c) => {
+    process.exitCode = c;
+  }, (e) => {
+    console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`);
+    process.exitCode = 1;
+  });
+}
 export {
   EXPECTATION_SCHEMA,
   FIELDS,
+  INTERACTION_OUTCOMES,
   MEASURED_KEYS_DOC,
+  OUTCOMES_FOR_ACTION,
   REPORT_SCHEMA,
   STYLE_KEYS,
   TOLERANCE,

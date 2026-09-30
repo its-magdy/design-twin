@@ -394,8 +394,8 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     ["20173:142081", "20173:142086", "20173:142091"].every((id) => jrRep.interactions.some((i) => i.nodeId === id && i.result === "fail")) && jrRep.verdict === "fail");
   ok("[lt3-int] ok:true with no selector is not a pass (finding 187's evidence rule)",
     () => { const gp0 = must(gpRep.interactions[0], "gpRep.interactions[0]"); return gp0.nodeId === "18580:60879" && gp0.result === "not-probed" && /without evidence/.test(must(gp0.detail, "gpRep.interactions[0].detail")); });
-  ok("[lt3-int] ok:true naming the selector it drove and a match count ≥1 is a pass",
-    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1" }] }); const r0 = must(r.interactions[0], "r.interactions[0]"); return r0.result === "pass" && r0.selector && r.coverage.interactionsPassed === 1; })());
+  ok("[lt3-int] ok:true naming the selector it drove, a match count of 1, an outcome and no navigation is a pass (D24)",
+    () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, detail: "dialog open=1", outcome: "dialog-opened", navEvents: 0 }] }); const r0 = must(r.interactions[0], "r.interactions[0]"); return r0.result === "pass" && r0.selector && r.coverage.interactionsPassed === 1; })());
   ok("[lt3-int] a selector that matched 0 elements is not a pass",
     () => (() => { const r = compare(gpExp, gpMeasured, { interactions: [{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="1359:21364"]', selectorCount: 0 }] }); return must(r.interactions[0], "r.interactions[0]").result === "not-probed"; })());
 
@@ -531,7 +531,7 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
   const r3 = run("--expect", "edited.json", "--out", "design/verify/GlobalPolicies");
   ok("[lt3-cli] re-running --expect over a different export says REPLACED and names the now-stale report/measurement",
     () => /REPLACED an existing/.test(r3.stderr) && /GlobalPolicies\.report\.json/.test(r3.stderr) && /PREVIOUS expectation/.test(r3.stderr));
-  fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1 }]));
+  fs.writeFileSync(path.join(cwd, "ints.json"), JSON.stringify([{ nodeId: "18580:60879", trigger: "on_click", ok: true, selector: '[data-dt-node="18580:60879"]', selectorCount: 1, outcome: "dialog-opened", navEvents: 0 }]));
   run("--expect", src, "--out", "design/verify/GlobalPolicies");
   run("--compare", expFile, "design/verify/GlobalPolicies.measured.json", "--interactions", "ints.json");
   ok("[lt3-cli] --interactions <file> is the input channel for interaction evidence (127)",
