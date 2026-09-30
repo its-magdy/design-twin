@@ -24,13 +24,19 @@ Most false diffs come from the render, not the code:
 - Remove drawn system chrome from comparison (status bar/home indicator areas) — the build uses real
   insets there.
 
+**On web the shipped probe does all of this** (`<scripts>/verify-probe.js`): it waits for `document.fonts.ready`,
+emulates reduced motion and switches animations/transitions off, optionally waits for `--ready <selector>`,
+then requires a quiet window (no navigation, no DOM churn) before measuring, and detects reloads (one re-run,
+then exit 4 with nothing written). It does not use `networkidle` — Playwright's docs discourage it, and a
+page with polling or a dev-server socket never reaches it. Do not re-implement any of this by hand.
+
 ## Per-stack rendering
 Use what the project already has; suggest adding the lightest option if nothing exists, and ask before
 installing dependencies.
 
 | Stack | Render | Structure dump |
 |---|---|---|
-| Web (React/Tailwind/CSS Modules) | Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
+| Web (React/Tailwind/CSS Modules) | `<scripts>/verify-probe.js` (drives the project's Playwright and measures; `--check` first). By hand only for looking around: Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
 | iOS SwiftUI / UIKit | swift-snapshot-testing (`assertSnapshot(of: view, as: .image(layout: .fixed(width: w, height: h)))`), or an Xcode Preview / `xcrun simctl io booted screenshot` on a matching device | `.recursiveDescription` / `dump` strategy for the view hierarchy; Accessibility Inspector |
 | Android Compose | Roborazzi (Robolectric, renders `@Preview`s, `captureRoboImage`) or Paparazzi; `@Preview(widthDp = w, heightDp = h)`; `compose-preview-screenshot-testing` | Roborazzi `.uitree.json` / `composeTestRule.onRoot().printToLog()` semantics tree |
 | React Native | Detox/Maestro screenshot on a simulator/emulator at the frame's size; or react-native-web + Playwright for layout-only checks | `toJSON()` from react-test-renderer; accessibility props |

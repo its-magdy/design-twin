@@ -26,7 +26,7 @@ import esbuild, { type BuildResult, type Plugin } from "esbuild";
 
 const SRC = path.join(import.meta.dirname, "..", "design-to-code");
 // The CLI entry points. kinds.ts / catalog-input.ts are libraries — they get inlined, not shipped.
-const ENTRIES: readonly string[] = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-screen"];
+const ENTRIES: readonly string[] = ["audit", "cross-check", "design-diff", "drift-lint", "get-component", "map-bootstrap", "map-validate", "plan-skeleton", "resolve-screen", "tokens", "verify-build", "verify-probe", "verify-screen"];
 
 // Rewrites `import.meta.main` to `false` in every design-to-code module except `entry` (see header).
 function inlinedCliGuard(entry: string): Plugin {

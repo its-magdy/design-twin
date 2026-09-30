@@ -52,4 +52,17 @@ check("[D13] drift-lint no longer 'exits non-zero at 0%'; 0% is a warning with a
 check("[DT-26] drift-lint/map-bootstrap read the library catalogs (`components.library.json`, `libraries/`)", /components\.library\.json/.test(skill) && /libraries\/\*\/components\.json.{0,80}libraries\/index\.json/.test(skill) && /design_drift_lint/.test(skill) && /map-bootstrap does the same only with `--screen`/.test(skill));
 check("[DT-26] a subagent records the short list, sets awaiting-user and does not confirm for the user (skill and agent)", /subagent.{0,200}awaiting-user.{0,200}(not|never) confirm/i.test(skill) && /awaiting-user.{0,200}(not|never) confirm|(not|never) confirm.{0,200}(list|map)/i.test(builder));
 
+console.log("build-screen docs (group 7, shipped web probe):");
+const verifier = flat(read("claude-plugin/agents/visual-verifier.md"));
+const verifySkill = flat(read("claude-plugin/skills/verify/SKILL.md"));
+const verifyRef = flat(read("claude-plugin/skills/build-screen/references/verify.md"));
+check("[G7] the verifier invokes scripts/verify-probe.js, with --check for the renderer and --expected/--url/--out to measure", /scripts\/verify-probe\.js" --check/.test(verifier) && /scripts\/verify-probe\.js".{0,200}--expected .{0,120}--url .{0,120}--out/.test(verifier));
+check("[G7] the verify skill invokes verify-probe.js --check (no inline Playwright script) and the probe for measuring", /scripts\/verify-probe\.js" --check/.test(verifySkill) && /verify-probe\.js".{0,200}--expected/.test(verifySkill) && !/node --input-type=module -e/.test(verifySkill));
+check("[G7] the verifier forbids writing its own probe and editing/rewriting the probe's measured.json", /never write your own probe/i.test(verifier) && /never (edit|.{0,20}edit).{0,80}(patch|rewrite).{0,40}`measured\.json`/i.test(verifier) && /interactions.{0,300}evidence\.json/.test(verifier) && /:focus-visible.{0,200}(keyboard Tab|Tab)/.test(verifier));
+check("[G7] the verifier: exit 3 asks the user, exit 4 reports the navigation log, untagged nodes are reported not matched by hand", /exit 3.{0,200}ask the user/i.test(verifier) && /exit 4.{0,300}navigation log/i.test(verifier) && /tag it.{0,200}do not match them by hand/i.test(verifier));
+check("[G7] no skill/agent doc tells the agent to run `npx playwright install` (only the user does; the agent asks)", /never run `npx playwright install`/i.test(verifier) && /never run either yourself/i.test(verifySkill) && !/playwright install[^.]{0,60}if the caller approves/i.test(verifier));
+check("[G7] the verify skill: implicit baseline, --against, COVERAGE FELL, and a probe of `unknown` is not comparable", /--against/.test(verifySkill) && /COVERAGE FELL/.test(verifySkill) && /inputs\.probe.{0,40}unknown.{0,200}not comparable/i.test(verifySkill) && /\[--interactions design\/verify\/<Screen>\.evidence\.json\].{0,120}only when the verifier wrote that file/.test(verifySkill));
+check("[G7] build-screen step 5 names verify-probe.js and says web measurements are never hand-written", /verify-probe\.js/.test(step(5)) && /never a hand-written one/i.test(step(5)));
+check("[G7] references/verify.md: readiness on web is the probe's (fonts.ready, reduced motion, --ready), and networkidle is not used", /verify-probe\.js/.test(verifyRef) && /document\.fonts\.ready/.test(verifyRef) && /reduced motion/i.test(verifyRef) && /does not use `networkidle`/.test(verifyRef));
+
 report();

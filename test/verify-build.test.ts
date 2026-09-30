@@ -1078,7 +1078,8 @@ check("every entry is a committed REAL file (a symlink out of the plugin dir is 
 }));
 check("bundles are self-contained — no require() that leaves the plugin directory", ENTRIES.every((n) =>
   !/(require\(|from )["']\.\.?\//.test(fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8"))));
-// Node builtins only: a bare package import would fail in an installed plugin (it has no node_modules),
+// Node builtins only (LITERAL specifiers only: a computed require(x)/import(x) is invisible to this regex —
+// the one sanctioned computed load, verify-probe's createRequire, is pinned by the next check): a bare package import would fail in an installed plugin (it has no node_modules),
 // and an INLINED package — esbuild marks each one with a `// …node_modules/<pkg>/…` path comment — bloats every
 // bundle (zod, a bridge dependency, is ~750 KB unminified per script). A bridge module the layer imports
 // must not pull one in.
@@ -1095,11 +1096,26 @@ check("bundles are self-contained — no require() that leaves the plugin direct
   }
   check("bundles use Node builtins only — no package imported or inlined" + (bad.length ? " — " + [...new Set(bad)].join(", ") : ""), bad.length === 0);
 }
+// The ONE explicit exception (owner decision D2): verify-probe.js loads the PROJECT's Playwright at run time
+// through createRequire(<project>/package.json) — a computed specifier the literal-import check above cannot
+// see. So: exactly one createRequire( call site, in that bundle only, and no bundle names a Playwright
+// package in a literal import/require.
+{
+  const DYNAMIC_REQUIRE_ALLOWED: Record<string, number> = { "verify-probe": 1 };
+  const wrong: string[] = [];
+  for (const n of ENTRIES) {
+    const text = fs.readFileSync(path.join(SCRIPTS, n + ".js"), "utf8");
+    const calls = [...text.matchAll(/\bcreateRequire\(/g)].length;
+    if (calls !== (DYNAMIC_REQUIRE_ALLOWED[n] ?? 0)) wrong.push(`${n}.js has ${calls} createRequire( call(s), allowed ${DYNAMIC_REQUIRE_ALLOWED[n] ?? 0}`);
+    if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["'](?:playwright|playwright-core|@playwright\/test)(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports a Playwright package literally`);
+  }
+  check("dynamic require only where allowed: verify-probe.js has exactly one createRequire(, every other bundle has none, none imports Playwright literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
+}
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.
 {
-  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton"];
+  const NEEDS_ARGS = ["design-diff", "drift-lint", "tokens", "map-bootstrap", "get-component", "map-validate", "plan-skeleton", "verify-probe"];
   const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
   const bare: string[] = [];

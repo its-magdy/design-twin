@@ -77,28 +77,19 @@ in the project and a browser it can launch. Run this **from the web app's own pa
 whose `package.json` has the dev server — in a monorepo that is the app, e.g. `apps/web`, not the root):
 
 ```bash
-node --input-type=module -e '
-import { createRequire } from "node:module";
-const req = createRequire(process.cwd() + "/package.json");   // resolve from the PROJECT, not the plugin
-let found = false;
-for (const p of ["playwright", "@playwright/test", "playwright-core"]) {
-  let mod; try { mod = req(p); } catch { continue; }
-  found = true;
-  try { const b = await mod.chromium.launch({ timeout: 30000 }); await b.close(); console.log(`ok: ${p} launches Chromium`); }
-  catch (e) { console.log(`${p} is installed but Chromium does not start: ${String(e.message).split("\n")[0]}`); process.exitCode = 1; }
-  break;
-}
-if (!found) { console.log("no playwright package in this project"); process.exitCode = 1; }'
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check [--project <app dir>]
 ```
 
-Not `ok` → **stop and ask** before step 3 (step 2 needs no browser), saying exactly what is missing and the commands that fix
-it — `npm i -D playwright` (or the project's package manager), then `npx playwright install chromium`,
-which downloads a browser build. Don't run either without the user's OK: one edits the project's
+It resolves the project's Playwright and launches Chromium once (exit 0 = ok, nothing written).
+
+Exit 3 → **stop and ask** before step 3 (step 2 needs no browser), saying exactly what is missing and the commands that fix
+it (the probe prints them: `npm i -D playwright`, then `npx playwright install chromium`, a large browser
+download). Never run either yourself — only the user does, or says so: one edits the project's
 dependencies, the other a large download. "No playwright package" can be a false negative — a Yarn
-Plug'n'Play project (no `node_modules`; run the same check through `yarn node`), or a project that drives
+Plug'n'Play project (no `node_modules`; run the same check through `yarn node`; pass `--project`), or a project that drives
 the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of the
 build-screen skill's `references/verify.md` (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`; simulator, emulator, `flutter`) the same way. The only way
-on without a renderer is the agent's `static-only` mode, which the report marks as not rendered.
+on without a renderer is the agent's `static-only` mode, which the report marks as not rendered. Where that reference shows `<scripts>/<name>.js`, `<scripts>` means `${CLAUDE_PLUGIN_ROOT}/scripts` (Claude Code writes the real path here, not there).
 
 ## 2. Emit the design's own numbers, as data
 
@@ -143,6 +134,8 @@ Pass several screen files if the build covers a flow; the expectation merges the
 `verify-screen.js` has **no browser**. `--compare` diffs two JSON files; rendering, measuring and
 driving interactions happen here, in the agent, and arrive as data.
 
+On web the verifier runs the shipped probe — `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> [--ready '[data-dt-node="<frame id>"]']` — which matches, reads every style key and writes `measured.json` and the PNG; nobody writes a probe by hand or edits its output. The agent adds only what the probe does not measure: designed interactions (and pressed states) and components it judges absent, in `design/verify/<Screen>.evidence.json`. Exit 4 (kept navigating, reloaded, unreachable, timeout) writes nothing: report it.
+
 Invoke `designtwin:visual-verifier` with: the screen name, the expectation path, the reference PNG
 path, the code files from `files[]`, the profile, and any state/theme/size the user asked about.
 
@@ -151,9 +144,8 @@ the expectation's `measuredKeys` lists — `borderRadius`, not `radius`), the sc
 `design/verify/<Screen>.png` it measured, and one result per designed interaction naming the
 selector it drove. It never edits app code, and it never writes the report it is graded by.
 
-**Interaction evidence has its own input channel.** Results go in `measured.json`'s
-`interactions[]`, or — when a separate script drove them — in a file passed as
-`--interactions <file>` (a JSON array of `{nodeId, trigger, ok, selector, selectorCount, detail}`).
+**Interaction evidence has its own input channel.** Results go in `design/verify/<Screen>.evidence.json`
+(an object `{interactions: [...], components: [...]}`), passed as `--interactions` (a bare JSON array of `{nodeId, trigger, ok, selector, selectorCount, detail}` also works).
 `ok: true` counts only with the `selector` that was driven and a `selectorCount` of at least 1; a
 result with no evidence, or `ok: null`, is `not-probed`.
 
@@ -162,10 +154,10 @@ result with no evidence, or `ok: null`, is `not-probed`.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
   design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json \
-  [--interactions <file>] --out design/verify/<Screen>
+  [--interactions design/verify/<Screen>.evidence.json] --out design/verify/<Screen>   # --interactions only when the verifier wrote that file
 ```
 
-Exit 0 only when the verdict is `pass`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
+The baseline is implicit: the existing `<Screen>.report.json` about to be overwritten; `--against <prev report>` overrides it. Exit 0 only when the verdict is `pass`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
 and prints the **headline** — the coverage line, verdict first:
 
 ```
@@ -201,7 +193,10 @@ How the verdict is computed, all of it deliberate:
 ## 5. Report the file, not an impression of it
 
 Lead with the report's `headline`, verbatim — it is the coverage line, and that sentence is what
-tells the user how much the verdict is worth. Then any `NEVER MEASURED` field, then the deltas,
+tells the user how much the verdict is worth. Right after it read the probe/census line and any
+`COVERAGE FELL a→b` or `probe changed` line, and say them: coverage that fell means the verdict is worth
+less than last round's. A report whose `inputs.probe` is `unknown` came from a hand-written measurement and is
+not comparable round to round. Then any `NEVER MEASURED` field, then the deltas,
 largest impact first (what, where in the code, design value → built value, and the `token` on the
 delta), then what was **not** checked: `notMeasured`, `fieldsNotMeasured`, `not-probed` interactions,
 the excluded-by-method values.

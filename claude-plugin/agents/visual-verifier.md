@@ -37,9 +37,11 @@ build-screen skill's `references/verify.md`
 Nothing available → write a `measured.json` with `{"mode": "static-only", "reason": "<exactly what
 you looked for>"}` and return. Do not install tooling or add dependencies without the caller saying so.
 
-Playwright missing on a web project is ~18s to add if the caller approves (`npm i -D playwright` +
-`npx playwright install chromium`), but on a cold machine that downloads ~150 MB. Say the cost before
-you spend it.
+**Web:** check with `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --check` (run from the web app's
+folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
+nothing is measured. Exit 3 means no usable renderer: **stop and ask the user** — the command prints the
+install line. Never run `npx playwright install` (or `npm i -D playwright`) yourself: it edits the
+project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask.
 
 ## 2. Say you're alive as you go
 
@@ -54,6 +56,8 @@ poll for liveness the one field it could not use. Write `failed` with the reason
 the last phase is never left hanging.
 
 ## 3. Render — and re-render immediately before you save anything
+
+**On web the probe (§4) renders, waits for readiness and takes the screenshot itself; this section is for native stacks.**
 
 Render at the frame's exact size (`box.w`×`box.h` from the export; device scale 1 or note it), fonts
 loaded, animations off. Save to `design/verify/<screen>.png` — **always**; it is the canonical render,
@@ -73,27 +77,48 @@ moved between loads.
 
 ## 4. Measure every node in the expectation
 
-For each row in `expected.json`, find the element and read its computed style. Two ways to find it,
-in this order:
+**Web: run the shipped probe. It owns the matching, the readiness and every style key.**
 
-1. **`data-dt-node="<figma node id>"`** — build-screen asks builders to emit this on elements
-   generated from a node (`accessibilityIdentifier` on iOS, `testTag` on Compose, `Semantics(identifier:)`
-   on Flutter). When it is there, matching is exact. Check it is on the element that IMPLEMENTS the
-   node: a FRAME/INSTANCE id spread onto an inner `<input>` measures the input, not the `<label>`
-   that draws the field — measure the container and report `tag` (compare refuses to grade a
-   container's box from a leaf `<input>/<svg>/<img>`).
-2. Otherwise match structurally and say so (`"matchedBy": "text"` / `"position"`): the row's `text`
-   where it is unique, then role + position. **A designed list rendered by one `.map()`** — twelve
-   drawn rows, one component — is expected: measure designed row *i* on rendered row *i* and report it
-   under the designed row's id. A shared shell (sidebar/header) carrying another frame's ids is matched
-   automatically through the component's internal path; you do not need to re-tag it.
-   Record anything you could not find — do NOT quietly skip it. An unfound node becomes `notMeasured`,
-   which blocks the pass, and that is correct: silence is not evidence.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
+  --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> \
+  [--ready '[data-dt-node="<frame id>"]']
+```
+
+It writes `design/verify/<Screen>.measured.json` and `<Screen>.png`, including `expectationSha256`, the probe's
+identity, `matchedBy` per node, `notMeasured` and the hover/focus states of every spec with a drawn state.
+Update the status file around it (one `measuring` phase). Rules:
+
+- **Never write your own probe, and never edit, patch or rewrite `measured.json`.** Its sha is the probe's
+  identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run (F-101).
+- **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
+  **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
+  out; nothing written) → report the navigation log it printed; do not retry in a loop.
+- **Untagged nodes** come back in `notMeasured` with the reason "tag it". Report them for the builder to tag
+  with `data-dt-node`; do not match them by hand. A `null` style with an `unmeasured[key]` reason is "not
+  measured", never a pass.
+- **Designed interactions, and components you judge genuinely absent, are yours.** The probe measures hover
+  and focus only (focus is recorded only when the element really took it; programmatic focus may not
+  match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence); pressed and every designed interaction you drive yourself, recording results as in
+  "Also collect" below into `design/verify/<Screen>.evidence.json` — an object
+  `{"interactions": [...], "components": [{"setName", "present": false, "detail"}]}` that the caller passes as
+  `--interactions`. Do not add them to `measured.json`.
+
+**Native stacks: match and read the keys yourself.** For each row in `expected.json`, find the element and
+read its computed style. Two ways to find it, in this order:
+
+1. **The stack's tag** — `accessibilityIdentifier` on iOS, `testTag` on Compose, `Semantics(identifier:)` on
+   Flutter, carrying the figma node id. When it is there, matching is exact. Check it is on the element that
+   IMPLEMENTS the node, not an inner leaf.
+2. Otherwise match structurally and say so (`"matchedBy": "text"` / `"position"`): the row's `text` where it
+   is unique, then role + position. A designed list rendered by one loop: measure designed row *i* on
+   rendered row *i*, reported under the designed row's id. Record anything you could not find — do NOT
+   quietly skip it. An unfound node becomes `notMeasured`, which blocks the pass, and that is correct.
 
 Read numbers, never eyeball them. **Use the canonical keys — `measuredKeys` in the expectation lists
 them; a differently-named key is not read, and the report's headline will say that field was present
-in 0 measurements.** (A probe once wrote `radius`; the comparer reads `borderRadius`; a whole phase of
-radius defects went unchecked.) On web:
+in 0 measurements.** The web column of this table is what the probe reads for you; use it as the reference
+for a native stack's equivalent:
 
 | key | read it as |
 |---|---|
@@ -109,7 +134,7 @@ radius defects went unchecked.) On web:
 | `tag` | `el.tagName.toLowerCase()` — lets the comparison route table rows, containers and leaves correctly |
 | `states.<hover\|pressed\|focus>` | the same styles **with the element in that state** — required for every spec carrying `drawnState` (the designer drew that row hovered; measuring it at rest reports a colour bug that is not there) |
 
-Put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at
+On native stacks put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at
 the top level, so a report can never be read against a newer expectation than it was measured on.
 
 **Traps that produced fabricated defects — check before you call anything wrong:**
@@ -142,7 +167,8 @@ Also collect:
   - Did not drive it? `"ok": null` with the reason — it is reported `not-probed`, not `fail`. Drove it
     and it did not do what the export says? `"ok": false` with what happened.
 
-Write it all to `design/verify/<screen>.measured.json`:
+On web, `components` and `interactions` go to `design/verify/<Screen>.evidence.json` (§4) and the probe writes
+`measured.json`. On native stacks write it all to `design/verify/<screen>.measured.json`:
 
 ```json
 {"measuredAt": "<ISO from `date -u`>", "renderer": "playwright-chromium", "viewport": "1440x1236",
@@ -183,7 +209,7 @@ anything the measurement cannot express, as a `note`:
 
 ## 6. Return
 
-Return the same object you wrote to `measured.json`, plus a short prose summary of what you looked at
+Return the object you wrote (on web: the probe's summary line plus the evidence file), plus a short prose summary of what you looked at
 and anything under `notes`. **Do not return a verdict** — the caller runs
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` and the report file decides. If you believe the screen is fine, the way
 to say that is a complete measurement with nothing in `notMeasured`.

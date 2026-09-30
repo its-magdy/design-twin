@@ -539,6 +539,9 @@ export interface VerifySpec {
   drawnStateOwn?: true;
   tokens?: TokenMap;
   frameId?: string;
+  /** node ids of every ancestor, nearest first, the frame root excluded (a probe scopes a text match to a
+   *  tagged ancestor with it; --compare does not read it). Absent on expectations written before group 7. */
+  ancestorIds?: string[];
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean }
 /** A root frame as an expectation lists it (no position). */
@@ -568,50 +571,72 @@ export interface VerifyExpectation {
   hidden?: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[] };
 }
 
-/** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open. */
+/** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open.
+ *  `null` = the probe could not read the value (the shipped probe gives the reason in MeasuredNode.unmeasured[key]);
+ *  --compare lists it as not measured, never as checked. */
 export interface MeasuredStyles {
-  fontFamily?: string;
-  fontSize?: number;
-  fontWeight?: number | string;
-  lineHeight?: number | string;
-  letterSpacing?: number;
-  color?: string;
-  backgroundColor?: string;
-  fill?: string;
-  borderColor?: string;
-  borderWidth?: number;
-  borderRadius?: number | number[] | string;
-  padding?: number[];
-  gap?: number | Array<number | null>;
-  gapVisual?: number;
-  width?: number;
-  height?: number;
-  x?: number;
-  y?: number;
-  opacity?: number;
+  fontFamily?: string | null;
+  fontSize?: number | null;
+  fontWeight?: number | string | null;
+  lineHeight?: number | string | null;
+  letterSpacing?: number | null;
+  color?: string | null;
+  backgroundColor?: string | null;
+  fill?: string | null;
+  borderColor?: string | null;
+  borderWidth?: number | null;
+  borderRadius?: number | number[] | string | null;
+  padding?: Array<number | null> | null;
+  gap?: number | Array<number | null> | null;
+  gapVisual?: number | null;
+  width?: number | null;
+  height?: number | null;
+  x?: number | null;
+  y?: number | null;
+  opacity?: number | null;
   text?: string | null;
-  placeholderText?: string;
-  placeholderColor?: string;
-  tag?: string;
-  textBox?: { x?: number; w?: number };
-  display?: string;
-  transform?: string;
-  rotate?: string;
-  visible?: boolean;
+  placeholderText?: string | null;
+  placeholderColor?: string | null;
+  tag?: string | null;
+  textBox?: { x?: number | null; w?: number | null } | null;
+  display?: string | null;
+  transform?: string | null;
+  rotate?: string | null;
+  visible?: boolean | null;
   [key: string]: unknown;
 }
 /** nodes[] of measured.json: `{nodeId, styles}` (canonical) or the styles flat on the row (older probes). */
 export interface MeasuredNode extends MeasuredStyles {
   nodeId: string;
   styles?: MeasuredStyles;
-  states?: Record<string, MeasuredStyles | { styles: MeasuredStyles }>;
+  states?: Record<string, MeasuredStyles | { styles: MeasuredStyles; unmeasured?: Record<string, string> }>;
+  /** how the probe found the element: "tag" | "tag-shared-path" | "text" | "text-ordinal" | "position" | "frame"
+   *  from the shipped probe; free text from a hand-written one */
   matchedBy?: string;
   note?: string;
   notes?: string;
   selector?: string;
+  /** how many elements `selector` matched */
+  selectorCount?: number;
+  /** why a styles key is null: `{<key>: "<why>"}` */
+  unmeasured?: Record<string, string>;
+  /** a TEXT spec's typography was read from this descendant of the matched element (e.g. "span") */
+  textFrom?: string;
+  /** the text is split over several runs; the first run's owner was read */
+  textFromMixed?: boolean;
+  /** where `fill` was read from */
+  fillSource?: "svg" | "background" | "img" | "css";
 }
 export interface MeasuredComponent { setName?: string; name?: string; nodeId?: string; present?: boolean; detail?: string; note?: string }
 export interface InteractionEvidence { nodeId: string; trigger?: string; ok?: boolean | null; result?: "not-probed"; selector?: string; selectorCount?: number; detail?: string }
+/** The shipped probe's identity (measured.probe; copied to report.inputs.probe). */
+export interface ProbeIdentity { name: string; version: string | null; sha256: string; playwright: { package: string; version: string }; browser: { name: string; version: string } }
+/** The element the probe took as a frame root, and how it found it. */
+export interface ProbeFrame { nodeId: string; selector: string; via: "tag" | "size-and-fill" | "viewport"; rect: { x: number; y: number; w: number; h: number } }
+/** Main-frame navigations the probe saw, and how many full re-runs they cost. */
+export interface ProbeNavigation { events: Array<{ type: string; url: string; at: number }>; afterInitialLoad: number; reruns: number }
+/** measured.notMeasured[] from the shipped probe: a spec it could not match, and why. */
+export interface ProbeNotMeasured { nodeId: string; why: string }
 /** <Screen>.measured.json — the probe's output, read as-is. */
 export interface VerifyMeasured {
   measuredAt?: string;
@@ -626,8 +651,15 @@ export interface VerifyMeasured {
   components?: MeasuredComponent[];
   interactions?: InteractionEvidence[];
   consoleErrors?: JsonValue[];
-  notMeasured?: JsonValue[];
+  /** `{nodeId, why}` from the shipped probe; hand-written probes wrote bare ids or `{nodeId, reason}` */
+  notMeasured?: Array<ProbeNotMeasured | JsonValue>;
   componentsMissing?: JsonValue[];
+  probe?: ProbeIdentity;
+  frame?: ProbeFrame;
+  frames?: ProbeFrame[];
+  navigation?: ProbeNavigation;
+  /** the probe's own count per matchedBy value (compare recomputes its census from nodes[]) */
+  matchedByCensus?: Record<string, number>;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -660,7 +692,9 @@ export interface VerifyReport {
   renderer?: string;
   viewport?: string | JsonObject;
   artifacts?: Array<string | ArtifactCheck>;
-  inputs?: { expectationSchema?: string; expectationSha256?: string; measuredSha256?: string; measuredAgainst?: string; exportContentSha256?: string; code?: CodeInputs };
+  inputs?: { expectationSchema?: string; expectationSha256?: string; measuredSha256?: string; measuredAgainst?: string; exportContentSha256?: string; code?: CodeInputs;
+    /** the shipped probe's identity, or "unknown" for a hand-written measured.json (group 7) */
+    probe?: ProbeIdentity | "unknown" };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
   why?: string[];
@@ -670,6 +704,8 @@ export interface VerifyReport {
     valuesNotComparable?: number; valuesUnverifiable?: number; hiddenLayersSkipped?: { layers: number; nodes: number; specsSkipped: number; instancesSkipped: number; interactionsSkipped: number };
     instanceSets?: number; instanceSetsWithEvidence?: number; instanceSetsViaSharedPath?: number; componentsBuilt?: number;
     interactionsExpected?: number; interactionsPassed?: number; interactionsFailed?: number; interactionsNotProbed?: number;
+    /** measured specs per matching rule (tag, tagSharedPath, text, textOrdinal, position, frame, sharedComponentPath, other, unstated) */
+    matchedBy?: Record<string, number>;
   };
   summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number };
   deltas?: VerifyDelta[];
@@ -682,10 +718,26 @@ export interface VerifyReport {
   fieldsNotMeasured?: Array<{ nodeId: string; name?: string; field: string; why: string }>;
   unverifiable?: Array<{ nodeId: string; name?: string; field: string; expected: JsonValue; why: string }>;
   notComparable?: NotComparable[];
-  probe?: { unknownKeys: Array<{ key: string; count: number; canonical?: string }>; duplicateNodeIds: number; interactionEvidenceOnHiddenLayers: number; interactionEvidenceNotInExpectation: number; measuredIdsOnHiddenLayers: number };
+  probe?: { unknownKeys: Array<{ key: string; count: number; canonical?: string }>; duplicateNodeIds: number; interactionEvidenceOnHiddenLayers: number; interactionEvidenceNotInExpectation: number; measuredIdsOnHiddenLayers: number;
+    /** measured node ids that match no spec, instance or hidden layer of the expectation (and no shared path) */
+    measuredIdsNotInExpectation?: number; measuredIdsNotInExpectationSample?: string[];
+    /** malformed optional extras of the measured file that were ignored (a hand-written `probe`, a non-list notMeasured) */
+    inputNotes?: string[] };
+  /** D18: coverage against the previous report (the one this run overwrote, or --against) */
+  against?: VerifyAgainst;
   limits?: string[];
   /** read by verify-build.js locateReports (a report written under a nickname) */
   nodeId?: string;
+}
+/** report.against (D18): the previous round's coverage beside this one's. Never changes the verdict. */
+export interface VerifyAgainst {
+  report: string;
+  nodesMeasured: { before: number | null; after: number };
+  nodesExpected: { before: number | null; after: number };
+  /** true/false when both rounds name a probe sha (or only one does); null when neither does */
+  probeChanged: boolean | null;
+  /** null when either report lacks inputs.expectationSha256 */
+  expectationChanged: boolean | null;
 }
 type VerifyCoverage = NonNullable<VerifyReport["coverage"]>;
 /** report.coverage as compare() writes it (schema @2): every counter present. */
@@ -694,6 +746,7 @@ export interface VerifyCoverageV2 extends VerifyCoverage {
   fieldsNeverMeasured: NonNullable<VerifyCoverage["fieldsNeverMeasured"]>; valuesNotComparable: number; valuesUnverifiable: number;
   instanceSets: number; instanceSetsWithEvidence: number; instanceSetsViaSharedPath: number;
   interactionsExpected: number; interactionsPassed: number; interactionsFailed: number; interactionsNotProbed: number;
+  matchedBy: Record<string, number>;
 }
 /**
  * What verify-screen.js compare() returns (schema @2): every @2 field present. `artifacts` is the CLI's

@@ -500,10 +500,13 @@ Copy this checklist into your notes and keep it updated:
 
      ```
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify/<Screen>
-     # …render, measure every node, write design/verify/<Screen>.measured.json…
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json \
+       --url <url> --out design/verify/<Screen>   # web: renders, measures every node, writes <Screen>.measured.json + .png
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
        design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json --out design/verify/<Screen>
      ```
+
+     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one.
 
      `--expect` emits the spec as data — font family/weight/size/line-height/colour, background,
      radius, padding, gap, size, and the literal text — one row per node, read straight off the
