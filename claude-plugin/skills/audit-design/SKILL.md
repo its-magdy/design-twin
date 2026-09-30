@@ -160,8 +160,9 @@ full turn; a clean summary can be reported from the JSON alone.
    step" and "use the closest existing token" both contradict `build-screen`'s rule 5, which treats an
    approximate match as silent hardcoding-by-proxy — the build uses exact values. An off-grid spacing
    or an unbound colour is a question about whether the *design* should change; the default is always
-   "use the exact value and flag it". See `references/questions.md`. The script ships at `${CLAUDE_PLUGIN_ROOT}/
-   scripts/audit.js` with the plugin, so it should always be present; only fall back to doing the same
+   "use the exact value and flag it". See `references/questions.md`. The script ships with the plugin
+   (`${CLAUDE_PLUGIN_ROOT}/scripts/audit.js`; `<scripts>` in the `references/` and `profiles/` files this skill loads (its own and build-screen's)
+   means that folder), so it should always be present; only fall back to doing the same
    checks by hand from `references/heuristics.md` if it genuinely errors out, and say which checks you
    skipped. Read the resulting `.json`; treat it as evidence to verify, not a verdict.
 

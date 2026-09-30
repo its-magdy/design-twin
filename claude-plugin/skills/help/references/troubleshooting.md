@@ -67,7 +67,7 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
 - **`design/` is empty / `/designtwin:build-screen` can't find files** → nothing exported yet. `design/` is a
   generated drop-target and doesn't exist until an export runs. Do Path A/B first.
 - **Wrong stack generated** → set `design/target.json`, or add a profile at your project's own repo
-  root (copy `${CLAUDE_PLUGIN_ROOT}/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
+  root (copy `<plugin>/skills/build-screen/profiles/_template.md`) — it overrides the bundled profiles.
 - **`stale-snapshot` / `unknown-freshness` from drift-lint** → the export in `design/` is older than
   24h (or has no `exportedAt`), so a "clean" result is against the snapshot, not the live file.
   Re-run Path A/B. Tunable: `--max-age <hours>` / `DRIFT_MAX_AGE_HOURS`.
@@ -78,12 +78,14 @@ verb forms — `dtwin status`, `dtwin token show`, `dtwin list libraries` … �
   (Loading/Skeleton/Empty/Error/Offline…) in the exported layers only. Export the page that holds it, or
   rename the frame. Library components' states show as "sampled" — pull the library with
   `--as-library` for their full variants.
-- **`audit.js`/`drift-lint.js`/etc. "not found"** → these ship at `${CLAUDE_PLUGIN_ROOT}/scripts/`
-  inside the plugin itself — that env var is set by Claude Code whenever a skill from this plugin is
-  active, so `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js"` resolves regardless of the consumer
-  project's own layout. If it still doesn't resolve, check `ls "${CLAUDE_PLUGIN_ROOT}/scripts"`: an
-  empty/missing directory means a broken install — re-run `/plugin install designtwin`. Working from
-  a clone of the Design Twin repo instead? The same scripts are `node design-to-code/<name>.js`.
+- **A script "not found" / `Cannot find module '/scripts/…'`** → the command ran with an empty plugin
+  path. The scripts ship at `<plugin>/scripts/<name>.js`. Claude Code writes the real plugin path into a
+  skill's or agent's own text when it loads it, but `CLAUDE_PLUGIN_ROOT` is NOT an environment variable in
+  the Bash tool, so `node "$CLAUDE_PLUGIN_ROOT/scripts/…"` typed into a shell always fails. Copy the path
+  exactly as the skill shows it; a script's own usage/hint lines also print their real path. If the skill
+  text itself still shows the literal `${…}` form (it was preloaded into an agent), the agent's prompt
+  names the folder. The folder is missing → re-run `/plugin install designtwin`. Working from a clone of
+  the Design Twin repo instead? The same scripts are `node design-to-code/<name>.ts`.
 - **Audit flags a lot of `small-touch-target` / `fixed-size-text`** → thresholds differ per platform
   (web 24px, iOS 44pt, Android 48dp) — make sure `--platform` matches the stack. Visual size can stay
   small if the hit area is padded; decorative static text can ignore the fixed-size warning.

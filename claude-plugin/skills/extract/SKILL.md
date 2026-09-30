@@ -316,4 +316,5 @@ cross-check blocker. Then **`/designtwin:audit-design <screen>`** to check the d
 **`/designtwin:build-screen <screen>`** to build it.
 
 If something failed — bridge offline, `EADDRINUSE`, empty library list, 401 — the symptom→fix list is
-the **help** skill's `references/troubleshooting.md`. Load it; don't debug from memory.
+the **help** skill's `references/troubleshooting.md` (`${CLAUDE_PLUGIN_ROOT}/skills/help/references/troubleshooting.md`;
+where it says `<plugin>` it means `${CLAUDE_PLUGIN_ROOT}`). Load it; don't debug from memory.

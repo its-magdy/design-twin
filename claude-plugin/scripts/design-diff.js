@@ -4,7 +4,7 @@
 
 // design-to-code/design-diff.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 import { execFileSync } from "node:child_process";
 
 // design-to-code/types.ts
@@ -141,7 +141,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -163,7 +163,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -178,7 +178,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -202,7 +202,7 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -218,8 +218,12 @@ function getOrInit(m, k, init) {
 }
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -320,12 +324,12 @@ var DESIGN_SYSTEM_FILES = {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -640,9 +644,9 @@ function markdown(d, label) {
   return L.join("\n") + "\n";
 }
 function snapshotPath(file, cwd = process.cwd()) {
-  const rel = path.relative(path.join(cwd, "design"), path.resolve(cwd, file));
-  const flat = (rel.startsWith("..") ? path.basename(file) : rel).split(path.sep).join("__");
-  return path.join(cwd, "design", ".sync", flat);
+  const rel = path2.relative(path2.join(cwd, "design"), path2.resolve(cwd, file));
+  const flat = (rel.startsWith("..") ? path2.basename(file) : rel).split(path2.sep).join("__");
+  return path2.join(cwd, "design", ".sync", flat);
 }
 function hashAssetBytes(fileName, buf) {
   return sha1Hex(normalizeForCompare(fileName, buf));
@@ -658,15 +662,15 @@ function assetPaths(doc) {
   return [...out];
 }
 function assetRoot(file, assets) {
-  let dir = path.dirname(path.resolve(file));
-  for (let i = 0; i < 6; i++, dir = path.dirname(dir)) if (assets.some((a) => fs3.existsSync(path.join(dir, a)))) return dir;
+  let dir = path2.dirname(path2.resolve(file));
+  for (let i = 0; i < 6; i++, dir = path2.dirname(dir)) if (assets.some((a) => fs3.existsSync(path2.join(dir, a)))) return dir;
   return null;
 }
 function assetHashes(file, doc) {
   const assets = assetPaths(doc), root = assets.length ? assetRoot(file, assets) : null, out = {};
   if (root) for (const a of assets) {
     try {
-      out[a] = hashAssetBytes(a, fs3.readFileSync(path.join(root, a)));
+      out[a] = hashAssetBytes(a, fs3.readFileSync(path2.join(root, a)));
     } catch {
     }
   }
@@ -680,7 +684,7 @@ function redrawnAssets(file, newDoc, prev, cwd) {
     if (prev.kind === "snapshot") before = (prev.assets || {})[a];
     else if (prev.kind === "git") {
       try {
-        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path.relative(cwd, path.join(now.root, a)).split(path.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
+        before = hashAssetBytes(a, execFileSync("git", ["show", "HEAD:./" + path2.relative(cwd, path2.join(now.root, a)).split(path2.sep).join("/")], { cwd, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
       }
     }
@@ -697,16 +701,16 @@ function previous(file, against, cwd = process.cwd(), current = null) {
   if (fs3.existsSync(snap)) {
     const assets = readJsonOrNull(snap + ".assets.json", isStringRecord);
     const r = readJson(snap, anyJson);
-    if (!("doc" in r)) throw new Error(`the snapshot ${path.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
-    found.push({ doc: r.doc, source: path.relative(cwd, snap), kind: "snapshot", assets });
+    if (!("doc" in r)) throw new Error(`the snapshot ${path2.relative(cwd, snap)} ${r.error} \u2014 re-take it with --snapshot --force, or pass --against <an older copy>`);
+    found.push({ doc: r.doc, source: path2.relative(cwd, snap), kind: "snapshot", assets });
   }
   if (fs3.existsSync(snap + ".prev")) {
     const assets = readJsonOrNull(snap + ".assets.json.prev", isStringRecord);
     const r = readJson(snap + ".prev", anyJson);
-    if ("doc" in r) found.push({ doc: r.doc, source: path.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
+    if ("doc" in r) found.push({ doc: r.doc, source: path2.relative(cwd, snap) + ".prev", kind: "snapshot", assets });
   }
   try {
-    const rel = path.relative(cwd, path.resolve(cwd, file)).split(path.sep).join("/");
+    const rel = path2.relative(cwd, path2.resolve(cwd, file)).split(path2.sep).join("/");
     const text = execFileSync("git", ["show", "HEAD:./" + rel], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
     const doc = JSON.parse(text);
     found.push({ doc, source: "git HEAD", kind: "git" });
@@ -734,31 +738,31 @@ function previous(file, against, cwd = process.cwd(), current = null) {
 }
 var DS_FILE_NAMES = Object.values(DESIGN_SYSTEM_FILES).filter((v) => typeof v === "string" && /\.json$/.test(v));
 function siblingFilesOf(f) {
-  const abs = path.resolve(f);
-  const dir = path.dirname(abs);
-  const base = path.basename(abs);
+  const abs = path2.resolve(f);
+  const dir = path2.dirname(abs);
+  const base = path2.basename(abs);
   const out = [];
   if (DS_FILE_NAMES.includes(base)) {
-    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path.dirname(dir);
+    const dsRoot = base === DESIGN_SYSTEM_FILES.MANIFEST ? dir : path2.dirname(dir);
     for (const name of DS_FILE_NAMES) {
       if (name === base) continue;
-      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path.join(dsRoot, "design-system");
-      out.push(path.relative(process.cwd(), path.join(siblingDir, name)));
+      const siblingDir = name === DESIGN_SYSTEM_FILES.MANIFEST ? dsRoot : path2.join(dsRoot, "design-system");
+      out.push(path2.relative(process.cwd(), path2.join(siblingDir, name)));
     }
     return out;
   }
   const m = /\.json$/i.test(base) ? base.slice(0, -5) : null;
   if (m) {
     for (const suf of [".vars.json", ".assets.json"]) {
-      const p = path.join(dir, m + suf);
-      if (fs3.existsSync(p)) out.push(path.relative(process.cwd(), p));
+      const p = path2.join(dir, m + suf);
+      if (fs3.existsSync(p)) out.push(path2.relative(process.cwd(), p));
     }
   }
   const pageDir = dir;
-  const pagesDir = path.dirname(pageDir);
-  if (path.basename(pagesDir) === "pages") {
-    const idx = path.join(pagesDir, "index.json");
-    if (fs3.existsSync(idx)) out.push(path.relative(process.cwd(), idx));
+  const pagesDir = path2.dirname(pageDir);
+  if (path2.basename(pagesDir) === "pages") {
+    const idx = path2.join(pagesDir, "index.json");
+    if (fs3.existsSync(idx)) out.push(path2.relative(process.cwd(), idx));
   }
   return out;
 }
@@ -767,7 +771,7 @@ function main(argv) {
        ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
   if (!argv.length || argv.includes("--help") || argv.includes("-h")) {
     console.error(USAGE);
-    process.exit(argv.length ? 0 : 2);
+    return argv.length ? 0 : 2;
   }
   const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
@@ -776,7 +780,7 @@ function main(argv) {
     const requested = positionals;
     if (!requested.length) {
       console.error(USAGE);
-      process.exit(2);
+      return 2;
     }
     const files = [...new Set(requested.flatMap((f) => [f, ...siblingFilesOf(f)]))];
     let refused = 0;
@@ -786,7 +790,7 @@ function main(argv) {
         continue;
       }
       const dest = snapshotPath(f);
-      fs3.mkdirSync(path.dirname(dest), { recursive: true });
+      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
       let identical = false;
       if (fs3.existsSync(dest)) {
         try {
@@ -795,7 +799,7 @@ function main(argv) {
         }
       }
       if (fs3.existsSync(dest) && !identical && !force) {
-        console.error(`design-diff: ${path.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
+        console.error(`design-diff: ${path2.relative(process.cwd(), dest)} already exists and would change \u2014 refusing to overwrite it (pass --force to replace it; the old one is kept as .prev).`);
         refused++;
         continue;
       }
@@ -820,34 +824,33 @@ function main(argv) {
         }
       } catch {
       }
-      console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
+      console.log(`snapshot: ${f} -> ${path2.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
-    if (refused) process.exitCode = 1;
-    return;
+    return refused ? 1 : 0;
   }
   const { against, out } = flags;
   const json = !!flags.json;
   const file = positionals[0];
   if (!file) {
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
   const current = readJsonFile(file, "export");
   const failed = (e) => {
     const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
     console.error(`design-diff: ${file}: ${String(message)}`);
-    process.exit(2);
+    return 2;
   };
   let prev = null;
   try {
     prev = previous(file, against, process.cwd(), current);
   } catch (e) {
-    failed(e);
+    return failed(e);
   }
   if (!prev) {
     console.error(`design-diff: nothing to compare ${file} against \u2014 no snapshot in design/.sync/, and it is not committed in git.
-Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
-    process.exit(2);
+Next time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
+    return 2;
   }
   let diff;
   try {
@@ -859,12 +862,13 @@ Next time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now p
   const result = { file, against: prev.source, baseline: prev.kind, warned: diff.warnings.length > 0, ...diff };
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) {
-    fs3.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    fs3.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
     fs3.writeFileSync(out, text);
     console.log(`wrote ${out} \u2014 ${JSON.stringify(result.summary)}${result.warnings.length ? ` \u2014 ${result.warnings.length} warning(s), read them` : ""}`);
   } else process.stdout.write(text);
+  return 0;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   assetHashes,
   diffCatalog,

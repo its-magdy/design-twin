@@ -159,7 +159,7 @@ check("visibility() never reads `visible` — a component PROPERTY called \"visi
 
 console.log("CLI:");
 const help = run(["--help"]);
-check("--help prints usage and exits 0", help.status === 0 && /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/plan-skeleton\.js" <screen\.json> <screen\.vars\.json> <design-system dir>/.test(help.stdout));
+check("--help prints usage and exits 0", help.status === 0 && /usage: node "[^"]*plan-skeleton\.(ts|js)" <screen\.json> <screen\.vars\.json> <design-system dir>/.test(help.stdout));
 check("an unknown flag is refused (exit 2), not swallowed", run([screen(JR), vars(JR), DS, "--output", "x"]).status === 2);
 {
   // Every input is checked as it is read (doc-guards.ts); each failure is one line naming the file, exit 1.

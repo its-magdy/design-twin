@@ -675,7 +675,7 @@ function toMarkdown(res: AuditReport): string {
         L.push(
           `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the ` +
             `catalog also match it by prop signature. The proposed matches are listed under \`crossFile.componentProposals\` — confirm them with the ` +
-            `user, then \`map-bootstrap.js … --from-proposals\` stubs exactly those.`,
+            `user, then the map-bootstrap script with \`--from-proposals\` stubs exactly those.`,
           ""
         );
       }
@@ -770,8 +770,7 @@ export { audit, toMarkdown, contrastRatio, parseHex, deltaE, controlKind, TOUCH_
 // --gate: exit 1 if any blocker was found (default is always exit 0 — findings are advice unless --gate is set).
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document its flag names is a one-line error and exit 2, never an audit of nothing.
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]\n` +
     "       [--design-system design/design-system] [--variables design/variables.json]\n" +
@@ -787,20 +786,20 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     grid: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("audit", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (flags.help) { console.log(USAGE); return 0; }
   const firstFile = files[0];
-  if (firstFile === undefined) { console.error(USAGE); process.exit(2); }
+  if (firstFile === undefined) { console.error(USAGE); return 2; }
   const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
-  if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); process.exit(2); }
+  if (platform && !PLATFORMS.includes(platform)) { console.error(`--platform must be one of ${PLATFORMS.join(", ")}`); return 2; }
   // `--grid abc` used to become NaN and fall back to the 4px default without a word.
   const grid = gridArg === undefined ? undefined : Number(gridArg);
-  if (grid !== undefined && !(Number.isFinite(grid) && grid > 0)) { console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`); process.exit(2); }
+  if (grid !== undefined && !(Number.isFinite(grid) && grid > 0)) { console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`); return 2; }
   // Variables discovery is shared with cross-check.ts (slice-sources.ts variablesContext): the union
   // at the export root (or --variables), and each screen's own slice beside it.
   const ctx = variablesContext(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
+  if (ctx.invalid.length) return 2;
   const inputs: AuditInput[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : undefined;
   // Optional by design: a project that only ever pulled one screen has no design-system/ at all, and
@@ -836,7 +835,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
         `error  node ${res.nodeIds[0]} already has an audit report at ${dup} — refusing to also write ${outBase}.json/.md ` +
           "(one screen, one report pair). Use that existing name, or pass --force to write this one anyway."
       );
-      process.exit(1);
+      return 1;
     }
   }
   if (jsonOnly) {
@@ -853,5 +852,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (res.platformAssumed) console.error("warn  no --platform given — assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   for (const n of (res.crossFile && res.crossFile.notChecked) || []) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
+  return gate && res.summary.blockers > 0 ? 1 : 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

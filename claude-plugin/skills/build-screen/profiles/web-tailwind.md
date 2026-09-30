@@ -71,7 +71,7 @@ Output
 - **An `@theme` variable REPLACES Tailwind's own of the same name.** `--radius-xl: 16px` makes every
   `rounded-xl` in the project 16px instead of 12px; `--radius-l`/`--radius-s` mint `rounded-l`/
   `rounded-s`, which Tailwind already defines as the left/start-corner shorthands. So the generated
-  `theme.css` (`tokens.js … --web tailwind`) puts every design token under a `figma-` sub-namespace:
+  `theme.css` (`node "<scripts>/tokens.js" … --web tailwind`) puts every design token under a `figma-` sub-namespace:
   Figma's `Border Radius/XL` is `--radius-figma-xl` → `rounded-figma-xl`, `Spacing/Space 4` is
   `--spacing-figma-space-4` → `p-figma-space-4`/`gap-figma-space-4`, a colour `Primary/Primary` is
   `--color-figma-primary-primary` → `bg-figma-primary-primary`, a font size is `text-figma-…`.

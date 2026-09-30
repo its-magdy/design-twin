@@ -2,7 +2,11 @@
 
 
 // design-to-code/cli-args.ts
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/read-json.ts
 import fs from "node:fs";
@@ -57,12 +61,12 @@ function readDocFile(file, what, guard, hint) {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -104,7 +108,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path, message) => errors.push({ path, message });
+  const err = (path2, message) => errors.push({ path: path2, message });
   if (!isObj(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -207,29 +211,30 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const file = process.argv[2];
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+function main(argv) {
+  const file = argv[0];
   const USAGE = `usage: ${scriptCmd("map-validate")} <map.json>`;
   if (file === "--help" || file === "-h") {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
   if (!file || file.startsWith("-")) {
     console.error((file ? `map-validate: unknown flag ${file}
 ` : "") + USAGE);
-    process.exit(1);
+    return 1;
   }
   const res = validateMap(readJsonFile(file, "component map"));
   if (res.ok) {
     console.log("map valid");
-    process.exit(0);
+    return 0;
   }
   res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
   console.error(`
 ${res.errors.length} error(s)`);
-  process.exit(1);
+  return 1;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   isCodeConnectMap,
   validateMap

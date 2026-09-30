@@ -71,6 +71,35 @@ do not read a `"verified"` in it as evidence, and never write one. Copy `files[]
 may already carry a `verification` block from the build's own inner verifier — read it, and in step 5
 say whether this run confirms or contradicts it.
 
+**Check that the project can render, now — not at the last hand-off.** The agent in step 3 needs a
+browser driver; finding out it is missing after steps 1–2 wastes the run. Web targets need Playwright
+in the project and a browser it can launch. Run this **from the web app's own package folder** (the one
+whose `package.json` has the dev server — in a monorepo that is the app, e.g. `apps/web`, not the root):
+
+```bash
+node --input-type=module -e '
+import { createRequire } from "node:module";
+const req = createRequire(process.cwd() + "/package.json");   // resolve from the PROJECT, not the plugin
+let found = false;
+for (const p of ["playwright", "@playwright/test", "playwright-core"]) {
+  let mod; try { mod = req(p); } catch { continue; }
+  found = true;
+  try { const b = await mod.chromium.launch({ timeout: 30000 }); await b.close(); console.log(`ok: ${p} launches Chromium`); }
+  catch (e) { console.log(`${p} is installed but Chromium does not start: ${String(e.message).split("\n")[0]}`); process.exitCode = 1; }
+  break;
+}
+if (!found) { console.log("no playwright package in this project"); process.exitCode = 1; }'
+```
+
+Not `ok` → **stop and ask** before step 3 (step 2 needs no browser), saying exactly what is missing and the commands that fix
+it — `npm i -D playwright` (or the project's package manager), then `npx playwright install chromium`,
+which downloads a browser build. Don't run either without the user's OK: one edits the project's
+dependencies, the other a large download. "No playwright package" can be a false negative — a Yarn
+Plug'n'Play project (no `node_modules`; run the same check through `yarn node`), or a project that drives
+the browser with Puppeteer or the Playwright MCP, which the verifier also accepts — so ask rather than conclude. Other stacks: check the tool in the per-stack table of the
+build-screen skill's `references/verify.md` (`${CLAUDE_PLUGIN_ROOT}/skills/build-screen/references/verify.md`; simulator, emulator, `flutter`) the same way. The only way
+on without a renderer is the agent's `static-only` mode, which the report marks as not rendered.
+
 ## 2. Emit the design's own numbers, as data
 
 ```bash

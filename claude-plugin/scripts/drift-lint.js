@@ -36,12 +36,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path2, parent, depth) {
+  (function go(node, parentHidden, path3, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path2, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path2 ? path2 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -166,7 +166,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -188,7 +188,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -203,7 +203,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -227,15 +227,19 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -508,12 +512,12 @@ function isRekeyed(result) {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -550,7 +554,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path2, message) => errors.push({ path: path2, message });
+  const err = (path3, message) => errors.push({ path: path3, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -653,29 +657,8 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (false) {
-  const file = process.argv[2];
-  const USAGE = `usage: ${scriptCmd2("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") {
-    console.log(USAGE);
-    process.exit(0);
-  }
-  if (!file || file.startsWith("-")) {
-    console.error((file ? `map-validate: unknown flag ${file}
-` : "") + USAGE);
-    process.exit(1);
-  }
-  const res = validateMap(readJsonFile2(file, "component map"));
-  if (res.ok) {
-    console.log("map valid");
-    process.exit(0);
-  }
-  res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
-  console.error(`
-${res.errors.length} error(s)`);
-  process.exit(1);
-}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/drift-lint.ts
 var stripSuffix = (k) => String(k).split("#")[0] ?? "";
@@ -849,27 +832,26 @@ function screenCoverage(map, catalog, screenDocs) {
     unmapped: rows.filter((r) => !r.inMap).map((r) => ({ setName: r.setName, key: r.key, instances: r.instances }))
   };
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+async function main(argv) {
   const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
   const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
   let maxAgeHours;
   if (flags["max-age"] !== void 0) {
     maxAgeHours = Number(flags["max-age"]);
     if (!(maxAgeHours > 0)) {
       console.error("--max-age expects a positive number of hours");
-      process.exit(2);
+      return 2;
     }
   } else if (process.env.DRIFT_MAX_AGE_HOURS) {
     maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
     if (!(maxAgeHours > 0)) {
       console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours");
-      process.exit(2);
+      return 2;
     }
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 36e5 : void 0;
@@ -877,7 +859,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const [mapFile, catalogFile] = positionals;
   if (!mapFile || !catalogFile) {
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
   const catalog = readSplitFile(
     catalogFile,
@@ -887,15 +869,15 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1)."
   );
-  const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const mapRaw = readJsonFile(mapFile, "component map", `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out codeconnect.local.json\`.`);
   const valid = validateMap(mapRaw);
   if (!valid.ok) {
     valid.errors.forEach((e) => console.error(`ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`));
     console.error(`
-${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 fix it, or check it with \`map-validate.js ${mapFile}\`.`);
-    process.exit(1);
+${mapFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 fix it, or check it with \`${scriptCmd("map-validate")} ${mapFile}\`.`);
+    return 1;
   }
-  if (!isCodeConnectMap(mapRaw)) process.exit(1);
+  if (!isCodeConnectMap(mapRaw)) return 1;
   const map = mapRaw;
   const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
@@ -925,8 +907,8 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
         console.error(
           `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key \u2014 but ${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.
        That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.
-       Get the confirmation list with \`cross-check.js <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
-       confirm it (set "confirmed": true per entry), then \`map-bootstrap.js <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user
+       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
         );
       } else if (cov.mapPct === 0) {
         screenFail = true;
@@ -947,19 +929,19 @@ SCREEN COVERAGE: ${cov.inMap}/${cov.distinct} (${cov.mapPct}%) of the component 
   }
   const fileKey = process.env.FIGMA_FILE_KEY;
   const token = process.env.FIGMA_TOKEN;
-  const run = async () => {
-    if (fileKey && token) {
-      try {
-        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
-        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
-      } catch (e) {
-        console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
-      }
+  if (fileKey && token) {
+    try {
+      const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
+      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) \u2014 it is confirmed stale, not just old.`);
+    } catch (e) {
+      console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
-    process.exit(res.errors.length || screenFail ? 1 : 0);
-  };
-  void run();
+  }
+  return res.errors.length || screenFail ? 1 : 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) void main(process.argv.slice(2)).then((code) => {
+  process.exitCode = code;
+});
 export {
   DEFAULT_MAX_AGE_MS,
   checkFreshness,

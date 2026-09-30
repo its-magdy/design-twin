@@ -3,7 +3,7 @@
 
 // design-to-code/resolve-screen.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -56,7 +56,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -78,7 +78,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -93,7 +93,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -117,7 +117,7 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -173,14 +173,21 @@ function getOrInit(m, k, init) {
   return made;
 }
 
+// design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -189,13 +196,13 @@ function isMainFallback(metaUrl) {
 // design-to-code/resolve-screen.ts
 var NODE_ID_RE = /^\d+:\d+$/;
 function allRows(exportDir) {
-  const rootFile = path.join(exportDir, "pages", "index.json");
+  const rootFile = path2.join(exportDir, "pages", "index.json");
   const root = readJsonOrNull(rootFile, isPagesRootIndex);
   if (!root) return [];
   if (root.layers) return root.layers;
   const rows = [];
   for (const pd of root.pageDirs) {
-    const idx = pd.dir ? readJsonOrNull(path.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
+    const idx = pd.dir ? readJsonOrNull(path2.join(exportDir, "pages", pd.dir, "index.json"), isPageIndex) : null;
     if (idx) rows.push(...idx.layers);
   }
   return rows;
@@ -205,7 +212,7 @@ function planRows(planDir) {
   const out = [];
   for (const f of fs3.readdirSync(planDir)) {
     if (!f.endsWith(".json")) continue;
-    const doc = readJsonOrNull(path.join(planDir, f), isPlan);
+    const doc = readJsonOrNull(path2.join(planDir, f), isPlan);
     if (doc && (doc.screenName || doc.nodeId)) out.push({ file: f, ...ifDefined("screenName", doc.screenName), ...ifDefined("nodeId", doc.nodeId), ...ifDefined("route", doc.route) });
   }
   return out;
@@ -272,11 +279,11 @@ function resolveScreen(exportDir, query, opts) {
   }
   return Object.assign({ status: "not-found", candidates: rows.map((r) => describe(r)) }, noTitles ? { noTitles: true } : null);
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const [exportDir, query, planDir] = process.argv.slice(2);
+function main(argv) {
+  const [exportDir, query, planDir] = argv;
   if (!exportDir || !query) {
-    console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
-    process.exit(2);
+    console.error(`usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`);
+    return 2;
   }
   const NOTITLES_NOTE = "note   this export's index carries no titles (pulled before title indexing) \u2014 re-pull the screen (`dtwin pull --node <id>`) to enable lookup by title";
   const listCandidates = (candidates) => {
@@ -286,24 +293,25 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
-    process.exit(0);
+    return 0;
   }
   if (res.status === "ambiguous") {
     console.error(`error  '${query}' matches ${res.candidates.length} screens at the '${res.stage}' stage \u2014 pick one by node id:`);
     listCandidates(res.candidates);
-    process.exit(1);
+    return 1;
   }
   if (res.status === "needs-confirmation") {
     console.error(`error  '${query}' matched only by text search \u2014 confirm with the node id (never resolved automatically from a substring hit):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
-    process.exit(1);
+    return 1;
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
   listCandidates(res.candidates);
   if (res.noTitles) console.error(NOTITLES_NOTE);
-  process.exit(1);
+  return 1;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   NODE_ID_RE,
   allRows,

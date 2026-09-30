@@ -19,7 +19,8 @@ own and cannot regenerate, so `rm -rf design/export && re-pull` is always safe. 
 
 **Your job when this skill is invoked: figure out what the user is trying to do and give them the
 exact next step.** Orientation → this file. Something broken → read
-[`references/troubleshooting.md`](references/troubleshooting.md), match the symptom, give the fix —
+[`references/troubleshooting.md`](references/troubleshooting.md) (where it says `<plugin>` it means
+`${CLAUDE_PLUGIN_ROOT}`, the installed plugin folder), match the symptom, give the fix —
 don't debug a bridge error from memory.
 
 Nothing here is headless: the target Figma file must be **open in the desktop app with the "Design
@@ -165,7 +166,7 @@ imports the Figma plugin does need one, since the npm package ships no `manifest
 - **`designtwin:visual-verifier`** — renders a built screen, measures every node against the design's
   own numbers, checks that every component on the frame was actually built and that every designed
   interaction works, and writes the measurements to `design/verify/`. It returns measurements rather
-  than a verdict: `verify-screen.js --compare` computes that, so "pass" is never something anyone
+  than a verdict: `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` computes that, so "pass" is never something anyone
   asserts. Never edits app code.
 
 ## Related

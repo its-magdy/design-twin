@@ -206,35 +206,34 @@ export { bootstrap, bootstrapFromProposals, proposalsIn };
 // Without --out the map goes to stdout. With --out it is written to that file; when the file already
 // exists and no existing-map was named, it IS the existing map — so re-running merges into it (the
 // "never destroys human work" semantics above) instead of replacing it with fresh stubs.
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
+function main(argv: string[]): number {
   const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
-  const argv = process.argv.slice(2);
   let outFile: string | null = null, proposalsFile: string | null = null, screenFile: string | null = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     const next = argv[pi + 1];
-    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage); return 1; }
     proposalsFile = next;
     argv.splice(pi, 2);
   }
   const si = argv.indexOf("--screen");
   if (si !== -1) {
     const next = argv[si + 1];
-    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--screen needs a screen export .json\n" + usage); return 1; }
     screenFile = next;
     argv.splice(si, 2);
   }
   const o = argv.indexOf("--out");
   if (o !== -1) {
     const next = argv[o + 1];
-    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); process.exit(1); }
+    if (!next || next.startsWith("--")) { console.error("--out needs a file path\n" + usage); return 1; }
     outFile = next;
     argv.splice(o, 2);
   }
   const unknown = argv.find((a) => a.startsWith("--"));
-  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); process.exit(1); }
+  if (unknown) { console.error(`unknown option ${unknown}\n${usage}`); return 1; }
   const [catalogFile, existingArg] = argv;
-  if (!catalogFile) { console.error(usage); process.exit(1); }
+  if (!catalogFile) { console.error(usage); return 1; }
   const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
   const existingFile = existingArg || outFile;
@@ -247,26 +246,26 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const valid = validateMap(existingRaw);
     if (!valid.ok || !isCodeConnectMap(existingRaw)) {
       valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
-      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) — refusing to rewrite it. Fix it (\`${scriptCmd("map-validate")} ${existingFile}\`) or move it aside. Nothing was written.`);
+      return 1;
     }
     existing = existingRaw;
   }
   if (proposalsFile) {
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
-    if (!proposals) { console.error(`map-bootstrap: ${proposalsFile} has no componentProposals — run cross-check.js with --out (or --json) and pass the JSON it wrote`); process.exit(1); }
+    if (!proposals) { console.error(`map-bootstrap: ${proposalsFile} has no componentProposals — run \`${scriptCmd("cross-check")} <screen.json> --out <base>\` (or --json) and pass the JSON it wrote`); return 1; }
     const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
     if (!report.confirmed) {
       console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each ` +
         `entry they accept, and re-run. Nothing was written — proposals are never accepted automatically.`);
-      process.exit(1);
+      return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
     if (outFile) fs.writeFileSync(outFile, out); else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) → ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` — wrote ${outFile}` : ""}`);
-    process.exit(0);
+    return 0;
   }
   // Finding 103: a full bootstrap on a real catalog stubs EVERY component in the file (318 on the
   // live run) — a list nobody can evaluate, and none of them may even be on the screen the user is
@@ -297,4 +296,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} — ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }
+  return 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

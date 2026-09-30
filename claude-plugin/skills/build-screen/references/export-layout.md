@@ -62,7 +62,7 @@ above — to learn the system before building.
   pointer with the **`design_get_component`** MCP tool (`{handle:"<key|id|name>"}` — no Figma connection
   needed, it reads the export on disk), or on the command line:
   ```
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/get-component.js" design/export/design-system/components.local.json <key|id|name>
+  node "<scripts>/get-component.js" design/export/design-system/components.local.json <key|id|name>
   ```
 - **`design-system/components.library.json`** — the same shape for components consumed from a
   published LIBRARY (`remote: true`). These are recovered by walking instances, so their props are a
@@ -71,7 +71,7 @@ above — to learn the system before building.
 - **`design-system/hygiene.json`** — `hygiene`, design-system smells at the CATALOG level: variables
   with ALL_SCOPES, semantic variables holding raw values, broken aliases, variant explosion (>30
   combos), unnamed/duplicate components. It does **not** check whether individual nodes use unbound
-  raw values — `node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js"` (the audit-design skill) does that per screen.
+  raw values — `node "<scripts>/audit.js"` (the audit-design skill) does that per screen.
 - **`design/audit/<screen>.{md,json}`** — the pre-build audit, if one was run (`/designtwin:audit-design`):
   verdict, findings, component state coverage, designer questions and the defaults assumed.
 
@@ -196,13 +196,13 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   Do not redraw the illustration, do not hand-simplify the paths, and do not chase the speckle with
   a blur or an opacity tweak in your own stack: all three replace a faithful asset with a guess, and
   the next re-pull silently undoes them. Report it as a real visual difference and say what it is.
-- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" <design/export/design-system/tokens.json or design/export/variables.json> design/`;
+- `design/tokens.dtcg.json` — Figma variables emitted as W3C DTCG tokens (`node "<scripts>/tokens.js" <design/export/design-system/tokens.json or design/export/variables.json> design/`;
   add `--web tailwind` for a Tailwind v4 `theme.css`, `--native <profile>` for a native token file),
   with `design/tokens.json` as the hand-written override layer: Figma variable/value → **your** code
   token, in the form your target uses.
 - `design/codeconnect.local.json` — Figma component → **your** code component +
   import path, keyed by the component's stable publish **`key`** so a rename in Figma can't silently
-  unmap it. Scaffold from the Figma side with `node "${CLAUDE_PLUGIN_ROOT}/scripts/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
+  unmap it. Scaffold from the Figma side with `node "<scripts>/map-bootstrap.js" design/export/design-system/components.local.json --out design/codeconnect.local.json`, or auto-seed the code
   side from **Code Connect files** in the repo with `dtwin seed` (the same as `node bridge/src/seed-components.ts`). Check it with
   the **`design_drift_lint`** MCP tool before building. If it's missing/thin, offer to run those.
   *(Older projects keep this file at the repo ROOT; `dtwin doctor` finds either and says which. A

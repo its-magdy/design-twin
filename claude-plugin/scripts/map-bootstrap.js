@@ -133,7 +133,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -155,7 +155,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -170,7 +170,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -194,7 +194,7 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -222,7 +222,11 @@ function screenRoots(doc) {
 }
 
 // design-to-code/cli-args.ts
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/component-match.ts
 function visibleInstances(doc, label) {
@@ -266,12 +270,12 @@ function parseVariant(s) {
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -308,7 +312,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path, message) => errors.push({ path, message });
+  const err = (path2, message) => errors.push({ path: path2, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -411,29 +415,8 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (false) {
-  const file = process.argv[2];
-  const USAGE = `usage: ${scriptCmd2("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") {
-    console.log(USAGE);
-    process.exit(0);
-  }
-  if (!file || file.startsWith("-")) {
-    console.error((file ? `map-validate: unknown flag ${file}
-` : "") + USAGE);
-    process.exit(1);
-  }
-  const res = validateMap(readJsonFile2(file, "component map"));
-  if (res.ok) {
-    console.log("map valid");
-    process.exit(0);
-  }
-  res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
-  console.error(`
-${res.errors.length} error(s)`);
-  process.exit(1);
-}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/map-bootstrap.ts
 var clone = (o) => structuredClone(o);
@@ -581,16 +564,15 @@ function proposalsIn(doc) {
   if (isJsonObject(doc) && isJsonObject(doc.crossFile) && isProposalList(doc.crossFile.componentProposals)) return doc.crossFile.componentProposals;
   return null;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
+function main(argv) {
   const usage = `usage: ${scriptCmd("map-bootstrap")} <design-system/components.local.json> [existing-map.json] [--out <file>] [--from-proposals <cross-check report.json>] [--screen <screen.json>]`;
-  const argv = process.argv.slice(2);
   let outFile = null, proposalsFile = null, screenFile = null;
   const pi = argv.indexOf("--from-proposals");
   if (pi !== -1) {
     const next = argv[pi + 1];
     if (!next || next.startsWith("--")) {
-      console.error("--from-proposals needs the JSON report cross-check.js (or audit.js) wrote\n" + usage);
-      process.exit(1);
+      console.error("--from-proposals needs the JSON report the cross-check (or audit) script wrote with --out/--json\n" + usage);
+      return 1;
     }
     proposalsFile = next;
     argv.splice(pi, 2);
@@ -600,7 +582,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const next = argv[si + 1];
     if (!next || next.startsWith("--")) {
       console.error("--screen needs a screen export .json\n" + usage);
-      process.exit(1);
+      return 1;
     }
     screenFile = next;
     argv.splice(si, 2);
@@ -610,7 +592,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const next = argv[o + 1];
     if (!next || next.startsWith("--")) {
       console.error("--out needs a file path\n" + usage);
-      process.exit(1);
+      return 1;
     }
     outFile = next;
     argv.splice(o, 2);
@@ -619,12 +601,12 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (unknown) {
     console.error(`unknown option ${unknown}
 ${usage}`);
-    process.exit(1);
+    return 1;
   }
   const [catalogFile, existingArg] = argv;
   if (!catalogFile) {
     console.error(usage);
-    process.exit(1);
+    return 1;
   }
   const catalog = readSplitFile(
     catalogFile,
@@ -641,8 +623,8 @@ ${usage}`);
     const valid = validateMap(existingRaw);
     if (!valid.ok || !isCodeConnectMap(existingRaw)) {
       valid.errors.forEach((e) => console.error(`map-bootstrap: ${existingFile}: ${e.path || "(root)"}: ${e.message}`));
-      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 refusing to rewrite it. Fix it (\`map-validate.js ${existingFile}\`) or move it aside. Nothing was written.`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${existingFile} is not a valid component map (${valid.errors.length} error(s)) \u2014 refusing to rewrite it. Fix it (\`${scriptCmd("map-validate")} ${existingFile}\`) or move it aside. Nothing was written.`);
+      return 1;
     }
     existing = existingRaw;
   }
@@ -650,20 +632,20 @@ ${usage}`);
     const doc = readJsonFile(proposalsFile, "proposals report");
     const proposals = proposalsIn(doc);
     if (!proposals) {
-      console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run cross-check.js with --out (or --json) and pass the JSON it wrote`);
-      process.exit(1);
+      console.error(`map-bootstrap: ${proposalsFile} has no componentProposals \u2014 run \`${scriptCmd("cross-check")} <screen.json> --out <base>\` (or --json) and pass the JSON it wrote`);
+      return 1;
     }
     const { map, report } = bootstrapFromProposals(proposals, catalog, existing);
     if (!report.confirmed) {
       console.error(`map-bootstrap: none of the ${proposals.length} proposal(s) in ${proposalsFile} is confirmed. Show the user the list, set "confirmed": true on each entry they accept, and re-run. Nothing was written \u2014 proposals are never accepted automatically.`);
-      process.exit(1);
+      return 1;
     }
     const out = JSON.stringify(map, null, 2) + "\n";
     if (outFile) fs3.writeFileSync(outFile, out);
     else process.stdout.write(out);
     for (const sk of report.skipped) console.error(`warn  ${sk}`);
     console.error(`map-bootstrap: ${report.confirmed} confirmed proposal(s) \u2192 ${report.added} new stub(s), ${report.kept} already mapped${outFile ? ` \u2014 wrote ${outFile}` : ""}`);
-    process.exit(0);
+    return 0;
   }
   let scopedCatalog = catalog;
   if (screenFile) {
@@ -688,7 +670,9 @@ ${usage}`);
     const review = entries.filter((e) => e.status === "needs-review").length;
     console.error(`map-bootstrap: wrote ${outFile} \u2014 ${entries.length} component(s), ${review} needing review${existing ? " (merged into the existing map)" : ""}`);
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   bootstrap,
   bootstrapFromProposals,

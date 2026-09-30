@@ -2,7 +2,7 @@
 
 
 // design-to-code/get-component.ts
-import path from "node:path";
+import path2 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -50,7 +50,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -72,7 +72,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -87,7 +87,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -111,7 +111,7 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -156,7 +156,11 @@ function readJson(file, guard) {
 }
 
 // design-to-code/cli-args.ts
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 // design-to-code/catalog-input.ts
 function isManifest(doc, payloadKey) {
@@ -179,12 +183,12 @@ var DESIGN_SYSTEM_DIR = DIR;
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -208,9 +212,9 @@ function findComponent(catalog, handle) {
   return null;
 }
 function resolveVariantsFile(catalogFile, variantsFile) {
-  const catalogDir = path.dirname(catalogFile);
-  const root = path.basename(catalogDir) === DESIGN_SYSTEM_DIR ? path.dirname(catalogDir) : catalogDir;
-  return path.join(root, variantsFile);
+  const catalogDir = path2.dirname(catalogFile);
+  const root = path2.basename(catalogDir) === DESIGN_SYSTEM_DIR ? path2.dirname(catalogDir) : catalogDir;
+  return path2.join(root, variantsFile);
 }
 function readOrThrow(file, guard) {
   const r = readJson(file, guard);
@@ -230,30 +234,32 @@ function getComponent(catalogFile, handle) {
   const detail = readOrThrow(detailPath, isComponentDetailFile);
   return { found: true, component: comp, detail, detailPath };
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const [catalogFile, handle] = process.argv.slice(2);
+function main(argv) {
+  const [catalogFile, handle] = argv;
   if (!catalogFile || !handle) {
     console.error(`usage: ${scriptCmd("get-component")} <design-system/components.local.json> <key|id|name>`);
-    process.exit(2);
+    return 2;
   }
   try {
     const res = getComponent(catalogFile, handle);
     if (!res.found) {
       console.error(`error  no component matches '${handle}' in ${catalogFile}`);
-      process.exit(1);
+      return 1;
     }
     if (!res.detail) {
       console.error(`warn   '${handle}' has no variantsFile/nodeFile (no node trees were exported for it \u2014 re-run the export with variantVisuals:true) \u2014 printing the catalog entry only`);
       process.stdout.write(JSON.stringify(res.component, null, 2) + "\n");
-      process.exit(0);
+      return 0;
     }
     process.stdout.write(JSON.stringify(res.detail, null, 2) + "\n");
   } catch (e) {
     const message = e && typeof e === "object" && "message" in e ? e.message : void 0;
     console.error(`error  ${String(message)}`);
-    process.exit(2);
+    return 2;
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   findComponent,
   getComponent,

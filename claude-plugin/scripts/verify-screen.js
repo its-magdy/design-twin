@@ -3,7 +3,7 @@
 
 // design-to-code/verify-screen.ts
 import fs4 from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 import crypto2 from "node:crypto";
 
 // design-to-code/hidden.ts
@@ -11,12 +11,12 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path3, parent, depth) {
+  (function go(node, parentHidden, path4, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
@@ -173,7 +173,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -195,7 +195,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -210,7 +210,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -234,15 +234,19 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -339,12 +343,12 @@ function getOrInit(m, k, init) {
 
 // bridge/src/is-main.ts
 import fs3 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath(metaUrl));
+    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1319,15 +1323,14 @@ function findExistingExpectedFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs4.existsSync(dir)) return null;
   for (const f of fs4.readdirSync(dir)) {
     if (!f.endsWith(".expected.json")) continue;
-    const full = path2.join(dir, f);
-    if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
+    const full = path3.join(dir, f);
+    if (path3.resolve(full) === path3.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && isJsonObject(doc.frame) && doc.frame.nodeId === nodeId) return full;
   }
   return null;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv) {
   const sha = (file) => crypto2.createHash("sha256").update(fs4.readFileSync(file)).digest("hex");
   const USAGE = `usage:
   ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]
@@ -1342,7 +1345,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       --out defaults to design/verify/<the .expected.json file's own basename>.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
-    process.exit(argv.length ? 0 : 2);
+    return argv.length ? 0 : 2;
   }
   const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
@@ -1350,18 +1353,18 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
   if (doExpect === doCompare) {
     console.error("pass exactly one of --expect / --compare\n" + USAGE);
-    process.exit(2);
+    return 2;
   }
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
-    process.exit(2);
+    return 2;
   }
   const write = (base, obj, md2) => {
     if (!base) {
       process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
       return;
     }
-    fs4.mkdirSync(path2.dirname(base), { recursive: true });
+    fs4.mkdirSync(path3.dirname(base), { recursive: true });
     fs4.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
     if (md2) fs4.writeFileSync(base + ".report.md", md2);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md2 ? " and " + base + ".report.md" : ""}`);
@@ -1370,18 +1373,18 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const firstFile = files[0];
     if (firstFile === void 0) {
       console.error("--expect needs at least one screen export\n" + USAGE);
-      process.exit(2);
+      return 2;
     }
-    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json") }));
+    const docs = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json") }));
     const exp = buildExpectation(docs);
-    const outBase = out || path2.join("design", "verify", path2.basename(firstFile, ".json"));
+    const outBase = out || path3.join("design", "verify", path3.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
-    const dup = findExistingExpectedFor(path2.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
+    const dup = findExistingExpectedFor(path3.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
       console.error(
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} \u2014 refusing to also write ${target} (one screen, one artefact set). Use that existing name, or pass --force to write this one anyway.`
       );
-      process.exit(1);
+      return 1;
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs4.existsSync(target) ? fs4.readFileSync(target, "utf8") : null;
@@ -1406,12 +1409,12 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const hc = exp.counts.hidden;
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) \u2014 visible layers only; skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable) \xB7 expectation sha256 ${h.slice(0, 12)}\u2026`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers \u2014 interaction coverage cannot be checked, and the report will say so rather than passing.");
-    process.exit(0);
+    return 0;
   }
   const [expFile, measuredFile] = files;
   if (!expFile || !measuredFile) {
     console.error("--compare needs <expected.json> <measured.json>\n" + USAGE);
-    process.exit(2);
+    return 2;
   }
   const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
   const measured = readDocFile(
@@ -1426,7 +1429,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     const list = isInteractionEvidenceList(raw) ? raw : isJsonObject(raw) && isInteractionEvidenceList(raw.interactions) ? raw.interactions : null;
     if (!list) {
       console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[\u2026]}`);
-      process.exit(2);
+      return 2;
     }
     extra = list;
   }
@@ -1438,31 +1441,32 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
   let code;
   {
-    const planDir = path2.join("design", "plan");
+    const planDir = path3.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
-    const stem = path2.basename(expFile, ".json").replace(/\.expected$/, "");
+    const stem = path3.basename(expFile, ".json").replace(/\.expected$/, "");
     const hits = [];
     for (const f of fs4.existsSync(planDir) ? fs4.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      const p = readJsonOrNull(path2.join(planDir, f), isPlan);
+      const p = readJsonOrNull(path3.join(planDir, f), isPlan);
       if (!p) continue;
-      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path2.basename(f, ".json")));
-      const byName = path2.basename(f, ".json") === stem || p.file && path2.basename(String(p.file), ".json") === stem;
+      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path3.basename(f, ".json")));
+      const byName = path3.basename(f, ".json") === stem || p.file && path3.basename(String(p.file), ".json") === stem;
       if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
     }
     const onlyHit = hits.length === 1 ? hits[0] : void 0;
     if (onlyHit) {
-      code = { plan: path2.join(planDir, onlyHit.f).split(path2.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+      code = { plan: path3.join(planDir, onlyHit.f).split(path3.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
   }
   const rep = compare(expectation, measured, { ...ifDefined("interactions", extra), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code) });
   const md = reportToMarkdown(rep);
-  const compareBase = out || path2.join("design", "verify", path2.basename(expFile, ".json").replace(/\.expected$/, ""));
+  const compareBase = out || path3.join("design", "verify", path3.basename(expFile, ".json").replace(/\.expected$/, ""));
   write(compareBase, rep, md);
   console.error(rep.headline);
-  process.exit(rep.verdict === "pass" ? 0 : 1);
+  return rep.verdict === "pass" ? 0 : 1;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   EXPECTATION_SCHEMA,
   FIELDS,

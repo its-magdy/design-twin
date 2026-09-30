@@ -514,6 +514,10 @@ console.log("P2b [§2.9b-2] a visible design node with no anchor blocks; hidden 
   const b = r.blocking.filter((m) => /no anchor in the plan/.test(m));
   const bMsg = must(b[0], "b[0]");
   check("[anchors] the live Global Policies plan BLOCKS on exactly its unanchored subtree, 1359:21457 (the duplicate footer)", b.length === 1 && /1359:21457/.test(bMsg) && /^3 visible/.test(bMsg));
+  // DT-15 follow-up: blocking messages are SAVED into the plan (verification.hook.blocking), a committed file —
+  // they name scripts in words, never by the per-machine absolute path the printed hints carry.
+  check("[DT-15] no blocking message (saved into the plan) carries a script path or a `node \"…\"` command",
+    r.blocking.length > 0 && r.blocking.every((m) => !/node "|[\\/]scripts[\\/][a-z-]+\.(js|ts)|design-to-code[\\/]/.test(m)) && /the plan-skeleton script/.test(bMsg));
   const fixed = fxPlan(GP);
   must(fixed.anchors, "fixed.anchors")["1359:21457"] = { omitted: "duplicate footer drawn on top of the frame (see deviations: duplicateFooter)" };
   fs.writeFileSync(path.join(root, "design/plan", GP + ".json"), JSON.stringify(fixed));

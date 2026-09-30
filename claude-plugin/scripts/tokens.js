@@ -3,7 +3,7 @@
 
 // design-to-code/tokens.ts
 import fs3 from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -135,7 +135,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -157,7 +157,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -172,7 +172,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -196,15 +196,19 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -253,7 +257,7 @@ ${usage}`);
 import { parseArgs as parseArgs2 } from "node:util";
 
 // design-to-code/slice-sources.ts
-import path from "node:path";
+import path2 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -262,12 +266,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path.dirname(docPath) : ".";
+  const base = docPath ? path2.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -279,7 +283,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -689,12 +693,12 @@ function nativeEmitter({ segs: segs2, isAlias: isAlias2, defaultModeName: defaul
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -996,8 +1000,8 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
     }
     const planned = plan.canonical.get(v);
     if (planned === void 0) continue;
-    const path3 = planned.split(DTCG_SEP);
-    if (path3.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
+    const path4 = planned.split(DTCG_SEP);
+    if (path4.some((s) => s === "__proto__" || s === "constructor" || s === "prototype")) {
       warn(`token '${v.name}' uses a reserved key (__proto__/constructor/prototype) \u2014 skipped`);
       continue;
     }
@@ -1008,25 +1012,25 @@ function buildTree(designSystem, warn, opts, pick, withExtensions, plan) {
       continue;
     }
     let node = root, collided = false;
-    for (const [i, seg] of path3.slice(0, -1).entries()) {
+    for (const [i, seg] of path4.slice(0, -1).entries()) {
       let child = node[seg];
       if (child === void 0) child = node[seg] = {};
       else if (isLeaf(child)) {
-        warn(`token '${v.name}' collides with token '${path3.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
+        warn(`token '${v.name}' collides with token '${path4.slice(0, i + 1).join("/")}' (a name is used as both a value and a group) \u2014 skipped`);
         collided = true;
         break;
       }
       node = child;
     }
     if (collided) continue;
-    const leafKey = path3[path3.length - 1] ?? "";
+    const leafKey = path4[path4.length - 1] ?? "";
     const existing = node[leafKey];
     if (existing !== void 0 && !isLeaf(existing)) {
       warn(`token '${v.name}' collides with a group of the same name \u2014 skipped`);
       continue;
     }
     if (existing !== void 0) {
-      warn(`token '${v.name}' lands on '${path3.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
+      warn(`token '${v.name}' lands on '${path4.join("/")}', which another token already holds \u2014 skipped, nothing overwritten`);
       continue;
     }
     let type = DTCG_TYPE[v.type];
@@ -1472,8 +1476,7 @@ function emitTokens(designSystem, opts) {
   return { dtcg, css, tailwind, resolver, resolverFiles: files, warnings: dedupe(collisions.concat(warnings)), collisions };
 }
 var { toNative, platformOf, PLATFORMS } = nativeEmitter({ segs, isAlias, defaultModeName, baseValue, unitDecision, isSentinel, percentOpacity });
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const args = process.argv.slice(2);
+function main(args) {
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]
        [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]
        With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to
@@ -1483,7 +1486,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs2({ args: a, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
   const { native, web, package: kotlinPackage } = flags;
   const alsoGeneric = !!flags["also-generic"];
@@ -1491,19 +1494,19 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const outDir = positionals[1] || ".";
   if (!input) {
     console.error(USAGE);
-    process.exit(1);
+    return 1;
   }
   if (native !== void 0 && !platformOf(native)) {
     console.error(`--native: unknown platform "${native}"
 ${USAGE}`);
-    process.exit(1);
+    return 1;
   }
   const WEB_TARGETS = { tailwind: "theme.css", "web-tailwind": "theme.css" };
   const webFile = web === void 0 ? void 0 : WEB_TARGETS[web];
   if (web !== void 0 && !webFile) {
     console.error(`--web: unknown target "${web}" (known: tailwind)
 ${USAGE}`);
-    process.exit(1);
+    return 1;
   }
   const ds = readSplitFile(
     input,
@@ -1519,12 +1522,12 @@ ${USAGE}`);
   const writeGeneric = !hasTarget || alsoGeneric;
   const genericCount = Object.keys(resolverFiles).length;
   if (writeGeneric) {
-    fs3.writeFileSync(path2.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
-    fs3.writeFileSync(path2.join(outDir, "tokens.css"), css);
-    fs3.writeFileSync(path2.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
+    fs3.writeFileSync(path3.join(outDir, "tokens.dtcg.json"), JSON.stringify(dtcg, null, 2));
+    fs3.writeFileSync(path3.join(outDir, "tokens.css"), css);
+    fs3.writeFileSync(path3.join(outDir, "tokens.resolver.json"), JSON.stringify(resolver, null, 2));
     for (const rel of Object.keys(resolverFiles)) {
-      const dest = path2.join(outDir, ...rel.split("/"));
-      fs3.mkdirSync(path2.dirname(dest), { recursive: true });
+      const dest = path3.join(outDir, ...rel.split("/"));
+      fs3.mkdirSync(path3.dirname(dest), { recursive: true });
       fs3.writeFileSync(dest, JSON.stringify(resolverFiles[rel], null, 2));
     }
   }
@@ -1532,14 +1535,14 @@ ${USAGE}`);
   const tw = tailwind;
   if (web !== void 0 && webFile !== void 0 && tw !== void 0) {
     const file = webFile;
-    fs3.writeFileSync(path2.join(outDir, file), tw.text);
+    fs3.writeFileSync(path3.join(outDir, file), tw.text);
     canonicalFile = file;
     if (tw.tokens && !tw.utilities) warnings.push(`--web ${web}: no variable mapped to a Tailwind namespace, so ${file} generates no utilities \u2014 every token is a plain custom property you must reference with var()`);
     else if (tw.tokens > tw.utilities) warnings.push(`--web ${web}: ${tw.tokens - tw.utilities} of ${tw.tokens} token(s) match no Tailwind namespace (unitless FLOATs like opacity/font-weight, non-font strings) \u2014 emitted as plain --figma-* properties, usable via var() but generating no utility`);
   }
   if (native !== void 0) {
     const n = toNative(ds, native, { ...ifDefined("package", kotlinPackage || void 0) });
-    fs3.writeFileSync(path2.join(outDir, n.file), n.text);
+    fs3.writeFileSync(path3.join(outDir, n.file), n.text);
     warnings.push(...n.warnings);
     canonicalFile = n.file;
   }
@@ -1550,7 +1553,9 @@ ${USAGE}`);
   } else {
     console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
   }
+  return 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   PLATFORMS,
   TW_PREFIX,

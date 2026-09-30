@@ -115,8 +115,11 @@ its export directly in `design/` — every path below works either way, just dro
 This skill *is* the build step: the agent reads the export JSON/PNG directly and writes the
 target-stack source files itself (steps 0–6 below), the same way it would write any other feature
 code in this repo. The scripts invoked along the way — audit and drift-lint in step 1, and the
-`Stop`-hook check in step 5 — all live at `${CLAUDE_PLUGIN_ROOT}/scripts/`, shipped with this
-plugin; those are checks, not generators. Everything else (mapping, coding, verifying) is done by
+`Stop`-hook check in step 5 — all ship with this plugin in `${CLAUDE_PLUGIN_ROOT}/scripts/`. Claude Code
+writes that folder's real path into this skill when it loads it; the variable is NOT set in the Bash
+shell, so copy the path as written here, never `$CLAUDE_PLUGIN_ROOT`. **`<scripts>` in this skill's
+`references/` and `profiles/` files means this same folder** (those files are read as-is, so they can't
+carry the path). Those are checks, not generators. Everything else (mapping, coding, verifying) is done by
 the agent, not a tool.
 
 ## Procedure
@@ -243,7 +246,7 @@ Copy this checklist into your notes and keep it updated:
      the `designtwin:audit-design` skill for a full review on a big or unfamiliar screen, passing the
      screen name as its argument — it runs in its own context, sees nothing of this conversation,
      and hands back the verdict and `design/audit/<screen>.md`). This command
-     **is not optional and is not "by hand" if it's missing** — `${CLAUDE_PLUGIN_ROOT}/scripts/` ships
+     **is not optional and is not "by hand" if it's missing** — the script ships
      with this plugin. `--gate` makes the process exit non-zero on any blocker; a non-zero exit **stops
      the build** until the user decides. Open questions get the audit's stated default, recorded in the
      final report — never a silent invention. If `design/audit/<screen>.json` exists and is Blocked and
@@ -302,9 +305,9 @@ Copy this checklist into your notes and keep it updated:
      (same hex/value or token name actually found by grep — not "closest existing token") or
      **MISSING**. On a project that has **no** token source of its own yet, don't hand-write one
      per screen — two screens built in separate sessions then disagree about what `color/primary` is
-     called. Generate it once with `tokens.js …` — `--native <profile>` on a native
+     called. Generate it once with `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" …` — `--native <profile>` on a native
      stack, the `--web` target your web profile names, no flag for plain `tokens.css` — rather than
-     hand-writing a theme from the bound token names. `tokens.js … --web tailwind` writes only
+     hand-writing a theme from the bound token names. `node "${CLAUDE_PLUGIN_ROOT}/scripts/tokens.js" … --web tailwind` writes only
      `theme.css` to the given directory; the generic token set is not written there unless you pass
      `--also-generic`. Feed it the design
      system's `tokens.json`, else this screen's own `.vars.json` — not the merged `variables.json`,
@@ -576,7 +579,7 @@ For step 5's render-and-compare, prefer the **`designtwin:visual-verifier`** age
 own work: hand it `design/verify/<Screen>.expected.json`, and it renders, measures every node,
 records which components exist and which designed interactions actually work, and writes
 `design/verify/<Screen>.measured.json`. It returns measurements, not a verdict — you run
-`verify-screen.js --compare` on what it wrote, copy the resulting report path and its `deltas` into
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` on what it wrote, copy the resulting report path and its `deltas` into
 the plan's `verification` block, fix the high-severity ones, and re-verify.
 
 It runs for minutes and prints nothing while it does, so it also writes a progress file you can poll
