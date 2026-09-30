@@ -36,8 +36,8 @@ import { visibleInstances, matchByNameAndSignature, isRekeyed } from "./componen
 import { hiddenSelf } from "./hidden.ts";
 import { parseHex, contrastRatio, composeAlpha, compositeOver } from "./color.ts";
 import type { Rgba } from "./color.ts";
-import { readDocFile, readOptionalDoc } from "./catalog-input.ts";
-import { isComponentsCatalog, isTextStylesDoc, isTokensDoc } from "./doc-guards.ts";
+import { readDocFile } from "./catalog-input.ts";
+import { readDesignSystemDir } from "./design-system-dir.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
 import { variablesContext } from "./slice-sources.ts";
@@ -999,7 +999,7 @@ export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT 
 // document it should be is a one-line error and exit 2.
 function main(argv: string[]): number {
   const USAGE =
-    `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/design-system] ` +
+    `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/export/design-system | design/export/libraries/<dir>] ` +
     "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
   const OPTIONS = {
     "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
@@ -1030,15 +1030,17 @@ function main(argv: string[]): number {
   if (ctx.staleLegacy) {
     console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) — remove it or re-pull into design/export/.`);
   }
+  // design-system/ or a library export's libraries/<dir>/ (components.json) — design-system-dir.ts, shared with audit.ts
+  const ds = readDesignSystemDir(dsBase);
   const res = crossCheck({
     screens,
     sliceSources: ctx.sliceSources,
     variables: variablesDoc,
     variablesPath,
-    tokens: readOptionalDoc(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc),
-    components: readOptionalDoc(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog),
-    componentsLibrary: readOptionalDoc(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc),
+    tokens: ds.tokens,
+    components: ds.components,
+    componentsLibrary: ds.componentsLibrary,
+    stylesText: ds.stylesText,
   });
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");

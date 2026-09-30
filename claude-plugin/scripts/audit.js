@@ -2,8 +2,8 @@
 
 
 // design-to-code/audit.ts
-import fs5 from "node:fs";
-import path3 from "node:path";
+import fs6 from "node:fs";
+import path4 from "node:path";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -377,6 +377,10 @@ function readSplitFile(file, what, guard, payloadKey, wantFile, hint) {
   process.exit(2);
 }
 
+// design-to-code/design-system-dir.ts
+import fs3 from "node:fs";
+import path from "node:path";
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -410,6 +414,14 @@ function isTextStylesDoc(x) {
   return isObj(x) && Array.isArray(x.styles) && x.styles.every((s) => isObj(s) && typeof s.name === "string");
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
+function isScreenAssetsDoc(x) {
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number") && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+}
+isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
+function isLibrariesIndex(x) {
+  return isObj(x) && Array.isArray(x.libraries) && x.libraries.every((r) => isObj(r) && typeof r.dir === "string" && optStr(r.libraryName) && (r.collectionKeys === void 0 || isStringArray(r.collectionKeys)));
+}
+isLibrariesIndex.expected = "a library index: an object with a `libraries` array of {dir, libraryName?, collectionKeys?}";
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
@@ -483,13 +495,47 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/design-system-dir.ts
+function readDesignSystemDir(dir) {
+  const local = path.join(dir, "components.local.json");
+  const isLibrary = !fs3.existsSync(local) && fs3.existsSync(path.join(dir, "components.json"));
+  return {
+    tokens: readOptionalDoc(path.join(dir, "tokens.json"), "design-system tokens", isTokensDoc),
+    components: readOptionalDoc(isLibrary ? path.join(dir, "components.json") : local, "component catalog", isComponentsCatalog),
+    componentsLibrary: readOptionalDoc(path.join(dir, "components.library.json"), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path.join(dir, "styles.text.json"), "text styles", isTextStylesDoc)
+  };
+}
+function exportRootOf(screenFile, dsDir) {
+  const roots = [];
+  if (screenFile) {
+    const pages = path.dirname(path.dirname(screenFile));
+    if (path.basename(pages) === "pages") roots.push(path.dirname(pages));
+  }
+  if (dsDir) {
+    const parent = path.dirname(path.normalize(dsDir));
+    roots.push(path.basename(parent) === "libraries" ? path.dirname(parent) : parent);
+  }
+  return roots.find((r) => fs3.existsSync(path.join(r, "libraries", "index.json"))) ?? null;
+}
+function findLibraryExports(screenFile, dsDir) {
+  const root = exportRootOf(screenFile, dsDir);
+  if (!root) return [];
+  const index = readJsonOrNull(path.join(root, "libraries", "index.json"), isLibrariesIndex);
+  if (!index) return [];
+  return index.libraries.filter((r) => r.dir && r.dir !== "." && r.dir !== ".." && !/[\\/]/.test(r.dir)).map((r) => {
+    const rel = path.join(root, "libraries", r.dir);
+    return { rel, name: r.libraryName || r.dir, collectionKeys: r.collectionKeys || [], components: readJsonOrNull(path.join(rel, "components.json"), isComponentsCatalog) };
+  });
+}
+
 // design-to-code/cli-args.ts
-import path from "node:path";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
 var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
-var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
+var scriptCmd = (name) => `node ${shellQuote(path2.join(path2.dirname(SELF), name + path2.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -535,8 +581,8 @@ ${usage}`);
 }
 
 // design-to-code/slice-sources.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -545,12 +591,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path2.dirname(docPath) : ".";
+  const base = docPath ? path3.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path3.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -562,7 +608,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path3.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -580,30 +626,30 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path2.resolve(path2.dirname(firstFile), "..", "..");
-    const rootVars = path2.join(exportRoot, "variables.json");
-    const sibling = path2.join(path2.dirname(firstFile), "variables.json");
-    if (fs3.existsSync(rootVars)) variablesPath = rootVars;
-    else if (fs3.existsSync(sibling)) variablesPath = sibling;
+    const exportRoot = path3.resolve(path3.dirname(firstFile), "..", "..");
+    const rootVars = path3.join(exportRoot, "variables.json");
+    const sibling = path3.join(path3.dirname(firstFile), "variables.json");
+    if (fs4.existsSync(rootVars)) variablesPath = rootVars;
+    else if (fs4.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
   }
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy = path2.join(path2.resolve(path2.dirname(firstFile), "..", ".."), "..", "variables.json");
-    if (fs3.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
+    const legacy = path3.join(path3.resolve(path3.dirname(firstFile), "..", ".."), "..", "variables.json");
+    if (fs4.existsSync(legacy) && path3.resolve(legacy) !== path3.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
 
 // bridge/src/is-main.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
+    return fs5.realpathSync(argv1) === fs5.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1240,9 +1286,34 @@ var CHROME_BOTTOM = /home ?indicator|gesture ?bar|navigation ?handle/i;
 var STATE_KEYS = ["loading", "empty", "error"];
 var STATE_WORDS = {
   loading: /\b(loading|skeleton|spinner|shimmer|placeholder)\b/i,
-  empty: /\b(empty|no results?|no data|nothing (here|found)|zero ?state)\b/i,
+  // F-23: an empty state is usually a SENTENCE ("No items added yet.", "Add your first project"), not a
+  // layer called "Empty" — `no … yet/added/created/found/available` within one clause (a non-breaking
+  // space counts: `\s`/`[^…]` both match U+00A0, which designers' copy often carries).
+  empty: /\b(empty|no results?|no data|nothing (here|found|to show|yet)|zero ?state|(add|create) your first)\b|\bno\b[^.!?\n]{0,40}?\b(yet|added|created|found|available)\b/i,
   error: /\b(error|failed|failure|offline|retry|something went wrong|not found|404|500)\b/i
 };
+var VALIDATION_WORDS = /\b((is|are) required|required field|invalid|is not valid|must (be|contain|include|match)|please (enter|select|provide|fill)|too (short|long)|already (exists|taken|in use))\b/i;
+var DIALOG_NAME = /\b(dialog|modal|pop-?ups?|popover|bottom ?sheet|action ?sheet|side ?drawer)s?\b/i;
+function textOf(node) {
+  const t = typeof node.text === "string" ? node.text.replace(/\s+/g, " ").trim() : "";
+  if (!t || t === (node.name || "").trim()) return null;
+  return t.length > 40 ? t.slice(0, 39) + "\u2026" : t;
+}
+var INK_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "LINE", "FRAME", "INSTANCE", "GROUP", "COMPONENT"]);
+function isIconInk(n) {
+  if (!(n.asset || n.geometry || n.assetSkipped) || !INK_TYPES.has(String(n.type))) return false;
+  return !(Array.isArray(n.fills) && n.fills.some((f) => f.type === "image" || f.type === "gradient"));
+}
+function overlaps(a, b) {
+  if (!a || !b || typeof a.x !== "number" || typeof a.y !== "number" || typeof b.x !== "number" || typeof b.y !== "number") return true;
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+var CONTROL_WORD = /\b(button|btn|checkbox|check box|radio|switch|toggle|input|text ?field|textfield|textarea)\b/i;
+var cite = (node) => {
+  const t = textOf(node);
+  return `'${node.name}'${t ? ` ("${t}")` : ""}`;
+};
+var textExtra = (node) => ifDefined("text", textOf(node) ?? void 0);
 var CONTROL_STATES = ["hover", "pressed", "focus", "disabled", "error", "selected", "loading"];
 var STATE_SYNONYMS = {
   hover: /^(hover|hovered|mouse ?over)$/,
@@ -1290,33 +1361,27 @@ var hasTok = (node, ...keys) => {
   const t = node.tokens;
   return !!(t && keys.some((k) => t[k] != null));
 };
-var unwrap = (d, i) => !d || isScreenDoc(d) ? { doc: d || null, label: `input${i}`, vars: null } : { doc: d.doc || null, label: d.label || `input${i}`, vars: d.vars || null };
+var unwrap = (d, i) => !d || isScreenDoc(d) ? { doc: d || null, label: `input${i}`, vars: null, assets: null } : { doc: d.doc || null, label: d.label || `input${i}`, vars: d.vars || null, assets: d.assets || null };
+function spacingStep(tokens) {
+  const values = [];
+  const isSpacing = (v) => v.type === "FLOAT" && (/spac/i.test(v.collection || "") || Array.isArray(v.scopes) && v.scopes.includes("GAP"));
+  for (const v of tokens && tokens.variables || []) {
+    if (!isSpacing(v)) continue;
+    for (const mv of Object.values(v.values)) if (typeof mv === "number" && Number.isFinite(mv) && Math.round(Math.abs(mv)) > 0) values.push(Math.round(Math.abs(mv)));
+  }
+  if (values.length < 2) return null;
+  const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
+  const step = values.reduce((a, b) => gcd(a, b));
+  return step >= 2 ? step : null;
+}
 function audit(input, opts = {}) {
   const givenPlatform = opts.platform;
   const platformAssumed = !isPlatform(givenPlatform);
   const platform = isPlatform(givenPlatform) ? givenPlatform : "web";
   const gridAssumed = !(opts.grid !== void 0 && opts.grid > 0);
   const grid = gridAssumed || opts.grid === void 0 ? 4 : opts.grid;
-  let gridMismatch = null;
-  if (gridAssumed) {
-    const dsTokens = opts.designSystem && opts.designSystem.tokens;
-    const spacingValues = [];
-    const colls = dsTokens && dsTokens.collections || [];
-    for (const c of colls) {
-      if (!/spac|space/i.test(c.name || "")) continue;
-      for (const v of c.variables || []) {
-        for (const mv of Object.values(v.valuesByMode || v.values || {})) {
-          const n = typeof mv === "number" ? mv : typeof mv === "string" && /^-?\d+(\.\d+)?$/.test(mv) ? Number(mv) : null;
-          if (n !== null && Number.isFinite(n) && n > 0) spacingValues.push(Math.abs(n));
-        }
-      }
-    }
-    if (spacingValues.length >= 2) {
-      const gcd2 = (a, b) => b === 0 ? a : gcd2(b, a % b);
-      const step = spacingValues.map(Math.round).reduce((a, b) => gcd2(a, b));
-      if (step > 0 && step !== grid) gridMismatch = step;
-    }
-  }
+  const dsStep = spacingStep(opts.designSystem && opts.designSystem.tokens);
+  const gridMismatch = dsStep !== null && dsStep !== grid ? dsStep : null;
   const docs = (Array.isArray(input) ? input : [input]).map(unwrap);
   const roots = docs.flatMap((d) => labelledRoots(d.doc, d.label));
   const catalog = opts.catalog && Array.isArray(opts.catalog.components) ? opts.catalog.components : [];
@@ -1336,8 +1401,12 @@ function audit(input, opts = {}) {
   const rawColors = /* @__PURE__ */ new Map();
   const usedComponents = /* @__PURE__ */ new Map();
   const stateHits = { loading: [], empty: [], error: [] };
+  const validationHits = [];
+  let inputsSeen = 0;
   const annotations = [];
   const hiddenIds = /* @__PURE__ */ new Set();
+  const nodesById = /* @__PURE__ */ new Map();
+  const navigations = /* @__PURE__ */ new Map();
   for (const root of roots) {
     const m = root.manifest || {};
     if (m.truncated) add("blocker", "export-truncated", `export of '${root.label}' was truncated (${m.truncated} subtree(s) past the depth limit) \u2014 the tree is incomplete; re-export a narrower scope before building`, null, { label: root.label });
@@ -1349,16 +1418,20 @@ function audit(input, opts = {}) {
   }
   function walk2(node, ancestors, ctx) {
     if (!node || typeof node !== "object") return;
-    const path4 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-    const here = { label: ctx.label, path: path4 };
+    const path5 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+    const here = { label: ctx.label, path: path5 };
     const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
     if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
     for (const state of STATE_KEYS) {
       const re = STATE_WORDS[state];
-      if (re.test(node.name || "") || node.type === "TEXT" && ancestors.length <= 6 && re.test(node.text || "")) {
+      if (re.test(node.name || "") || node.type === "TEXT" && (state === "empty" || ancestors.length <= 6) && re.test(node.text || "")) {
         stateHits[state].push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
       }
+    }
+    const variantValues = String(node.mainComponent && node.mainComponent.name || "").split(",").map((p) => (p.split("=")[1] || "").trim().toLowerCase());
+    if (node.type === "TEXT" && VALIDATION_WORDS.test(node.text || "") || VALIDATION_WORDS.test(node.name || "") || controlKind(node.mainComponent && node.mainComponent.setName || node.component) === "input" && variantValues.some((v) => STATE_SYNONYMS.error.test(v))) {
+      validationHits.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, hidden: !!hiddenBranch });
     }
     if (hiddenBranch) {
       if (node.id) hiddenIds.add(node.id);
@@ -1366,21 +1439,35 @@ function audit(input, opts = {}) {
       for (const child of Array.isArray(node.children) ? node.children : []) walk2(child, [...ancestors, self], ctx);
       return;
     }
+    if (node.id) nodesById.set(node.id, node);
     if (node.mainComponent || node.component) {
       const mc = node.mainComponent || {};
       const name = mc.setName || node.component;
       const key = mc.setKey || mc.key || name;
-      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), remote: !!mc.remote, nodeId: node.id });
+      const icon = !!(node.asset || node.geometry || node.assetSkipped) && !CONTROL_WORD.test(String(name || ""));
+      if (key && !usedComponents.has(key)) usedComponents.set(key, { name, ...ifDefined("key", mc.setKey || mc.key), ...ifDefined("variantKey", mc.key), remote: !!mc.remote, nodeId: node.id, ...icon ? { icon: true } : {} });
+      if (!icon && controlKind(name) === "input" && !/\b(search|filter)/i.test(String(name || ""))) inputsSeen++;
+    }
+    for (const r of Array.isArray(node.reactions) ? node.reactions : []) {
+      for (const a of Array.isArray(r.actions) ? r.actions : []) {
+        if (a.type !== "node" || !(a.destination || a.destinationId) || a.navigation === "change_to" || a.navigation === "scroll_to") continue;
+        const nav = a.navigation || "navigate";
+        const id = nav + "|" + (a.destinationId || a.destination);
+        const row = navigations.get(id);
+        if (row) row.count++;
+        else navigations.set(id, { destination: a.destination, destinationId: a.destinationId, navigation: nav, count: 1, node, label: ctx.label });
+      }
     }
     if (node.detachedFrom) add("warning", "detached-instance", `'${node.name}' is a detached component instance \u2014 map it back to the component unless the detach was deliberate`, node, here);
     if (node.missingFont) add("blocker", "missing-font", `'${node.name}' uses a font Figma couldn't load \u2014 the recorded family/weight may not match the render; confirm the font files and license`, node, here);
     if (node.layout && node.layout.mode === "absolute" && Array.isArray(node.children) && node.children.length > 1 && node.type !== "GROUP" && ancestors.length > 0) {
       add("info", "no-auto-layout", `'${node.name}' has no auto layout (${node.children.length} children placed by coordinates) \u2014 infer a flow layout and ask how it should resize`, node, here);
     }
-    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && Array.isArray(node.children) && node.children.length) {
+    const flow = Array.isArray(node.children) ? node.children.filter((c) => c && !hiddenSelf(c) && !c.absolute) : [];
+    if (node.layout && Array.isArray(node.layout.padding) && node.layout.padding.length === 4 && node.box && flow.length) {
       const [padTop, , padBottom] = node.layout.padding;
-      const kids = node.children.filter((c) => !!(c && c.box && typeof c.box.h === "number"));
-      if (kids.length === node.children.length && kids.length && padTop !== void 0 && padBottom !== void 0) {
+      const kids = flow.filter((c) => !!(c.box && typeof c.box.h === "number"));
+      if (kids.length === flow.length && padTop !== void 0 && padBottom !== void 0) {
         const direction = node.layout.flexDirection || (node.layout.display === "flex" ? "row" : null);
         const gap = typeof node.layout.gap === "number" ? node.layout.gap : 0;
         let expectedH = null;
@@ -1487,13 +1574,15 @@ function audit(input, opts = {}) {
     }
     if (Array.isArray(node.children)) {
       const stacks = !node.layout || node.layout.mode === "absolute";
-      const beneath = [];
-      const self = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: beneath };
+      const earlier = [];
+      const self = { name: node.name, ...ifDefined("hidden", node.hidden), ...ifDefined("fills", node.fills), __tappable: tappable, __beneath: [] };
       const chain = [...ancestors, self];
       for (const child of node.children) {
-        self.__beneath = stacks || child.absolute ? beneath : [];
+        self.__beneath = stacks || child.absolute ? earlier.filter((l) => overlaps(l.box, child.box)).flatMap((l) => l.fills) : [];
         walk2(child, chain, ctx);
-        if (!child.hidden && Array.isArray(child.fills)) beneath.push(...child.fills);
+        if (!hiddenSelf(child) && child.type !== "TEXT" && !isIconInk(child) && Array.isArray(child.fills) && child.fills.length) {
+          earlier.push({ fills: child.fills, ...ifDefined("box", child.box) });
+        }
       }
     }
   }
@@ -1514,7 +1603,7 @@ function audit(input, opts = {}) {
   function textChecks(node, ancestors, here) {
     const font = node.font || {};
     if (!node.autoResize && !node.truncate && !node.maxLines) {
-      add("warning", "fixed-size-text", `'${node.name}' is a fixed-size text box with no truncation rule \u2014 it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here);
+      add("warning", "fixed-size-text", `${cite(node)} is a fixed-size text box with no truncation rule \u2014 it will clip under font scaling or longer translations; decide wrap / truncate / grow`, node, here, textExtra(node));
     }
     const fg = parseHex(font.color);
     if (!fg) return;
@@ -1537,14 +1626,14 @@ function audit(input, opts = {}) {
     const large = size != null && (size >= 24 || size >= 18.66 && bold);
     const need = large ? 3 : 4.5;
     if (complex) {
-      add("info", "contrast-manual", `'${node.name}' sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here);
+      add("info", "contrast-manual", `${cite(node)} sits on a gradient/image \u2014 check text contrast manually (needs ${need}:1)`, node, here, textExtra(node));
       return;
     }
     const assumed = !bg;
     const base = bg || { r: 255, g: 255, b: 255, a: 1 };
     const ratio = contrastRatio(over(fg, base), base);
     if (ratio < need) {
-      add(assumed ? "info" : "warning", "low-contrast", `'${node.name}' text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need });
+      add(assumed ? "info" : "warning", "low-contrast", `${cite(node)} text contrast ${r1(ratio)}:1 is below WCAG AA ${need}:1 (${large ? "large" : "normal"} text, ${font.color} on ${assumed ? "an assumed white page" : "its background"})`, node, here, { ratio: r1(ratio), required: need, ...textExtra(node) });
     }
   }
   const raws = [...rawColors.entries()].map(([hex, e]) => ({ hex, ...e })).filter((x) => x.rgb.a >= 1);
@@ -1561,38 +1650,128 @@ function audit(input, opts = {}) {
     }
     if (cluster.length > 1) add("info", "near-duplicate-colors", `unbound colors ${cluster.map((c) => `${c.hex}\xD7${c.count}`).join(", ")} are visually indistinguishable (\u0394E<3) \u2014 probably one token`, null, null, { colors: cluster.map((c) => c.hex) });
   }
-  const components = [];
-  const byKey = /* @__PURE__ */ new Map(), byName = /* @__PURE__ */ new Map();
-  for (const c of catalog) {
-    if (c.key) byKey.set(c.key, c);
-    if (c.name) byName.set(c.name, c);
+  const screenCollKeys = new Set(docs.flatMap((d) => (d.vars && d.vars.collections || []).map((c) => c.key)).filter((k) => !!k));
+  const fullCatalogs = [];
+  if (catalog.length) fullCatalogs.push({ label: "--catalog", components: catalog, byName: true });
+  const dsCatalog = opts.designSystem && opts.designSystem.components;
+  if (dsCatalog && dsCatalog !== opts.catalog && Array.isArray(dsCatalog.components)) fullCatalogs.push({ label: opts.designSystemDir || "the design system", components: dsCatalog.components, byName: true });
+  const sameDir = (a, b) => b !== void 0 && path4.resolve(a) === path4.resolve(b);
+  for (const lib of opts.libraries || []) {
+    if (!lib.components || sameDir(lib.rel, opts.designSystemDir)) continue;
+    const unknown = !screenCollKeys.size || !lib.collectionKeys.length;
+    fullCatalogs.push({ label: lib.rel, components: lib.components.components, byName: unknown || lib.collectionKeys.some((k) => screenCollKeys.has(k)), unproven: unknown });
   }
-  const candidates = usedComponents.size ? [...usedComponents.values()].map((u) => ({ use: u, def: u.key && byKey.get(u.key) || (u.name === void 0 ? void 0 : byName.get(u.name)) })) : catalog.filter((c) => c.type === "COMPONENT_SET" || c.type === "COMPONENT").map((c) => ({ use: { name: c.name }, def: c }));
-  for (const { use, def } of candidates) {
-    const kind = controlKind(use.name) || def && controlKind(def.name);
-    if (!kind) continue;
-    const need = requiredStates(kind, platform);
-    if (!def) {
-      components.push({ name: use.name ?? "", kind, known: false, present: [], missing: [], note: "not in the component catalog \u2014 states unknown" });
-      continue;
-    }
+  const sampledCatalog = opts.designSystem && opts.designSystem.componentsLibrary && opts.designSystem.componentsLibrary.components || [];
+  const valuesOf = (c) => {
     const values = [];
-    for (const p of Object.values(def.props || {})) {
-      if (p.type === "VARIANT" && Array.isArray(p.options)) values.push(...p.options);
+    for (const p of Object.values(c.props || {})) {
+      if (p.type === "VARIANT") values.push(...Array.isArray(p.options) ? p.options : Array.isArray(p.observed) ? p.observed : []);
       if (p.type === "BOOLEAN") values.push(String(p.key || "").split("#")[0] ?? "");
     }
+    if (c.variant) for (const part of c.variant.split(",")) {
+      const v = part.split("=")[1];
+      if (v) values.push(v.trim());
+    }
+    return values;
+  };
+  const isSampled = (c) => !!(c.remote || c.derivedFrom === "instances");
+  const hasVariants = (c) => !!c.variant || Object.values(c.props || {}).some((p) => p.type === "VARIANT");
+  const merged = (rows, label, matchedBy, sampled) => {
+    const withVariants = rows.filter(hasVariants);
+    const use = withVariants.length ? withVariants : rows;
+    const first = use[0];
+    if (!first) return null;
+    const distinct = new Set(use.map((c) => c.key || c.id || c)).size;
+    return { def: first, values: use.flatMap(valuesOf), label: distinct > 1 && !sampled ? `${label} \u2014 ${distinct} rows named '${first.name}', read together` : label, matchedBy, sampled };
+  };
+  function stateDefOf(u) {
+    const keys = [u.key, u.variantKey].filter((k) => !!k);
+    const keyHit = (c) => !!c.key && keys.includes(c.key);
+    for (const cat of fullCatalogs) {
+      const def = cat.components.find(keyHit);
+      if (def) return { def, values: valuesOf(def), label: cat.label, matchedBy: "key", sampled: isSampled(def) };
+    }
+    const sampledKey = sampledCatalog.find(keyHit);
+    const sampledDef = sampledKey ? merged(sampledCatalog.filter((c) => keyHit(c) || c.name === sampledKey.name), "components.library.json", "key", true) : null;
+    if (u.name !== void 0) {
+      for (const cat of fullCatalogs) {
+        if (!cat.byName || cat.unproven && sampledDef) continue;
+        const found = merged(cat.components.filter((c) => c.name === u.name), cat.label, "name", false);
+        if (found) return { ...found, values: [...found.values, ...sampledDef ? sampledDef.values : []], sampled: isSampled(found.def) };
+      }
+    }
+    return sampledDef || (u.name === void 0 ? null : merged(sampledCatalog.filter((c) => c.name === u.name), "components.library.json", "name", true));
+  }
+  const components = [];
+  const unchecked = [];
+  const candidates = usedComponents.size ? [...usedComponents.values()].filter((u) => !u.icon).map((u) => ({ use: u, found: stateDefOf(u) })) : catalog.filter((c) => c.type === "COMPONENT_SET" || c.type === "COMPONENT").map((c) => ({ use: { name: c.name }, found: { def: c, values: valuesOf(c), label: "--catalog", matchedBy: "name", sampled: isSampled(c) } }));
+  for (const { use, found } of candidates) {
+    const kind = controlKind(use.name) || found && controlKind(found.def.name);
+    if (!kind) continue;
+    const need = requiredStates(kind, platform);
+    if (!found) {
+      components.push({ name: use.name ?? "", kind, known: false, present: [], missing: [], note: "in no component catalog \u2014 states unknown" });
+      if (need.length) unchecked.push(use.name ?? "");
+      continue;
+    }
+    const { def, values, label, matchedBy, sampled } = found;
     const norm2 = values.map((v) => String(v).trim().toLowerCase());
     const present = CONTROL_STATES.filter((s) => norm2.some((v) => STATE_SYNONYMS[s].test(v)));
     const missing = need.filter((s) => !present.includes(s));
-    const sampled = !!(use.remote || def.remote);
-    components.push({ name: def.name, kind, known: true, sampled, present, missing });
+    components.push({ name: def.name, kind, known: true, sampled, present, missing, catalog: label, matchedBy });
     if (missing.length) {
-      add(sampled ? "info" : "warning", "missing-component-states", `${kind} '${def.name}' has no ${missing.join("/")} state${missing.length > 1 ? "s" : ""} in its variants${sampled ? " (library component \u2014 props are sampled, so this may be incomplete rather than missing)" : ""} \u2014 ask the designer or derive from tokens, and say so`, null, null, { component: def.name, missing });
+      const where = `${label}${matchedBy === "name" ? ", matched by NAME only" : ""}`;
+      add(sampled ? "info" : "warning", "missing-component-states", `${kind} '${def.name}' has no ${missing.join("/")} state${missing.length > 1 ? "s" : ""} in its variants (${where})${sampled ? " \u2014 sampled from instances, so this may be incomplete rather than missing" : ""} \u2014 ask the designer or derive from tokens, and say so`, null, null, { component: def.name, missing });
     }
   }
+  if (unchecked.length) {
+    const tried = [...fullCatalogs.map((c) => c.label), ...sampledCatalog.length ? ["components.library.json"] : []];
+    add(
+      "warning",
+      "component-states-unchecked",
+      `states could not be checked for ${unchecked.length} control(s) \u2014 ${unchecked.slice(0, 6).map((n) => `'${n}'`).join(", ")}${unchecked.length > 6 ? ", \u2026" : ""} \u2014 ` + (tried.length ? `none of the catalogs this run read (${tried.join(", ")}) defines them` : "no component catalog was given") + `. Missing hover/pressed/focus/disabled designs are invisible here: pass the catalog that defines them (a library export: --design-system <export>/libraries/<dir>), or ask the designer`,
+      null,
+      null,
+      { controls: unchecked }
+    );
+  }
   const stateOf = (s) => stateHits[s].length ? "designed" : "not-found";
-  const screenStates = { loading: stateOf("loading"), empty: stateOf("empty"), error: stateOf("error") };
+  const allDialogs = roots.length > 0 && roots.every((r) => DIALOG_NAME.test(r.tree.name || ""));
+  const screenStates = {
+    loading: stateOf("loading"),
+    empty: allDialogs && !stateHits.empty.length ? "not-applicable" : stateOf("empty"),
+    error: stateOf("error"),
+    ...inputsSeen ? { validation: validationHits.length ? "designed" : "not-found" } : {}
+  };
   const screenStatesScope = { rootsAudited: roots.length, singleFrame: roots.length === 1 };
+  for (const d of docs) {
+    const a = d.assets;
+    if (!a || !Array.isArray(a.heavy)) continue;
+    const label = labelledRoots(d.doc, d.label)[0]?.label ?? d.label;
+    for (const h of a.heavy) {
+      const nodeId = (Array.isArray(a.files) ? a.files : []).find((f) => f.file === h.file)?.node;
+      if (nodeId && hiddenIds.has(nodeId)) continue;
+      const node = nodeId ? nodesById.get(nodeId) : void 0;
+      add(
+        "info",
+        "heavy-asset",
+        `'${h.file}' is ${(h.bytes / 1048576).toFixed(2)} MB${h.paths ? ` / ${h.paths} <path> elements` : ""} \u2014 too heavy to inline; import it by URL, or ask the designer for a raster export. Do not redraw or simplify it`,
+        node || null,
+        { label },
+        { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths) }
+      );
+    }
+  }
+  for (const n of navigations.values()) {
+    add(
+      "info",
+      "prototype-navigation",
+      `${n.count} layer(s) (e.g. '${n.node.name}') ${n.navigation === "overlay" ? "open" : n.navigation === "swap" ? "swap to" : "go to"} '${n.destination ?? "an unnamed frame"}'${n.destinationId ? ` (${n.destinationId})` : ""} in the prototype \u2014 confirm this is the intended behaviour before wiring it (a link copied along with a layer looks the same as a designed one)`,
+      n.node,
+      { label: n.label },
+      { ...ifDefined("destination", n.destination), ...ifDefined("destinationId", n.destinationId), navigation: n.navigation, sources: n.count }
+    );
+  }
   const bindingOf = (k) => {
     const [b, t] = binding[k];
     return { bound: b, total: t, pct: t ? Math.round(b / t * 100) : null };
@@ -1604,14 +1783,16 @@ function audit(input, opts = {}) {
   }
   const questions = [];
   const STATE_QUESTION = {
-    loading: "what shows while data loads (skeleton vs spinner, delay before showing)?",
+    loading: allDialogs ? "what shows while the dialog's action runs (disabled buttons, spinner, can it be dismissed)?" : "what shows while data loads (skeleton vs spinner, delay before showing)?",
     empty: "what shows when there's no data (first use vs no results vs cleared)?",
     error: "what shows when a request fails (inline vs full-screen, retry, offline)?"
   };
   for (const s of STATE_KEYS) if (screenStates[s] === "not-found") questions.push(`No ${s} state was found in the exported layers \u2014 ${STATE_QUESTION[s]}`);
+  if (screenStates.validation === "not-found") questions.push("No validation state was found for this screen's inputs \u2014 how do field errors show (inline message, when: on blur or on submit, and what does each field require)?");
+  if (unchecked.length) questions.push(`The states of ${unchecked.slice(0, 6).map((n) => `'${n}'`).join(", ")}${unchecked.length > 6 ? ", \u2026" : ""} could not be checked (no catalog defines them) \u2014 are hover/pressed/focus/disabled designed somewhere?`);
   for (const c of components.filter((c2) => c2.missing && c2.missing.length)) questions.push(`'${c.name}' has no ${c.missing.join("/")} design \u2014 use the design-system default, or is there a spec?`);
   if (findings.some((f) => f.code === "fixed-size-text")) questions.push("Several text boxes are fixed-size \u2014 at 200% font scale or in a longer language, should they wrap, truncate (how many lines), or grow?");
-  let crossFile = null;
+  let crossFile;
   let hiddenFindingsOmitted = 0;
   if (opts.designSystem || opts.variables) {
     crossFile = crossCheck({
@@ -1641,10 +1822,17 @@ function audit(input, opts = {}) {
       findings: [],
       coverage: null,
       notChecked: [
-        `the whole cross-FILE pass \u2014 no design system was given. Every token-binding percentage below means "resolves to some variable in this screen's own file", NOT "matches your design system". Re-run with --design-system design/design-system to tell the two apart.`
+        `the whole cross-FILE pass \u2014 no design system was given. Every token-binding percentage below means "resolves to some variable in this screen's own file", NOT "matches your design system". Re-run with --design-system design/export/design-system to tell the two apart.`
       ],
       inputs: {}
     };
+  }
+  for (const lib of opts.libraries || []) {
+    if (sameDir(lib.rel, opts.designSystemDir)) continue;
+    const shared = lib.collectionKeys.filter((k) => screenCollKeys.has(k)).length;
+    crossFile.notChecked.push(
+      `the library export ${lib.rel} ('${lib.name}') \u2014 the cross-file pass did not compare this screen against it` + (screenCollKeys.size ? ` (the screen binds ${shared} of its ${screenCollKeys.size} variable collection(s) from it by key)` : "") + `. Its components.json ${lib.components ? "WAS" : "could not be"} read for the component-state check. To check tokens, text styles and components against it, re-run with --design-system ${lib.rel}.`
+    );
   }
   findings.sort((a, b) => SEVERITY_ORDER2[a.severity] - SEVERITY_ORDER2[b.severity] || a.code.localeCompare(b.code));
   const count = (s) => findings.filter((f) => f.severity === s).length;
@@ -1674,7 +1862,7 @@ function audit(input, opts = {}) {
 function toMarkdown(res) {
   const L = [];
   L.push(`# Design audit \u2014 ${res.screens.join(", ") || "(no screens)"}`, "");
-  const gridNote = res.gridAssumed ? res.gridMismatch ? ` *(DEFAULT \u2014 not given; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px \u2014 pass \`--grid ${res.gridMismatch}\`)*` : " *(default \u2014 not given)*" : "";
+  const gridNote = res.gridMismatch ? ` *(${res.gridAssumed ? "DEFAULT \u2014 not given" : "as given"}; this system's own spacing tokens step by ${res.gridMismatch}px, not ${res.grid}px \u2014 pass \`--grid ${res.gridMismatch}\`)*` : res.gridAssumed ? " *(default \u2014 not given)*" : "";
   L.push(`Platform: **${res.platform}**${res.platformAssumed ? " *(ASSUMED \u2014 not given)*" : ""} \xB7 grid ${res.grid}px${gridNote} \xB7 **${res.summary.blockers} blocker(s)**, ${res.summary.warnings} warning(s), ${res.summary.info} info`, "");
   if (res.hiddenLayers && res.hiddenLayers.nodesSkipped) L.push(`*${res.hiddenLayers.nodesSkipped} node(s) on hidden layers (switched off in Figma) were skipped \u2014 they are not built, and no finding below cites one.*`, "");
   if (res.platformAssumed) {
@@ -1692,7 +1880,7 @@ function toMarkdown(res) {
     if (cf.coverage && cf.coverage.distinct) {
       const c = cf.coverage;
       L.push(
-        `**${c.matchedByLocalKey}/${c.distinct} (${c.localPct}%)** of the components on this screen resolve to \`components.local.json\` **by key**` + (c.matchedByName ? `; ${c.matchedByName} more match by NAME only and are unverified` : "") + (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
+        `**${c.matchedByLocalKey}/${c.distinct} (${c.localPct}%)** of the components on this screen resolve to the design system's component catalog **by key**` + (c.matchedByName ? `; ${c.matchedByName} more match by NAME only and are unverified` : "") + (c.ambiguousName ? `; ${c.ambiguousName} share a name with several catalog entries and were left unmatched` : "") + ".",
         ""
       );
       if (c.rekey && c.rekey.rekeyed) {
@@ -1736,17 +1924,17 @@ function toMarkdown(res) {
     L.push(`*Scope: ${scope.rootsAudited} frames audited \u2014 "not found" means none of them drew it.*`, "");
   }
   for (const [k, v] of Object.entries(res.screenStates)) {
-    L.push(`- ${k}: ${v === "designed" ? "designed" : scope.singleFrame ? "**not in this frame \u2014 ask**" : "**not found \u2014 ask**"}`);
+    L.push(`- ${k}: ${v === "designed" ? "designed" : v === "not-applicable" ? "not applicable (a dialog has no data list)" : scope.singleFrame ? "**not in this frame \u2014 ask**" : "**not found \u2014 ask**"}`);
   }
   if (res.components.length) {
-    L.push("", "## Component states", "", "| Component | Kind | Present | Missing |", "|---|---|---|---|");
-    for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} |`);
+    L.push("", "## Component states", "", "| Component | Kind | Present | Missing | Catalog |", "|---|---|---|---|---|");
+    for (const c of res.components) L.push(`| ${c.name} | ${c.kind} | ${c.present.join(", ") || "\u2013"} | ${c.known ? c.missing.join(", ") || "none" : c.note}${c.sampled ? " (sampled)" : ""} | ${c.catalog ? `${c.catalog}${c.matchedBy === "name" ? " (by name)" : ""}` : "\u2013"} |`);
   }
   for (const sev of ["blocker", "warning", "info"]) {
-    const fs6 = res.findings.filter((f) => f.severity === sev);
-    if (!fs6.length) continue;
-    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs6.length})`, "");
-    for (const f of fs6) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}`);
+    const fs7 = res.findings.filter((f) => f.severity === sev);
+    if (!fs7.length) continue;
+    L.push("", `## ${sev === "blocker" ? "Blockers" : sev === "warning" ? "Warnings" : "Info"} (${fs7.length})`, "");
+    for (const f of fs7) L.push(`- \`${f.code}\` ${f.message}${f.nodeId ? ` \u2014 node \`${f.nodeId}\`${f.screen ? ` in ${f.screen}` : ""}` : ""}`);
   }
   if (res.annotations.length) {
     L.push("", "## Designer annotations", "");
@@ -1763,11 +1951,11 @@ function blockerIds(auditDoc) {
   return findings.filter((f) => !!f && typeof f === "object" && "severity" in f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
 }
 function findExistingAuditFor(dir, nodeId, ownTarget) {
-  if (!nodeId || !fs5.existsSync(dir)) return null;
-  for (const f of fs5.readdirSync(dir)) {
+  if (!nodeId || !fs6.existsSync(dir)) return null;
+  for (const f of fs6.readdirSync(dir)) {
     if (!f.endsWith(".json")) continue;
-    const full = path3.join(dir, f);
-    if (path3.resolve(full) === path3.resolve(ownTarget)) continue;
+    const full = path4.join(dir, f);
+    if (path4.resolve(full) === path4.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
   }
@@ -1775,9 +1963,10 @@ function findExistingAuditFor(dir, nodeId, ownTarget) {
 }
 function main(argv) {
   const USAGE = `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]
-       [--design-system design/design-system] [--variables design/variables.json]
+       [--design-system design/export/design-system] [--variables design/export/variables.json]
        [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
   --design-system turns on the cross-FILE pass (does this screen come from that design system?).
+  It takes design/export/design-system or a library export, design/export/libraries/<dir>.
   Without it every token-binding % below means "binds SOME variable", not "matches your design system".
   --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
   name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
@@ -1819,21 +2008,33 @@ function main(argv) {
   const ctx = variablesContext(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
   if (ctx.invalid.length) return 2;
-  const inputs = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
+  const inputs = files.map((f, i) => ({
+    doc: readDocFile(f, "screen export", isScreenDoc),
+    label: path4.basename(f, ".json"),
+    ...ifDefined("vars", ctx.own[i]),
+    // own[i] is set: own is files.map(...)
+    assets: readJsonOrNull(f.replace(/\.json$/, ".assets.json"), isScreenAssetsDoc)
+  }));
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
-  const designSystem = dsDir ? {
-    tokens: readOptionalDoc(path3.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
-    ...ifDefined("components", readOptionalDoc(path3.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog),
-    componentsLibrary: readOptionalDoc(path3.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path3.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc)
-  } : void 0;
+  const dsRead = dsDir ? readDesignSystemDir(dsDir) : null;
+  const designSystem = dsRead ? { tokens: dsRead.tokens, ...ifDefined("components", dsRead.components || catalog), componentsLibrary: dsRead.componentsLibrary, stylesText: dsRead.stylesText } : void 0;
+  const libraries = findLibraryExports(firstFile, dsDir);
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
+  const res = audit(inputs, {
+    ...ifDefined("platform", platform),
+    ...ifDefined("catalog", catalog),
+    ...ifDefined("designSystem", designSystem),
+    ...ifDefined("designSystemDir", dsDir),
+    libraries,
+    variables,
+    sliceSources: ctx.sliceSources,
+    ...ifDefined("grid", grid)
+  });
   const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path3.join("design", "audit", path3.basename(firstFile, ".json"));
+  const outBase = out || path4.join("design", "audit", path4.basename(firstFile, ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path3.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
+    const dup = findExistingAuditFor(path4.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {
       console.error(
         `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
@@ -1844,9 +2045,9 @@ function main(argv) {
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs5.mkdirSync(path3.dirname(outBase), { recursive: true });
-    fs5.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs5.writeFileSync(outBase + ".md", md);
+    fs6.mkdirSync(path4.dirname(outBase), { recursive: true });
+    fs6.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
+    fs6.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
   } else {
     process.stdout.write(md);
