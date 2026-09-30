@@ -165,8 +165,10 @@ FAIL — nodes measured 74/179 · 329 values compared · 0 high, 81 medium · in
 ```
 
 If the probe named a field differently from the canonical key, the headline says so before anything
-else (`NEVER MEASURED: 'borderRadius' present in 0 of 74 measurements (probe sent 'radius')`) — a
-field nobody measured was once silently "not wrong" for a whole phase.
+else (`NEVER MEASURED: 'borderRadius' present on 0 of 12 nodes that state it (probe sent 'radius')`) — a
+field nobody measured was once silently "not wrong" for a whole phase. A field only one node states is
+listed under that node instead — unless the probe sent it under another name, or no measured node
+carries that key at all.
 
 How the verdict is computed, all of it deliberate:
 
@@ -188,7 +190,13 @@ How the verdict is computed, all of it deliberate:
   its own — the old "N components were never built" was this number, and it was 0-for-83 wrong.
 - **Excluded by method** (`notComparable`, `unverifiable`) and the report's `limits` say what this
   method cannot see (`::placeholder` colour unless reported, `::before`/`::after`, a `rotate` that
-  reads `transform: none`). Say them; they are not passes.
+  reads `transform: none`, the fill of an icon drawn by an `<img>`). Say them; they are not passes.
+- **Numbers are px.** A number or a `"20px"` string is compared as 20 (`letter-spacing: normal` is 0,
+  and so is `gap: normal` when the probe reports `display` flex/grid). A percentage, another unit, any
+  other keyword, or a value CSS cannot produce (a negative size, padding, radius, font-size or gap,
+  opacity above 1, a row gap wider than its table) is listed as not measured with the reason, never
+  compared as text. An unverifiable value (an `<img>` icon's fill) is counted in the headline; it does
+  not block the verdict, and it is not a pass — compare the asset file.
 
 ## 5. Report the file, not an impression of it
 

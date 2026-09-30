@@ -506,6 +506,20 @@ var REPORT_SCHEMA = "designtwin/verify-report@2";
 var firstSolid = (fills) => (fills || []).find((f) => !!f && f.type === "solid" && f.visible !== false);
 var num = (v) => typeof v === "number" && Number.isFinite(v);
 var r2 = (v) => Math.round(v * 100) / 100;
+var PX_RE = /^\s*[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:px)?\s*$/i;
+function cssPx(v) {
+  if (num(v)) return v;
+  if (typeof v !== "string" || !PX_RE.test(v)) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fourSides(v) {
+  const parts = num(v) ? [v] : Array.isArray(v) ? v : typeof v === "string" ? v.trim().split(/\s+/) : [];
+  const p = parts.map(cssPx);
+  if (p.length < 1 || p.length > 4 || p.some((x) => x === null)) return null;
+  const [p0, p1 = p0, p2 = p0, p3 = p1] = p.filter((x) => x !== null);
+  return p0 === void 0 || p1 === void 0 || p2 === void 0 || p3 === void 0 ? null : [p0, p1, p2, p3];
+}
 var STATE_WORD = /(?:^|[^a-z])(hover(?:ed)?|pressed|focus(?:ed)?)(?:[^a-z]|$)/i;
 var normState = (w) => /^hover/i.test(w) ? "hover" : /^press/i.test(w) ? "pressed" : "focus";
 function drawnStateOf(n) {
@@ -565,8 +579,9 @@ function expectNodeRow(n, ctxOrPath) {
     const lh = lineHeightPx(n.font.lineHeight, n.font.size);
     if (lh != null) spec.lineHeight = lh;
     const ls = n.font.letterSpacing;
-    if (ls && typeof ls.value === "number" && ls.unit !== "PERCENT") {
-      spec.letterSpacing = ls.value;
+    if (ls && typeof ls.value === "number") {
+      if (String(ls.unit).toLowerCase() !== "percent") spec.letterSpacing = ls.value;
+      else if (typeof n.font.size === "number") spec.letterSpacing = r2(ls.value / 100 * n.font.size);
     }
     if (n.font.color) spec.color = normColor(n.font.color);
   }
@@ -828,7 +843,7 @@ var STYLE_KEY_SHAPE = {
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
   // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
-  "nodes[].styles": `computed values, EVERY key on every node (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
   "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
@@ -838,6 +853,7 @@ var MEASURED_KEYS_DOC = {
   "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state \u2014 required for a node whose spec has drawnState",
   "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
   "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against"
 };
 var TOKEN_KEYS = {
@@ -880,40 +896,30 @@ function compareField(f, want, got) {
   return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
 function comparePadding(want, got) {
-  if (!Array.isArray(want) || !Array.isArray(got)) return null;
-  const w = want.map(Number), g = got.map(Number);
-  if (w.some(Number.isNaN) || g.some(Number.isNaN)) return null;
-  const worst = Math.max(...w.map((v, i) => Math.abs(v - (g[i] || 0))));
-  return worst <= TOLERANCE.padding ? null : { want: w, got: g, delta: Number(worst.toFixed(3)) };
+  if (!Array.isArray(want)) return null;
+  const w = want.map(Number);
+  if (w.some(Number.isNaN)) return null;
+  const worst = Math.max(...w.map((v, i) => Math.abs(v - (got[i] ?? 0))));
+  return worst <= TOLERANCE.padding ? null : { want: w, got: [...got], delta: Number(worst.toFixed(3)) };
 }
 function radiusCorners(v) {
-  if (v == null) return null;
-  if (num(v)) return [v, v, v, v];
-  if (Array.isArray(v)) {
-    const a = v.map(Number);
-    const [a0, a1, a2, a3] = a;
-    if (a.length === 4 && a.every(Number.isFinite) && a0 !== void 0 && a1 !== void 0 && a2 !== void 0 && a3 !== void 0) return [a0, a1, a2, a3];
-    return a.length === 1 && a0 !== void 0 && Number.isFinite(a0) ? [a0, a0, a0, a0] : null;
-  }
-  const p = String(v).trim().split(/\s+/).map(parseFloat);
-  const [p0, p1, p2, p3] = p;
-  if (p0 === void 0 || p.some(Number.isNaN)) return null;
-  if (p1 === void 0) return [p0, p0, p0, p0];
-  if (p2 === void 0) return [p0, p1, p0, p1];
-  if (p3 === void 0) return [p0, p1, p2, p1];
-  return [p0, p1, p2, p3];
+  return v == null ? null : fourSides(v);
 }
 var clampRadius = (r, w, h) => num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r;
 var TABLE_TAGS = /* @__PURE__ */ new Set(["table", "thead", "tbody", "tfoot", "tr"]);
 var CONTAINER_TAGS = /* @__PURE__ */ new Set(["th", "td", "tr", "button", "label", "li", "a", "section", "article", "header", "footer", "nav", "table", "input"]);
 var LEAF_TAGS = /* @__PURE__ */ new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 var CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
+var PIXEL_TAGS = /* @__PURE__ */ new Set(["img", "picture", "canvas", "object", "embed"]);
+var NON_NEGATIVE = /* @__PURE__ */ new Set(["fontSize", "lineHeight", "borderWidth", "gap", "width", "height", "opacity"]);
 var LEAF_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "backgroundColor", "borderColor", "borderWidth", "borderRadius", "gap"]);
-var isContainer = (got) => !!(got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0));
+var isContainer = (got) => !!(got.tag && CONTAINER_TAGS.has(String(got.tag).toLowerCase()) || Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0));
 var LIMITS = [
   "::before/::after content and any other pseudo-element are invisible to a computed-style probe; the export cannot say which layers a build draws that way, so they are compared only if the probe reports them under the node's id.",
   "::placeholder colour is compared only when the probe reports placeholderColor (getComputedStyle(el,'::placeholder') or the stylesheet rule); otherwise it is listed under `unverifiable`, never passed.",
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing (finding 198).",
+  "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` \u2014 compare the asset file instead.",
+  'Numbers are read as px: a number or a px string ("20px"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).',
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared."
 ];
 var MATCH_BUCKET = {
@@ -939,6 +945,30 @@ var MATCH_LABEL = {
 };
 var TYPO_FIELDS = /* @__PURE__ */ new Set(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 var SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
+var NEVER_MEASURED_HEADLINE_MIN = 2;
+var MEASURED_TOP_KEYS = {
+  measuredAt: true,
+  renderer: true,
+  viewport: true,
+  theme: true,
+  artifacts: true,
+  expectationSha256: true,
+  mode: true,
+  reason: true,
+  nodes: true,
+  components: true,
+  interactions: true,
+  consoleErrors: true,
+  notMeasured: true,
+  componentsMissing: true,
+  probe: true,
+  frame: true,
+  frames: true,
+  navigation: true,
+  matchedByCensus: true,
+  notes: true
+};
+var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes" };
 function compare(expectation, measured, opts) {
   opts = opts || {};
   measured = measured || {};
@@ -949,6 +979,7 @@ function compare(expectation, measured, opts) {
   const byId = /* @__PURE__ */ new Map();
   let duplicateNodeIds = 0;
   const unknownKeys = /* @__PURE__ */ new Map();
+  const keysSeen = /* @__PURE__ */ new Set();
   for (const m of measured.nodes || []) {
     if (!m || m.nodeId == null) continue;
     const id = String(m.nodeId);
@@ -958,7 +989,10 @@ function compare(expectation, measured, opts) {
     }
     byId.set(id, m);
     const s = m.styles || m;
-    for (const k of Object.keys(s)) if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1);
+    for (const k of Object.keys(s)) {
+      keysSeen.add(k);
+      if (!KNOWN_MEASURED_KEYS.has(k)) unknownKeys.set(k, (unknownKeys.get(k) || 0) + 1);
+    }
   }
   const expectedIds = /* @__PURE__ */ new Set([...specs.map((s) => String(s.nodeId)), ...(expectation.instances || []).map((i) => String(i.nodeId))]);
   const suffix = (id) => {
@@ -1084,6 +1118,10 @@ function compare(expectation, measured, opts) {
         present = true;
         nullKeys = ["gapVisual", "gap"];
       }
+      if (f.key === "fill" && (PIXEL_TAGS.has(tagLc) || m.fillSource === "img")) {
+        unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: `drawn by an <${PIXEL_TAGS.has(tagLc) ? tagLc : "img"}>: its paint is pixels, not a CSS property \u2014 the SVG's own fill cannot be read from the element's computed style` });
+        continue;
+      }
       tally(f.key, present);
       if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) {
         gap(spec, f.label, stateWhy);
@@ -1098,7 +1136,7 @@ function compare(expectation, measured, opts) {
           gapNull(f.label, "textBox");
           continue;
         }
-        gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 report textBox (a Range over the text) instead`);
+        gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 report textBox (a Range over the text) instead`);
         continue;
       }
       if (isText && tb && f.key === "height") {
@@ -1120,16 +1158,42 @@ function compare(expectation, measured, opts) {
         gap(spec, f.label, "the probe did not report this property");
         continue;
       }
-      if (val === null) {
+      if (val === null || Array.isArray(val) && val.includes(null)) {
         gapNull(f.label, ...nullKeys);
         continue;
+      }
+      if (f.norm && (f.norm(val) == null || typeof val !== "string" && typeof val !== "number")) {
+        gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as ${f.label}`);
+        continue;
+      }
+      if (f.tol != null && !f.norm && f.key !== "borderRadius") {
+        const flexOrGrid = typeof got.display === "string" && /(^|-)(flex|grid)$/.test(got.display.trim());
+        const n = val === "normal" && (f.key === "letterSpacing" || f.key === "gap" && flexOrGrid) ? 0 : cssPx(val);
+        if (n === null) {
+          const kw = val !== "normal" ? "" : f.key === "gap" ? " (0 in flex/grid, not applicable in block layout \u2014 report display, or a number)" : " (its px value depends on the font's metrics)";
+          gap(spec, f.label, `could not read '${typeof val === "string" ? val : JSON.stringify(val)}' as a px number${kw}`);
+          continue;
+        }
+        const box = Math.max(cssPx(got.width) ?? 0, cssPx(got.height) ?? 0);
+        const why = NON_NEGATIVE.has(f.key) && n < 0 && !(f.key === "gap" && num(want0) && want0 < 0) ? `${r2(n)} is impossible for ${f.label} (CSS cannot make it negative)` : f.key === "opacity" && n > 1 ? `${r2(n)} is impossible for opacity (0 to 1)` : f.key === "gap" && nullKeys[0] === "gapVisual" && box > 0 && n > box ? `${r2(n)}px is larger than the element measured (${r2(box)}px)` : null;
+        const cssGap = why && nullKeys[0] === "gapVisual" && !table ? cssPx(got.gap) : null;
+        if (cssGap !== null && cssGap >= 0) val = cssGap;
+        else if (why) {
+          gap(spec, f.label, `${why} \u2014 a measuring artefact (children not laid out in one line, or rows read across columns?); not compared`);
+          continue;
+        } else val = n;
       }
       fieldsChecked++;
       let want = want0, have = val;
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
         if (!c) {
-          gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a radius`);
+          gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a px radius`);
+          fieldsChecked--;
+          continue;
+        }
+        if (c.some((r) => r < 0)) {
+          gap(spec, f.label, `${JSON.stringify(val)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
           fieldsChecked--;
           continue;
         }
@@ -1155,8 +1219,9 @@ function compare(expectation, measured, opts) {
       const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
-      if (got.borderRadius === null) gapNull("border-radius", "borderRadius");
-      else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
+      if (got.borderRadius === null || Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null)) gapNull("border-radius", "borderRadius");
+      else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`);
+      else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
         const [ctl, ctr, cbr, cbl] = c;
@@ -1171,16 +1236,17 @@ function compare(expectation, measured, opts) {
     }
     if (spec.padding !== void 0) {
       tally("padding", got.padding !== void 0);
+      const pad = fourSides(got.padding);
       if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property");
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
-      else if (got.padding === null || !Array.isArray(got.padding) || got.padding.some((v) => v === null)) {
-        if (got.padding === null || Array.isArray(got.padding)) gapNull("padding", "padding");
-        else gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as padding [t,r,b,l]`);
-      } else {
+      else if (got.padding === null || Array.isArray(got.padding) && got.padding.some((v) => v === null)) gapNull("padding", "padding");
+      else if (!pad) gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as px padding [t,r,b,l]`);
+      else if (pad.some((v) => v < 0)) gap(spec, "padding", `${JSON.stringify(got.padding)} is impossible for padding (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
+      else {
         fieldsChecked++;
-        const bad = comparePadding(spec.padding, got.padding);
-        const allZero = got.padding.every((v) => Number(v) === 0);
+        const bad = comparePadding(spec.padding, pad);
+        const allZero = pad.every((v) => v === 0);
         if (bad) push(spec, "padding", "medium", bad, {
           unit: "px",
           ...ifDefined("token", tokenFor(spec, "padding")),
@@ -1350,7 +1416,7 @@ function compare(expectation, measured, opts) {
   if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
-  for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' \u2014 the canonical key is '${f.field}')` : ""} \u2014 ${f.expectedOn} expectation(s) went unchecked`);
+  for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' \u2014 the canonical key is '${f.field}')` : ""}`);
   if (notMeasured.length) reasons.push(`${notMeasured.length} of ${nodesExpected} node spec(s) were never measured`);
   if (high) reasons.push(`${high} high-severity value mismatch(es)`);
   if (medium) reasons.push(`${medium} medium-severity value mismatch(es)`);
@@ -1397,7 +1463,9 @@ function compare(expectation, measured, opts) {
   }
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
-  const headline = `${mark} \u2014 ` + (fieldsNeverMeasured.length ? `NEVER MEASURED: ${fieldsNeverMeasured.map((f) => `'${f.field}' present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected} \xB7 ${fieldsChecked} values compared \xB7 ${high} high, ${medium} medium \xB7 interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
+  const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
+  const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected} \xB7 ${fieldsChecked} values compared \xB7 ${high} high, ${medium} medium \xB7 ` + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
+  (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
   return {
     schema: REPORT_SCHEMA,
     ...ifDefined("screen", expectation.screen),
@@ -1422,6 +1490,7 @@ function compare(expectation, measured, opts) {
     notComparable: expectation.notComparable || [],
     probe: {
       unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
+      unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
@@ -1480,7 +1549,7 @@ function reportToMarkdown(r) {
   if (r.deltas.length) {
     L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token |", "|---|---|---|---|---|---|");
     for (const d of r.deltas) {
-      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${fmt(d.expected)}${d.unit || ""} | ${fmt(d.actual)}${d.unit || ""} | ${d.token || "\u2014"} |`);
+      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "\u2014"} |`);
     }
     L.push("");
   }
@@ -1525,9 +1594,10 @@ function reportToMarkdown(r) {
     L.push("");
   }
   const p = r.probe || {};
-  if (p.unknownKeys && p.unknownKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.inputNotes && p.inputNotes.length) {
+  if (p.unknownKeys && p.unknownKeys.length || p.unknownTopLevelKeys && p.unknownTopLevelKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.inputNotes && p.inputNotes.length) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}\xD7) is not read by verify-screen${k.canonical ? ` \u2014 the canonical key is \`${k.canonical}\`` : ""}`);
+    for (const k of p.unknownTopLevelKeys || []) L.push(`- top-level key \`${k.key}\` is not read by verify-screen${k.canonical ? ` \u2014 the canonical key is \`${k.canonical}\`` : ""}`);
     if (p.duplicateNodeIds) L.push(`- ${p.duplicateNodeIds} duplicate node id(s) in nodes[] \u2014 the first measurement of each id was used`);
     if (p.measuredIdsOnHiddenLayers) L.push(`- ${p.measuredIdsOnHiddenLayers} measurement(s) are for hidden layers and were ignored`);
     for (const n of p.inputNotes || []) L.push(`- ${n}`);
@@ -1540,6 +1610,10 @@ function reportToMarkdown(r) {
   return L.join("\n") + "\n";
 }
 var fmt = (v) => Array.isArray(v) ? v.join("/") : String(v);
+var withUnit = (v, unit) => {
+  const t = fmt(v);
+  return unit && !t.endsWith(unit) ? t + unit : t;
+};
 function findExistingExpectedFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs4.existsSync(dir)) return null;
   for (const f of fs4.readdirSync(dir)) {
