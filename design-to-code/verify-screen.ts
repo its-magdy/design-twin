@@ -35,8 +35,10 @@ import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
-import { isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
+import { isBuildIdentity, isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
+import { MEASURED_PHASES, STATUS_PHASES, readStatusAt, statusFile, statusMain, waitMain, writeFileAtomic } from "./verify-run.ts";
+import type { VerifyStatusV2 } from "./verify-run.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
@@ -801,6 +803,10 @@ export interface CompareOptions {
   anchors?: Record<string, PlanAnchor> | null;
   /** recorded as report.inputs.waivers: the plan file and waiversHash() of it */
   waiversInput?: { plan: string; sha256: string } | null;
+  /** F-72/D26: the run's status file beside the measured file — an unfinished run, or one naming another measured
+   *  file, makes the verdict incomplete. A v1 (hand-written) status is never trusted, never judged. null = looked
+   *  for and none found: a measured file naming its runId is then unrecorded (M-1); undefined = not looked for. */
+  status?: { file: string; status: VerifyStatusV2 | "v1" } | null;
 }
 
 // ---- D5 waivers: does a waiver's recorded value still describe this round's delta?
@@ -813,6 +819,69 @@ function fieldTolerance(label: string): number | null {
   if (label === "placement") return TOLERANCE.position;
   return null;
 }
+// ---- F-92: the previous round's deltas against this round's, keyed nodeId + field. A delta that is gone only
+// because its node or value was not measured this round is LOST COVERAGE, not a fix. H2: "not measured" means the
+// node is unmeasured or its measured node lacks the value (absent / null) — a value that was measured but the compare
+// now declines (impossible, an <img> fill, a method gap) is nowUnverifiable; and when the measured file is the very
+// same file as last round's, no difference is the build's — every one is `reclassified`, none fixed/new/lost.
+const fieldBase = (f: string): string => f.replace(/\s*\(.*\)$/, "");
+// D26 (F-72): the verdict reasons that say the run itself is unverified — the ONE wording compare() writes and
+// --accept recognises (it refuses a report carrying any of them).
+const INTEGRITY_PHRASES = {
+  otherExpectation: "the measurements were taken against a DIFFERENT expectation",
+  noExpectation: "measured file names no expectation (expectationSha256)",
+  unfinished: "— the verifier had not finished",
+  otherMeasured: "names a different measured file",
+  unrecorded: "no status of that run records it",
+} as const;
+const isIntegrityReason = (w: string): boolean => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
+interface CoverageNow {
+  notMeasured: Array<{ nodeId: string }>; fieldsNotMeasured: Array<{ nodeId: string; field: string; why: string }>; unverifiable: Array<{ nodeId: string; field: string; why: string }>;
+  specIds: Set<string>; absent: Set<string>; sameMeasured: boolean;
+  /** L-3: nodes whose `placement` (derived from the box) could not be judged this round — absent = an input
+   *  (x/y/width/height) was not reported or null (lost coverage), else one was reported but is not a number */
+  placementGaps?: Map<string, { absent: boolean; why: string }>;
+}
+function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow): NonNullable<VerifyAgainst["deltas"]> {
+  const keyOf = (d: { nodeId?: unknown; field?: unknown }): string | null => (typeof d.nodeId === "string" && typeof d.field === "string" ? `${d.nodeId}\u0000${d.field}` : null);
+  const curByKey = new Map<string, VerifyDelta>();
+  for (const d of cur) { const k = keyOf(d); if (k !== null && !curByKey.has(k)) curByKey.set(k, d); }
+  const prevByKey = new Map<string, VerifyDelta>();
+  for (const d of prev) { const k = isJsonObject(d) ? keyOf(d) : null; if (k !== null && !prevByKey.has(k)) prevByKey.set(k, d); }
+  const out: NonNullable<VerifyAgainst["deltas"]> = { fixed: 0, new: 0, unchanged: 0, lostCoverage: [] };
+  const was = (d: VerifyDelta): JsonValue => (d.actual === undefined ? null : d.actual);
+  if (now.sameMeasured) {
+    const reclassified: NonNullable<NonNullable<VerifyAgainst["deltas"]>["reclassified"]> = [];
+    for (const [k, d] of curByKey) if (!prevByKey.has(k)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "new", was: null });
+    for (const [k, d] of prevByKey) {
+      if (curByKey.has(k)) out.unchanged++;
+      else if (now.specIds.has(d.nodeId)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "gone", was: was(d) });
+    }
+    return { ...out, sameMeasured: true, reclassified };
+  }
+  for (const k of curByKey.keys()) if (!prevByKey.has(k)) out.new++;
+  const unmeasuredNodes = new Set(now.notMeasured.map((n) => n.nodeId));
+  const nowUnverifiable: NonNullable<NonNullable<VerifyAgainst["deltas"]>["nowUnverifiable"]> = [];
+  const sameField = (g: { nodeId: string; field: string }, d: VerifyDelta): boolean => g.nodeId === d.nodeId && (g.field === d.field || fieldBase(g.field) === fieldBase(d.field));
+  for (const [k, d] of prevByKey) {
+    if (curByKey.has(k)) { out.unchanged++; continue; }
+    if (!now.specIds.has(d.nodeId)) continue; // the spec left the expectation: neither fixed nor lost
+    if (unmeasuredNodes.has(d.nodeId)) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the node was not measured this round" }); continue; }
+    const gapRow = now.fieldsNotMeasured.find((g) => sameField(g, d));
+    const absent = gapRow ? now.absent.has(`${gapRow.nodeId}\u0000${gapRow.field}`) : now.absent.has(k) || [...now.absent].some((a) => a.startsWith(`${d.nodeId}\u0000`) && fieldBase(a.slice(d.nodeId.length + 1)) === fieldBase(d.field));
+    if (absent) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${gapRow ? gapRow.why : "the probe did not report this property"}` }); continue; }
+    // L-3: placement is derived from the box — gone because an input is missing is not a fix
+    const derived = d.field === "placement" ? now.placementGaps?.get(d.nodeId) : undefined;
+    if (derived && derived.absent) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${derived.why}` }); continue; }
+    if (derived) { nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: derived.why }); continue; }
+    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d));
+    if (method) { nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: method.why }); continue; }
+    out.fixed++;
+  }
+  return nowUnverifiable.length ? { ...out, nowUnverifiable } : out;
+}
+const sortKeys = (o: Record<string, string | null>): Array<[string, string | null]> => Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
 const NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
 /** Equal within `tol`: numbers by distance, lists item by item, strings exactly — or, with a tolerance, with
  *  every number in them within it (a placement actual "bottom edge at y=1450 in a 900-high frame"). */
@@ -856,9 +925,54 @@ const NEVER_MEASURED_HEADLINE_MIN = 2;
 const MEASURED_TOP_KEYS = {
   measuredAt: true, renderer: true, viewport: true, theme: true, artifacts: true, expectationSha256: true, mode: true, reason: true,
   nodes: true, components: true, interactions: true, consoleErrors: true, notMeasured: true, componentsMissing: true, probe: true,
-  frame: true, frames: true, navigation: true, matchedByCensus: true, notes: true,
+  frame: true, frames: true, navigation: true, matchedByCensus: true, notes: true, runId: true, build: true,
 } as const satisfies Record<keyof VerifyMeasured, true>;
-const TOP_KEY_HINTS: Record<string, string> = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes" };
+// (a hand-written probe's top-level `navEvents` object is its page-wide navigation log — the canonical key is
+// `navigation`; the per-interaction count F-102 reads lives on each interactions[] row, never up here)
+const TOP_KEY_HINTS: Record<string, string> = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
+
+// ---- F-102 (D24): what counts as evidence that an interaction worked. `ok:true` is a claim; a pass needs the one
+// element driven (selectorCount === 1), an outcome that is what the designed action does, and no document loaded
+// during the interaction (navEvents: a reload or a cross-document navigation — a dev-server reload once read as "the
+// dialog opened") — except where loading another document IS the action (navigate / back / url with url-changed).
+// An in-page URL change (pushState, a hash) loads no document: navEvents 0, and `url-changed` passes for any action
+// that allows it. Anything short of that is not-probed with the missing piece named, never fail: the control may work.
+export const INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"] as const;
+type Outcome = (typeof INTERACTION_OUTCOMES)[number];
+const ANY_BUT_NONE: readonly Outcome[] = INTERACTION_OUTCOMES.filter((o) => o !== "none");
+export const OUTCOMES_FOR_ACTION: Readonly<Record<"navigate" | "overlay" | "change_to" | "swap" | "other", readonly Outcome[]>> = {
+  navigate: ["url-changed", "selector-appeared"],
+  overlay: ["dialog-opened", "selector-appeared"],
+  change_to: ["state-changed", "selector-appeared"],
+  swap: ["state-changed", "selector-appeared"],
+  other: ANY_BUT_NONE,
+};
+// Actions whose effect IS a URL change: a document loaded during them (a full navigation) is the outcome, not a
+// reload. (D24 names navigate; `back` and `url` change the URL by definition too — without them a multi-page back
+// link could never pass.) An overlay opened as a route or a tab kept in the query string records what APPEARED
+// (dialog-opened / selector-appeared / state-changed), which its action allows — not url-changed.
+const URL_ACTIONS = new Set(["navigate", "back", "url"]);
+const isOutcome = (x: unknown): x is Outcome => typeof x === "string" && INTERACTION_OUTCOMES.some((o) => o === x);
+function outcomesFor(action: string | undefined): readonly Outcome[] {
+  return action === "navigate" || action === "overlay" || action === "change_to" || action === "swap" ? OUTCOMES_FOR_ACTION[action] : OUTCOMES_FOR_ACTION.other;
+}
+/** What an ok:true row lacks to count as a pass (D24), in words — empty when it passes. */
+function evidenceGaps(hit: InteractionEvidence, action: string | undefined): string[] {
+  const gaps: string[] = [];
+  const count = Number(hit.selectorCount);
+  if (!hit.selector) gaps.push("no selector named");
+  else if (!(count >= 1)) gaps.push(`selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`);
+  else if (count !== 1) gaps.push(`selector '${hit.selector}' matched ${count} elements — which one was driven? (needs exactly 1)`);
+  const allowed = outcomesFor(action);
+  if (hit.outcome === undefined) gaps.push("no outcome recorded (url-changed | dialog-opened | selector-appeared | state-changed | none)");
+  else if (!isOutcome(hit.outcome)) gaps.push(`outcome '${String(hit.outcome)}' is not one of ${INTERACTION_OUTCOMES.join(" | ")}`);
+  else if (!allowed.includes(hit.outcome)) gaps.push(`outcome '${hit.outcome}' is not what ${action ? `${/^[aeiou]/.test(action) ? "an" : "a"} ${action}` : "this action"} does (${allowed.join(" or ")})`);
+  const nav = hit.navEvents;
+  if (nav === undefined) gaps.push("no navEvents recorded (documents loaded during the interaction: a reload or a full navigation)");
+  else if (typeof nav !== "number" || !Number.isInteger(nav) || nav < 0) gaps.push(`navEvents ${JSON.stringify(nav)} is not a count`);
+  else if (nav > 0 && !(action !== undefined && URL_ACTIONS.has(action) && hit.outcome === "url-changed")) gaps.push(`${nav} document(s) loaded during the interaction (a reload or a full navigation) — a reload is not an outcome${hit.outcome === "url-changed" ? `; only a navigate, back or url action may load a document` : ""}`);
+  return gaps;
+}
 
 /**
  * compare(expectation, measured, opts?) -> report.
@@ -919,7 +1033,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const matchedByCensus: Record<string, number> = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
   const positionMatched = new Set<string>(); // spec ids matched by position: their deltas are low-confidence
   const typographyOn = new Map<string, string>(); // TEXT spec id -> the container tag its typography was read from
-  const gap = (spec: VerifySpec, field: string, why: string): number => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  // H2: the gaps where the measured node lacks the value (the key absent, or null) — the only kind that can LOSE a
+  // previous delta; every other gap is the compare declining a value it has (a method gap, not lost coverage)
+  const absentGaps = new Set<string>();
+  const placementGaps = new Map<string, { absent: boolean; why: string }>(); // L-3: placement's inputs, per node
+  const gap = (spec: VerifySpec, field: string, why: string, absent = false): number => {
+    if (absent) absentGaps.add(`${spec.nodeId}\u0000${field}`);
+    return fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
+  };
   const push = (spec: VerifySpec, field: string, severity: DeltaSeverity, bad: Bad, extra?: Partial<VerifyDelta>): number => deltas.push(Object.assign({
     severity, nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field,
     expected: bad.want, actual: bad.got, delta: bad.delta,
@@ -989,7 +1110,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const stUm: unknown = st ? st.unmeasured : undefined;
     const um: Record<string, string> = { ...(isJsonObject(m.unmeasured) ? m.unmeasured : {}), ...(isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e): e is [string, string] => typeof e[1] === "string")) : {}) };
     const nullWhy = (...keys: string[]): string => { for (const k of keys) { const w = um[k]; if (typeof w === "string" && w) return w; } return "reported null"; };
-    const gapNull = (field: string, ...keys: string[]): void => { fieldsReportedNull++; gap(spec, field, nullWhy(...keys)); };
+    const gapNull = (field: string, ...keys: string[]): void => { fieldsReportedNull++; gap(spec, field, nullWhy(...keys), true); };
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
     const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) — measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
 
@@ -997,6 +1118,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // edit button that exists only on the hovered row, "36 → 0").
     if (state && measuredIn === "rest" && zeroAtRest) {
       for (const f of FIELDS) if (spec[f.key] !== undefined) { tally(f.key, false); gap(spec, f.label, `renders 0×0 at rest: ${stateWhy}`); }
+      placementGaps.set(String(spec.nodeId), { absent: false, why: `renders 0×0 at rest: ${stateWhy}` }); // L-3
       continue;
     }
     const isText = spec.type === "TEXT";
@@ -1039,7 +1161,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
       if (val === undefined) {
         if (f.optional) { unverifiable.push({ nodeId: spec.nodeId, name: spec.name, field: f.label, expected: want0, why: "a ::placeholder colour is not readable from getComputedStyle(el) — report placeholderColor to have it checked" }); continue; }
-        gap(spec, f.label, "the probe did not report this property");
+        gap(spec, f.label, "the probe did not report this property", true);
         continue;
       }
       if (val === null || (Array.isArray(val) && val.includes(null))) { gapNull(f.label, ...nullKeys); continue; }
@@ -1102,7 +1224,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== undefined);
       if (got.borderRadius === null || (Array.isArray(got.borderRadius) && got.borderRadius.some((v) => v === null))) gapNull("border-radius", "borderRadius");
-      else if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`);
+      else if (!c) gap(spec, "border-radius", got.borderRadius === undefined ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a px radius`, got.borderRadius === undefined);
       else if (c.some((r) => r < 0)) gap(spec, "border-radius", `${JSON.stringify(got.borderRadius)} is impossible for a radius (CSS cannot make it negative) — a measuring artefact; not compared`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
@@ -1119,7 +1241,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (spec.padding !== undefined) {
       tally("padding", got.padding !== undefined);
       const pad = fourSides(got.padding);
-      if (got.padding === undefined) gap(spec, "padding", "the probe did not report this property");
+      if (got.padding === undefined) gap(spec, "padding", "the probe did not report this property", true);
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells — report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
       else if (got.padding === null || (Array.isArray(got.padding) && got.padding.some((v) => v === null))) gapNull("padding", "padding");
@@ -1135,7 +1257,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     }
     if (spec.placeholderText !== undefined) {
       tally("placeholderText", got.placeholderText !== undefined);
-      if (got.placeholderText === undefined) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')");
+      if (got.placeholderText === undefined) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')", true);
       else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
       else {
         fieldsChecked++;
@@ -1146,8 +1268,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       tally("text", got.text !== undefined);
       if (got.text === null) {
         fieldsReportedNull++;
-        gap(spec, "text", um.text || "the probe reported text: null — an element with child elements still has text; report its textContent");
+        gap(spec, "text", um.text || "the probe reported text: null — an element with child elements still has text; report its textContent", true);
       }
+      else if (got.text === undefined) absentGaps.add(`${spec.nodeId}\u0000text`);
       else if (got.text !== undefined) {
         fieldsChecked++;
         // Compare the literal characters. Figma's text-transform renders "NO. Of" from a stored "NO. of"
@@ -1192,6 +1315,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // ---- placement: a designed-inside-the-frame node that renders outside it (finding 164)
     const fr = frameOf(spec);
     const bx = got;
+    if (num(fr.w) && num(fr.h)) {
+      const BOX_KEYS = ["x", "y", "width", "height"] as const;
+      const missing = BOX_KEYS.filter((k) => bx[k] === undefined || bx[k] === null);
+      const unread = BOX_KEYS.filter((k) => bx[k] !== undefined && bx[k] !== null && !num(bx[k]));
+      if (missing.length) placementGaps.set(String(spec.nodeId), { absent: true, why: `the probe did not report ${missing.join("/")} (placement is derived from the box)` });
+      else if (unread.length) placementGaps.set(String(spec.nodeId), { absent: false, why: `could not read ${unread.join("/")} as px numbers (placement is derived from the box)` });
+    }
     if (num(fr.w) && num(fr.h) && (num(bx.x) || num(bx.y))) {
       const w = num(bx.width) ? bx.width : 0, h = num(bx.height) ? bx.height : 0;
       const tol = TOLERANCE.position;
@@ -1305,7 +1435,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
     const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...(i.destinationExported === false ? { destinationExported: false } : {}) };
-    const worked = !!hit && hit.ok === true && hit.result !== "not-probed" && !!hit.selector && Number(hit.selectorCount) >= 1;
+    // D24: ok:true passes only with the evidence (one element, an outcome the action produces, no reload)
+    const gaps = hit && hit.ok === true && hit.result !== "not-probed" ? evidenceGaps(hit, i.action) : null;
+    const worked = gaps !== null && gaps.length === 0;
+    const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : undefined), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : undefined) } : {};
     // D20: removed from the graded set before grading; evidence that it works anyway is noted, never graded.
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
@@ -1314,15 +1447,39 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail) });
-    if (hit.ok === false) return Object.assign(row, { result: "fail" as const, ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector) });
+    if (hit.ok === false) return Object.assign(row, { result: "fail" as const, ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
     // ok:true is a claim; the evidence is the selector that was driven and proof it matched something.
     // An agent once credited two hidden popup rows with hovers it performed on unrelated controls (187).
-    if (!hit.selector || !(count >= 1)) {
-      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${!hit.selector ? "no selector named" : `selector '${hit.selector}' matched ${Number.isFinite(count) ? count : "an unreported number of"} element(s)`}${hit.detail ? `; probe said: ${hit.detail}` : ""}` });
+    // F-102: the outcome and the navigation count too — a reload once read as "the dialog opened".
+    if (!worked || !hit.selector) {
+      return Object.assign(row, { result: "not-probed" as const, detail: `reported ok without evidence — ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
-    return Object.assign(row, { result: "pass" as const, ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count });
+    return Object.assign(row, { result: "pass" as const, ...ifDefined("detail", hit.detail), selector: hit.selector, selectorCount: count, ...said });
   });
-  const unexpectedInteractionEvidence = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase())).length;
+  const unexpectedRows = allEvidence.filter((r) => r && r.nodeId != null && !hiddenSet.has(String(r.nodeId)) && !expectedKeys.has(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase()));
+  const unexpectedInteractionEvidence = unexpectedRows.length;
+  // DT-29: name each unmatched result (once per nodeId + trigger) and, when a designed interaction is near, say which —
+  // the evidence was probably meant for it (a trigger written `on_click(name link)`, an ancestor's id).
+  const designed = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const specAnc = new Map(specs.map((sp) => [String(sp.nodeId), sp.ancestorIds || []]));
+  const unmatchedInteractionEvidence: Array<{ nodeId: string; trigger: string; hint?: string }> = [];
+  const unmatchedSeen = new Set<string>();
+  for (const r of unexpectedRows) {
+    const nodeId = String(r.nodeId), trigger = String(r.trigger || "on_click");
+    const key = nodeId + "|" + trigger.toLowerCase();
+    if (unmatchedSeen.has(key)) continue;
+    unmatchedSeen.add(key);
+    const bare = trigger.toLowerCase().replace(/\s*[(:[].*$/, "").trim();
+    const sameNode = designed.filter((i) => String(i.nodeId) === nodeId);
+    const exact = sameNode.find((i) => i.trigger === bare);
+    const kin = designed.find((i) => i.trigger === bare && (specAnc.get(String(i.nodeId)) || []).includes(nodeId))
+      ?? designed.find((i) => i.trigger === bare && (specAnc.get(nodeId) || []).includes(String(i.nodeId)));
+    const hint = exact ? `use the expectation's trigger \`${exact.trigger}\` verbatim (not \`${trigger}\`)`
+      : sameNode.length ? `this node's designed trigger is ${sameNode.map((i) => `\`${i.trigger}\``).join(" / ")}, not \`${trigger}\``
+      : kin ? `${(specAnc.get(String(kin.nodeId)) || []).includes(nodeId) ? "an ancestor" : "a descendant"} of the designed \`${kin.nodeId}\` ${kin.name || ""} (${kin.trigger}) — report the result under the designed node's id`.replace("  (", " (")
+      : undefined;
+    unmatchedInteractionEvidence.push({ nodeId, trigger, ...ifDefined("hint", hint) });
+  }
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
   const interactionsNotProbed = interactions.filter((i) => i.result === "not-probed");
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
@@ -1395,6 +1552,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // (an in-process caller can hand over any object: a probe that is not an identity reads as unknown, with a note)
   const probeRaw: unknown = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : undefined;
+  const buildRaw: unknown = measured.build;
+  const buildNow = isBuildIdentity(buildRaw) ? buildRaw : undefined;
+  if (buildRaw !== undefined && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
+  const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
+  if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) — not checked; write it with verify-screen --status`);
+  const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : undefined;
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs: VerifyReportV2["inputs"] = {
     expectationSchema: expectation.schema || "(none)",
@@ -1409,6 +1572,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
     ...ifDefined("waivers", opts.waiversInput || undefined),
+    // DT-81: the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
+    build: buildNow ?? "unknown",
+    ...ifDefined("runId", runId),
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1419,8 +1585,26 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // (a spec a plan anchor folded into a measured ancestor, F-77, is out of the denominator)
   const nodesExpected = specs.length - folded.length;
   const reasons: string[] = [];
+  // D26 (F-72): the run's integrity, ranked FIRST. When any of these holds, the numbers below belong to an unverified
+  // run (another expectation, no expectation, an unfinished run, another measured file) — so the verdict is
+  // `incomplete` even with high mismatches (L-6): a `fail` would grade numbers nothing ties to this design and run.
+  // The report is still written (the D18 baseline chain stays intact).
+  if (stale) reasons.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
+  if (opts.expectationSha256 && !measured.expectationSha256) reasons.push(`${INTEGRITY_PHRASES.noExpectation} — nothing ties these numbers to this design; re-measure with the shipped probe`);
+  // M-1: a measured file that names its run, beside no status of that run (none found, a v1 file, another run's) —
+  // nothing recorded it as that run's (the probe's status write was refused, or another run has started since).
+  // Only when compare looked for one (opts.status null or set; undefined = an in-process caller that passed none).
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : undefined;
+  if (measuredRun !== undefined && opts.status !== undefined && (st === null || st.runId !== measuredRun)) {
+    reasons.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} — ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run — re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st) {
+    const stFile = opts.status ? opts.status.file : "status.json";
+    if (!MEASURED_PHASES.includes(st.phase)) reasons.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) reasons.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}…, this one ${opts.measuredSha256.slice(0, 12)}…) — measured again outside run ${st.runId}?`);
+  }
+  const integrity = [...reasons];
+  const integrityFailed = integrity.length > 0;
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
-  if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
   for (const f of fieldsNeverMeasured) reasons.push(`field '${f.field}' was present on 0 of the ${f.expectedOn} measured node(s) whose spec states it${f.probeSent ? ` (the probe sent '${f.probeSent.join("', '")}' — the canonical key is '${f.field}')` : ""}`);
@@ -1435,7 +1619,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
 
   // Reasons come from OPEN items only. Nothing open, but something accepted or descoped → pass-with-deviations (D5/D20).
   const verdict: VerifyVerdict = reasons.length === 0 ? (accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass")
-    : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
+    : integrityFailed ? "incomplete" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
 
   const coverage: VerifyCoverageV2 = {
     nodesExpected,
@@ -1468,6 +1652,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   let against: VerifyAgainst | undefined;
   if (opts.against) {
     const prev = opts.against.report;
+    const pb: unknown = prev.inputs ? prev.inputs.build : undefined;
+    const prevBuild = isBuildIdentity(pb) ? pb : null;
     const pc = prev.coverage;
     const shaOf = (p: unknown): string | null => (isJsonObject(p) && typeof p.sha256 === "string" ? p.sha256 : null);
     const prevSha = shaOf(prev.inputs && prev.inputs.probe), curSha = probeIdentity ? probeIdentity.sha256 : null;
@@ -1478,8 +1664,18 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       nodesExpected: { before: pc && num(pc.nodesExpected) ? pc.nodesExpected : null, after: nodesExpected },
       probeChanged: prevSha === null && curSha === null ? null : prevSha !== curSha,
       expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
+      ...(Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, { notMeasured, fieldsNotMeasured, unverifiable, specIds: new Set(specs.map((sp) => String(sp.nodeId))), absent: absentGaps, placementGaps,
+        sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256) }) } : {}),
+      sameBuild: prevBuild && buildNow ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null,
     };
   }
+  // DT-81: the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
+  const prevCode = opts.against && opts.against.report.inputs ? opts.against.report.inputs.code : undefined;
+  const codeChanged = prevCode && opts.code ? (Object.keys(prevCode.files).length && Object.keys(opts.code.files).length ? JSON.stringify(sortKeys(prevCode.files)) !== JSON.stringify(sortKeys(opts.code.files))
+    : !!(prevCode.gitHead && opts.code.gitHead && prevCode.gitHead !== opts.code.gitHead)) : false;
+  const sameBuildServed = !!(against && against.sameBuild === true && codeChanged);
+  const lost = against && against.deltas ? against.deltas.lostCoverage.length : 0;
+  const unmatchedCount = unmatchedInteractionEvidence.length;
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
   // The headline's NEVER MEASURED slot is for a key the probe got wrong everywhere (finding 182). One node
@@ -1498,7 +1694,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} · ` +
     `data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` +
     (against && fell ? ` · COVERAGE FELL ${against.nodesMeasured.before}→${against.nodesMeasured.after} vs ${against.report}` : "") +
-    (against && against.probeChanged === true ? " · probe changed" : "");
+    (against && against.probeChanged === true ? " · probe changed" : "") +
+    // group 10 — informational, never the verdict
+    (unmatchedCount ? ` · ${unmatchedCount} probe result(s) matched no designed interaction` : "") +
+    (lost ? ` · LOST COVERAGE on ${lost} earlier delta(s)` : "") +
+    (sameBuildServed && against ? ` · SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
 
   return {
     schema: REPORT_SCHEMA,
@@ -1512,6 +1712,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     verdict,
     headline,
     why: reasons,
+    integrity,
     coverage,
     summary: { high, medium, low: open.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length,
       accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, highCauses },
@@ -1531,6 +1732,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
+      ...(unmatchedInteractionEvidence.length ? { unmatchedInteractionEvidence } : {}),
       measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length,
       measuredIdsNotInExpectation: measuredIdsNotInExpectation.length,
       measuredIdsNotInExpectationSample: measuredIdsNotInExpectation.slice(0, 5),
@@ -1565,7 +1767,12 @@ function reportToMarkdown(r: VerifyReportV2): string {
   L.push(`# Verify — ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} · measured ${r.measuredAt}` +
-    (r.inputs && r.inputs.expectationSha256 ? ` · against expectation ${r.inputs.expectationSha256.slice(0, 12)}…` : ""), "");
+    (r.inputs && r.inputs.expectationSha256 ? ` · against expectation ${r.inputs.expectationSha256.slice(0, 12)}…` : "") + (r.inputs && r.inputs.runId ? ` · run ${r.inputs.runId}` : ""), "");
+  // DT-81: which build was served (a stale preview measures old code)
+  const b = r.inputs && r.inputs.build;
+  L.push(b && b !== "unknown"
+    ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}… · git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
+    : "Build served: build identity unknown (the measured file records none — measured by a hand-written or older probe).", "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");
     for (const w of r.why) L.push(`- ${w}`);
@@ -1590,6 +1797,35 @@ function reportToMarkdown(r: VerifyReportV2): string {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
       `${a.probeChanged === true ? " · **the probe changed**" : a.probeChanged === null ? " · probe identity unknown on both rounds" : ""}${a.expectationChanged ? " · the expectation changed" : ""}. This never changes the verdict.`, "");
+    const d = a.deltas;
+    if (d && d.sameMeasured) {
+      const rc = d.reclassified || [];
+      L.push(`Previous deltas (node + field): **the same measured file as last round** — nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open` +
+        `${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+      if (rc.length) {
+        L.push(`## Reclassified (${rc.length})`, "", "*Same measured file — the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
+        for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
+        if (rc.length > 40) L.push(`| …and ${rc.length - 40} more | | | |`);
+        L.push("");
+      }
+    } else if (d) {
+      const nu = d.nowUnverifiable || [];
+      L.push(`Previous deltas (node + field): ${d.fixed} fixed · ${d.unchanged} still open · ${d.new} new · ${d.lostCoverage.length ? `**${d.lostCoverage.length} lost coverage** (gone only because they were not measured this round)` : "0 lost coverage"}` +
+        `${nu.length ? ` · ${nu.length} now unverifiable by method (measured, but the compare no longer reads it)` : ""}.`, "");
+      if (nu.length) {
+        L.push(`## Now unverifiable by method (${nu.length})`, "", "*A previous delta whose value was measured this round, but the compare now declines it — not lost coverage, not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+        for (const x of nu.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+        if (nu.length > 40) L.push(`| …and ${nu.length - 40} more | | | |`);
+        L.push("");
+      }
+    }
+    if (a.sameBuild === true && r.headline.includes("SAME BUILD SERVED")) L.push("**The same build was served as last round although the code changed** — a stale preview or dist? Rebuild before measuring a preview.", "");
+    if (d && d.lostCoverage.length) {
+      L.push(`## Lost coverage (${d.lostCoverage.length})`, "", "*A previous delta that is gone only because its node or value was not measured — not a fix.*", "", "| Node | Field | Was | Why |", "|---|---|---|---|");
+      for (const x of d.lostCoverage.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${fmt(x.was)} | ${x.why} |`);
+      if (d.lostCoverage.length > 40) L.push(`| …and ${d.lostCoverage.length - 40} more | | | |`);
+      L.push("");
+    }
   }
   L.push("## How nodes were matched", "");
   const ip = r.inputs && r.inputs.probe;
@@ -1647,6 +1883,14 @@ function reportToMarkdown(r: VerifyReportV2): string {
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
     for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}`);
+    L.push("");
+  }
+  // DT-29: a result filed under a node + trigger nothing designed — never graded, so it never helped the verdict
+  const um = (r.probe && r.probe.unmatchedInteractionEvidence) || [];
+  if (um.length) {
+    L.push(`## Probe results that matched no designed interaction (${um.length})`, "", "*Copy nodeId and trigger verbatim from the expectation's interactions[]; these results were not graded.*", "");
+    for (const u of um.slice(0, 40)) L.push(`- \`${u.nodeId}\` ${u.trigger}${u.hint ? ` — ${u.hint}` : ""}`);
+    if (um.length > 40) L.push(`- …and ${um.length - 40} more`);
     L.push("");
   }
   const ungraded = r.interactions.filter((i) => i.result === "undesigned" || i.result === "descoped");
@@ -1733,6 +1977,11 @@ function plansFor(frameId: string | undefined, stem: string): Array<{ file: stri
 
 /** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
 function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
+  // L-c: a report whose run failed its integrity checks graded numbers nothing ties to this design and run — a
+  // waiver written from it would bind to values that may never have been rendered (D26)
+  // L-1: the integrity reasons compare recorded (report.integrity); an older report has only why[] — match its wording
+  const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
+  if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) — nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
   const deltas: VerifyDelta[] = Array.isArray(rep.deltas) ? rep.deltas : [];
   const picked = sel.group !== undefined ? deltas.filter((d) => d.group === sel.group)
     : deltas.filter((d) => d.nodeId === sel.node && (sel.field === undefined || d.field === sel.field));
@@ -1755,7 +2004,7 @@ export { buildExpectation, compare, reportToMarkdown, selectForAccept, probeLine
 
 
 // ---------------------------------------------------------------- CLI
-function main(argv: string[]): number {
+function main(argv: string[]): number | Promise<number> {
   const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
@@ -1771,21 +2020,57 @@ function main(argv: string[]): number {
     "      components[] rows {setName|nodeId, present} are merged with measured.json's).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
-    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +
+    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +    "      Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another\n" +
+    "      measured file, makes the verdict 'incomplete' even with high mismatches (the numbers belong to an unverified run).\n" +
     "      The plan for this frame (design/plan/, or --plan <plan.json>) supplies waivers[] and descopes[]: an accepted\n" +
     "      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).\n" +
     `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
     "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
     "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
-    "      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.";
+    "      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.\n" +
+    `  ${scriptCmd("verify-screen")} --status <Screen> --phase <${STATUS_PHASES.join("|")}> [--run <id> | --new-run] [--detail "…"] [--by agent|orchestrator] [--dir design/verify] [--publish <stageDir>]\n` +
+    "      writes the run's LIVE status (status v2: runId, rev, machine time) atomically in the run cache —\n" +
+    "      node_modules/.cache/designtwin-verify/<Screen>.status.json (the project's: the nearest package.json at or above <dir>, or the\n" +
+    "      workspace root its dependencies are hoisted to, never past .git; the OS temp dir, not shared between sandboxed and unsandboxed\n" +
+    "      commands, with no package.json or Yarn PnP) — <dir> resolves against the cwd — outside every dev-server\n" +
+    "      watch, so a heartbeat never reloads the page being measured — and prints `run <id> rev <n>` (stdout), the live file and the run's\n" +
+    "      stage dir (stderr). Without --run it continues only a run that has not ended (else exit 2). `done` checks first — refuses (exit 1)\n" +
+    "      a missing measured file (the staged one when --publish holds it), one measured against another expectation, in another run, or\n" +
+    "      not the one the probe recorded in this run — then publishes, records the sha256 of <Screen>.expected/.measured.json (and\n" +
+    "      .evidence.json when this run published it), and writes the final status into <dir>/<Screen>.status.json. --publish copies every\n" +
+    "      file of a staging directory into <dir> (tmp file in <dir>, then rename) — stage in the run cache while any page of the app is open.\n" +
+    `  ${scriptCmd("verify-screen")} --wait <Screen> --run <id> [--timeout <s>=1200] [--stall <s>=300] [--interval <s>=2] [--dir design/verify]\n` +
+    "      waits (on the live status, else <dir>/<Screen>.status.json) until run <id> is done and <Screen>.measured.json is the file it\n" +
+    "      names, then prints the --compare command (exit 0; with --interactions only for evidence this run published);\n" +
+    "      exit 1 when the run failed or is blocked (prints why), 5 on timeout or when the status did not change for --stall seconds,\n" +
+    "      6 when the run cache exists but cannot be read.\n" +
+    "exit (--status): 0 wrote · 1 refused · 2 usage · 6 the run cache is not writable (sandbox write scope? — run from the project root).";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
   const OPTIONS = {
     out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" },
     accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" }, "all-fields": { type: "boolean" },
+    status: { type: "string" }, wait: { type: "string" }, phase: { type: "string" }, run: { type: "string" }, "new-run": { type: "boolean" }, detail: { type: "string" },
+    dir: { type: "string" }, publish: { type: "string" }, timeout: { type: "string" }, stall: { type: "string" }, interval: { type: "string" },
     help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
+  // F-72 (D25): the run's status file and the wait on it — the tools write machine time, rev and shas, never the agent
+  const runFlags = ["phase", "run", "new-run", "detail", "dir", "publish", "timeout", "stall", "interval"] as const;
+  if (flags.status !== undefined || flags.wait !== undefined) {
+    if (flags.status !== undefined && flags.wait !== undefined) { console.error("pass --status or --wait, not both\n" + USAGE); return 2; }
+    const other = (["expect", "compare", "accept", "out", "interactions", "against", "force", "node", "field", "group", "reason", "plan", "all-fields"] as const).filter((k) => flags[k] !== undefined);
+    if (other.length || files.length) { console.error(`--${flags.status !== undefined ? "status" : "wait"} takes none of ${[...other.map((k) => `--${k}`), ...files].join(", ")}\n` + USAGE); return 2; }
+    if (flags.wait !== undefined) {
+      const bad = (["phase", "new-run", "detail", "publish", "by"] as const).filter((k) => flags[k] !== undefined);
+      if (bad.length) { console.error(`--wait takes none of ${bad.map((k) => `--${k}`).join(", ")}\n` + USAGE); return 2; }
+      return waitMain(flags.wait, flags, USAGE);
+    }
+    const bad = (["timeout", "stall", "interval"] as const).filter((k) => flags[k] !== undefined);
+    if (bad.length) { console.error(`--status takes none of ${bad.map((k) => `--${k}`).join(", ")}\n` + USAGE); return 2; }
+    return statusMain(flags.status, flags, USAGE);
+  }
+  for (const k of runFlags) if (flags[k] !== undefined) { console.error(`--${k} only applies to --status / --wait\n` + USAGE); return 2; }
   const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
   if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) { console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE); return 2; }
@@ -1797,9 +2082,9 @@ function main(argv: string[]): number {
 
   const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
-    fs.mkdirSync(path.dirname(base), { recursive: true });
-    fs.writeFileSync(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
-    if (md) fs.writeFileSync(base + ".report.md", md);
+    // F-72: atomic (tmp beside the target, then rename) — a reader never sees half a report or expectation
+    writeFileAtomic(base + (doExpect ? ".expected.json" : ".report.json"), JSON.stringify(obj, null, 2) + "\n");
+    if (md) writeFileAtomic(base + ".report.md", md);
     console.error(`wrote ${base}${doExpect ? ".expected.json" : ".report.json"}${md ? " and " + base + ".report.md" : ""}`);
   };
 
@@ -1952,7 +2237,17 @@ function main(argv: string[]): number {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
   }
-  const rep = compare(expectation, measured, { ...(readable.notes.length ? { inputNotes: readable.notes } : {}), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
+  // F-72/D26: the run status of the measured file (<dir>/<S>.measured.json → the live status of <dir>/<S>, else the
+  // published <dir>/<S>.status.json) — the same resolver --status, --wait and verify-probe --run use (H1)
+  // — and, for a measured file naming its run, else the status of the expectation's dir the probe wrote it to
+  // (verify-probe keys the run by the expectation's dir, so a measured file it wrote to a stage dir finds its run)
+  const measuredBase = /\.measured\.json$/.test(measuredFile) ? measuredFile.replace(/\.measured\.json$/, "") : null;
+  const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path.join(path.dirname(expFile), path.basename(measuredBase)) : null;
+  const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path.resolve(probeBase) !== path.resolve(measuredBase) ? readStatusAt(probeBase) : null);
+  // (status: null = looked and found none — a measured file naming its run then has nothing recording it, M-1)
+  const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status } }
+    : measuredBase !== null ? { status: null } : {};
+  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.notes.length ? { inputNotes: readable.notes } : {}), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
@@ -2017,4 +2312,8 @@ function acceptMain(files: string[], flags: { node?: string | undefined; field?:
   return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) {
+  const code = main(process.argv.slice(2));
+  if (typeof code === "number") process.exitCode = code;
+  else code.then((c) => { process.exitCode = c; }, (e: unknown) => { console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`); process.exitCode = 1; });
+}

@@ -27,9 +27,12 @@ import type { ParseArgsOptionsConfig } from "node:util";
  * never put it in a file the tools write (an absolute, per-install path would change the file's hash).
  */
 const SELF = fileURLToPath(import.meta.url);
-// Double quotes keep spaces; a path that also holds a character the shell expands inside them (" $ ` \)
-// is single-quoted instead, with any ' closed, escaped and reopened.
-const shellQuote = (p: string): string => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+// Double quotes keep spaces; a path that also holds a character the shell expands inside them (" $ ` \, and
+// zsh's history !) is single-quoted instead, with any ' closed, escaped and reopened.
+const shellQuote = (p: string): string => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+/** One argument of a printed command as one shell word: bare when it holds only characters no shell treats
+ *  specially (a path like design/verify/Plots.json), else quoted as above — a project path may hold a space. */
+export const shellArg = (a: string): string => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 export const scriptCmd = (name: string): string => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 function errCode(e: unknown): string | undefined {

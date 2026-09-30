@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import * as VS from "../design-to-code/verify-screen.ts";
 import type { BuiltExpectation, ExpectInput } from "../design-to-code/verify-screen.ts";
@@ -253,7 +254,9 @@ block("components from the --interactions object; D18 coverage baseline — thro
   t("[cli] --against is registered and documented; only with --compare", () => /--against <report\.json>/.test(run("--help").stdout) && run("--expect", "orders.json", "--against", "x.json").status === 2);
 
   put("evidence.json", { interactions: [], components: [{ setName: "Button", present: false, detail: "no button in the toolbar" }] });
-  run("--compare", expFile, "m185.json", "--out", "design/verify/Ev", "--interactions", "evidence.json");
+  // tied to this expectation (L-6: a measured file naming no expectation is an integrity failure → incomplete, never fail)
+  put("m185e.json", { ...rows(185, "a".repeat(64)), expectationSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, expFile))).digest("hex") });
+  run("--compare", expFile, "m185e.json", "--out", "design/verify/Ev", "--interactions", "evidence.json");
   const ev = readJsonOrNull(path.join(cwd, "design/verify/Ev.report.json"), isVerifyReport);
   t("[components] components[] in the --interactions object are read: Button reported ABSENT → fail", () =>
     !!ev && (ev.componentsAbsent || []).some((c) => c.setName === "Button" && c.detail === "no button in the toolbar") && ev.verdict === "fail");

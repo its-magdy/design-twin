@@ -2,13 +2,14 @@
 
 
 // design-to-code/verify-probe.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
-import crypto from "node:crypto";
+import fs4 from "node:fs";
+import path3 from "node:path";
+import crypto2 from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
+import { spawnSync as spawnSync2 } from "node:child_process";
 
 // design-to-code/probe-page.ts
 function collectCandidates(input) {
@@ -400,9 +401,9 @@ function measureElements(input) {
     return res;
   });
 }
-function focusablePath(path3) {
+function focusablePath(path4) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path3);
+  const el = document.querySelector(path4);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -416,8 +417,8 @@ function focusablePath(path3) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function focusInfo(path3) {
-  const el = document.querySelector(path3);
+function focusInfo(path4) {
+  const el = document.querySelector(path4);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -638,9 +639,23 @@ function census(nodes, notMeasured) {
   return c;
 }
 
+// design-to-code/content-hash.ts
+import { spawnSync } from "node:child_process";
+
 // bridge/src/json-util.ts
 function isStringArray(x) {
   return Array.isArray(x) && x.every((v) => typeof v === "string");
+}
+
+// design-to-code/content-hash.ts
+function gitHead(cwd) {
+  try {
+    const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] });
+    const h = r.status === 0 && String(r.stdout || "").trim();
+    return h && /^[0-9a-f]{40}$/.test(h) ? h : null;
+  } catch {
+    return null;
+  }
 }
 
 // design-to-code/types.ts
@@ -655,6 +670,7 @@ import fs from "node:fs";
 var errMsg = (e) => typeof e === "string" ? e : String(e && e.message || e);
 
 // design-to-code/read-json.ts
+var anyJson = (_x) => true;
 function readFailure(e) {
   const code = e && typeof e === "object" && "code" in e ? e.code : void 0;
   if (code === "ENOENT") return { error: "does not exist", missing: true };
@@ -765,6 +781,9 @@ var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof 
 function isProbeIdentity(x) {
   return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
+function isBuildIdentity(x) {
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+}
 var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
@@ -775,7 +794,10 @@ var MEASURED_EXTRAS = [
   ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
   ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
   ["matchedByCensus", isCountMap, "a {rule: count} map"],
-  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"]
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
+  // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
+  ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -796,7 +818,7 @@ function isMeasuredComponentList(x) {
 }
 isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 function isVerifyReport(x) {
-  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
+  return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && (x.integrity === void 0 || isStringArray(x.integrity)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
 isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals", "waivers", "descopes"];
@@ -840,12 +862,19 @@ function isStringRecord(x) {
 }
 isStringRecord.expected = "an object of strings";
 
+// design-to-code/verify-run.ts
+import fs2 from "node:fs";
+import os from "node:os";
+import path2 from "node:path";
+import crypto from "node:crypto";
+
 // design-to-code/cli-args.ts
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 var SELF = fileURLToPath(import.meta.url);
-var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellQuote = (p) => /["$`\\!]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var shellArg = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
@@ -891,6 +920,172 @@ ${usage}`);
   }
 }
 
+// design-to-code/verify-run.ts
+var STATUS_SCHEMA = "designtwin/verify-status@2";
+var STATUS_PHASES = ["queued", "starting", "renderer-found", "renderer-ready", "measuring", "measured", "driving", "done", "failed", "blocked"];
+var isPhase = (x) => typeof x === "string" && STATUS_PHASES.some((p) => p === x);
+var optStr2 = (x) => x === void 0 || typeof x === "string";
+function isVerifyStatusV2(x) {
+  return isJsonObject(x) && x.schema === STATUS_SCHEMA && typeof x.screen === "string" && typeof x.runId === "string" && typeof x.rev === "number" && isPhase(x.phase) && typeof x.detail === "string" && typeof x.at === "string" && (x.by === "verify-probe" || x.by === "agent" || x.by === "orchestrator") && optStr2(x.expectationSha256) && optStr2(x.measuredSha256) && optStr2(x.evidenceSha256) && (x.published === void 0 || Array.isArray(x.published) && x.published.every((p) => typeof p === "string"));
+}
+isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
+var statusFile = (base) => base + ".status.json";
+var sha256Of = (data) => crypto.createHash("sha256").update(data).digest("hex");
+var CACHE_NAME = "designtwin-verify";
+var shortSha = (s) => sha256Of(s).slice(0, 16);
+var isDir = (p) => {
+  try {
+    return fs2.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+var exists = (p) => fs2.existsSync(p);
+function realpath(p) {
+  if (typeof fs2.realpathSync.native === "function") {
+    try {
+      return fs2.realpathSync.native(p);
+    } catch {
+    }
+  }
+  return fs2.realpathSync(p);
+}
+function canonical(p) {
+  const abs = path2.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    const parent = path2.dirname(abs);
+    return parent === abs ? abs : path2.join(canonical(parent), path2.basename(abs));
+  }
+}
+var hasPnp = (d) => exists(path2.join(d, ".pnp.cjs")) || exists(path2.join(d, ".pnp.js"));
+function isWorkspaceRoot(d) {
+  if (exists(path2.join(d, "pnpm-workspace.yaml"))) return true;
+  const r = readJson(path2.join(d, "package.json"), anyJson);
+  return "doc" in r && isJsonObject(r.doc) && r.doc.workspaces !== void 0;
+}
+function installRootOf(dir) {
+  let P = null;
+  for (let d = dir; ; d = path2.dirname(d)) {
+    if (exists(path2.join(d, "package.json"))) {
+      P = d;
+      break;
+    }
+    if (exists(path2.join(d, ".git")) || path2.dirname(d) === d) return null;
+  }
+  if (isDir(path2.join(P, "node_modules"))) return P;
+  let ws = null;
+  for (let d = P; ; d = path2.dirname(d)) {
+    if (isWorkspaceRoot(d)) {
+      ws = d;
+      break;
+    }
+    if (exists(path2.join(d, ".git")) || path2.dirname(d) === d) break;
+  }
+  if (ws !== null && isDir(path2.join(ws, "node_modules"))) return ws;
+  if (hasPnp(P) || ws !== null && hasPnp(ws)) return null;
+  return P;
+}
+function runCacheOf(verifyDir) {
+  const v = canonical(verifyDir);
+  const root = installRootOf(v);
+  if (root !== null) {
+    const cache = path2.join(root, "node_modules", ".cache", CACHE_NAME);
+    const rel = path2.relative(root, v).split(path2.sep).join("/");
+    return { dir: rel === "design/verify" ? cache : path2.join(cache, "dirs", shortSha(rel)), root };
+  }
+  return { dir: path2.join(os.tmpdir(), CACHE_NAME, shortSha(v)), root: v };
+}
+function runCacheDir(verifyDir) {
+  return runCacheOf(verifyDir).dir;
+}
+var UNWRITABLE_CODES = /* @__PURE__ */ new Set(["EACCES", "EPERM", "EROFS", "ENOENT"]);
+var errCode2 = (e) => e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
+var RunCacheUnwritable = class extends Error {
+  cacheDir;
+  root;
+  /** `code`: the refusal's errno, or "read" when the run cache exists but cannot be read (--wait). ENOENT is not a
+   *  permission: a directory on the way was removed while the run wrote there (L-4) */
+  constructor(cacheDir, root, code) {
+    super(code === "ENOENT" ? `run cache ${cacheDir} disappeared \u2014 was node_modules reinstalled during the run? (a reinstall clears node_modules/.cache: the live status and the staged files with it) \u2014 start a new run once it is back` : `run cache ${cacheDir} is not ${code === "read" ? "readable" : "writable"} (sandbox write scope?) \u2014 run from ${root} or allow ${code === "read" ? "access" : "writes"} there`);
+    this.name = "RunCacheUnwritable";
+    this.cacheDir = cacheDir;
+    this.root = root;
+  }
+};
+function inRunCache(verifyDir, fn) {
+  try {
+    return fn();
+  } catch (e) {
+    const code = errCode2(e);
+    if (code !== void 0 && UNWRITABLE_CODES.has(code)) {
+      const c = runCacheOf(verifyDir);
+      throw new RunCacheUnwritable(c.dir, c.root, code);
+    }
+    throw e;
+  }
+}
+var liveStatusFile = (base) => path2.join(runCacheDir(path2.dirname(base)), path2.basename(base) + ".status.json");
+var stageDirOf = (base, runId) => path2.join(runCacheDir(path2.dirname(base)), "stage", runId);
+function writeFileAtomic(file, data) {
+  fs2.mkdirSync(path2.dirname(path2.resolve(file)), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  try {
+    fs2.writeFileSync(tmp, data);
+    fs2.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs2.rmSync(tmp, { force: true });
+    } catch {
+    }
+    throw e;
+  }
+}
+function readStatusFile(file) {
+  const r = readJson(file, anyJson);
+  if (!("doc" in r)) return null;
+  if (isVerifyStatusV2(r.doc)) return r.doc;
+  return isJsonObject(r.doc) && r.doc.schema === void 0 && typeof r.doc.phase === "string" ? "v1" : null;
+}
+function readStatusAt(base) {
+  for (const file of [liveStatusFile(base), statusFile(base)]) {
+    const status = readStatusFile(file);
+    if (status !== null) return { file, status };
+  }
+  return null;
+}
+function readStatus(base) {
+  const r = readStatusAt(base);
+  return r ? r.status : null;
+}
+function writeStatus(base, p) {
+  const prev = readStatus(base);
+  const same = prev && prev !== "v1" && prev.runId === p.runId ? prev : null;
+  const pick = (k) => {
+    const v = p[k] ?? (same ? same[k] : void 0);
+    return v !== void 0 ? { [k]: v } : {};
+  };
+  const published = p.published !== void 0 || same && same.published ? [.../* @__PURE__ */ new Set([...same && same.published || [], ...p.published || []])].sort() : void 0;
+  const doc = {
+    schema: STATUS_SCHEMA,
+    screen: path2.basename(base),
+    runId: p.runId,
+    rev: same ? same.rev + 1 : 1,
+    phase: p.phase,
+    detail: p.detail ?? "",
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    by: p.by,
+    ...pick("expectationSha256"),
+    ...pick("measuredSha256"),
+    ...pick("evidenceSha256"),
+    ...published !== void 0 ? { published } : {}
+  };
+  const live = liveStatusFile(base);
+  inRunCache(path2.dirname(base), () => writeFileAtomic(live, JSON.stringify(doc, null, 2) + "\n"));
+  return doc;
+}
+
 // design-to-code/export-shape.ts
 function isIrNode(x) {
   return isJsonObject(x) && typeof x.id === "string" && typeof x.type === "string" && (x.children === void 0 || Array.isArray(x.children));
@@ -921,13 +1116,13 @@ function colorKey(v) {
 }
 
 // bridge/src/is-main.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
+    return fs3.realpathSync(argv1) === fs3.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -1046,7 +1241,18 @@ var MEASURED_KEYS_DOC = {
   "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against"
 };
-if (false) process.exitCode = main(process.argv.slice(2));
+var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
+var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
+if (false) {
+  const code = main(process.argv.slice(2));
+  if (typeof code === "number") process.exitCode = code;
+  else code.then((c) => {
+    process.exitCode = c;
+  }, (e) => {
+    console.error(`verify-screen: ${e instanceof Error ? e.message : String(e)}`);
+    process.exitCode = 1;
+  });
+}
 
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
@@ -1056,22 +1262,22 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs3.existsSync(path2.join(dir, f));
+  const has = (f) => fs4.existsSync(path3.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs3.existsSync(path2.join(dir, f));
+  const has = (f) => fs4.existsSync(path3.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function resolvePlaywright(dir) {
-  const abs = path2.resolve(dir);
-  const req = createRequire(path2.join(abs, "package.json"));
+  const abs = path3.resolve(dir);
+  const req = createRequire(path3.join(abs, "package.json"));
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
     let file;
@@ -1100,8 +1306,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs3.existsSync(path2.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path2.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs4.existsSync(path3.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path3.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function rendererUnavailable(reason, hint) {
   console.error(`verify-probe: renderer unavailable \u2014 ${reason}
@@ -1119,13 +1325,28 @@ async function launch(r, dir) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path2.join(path2.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path2.join(path2.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path3.join(path3.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path3.join(path3.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
   return null;
 }
-var selfSha256 = () => crypto.createHash("sha256").update(fs3.readFileSync(SELF2)).digest("hex");
+var selfSha256 = () => crypto2.createHash("sha256").update(fs4.readFileSync(SELF2)).digest("hex");
+var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
+function buildFrom(url, served, viteClient) {
+  const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")) };
+}
+function gitState(dir) {
+  const head = gitHead(dir);
+  if (!head) return { gitHead: null, gitDirty: null };
+  try {
+    const r = spawnSync2("git", ["status", "--porcelain", "--", ".", ":(exclude)design"], { cwd: dir, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] });
+    return { gitHead: head, gitDirty: r.status === 0 ? String(r.stdout || "").trim() !== "" : null };
+  } catch {
+    return { gitHead: head, gitDirty: null };
+  }
+}
 var INIT_SCRIPT = `(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
   const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important}";
@@ -1348,7 +1569,31 @@ function hoverTarget(c, byTag) {
 async function runProbe(browser, o) {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
   const page = await context.newPage();
+  page.setDefaultTimeout(o.timeout);
   await page.addInitScript({ content: INIT_SCRIPT });
+  let origin = "";
+  try {
+    origin = new URL(o.url).origin;
+  } catch {
+  }
+  const served = /* @__PURE__ */ new Map();
+  const bodies = [];
+  let gen = 0, viteClient = false;
+  page.on("response", (res) => {
+    if (!BUILD_TYPES.has(res.request().resourceType())) return;
+    let u;
+    try {
+      u = new URL(res.url());
+    } catch {
+      return;
+    }
+    if (u.origin !== origin) return;
+    if (u.pathname === "/@vite/client") viteClient = true;
+    const g = gen;
+    bodies.push(res.body().then((b) => {
+      if (g === gen) served.set(u.pathname, sha256Of(b));
+    }, () => void 0));
+  });
   const log = { events: [], navs: 0, gotos: 0, t0: Date.now() };
   const consoleErrors = [];
   page.on("framenavigated", (f) => {
@@ -1371,8 +1616,12 @@ async function runProbe(browser, o) {
   try {
     for (; ; ) {
       try {
+        gen++;
+        served.clear();
+        viteClient = false;
         const result = await pass(page, log, o);
-        return { kind: "ok", result, navigation: nav(reruns), consoleErrors };
+        await Promise.allSettled(bodies);
+        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient) };
       } catch (e) {
         if (e instanceof BrowserGoneError) return { kind: "browser-gone", why: e.message, navigation: nav(reruns) };
         if (e instanceof KeptNavigatingError) return { kind: "navigation", why: e.message, navigation: nav(reruns) };
@@ -1387,14 +1636,20 @@ async function runProbe(browser, o) {
 }
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
-      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]
+      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
       --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
+      --run <id> (from verify-screen --status \u2026 --new-run): writes the run's LIVE status (the run cache,
+      node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
+      before the browser starts, \`measured\` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev.
+      --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).
   ${scriptCmd("verify-probe")} --check [--project <dir>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
-      navigating / reloaded twice during measurement / was unreachable / timed out (nothing written).`;
+      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time (nothing written).`;
+var MAX_TIME_DEFAULT = 18e4;
+var CLOSE_CAP_MS = 1e4;
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
@@ -1414,13 +1669,26 @@ async function main(argv) {
     position: { type: "boolean" },
     timeout: { type: "string" },
     check: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
+    help: { type: "boolean", short: "h" },
+    run: { type: "string" },
+    "max-time": { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path2.resolve(f.project ?? ".");
+  const project = path3.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
+${USAGE}`);
+    return 2;
+  }
+  const maxTime = f["max-time"] === void 0 ? MAX_TIME_DEFAULT : Number(f["max-time"]);
+  if (!Number.isFinite(maxTime) || maxTime <= 0) {
+    console.error(`verify-probe: --max-time must be a positive number of milliseconds
+${USAGE}`);
+    return 2;
+  }
+  if (f.run !== void 0 && (f.check || !/^[\w.:-]+$/.test(f.run))) {
+    console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}
 ${USAGE}`);
     return 2;
   }
@@ -1441,7 +1709,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs3.readFileSync(f.expected);
+    expBytes = fs4.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -1454,45 +1722,94 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
+  const outBase = f.out ?? (f.expected ? path3.join(path3.dirname(f.expected), path3.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  const statusBase = f.expected ? path3.join(path3.dirname(f.expected), path3.basename(outBase)) : "";
+  const expSha = expBytes ? sha256Of(expBytes) : void 0;
+  const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
+  const status = (w) => {
+    try {
+      writeStatus(statusBase, w);
+      return true;
+    } catch (e) {
+      if (!(e instanceof RunCacheUnwritable)) throw e;
+      console.error(`warning  ${e.message}`);
+      return false;
+    }
+  };
+  const ended = (code) => {
+    if (runId !== void 0 && (code === 3 || code === 4)) {
+      status({ runId, phase: "measuring", by: "verify-probe", detail: `probe exit ${code} \u2014 nothing written`, ...expSha ? { expectationSha256: expSha } : {} });
+    }
+    return code;
+  };
   const res = resolvePlaywright(project);
-  if (!res.ok) return rendererUnavailable(res.reason, res.hint);
-  const launched = await launch(res, project);
-  if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
-  const browser = launched.browser;
-  const identity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
-  if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
-    await browser.close();
-    console.log(`ok  ${res.pkg} ${res.version} (from ${path2.relative(project, res.file) || res.file}) \xB7 chromium ${identity.browser.version} \xB7 verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026)`);
-    return 0;
-  }
-  let run;
-  try {
-    run = await runProbe(browser, { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout });
-  } catch (e) {
+  if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
+  const measuringRecorded = runId !== void 0 && status({ runId, phase: "measuring", by: "verify-probe", detail: `verify-probe measuring ${f.url ?? ""}`, ...expSha ? { expectationSha256: expSha } : {} });
+  if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
+  const held = {};
+  let timer;
+  const watchdog = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), maxTime);
+  });
+  const work = (async () => {
+    const launched = await launch(res, project);
+    if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
+    const browser = launched.browser;
+    held.browser = browser;
+    const identity2 = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
+    if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
+      await browser.close();
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path3.relative(project, res.file) || res.file}) \xB7 chromium ${identity2.browser.version} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      return 0;
+    }
+    let run2;
+    try {
+      run2 = await runProbe(browser, { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout });
+    } catch (e) {
+      await browser.close().catch(() => void 0);
+      if (e instanceof UnreachableError) {
+        console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
+        return 4;
+      }
+      if (/Timeout .*exceeded/i.test(errMsg(e))) {
+        console.error(`verify-probe: timed out \u2014 ${errMsg(e).split("\n")[0]} \u2014 nothing written.`);
+        return 4;
+      }
+      throw e;
+    }
     await browser.close().catch(() => void 0);
-    if (e instanceof UnreachableError) {
-      console.error(`verify-probe: ${e.message} \u2014 nothing written.`);
+    if (held.timedOut) return 4;
+    if (run2.kind === "browser-gone") {
+      console.error(`verify-probe: ${run2.why} \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
       return 4;
     }
-    if (/Timeout .*exceeded/i.test(errMsg(e))) {
-      console.error(`verify-probe: timed out \u2014 ${errMsg(e).split("\n")[0]} \u2014 nothing written.`);
-      return 4;
-    }
-    throw e;
-  }
-  await browser.close().catch(() => void 0);
-  if (run.kind === "browser-gone") {
-    console.error(`verify-probe: ${run.why} \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
-    return 4;
-  }
-  if (run.kind === "navigation") {
-    console.error(`verify-probe: ${run.why} \u2014 nothing written.
+    if (run2.kind === "navigation") {
+      console.error(`verify-probe: ${run2.why} \u2014 nothing written.
   the page reloaded during measurement: move writes out of the dev-server watch tree (see verify.md), or serve a production build.
   navigation log:
-` + run.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
-    return 4;
+` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
+      return 4;
+    }
+    return { run: run2, identity: identity2 };
+  })();
+  const first = await Promise.race([work, watchdog]);
+  clearTimeout(timer);
+  if (first === "timeout") {
+    held.timedOut = true;
+    work.catch(() => void 0);
+    const b = held.browser;
+    if (b) {
+      const cap = () => sleep(CLOSE_CAP_MS, void 0, { ref: false });
+      await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
+      await Promise.race([b.close().catch(() => void 0), cap()]);
+    }
+    console.error(`verify-probe: timed out after ${maxTime / 1e3}s (--max-time) \u2014 the browser was closed, nothing written.
+  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).`);
+    return ended(4);
   }
-  const outBase = f.out ?? path2.join(path2.dirname(f.expected), path2.basename(f.expected, ".json").replace(/\.expected$/, ""));
+  if (typeof first === "number") return ended(first);
+  const { run, identity } = first;
+  if (!expectation || !expBytes || !f.expected || !f.url) return 2;
   const png = outBase + ".png";
   const r = run.result;
   const frameOut = (fr) => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
@@ -1501,8 +1818,8 @@ ${USAGE}`);
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path2.sep).join("/")],
-    expectationSha256: crypto.createHash("sha256").update(expBytes).digest("hex"),
+    artifacts: [png.split(path3.sep).join("/")],
+    expectationSha256: sha256Of(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
     ...r.frames.length > 1 ? { frames: r.frames.map(frameOut) } : {},
@@ -1511,18 +1828,33 @@ ${USAGE}`);
     nodes: r.nodes,
     notMeasured: r.notMeasured,
     components: r.components,
-    ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}
+    ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
+    ...f.run !== void 0 ? { runId: f.run } : {},
+    build: { ...run.build, ...gitState(project) }
   };
   const allNotes = [...notes, ...r.notes];
-  fs3.mkdirSync(path2.dirname(path2.resolve(outBase)), { recursive: true });
-  fs3.writeFileSync(outBase + ".measured.json", JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n");
-  fs3.writeFileSync(png, r.png);
+  const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
+  writeFileAtomic(png, r.png);
+  writeFileAtomic(outBase + ".measured.json", measuredText);
+  const statusRefused = runId !== void 0 && !status({
+    runId,
+    phase: "measured",
+    by: "verify-probe",
+    detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
+    ...expSha ? { expectationSha256: expSha } : {},
+    measuredSha256: sha256Of(measuredText)
+  });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}`);
-  console.error(`next  ${scriptCmd("verify-screen")} --compare ${f.expected} ${outBase}.measured.json --out ${outBase}`);
+  if (statusRefused && runId !== void 0) {
+    const outDir = path3.resolve(path3.dirname(outBase)), verifyDir = path3.resolve(path3.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path3.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path3.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+  }
+  console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) {
@@ -1535,6 +1867,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 }
 export {
   PLAYWRIGHT_PACKAGES,
+  buildFrom,
   errorKind,
   installHint,
   isPlaywrightModule,

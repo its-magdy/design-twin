@@ -50,6 +50,22 @@ export const TAILWIND_SOURCE_NOT_NOTE =
   `Next to \`@import "tailwindcss";\` in your CSS entry, add \`@source not "<path from that CSS file to ${DESIGN_DIR}/>";\` ` +
   `(e.g. \`@source not "../${DESIGN_DIR}";\` for src/app.css) — Tailwind v4.1+`;
 
+// F-91 (D9: suggest only). What was proven on a real Vite + Tailwind v4 app: with Tailwind's automatic source
+// detection, rewriting an existing text file under design/ makes Vite fully reload the page — the reload that aborted
+// a measurement. Either Vite's `server.watch.ignored` (chokidar options, vite.dev/config/server-options) or Tailwind's
+// `@source not` stops it. Only emitted when the project lists BOTH vite and Tailwind v4: without Tailwind scanning
+// design/, Vite reloads only for files in its module graph, which design/ is not — so the note would be noise there.
+// (The verify tools themselves write nothing under design/ while a page is open: live status + staging live in
+// node_modules/.cache/designtwin-verify/.) Never edited for the user: vite.config is theirs.
+export const VITE_WATCH_IGNORED_NOTE =
+  `With Tailwind v4's automatic source detection, rewriting an existing text file under ${DESIGN_DIR}/ (a re-export, a verify report) makes Vite fully reload the open page. ` +
+  `Either add \`server: { watch: { ignored: ['**/${DESIGN_DIR}/**'] } }\` in vite.config (merge it with any existing \`server.watch\` options), or the Tailwind \`@source not\` above — both stop it`;
+
+// F-91: design/verify/ is regenerated on every verify run (measurements, screenshots, reports); the
+// plan's waivers and descopes live in design/plan/, so ignoring it loses no decision.
+export const VERIFY_GITIGNORE_NOTE =
+  `${VERIFY_DIR}/ is regenerated on every verify run (measurements, screenshots, reports) — consider adding \`${VERIFY_DIR}/\` to .gitignore; decisions live in ${PLAN_DIR}/ and are not affected`;
+
 // The marks of an export directory, in the order a pull creates them. Used to tell "this project uses
 // the old flat layout" from "this project has no export yet", which are different problems with
 // different fixes.

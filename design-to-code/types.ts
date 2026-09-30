@@ -677,7 +677,27 @@ export interface MeasuredNode extends MeasuredStyles {
   fillSource?: "svg" | "background" | "img" | "css";
 }
 export interface MeasuredComponent { setName?: string; name?: string; nodeId?: string; present?: boolean; detail?: string; note?: string }
-export interface InteractionEvidence { nodeId: string; trigger?: string; ok?: boolean | null; result?: "not-probed"; selector?: string; selectorCount?: number; detail?: string }
+/** What an interaction visibly did (F-102) — recorded by whoever drove it, never inferred from `detail`. */
+export type InteractionOutcome = "url-changed" | "dialog-opened" | "selector-appeared" | "state-changed" | "none";
+export interface InteractionEvidence { nodeId: string; trigger?: string; ok?: boolean | null; result?: "not-probed"; selector?: string; selectorCount?: number; detail?: string;
+  /** F-102: what the interaction did — a free-text value is read as "no outcome recorded" */
+  outcome?: InteractionOutcome | (string & {});
+  /** F-102 (D24): documents LOADED in the main frame during the interaction — a reload or a cross-document navigation
+   *  (page 'load' events, or a window marker set before and gone after). An in-page URL change (pushState, a hash)
+   *  loads none: it is 0. A reload is not an outcome. */
+  navEvents?: number }
+/** measured.build (DT-81): what the probe was served — so a stale preview/dist is visible. */
+export interface BuildIdentity {
+  url: string;
+  /** vite-dev when /@vite/client was served; static when same-origin assets were and it was not */
+  mode: "vite-dev" | "static" | "unknown";
+  /** same-origin document/script/stylesheet responses hashed */
+  assets: number;
+  /** sha256 over the sorted "<path> <sha256 of body>" lines */
+  assetsSha256: string;
+  gitHead: string | null;
+  gitDirty: boolean | null;
+}
 /** The shipped probe's identity (measured.probe; copied to report.inputs.probe). */
 export interface ProbeIdentity { name: string; version: string | null; sha256: string; playwright: { package: string; version: string }; browser: { name: string; version: string } }
 /** The element the probe took as a frame root, and how it found it. */
@@ -711,6 +731,10 @@ export interface VerifyMeasured {
   matchedByCensus?: Record<string, number>;
   /** the shipped probe's run notes (settling, frame fallbacks, state measurement) — informational */
   notes?: string[];
+  /** F-72: the verify run (status v2) this measurement belongs to */
+  runId?: string;
+  /** DT-81: the build the probe was served */
+  build?: BuildIdentity;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -734,7 +758,7 @@ export interface VerifyDelta {
 }
 /** "undesigned" (D22): the destination was never exported; "descoped" (D20): the owner removed it from the graded set. */
 export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
-export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string }
+export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string; outcome?: string; navEvents?: number }
 export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string }
 /** report.inputs.code (finding 317): which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
@@ -762,10 +786,17 @@ export interface VerifyReport {
     /** the shipped probe's identity, or "unknown" for a hand-written measured.json (group 7) */
     probe?: ProbeIdentity | "unknown";
     /** the plan whose waivers/descopes were applied, and waiversHash() of them (verify-build: stale when it differs) */
-    waivers?: { plan: string; sha256: string } };
+    waivers?: { plan: string; sha256: string };
+    /** DT-81: the build the probe was served (measured.build), or "unknown" */
+    build?: BuildIdentity | "unknown";
+    /** F-72: the verify run the measured file belongs to */
+    runId?: string };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
   why?: string[];
+  /** L-1: the why[] entries that say the run itself is unverified (D26) — what --accept refuses on. Absent in reports
+   *  written before it was recorded (--accept then matches why[] by wording). */
+  integrity?: string[];
   coverage?: {
     nodesExpected: number; nodesMeasured: number; nodesNotMeasured?: number; nodesMatchedByComponentPath?: number; fieldsChecked: number;
     fieldsNotMeasured?: number; fieldsNeverMeasured?: Array<{ field: string; expectedOn: number; measuredOn: number; probeSent?: string[] }>;
@@ -800,7 +831,9 @@ export interface VerifyReport {
     /** measured node ids that match no spec, instance or hidden layer of the expectation (and no shared path) */
     measuredIdsNotInExpectation?: number; measuredIdsNotInExpectationSample?: string[];
     /** malformed optional extras of the measured file that were ignored (a hand-written `probe`, a non-list notMeasured) */
-    inputNotes?: string[] };
+    inputNotes?: string[];
+    /** DT-29: interaction results whose nodeId + trigger match no designed interaction, with a hint when one is near */
+    unmatchedInteractionEvidence?: Array<{ nodeId: string; trigger: string; hint?: string }> };
   /** D18: coverage against the previous report (the one this run overwrote, or --against) */
   against?: VerifyAgainst;
   limits?: string[];
@@ -816,6 +849,18 @@ export interface VerifyAgainst {
   probeChanged: boolean | null;
   /** null when either report lacks inputs.expectationSha256 */
   expectationChanged: boolean | null;
+  /** F-92: the previous round's deltas (nodeId + field) against this round's; lostCoverage = a previous delta whose
+   *  node is not measured now, or whose measured node lacks the value (key absent or null) — neither fixed nor still
+   *  open. H2: nowUnverifiable = a previous delta whose value WAS measured but the compare now declines it (an
+   *  impossible value, an <img> fill, a method gap) — not lost coverage; reclassified = every difference when the
+   *  measured file is the SAME as last round's (inputs.measuredSha256): the compare (or the expectation) changed, not
+   *  the build, so nothing is fixed, new or lost. */
+  deltas?: { fixed: number; new: number; unchanged: number; lostCoverage: Array<{ nodeId: string; field: string; was: JsonValue; why: string }>;
+    nowUnverifiable?: Array<{ nodeId: string; field: string; was: JsonValue; why: string }>;
+    sameMeasured?: boolean;
+    reclassified?: Array<{ nodeId: string; field: string; change: "gone" | "new"; was: JsonValue }> };
+  /** DT-81: both rounds served the same build (assetsSha256); null when either round records none */
+  sameBuild?: boolean | null;
 }
 type VerifyCoverage = NonNullable<VerifyReport["coverage"]>;
 /** report.coverage as compare() writes it (schema @2): every counter present. */
@@ -836,6 +881,7 @@ export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   verdict: VerifyVerdict;
   headline: string;
   why: string[];
+  integrity: string[];
   coverage: VerifyCoverageV2;
   summary: NonNullable<VerifyReport["summary"]>;
   deltas: VerifyDelta[];

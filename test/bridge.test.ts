@@ -754,6 +754,25 @@ void (async () => {
       return ["^3.4.1", "~3.3", "3.x", ">=3 <4"].every((r) => n(`{"devDependencies":{"tailwindcss":"${r}"}}`) === 0)
         && n('{"devDependencies":{"tailwindcss":"^4.1.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ^4.0.0"}}') === 1 && n('{"devDependencies":{"tailwindcss":"^3.0.0 || ~3.4"}}') === 0 && n('{"devDependencies":{"tailwindcss":">=3"}}') === 1 && n('{"devDependencies":{"@tailwindcss/vite":"^4"}}') === 1;
     })());
+    // F-91 (D9: suggest only): a watched write into design/ can hot-reload the page being measured.
+    // M2: proven only for vite + Tailwind v4 (its source detection is what makes Vite reload on a design/ rewrite)
+    ok("[F-91] a project listing vite AND Tailwind v4 gets ONE server.watch.ignored note naming the proven mechanism; vite alone, Tailwind v3 or no vite get none; vite.config is never written", (() => {
+      const notes = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /server: \{ watch: \{ ignored: \['\*\*\/design\/\*\*'\] \} \}/.test(a.note));
+      const n = (files: Record<string, string>) => notes(files).length;
+      const d = mk({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^4.1.0"}}', "vite.config.ts": "export default {};\n" });
+      init.apply(d, init.plan(d, { token: tok }), () => {});
+      const both = notes({ "package.json": '{"devDependencies":{"vite":"7","@tailwindcss/vite":"^4"}}' });
+      return both.length === 1 && /Tailwind v4's automatic source detection/.test(both[0]?.kind === "note" ? both[0].note : "") && /fully reload/.test(both[0]?.kind === "note" ? both[0].note : "")
+        && n({ "package.json": '{"dependencies":{"vite":"7","tailwindcss":"4"}}' }) === 1
+        && n({ "package.json": '{"devDependencies":{"vite":"7"}}' }) === 0 && n({ "package.json": '{"devDependencies":{"vite":"7","tailwindcss":"^3.4.1"}}' }) === 0
+        && n({ "package.json": '{"dependencies":{"tailwindcss":"4"}}' }) === 0 && n({}) === 0 && fs.readFileSync(path.join(d, "vite.config.ts"), "utf8") === "export default {};\n";
+    })());
+    ok("[F-91] init suggests gitignoring design/verify/ unless .gitignore already covers it", (() => {
+      const n = (files: Record<string, string>) => init.plan(mk(files), { token: tok }).filter((a) => a.kind === "note" && /consider adding `design\/verify\/` to \.gitignore/.test(a.note)).length;
+      return n({}) === 1 && n({ ".gitignore": "node_modules/\n" }) === 1 && n({ ".gitignore": "design/verify/\n" }) === 0 && n({ ".gitignore": "design/\n" }) === 0
+        && ["design/verify/**\n", "/design/verify\n", "/design/verify/\n", "design/verify/*\n", "design/verify\n"].every((g) => n({ ".gitignore": g }) === 0)
+        && n({ ".gitignore": "design/verify-old/\n" }) === 1 && n({ ".gitignore": "design/export/\n" }) === 1;
+    })());
     ok("[DT-79] init only suggests it — nothing is written into a stylesheet", (() => {
       const d = mk({ "package.json": '{"devDependencies":{"tailwindcss":"4"}}', "src/app.css": '@import "tailwindcss";\n' });
       init.apply(d, init.plan(d, { token: tok }), () => {});

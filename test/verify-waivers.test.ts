@@ -68,7 +68,8 @@ function echo(spec: VerifySpec): MeasuredNode {
 }
 type Over = Record<string, MeasuredStyles | null>; // null = not measured
 const VIEWPORT: ProbeFrame = { nodeId: "1:1", selector: "body", via: "viewport", rect: { x: 0, y: 0, w: 1280, h: 1400 } };
-const works = (nodeId: string): InteractionEvidence => ({ nodeId, trigger: "on_click", ok: true, selector: `[data-dt-node="${nodeId}"]`, selectorCount: 1 });
+// (D24/F-102: a pass needs an outcome the action produces and no navigation during it)
+const works = (nodeId: string): InteractionEvidence => ({ nodeId, trigger: "on_click", ok: true, selector: `[data-dt-node="${nodeId}"]`, selectorCount: 1, outcome: "selector-appeared", navEvents: 0 });
 function measure(over: Over = {}, extra: Partial<VerifyMeasured> = {}): VerifyMeasured {
   const nodes: MeasuredNode[] = [];
   for (const s of exp.nodes) {

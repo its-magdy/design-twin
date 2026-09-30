@@ -86,6 +86,13 @@ const isOurMcpEntry = (e: unknown): boolean => {
   return !!e && Array.isArray(args) && (args.some((a) => /(^|[\\/])figma-mcp\.(mjs|mts|ts|js)$/.test(String(a))) || (args.includes("designtwin") && args.includes("mcp")));
 };
 
+// Does package.json list vite in dependencies or devDependencies?
+function usesVite(cwd: string): boolean {
+  let raw: unknown;
+  try { raw = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as unknown; } catch { return false; }
+  return isPlainObject(raw) && [raw.dependencies, raw.devDependencies].filter(isPlainObject).some((d) => "vite" in d);
+}
+
 // Does package.json list Tailwind v4 (tailwindcss not pinned to v3, or its v4-only Vite/PostCSS plugin) in dependencies or devDependencies?
 function usesTailwind(cwd: string): boolean {
   let raw: unknown;
@@ -173,7 +180,16 @@ function plan(cwd: string, { mcp = false, mcpEntry, token }: PlanOptions): InitA
   if (ignored) actions.push({ kind: "note", note: ".gitignore ignores design/ — target.json, codeconnect.local.json, plan/ and audit/ under it are hand-authored and are NOT regenerable. Ignore only the export: replace `design/` with `design/export/`" });
 
   // DT-79 (D9: suggest only): a Tailwind project would otherwise compile class names quoted in design/.
-  if (usesTailwind(cwd)) actions.push({ kind: "note", note: LAYOUT.TAILWIND_SOURCE_NOT_NOTE });
+  const tailwind = usesTailwind(cwd);
+  if (tailwind) actions.push({ kind: "note", note: LAYOUT.TAILWIND_SOURCE_NOT_NOTE });
+
+  // F-91 (D9: suggest only): with Tailwind v4 scanning design/, a rewrite there makes Vite reload the open page
+  // (proven only for vite + Tailwind v4 — see VITE_WATCH_IGNORED_NOTE for why vite alone gets no note).
+  if (tailwind && usesVite(cwd)) actions.push({ kind: "note", note: LAYOUT.VITE_WATCH_IGNORED_NOTE });
+  // design/verify/ already ignored — any spelling: design/verify, /design/verify/, design/verify/**, design/verify/*
+  // (or the whole design/ tree, which the note above already warns about)
+  const verifyIgnored = /^\/?design(?:\/verify)?(?:\/(?:\*\*?)?)?\s*$/m.test(fs.existsSync(gi) ? fs.readFileSync(gi, "utf8") : "");
+  if (!verifyIgnored) actions.push({ kind: "note", note: LAYOUT.VERIFY_GITIGNORE_NOTE });
 
   if (mcp) {
     const file = path.join(cwd, ".mcp.json");
@@ -300,4 +316,4 @@ function main(argv: string[]): void {
   );
 }
 
-export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson, usesTailwind };
+export { detectProfile, plan, apply, main, isOurMcpEntry, readMcpJson, usesTailwind, usesVite };
