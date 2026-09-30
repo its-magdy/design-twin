@@ -41,6 +41,7 @@ import { isPageIndex, isPagesRootIndex, isPlan } from "./doc-guards.ts";
 import { readJsonOrNull } from "./read-json.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
+import { scriptCmd } from "./cli-args.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
 
 // Every file read here (pages/index.json, a page's index.json, design/plan/*.json) is checked against its
@@ -185,13 +186,13 @@ function resolveScreen(exportDir: string, query: unknown, opts?: { planDir?: str
 
 export { resolveScreen, allRows, planRows, describe, NODE_ID_RE };
 
-// CLI: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]
-// (that is the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const [exportDir, query, planDir] = process.argv.slice(2);
+// CLI: node <plugin>/scripts/resolve-screen.js <design/export dir> <name-or-id> [design/plan dir]
+// (the installed path in a consumer project; in THIS repo it is design-to-code/resolve-screen.ts).
+function main(argv: string[]): number {
+  const [exportDir, query, planDir] = argv;
   if (!exportDir || !query) {
-    console.error('usage: node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-screen.js" <design/export dir> <name-or-id> [design/plan dir]');
-    process.exit(2);
+    console.error(`usage: ${scriptCmd("resolve-screen")} <design/export dir> <name-or-id> [design/plan dir]`);
+    return 2;
   }
   const NOTITLES_NOTE =
     "note   this export's index carries no titles (pulled before title indexing) — re-pull the " +
@@ -203,21 +204,23 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (res.status === "resolved") {
     console.log(`resolved '${query}' -> ${res.row.name} (${res.row.id}) via ${res.stage}`);
     process.stdout.write(JSON.stringify(res.row, null, 2) + "\n");
-    process.exit(0);
+    return 0;
   }
   if (res.status === "ambiguous") {
     console.error(`error  '${query}' matches ${res.candidates.length} screens at the '${res.stage}' stage — pick one by node id:`);
     listCandidates(res.candidates);
-    process.exit(1);
+    return 1;
   }
   if (res.status === "needs-confirmation") {
     console.error(`error  '${query}' matched only by text search — confirm with the node id (never resolved automatically from a substring hit):`);
     listCandidates(res.candidates);
     if (res.noTitles) console.error(NOTITLES_NOTE);
-    process.exit(1);
+    return 1;
   }
   console.error(`error  '${query}' matches no screen. Known layers:`);
   listCandidates(res.candidates);
   if (res.noTitles) console.error(NOTITLES_NOTE);
-  process.exit(1);
+  return 1;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

@@ -10,7 +10,7 @@ You measure; you do not fix, and you do not decide whether the screen passes.
 That split matters. Verification used to end in a prose verdict, and three separate passes on one
 build returned "pass" while an independent measurement found a third of the sampled values wrong —
 because comparing screenshots and structure lets anything wrong-but-plausible through. Your job is
-to produce **numbers**; `verify-screen.js --compare` turns them into a verdict, and it cannot be
+to produce **numbers**; `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` turns them into a verdict, and it cannot be
 talked round.
 
 Inputs you need (ask the caller once if missing): the screen name; the **expectation file**
@@ -185,7 +185,7 @@ anything the measurement cannot express, as a `note`:
 
 Return the same object you wrote to `measured.json`, plus a short prose summary of what you looked at
 and anything under `notes`. **Do not return a verdict** — the caller runs
-`verify-screen.js --compare` and the report file decides. If you believe the screen is fine, the way
+`node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` and the report file decides. If you believe the screen is fine, the way
 to say that is a complete measurement with nothing in `notMeasured`.
 
 Never list an artifact you did not write: `--compare` checks every path in `artifacts` on disk and

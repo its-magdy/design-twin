@@ -571,15 +571,15 @@ function siblingFilesOf(f: string): string[] {
   return out;
 }
 
-function main(argv: string[]): void {
+function main(argv: string[]): number {
   const USAGE = `usage: ${scriptCmd("design-diff")} --snapshot <file.json>... [--force]\n       ${scriptCmd("design-diff")} <file.json> [--against <old.json>] [--json] [--out <file>]`;
-  if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); process.exit(argv.length ? 0 : 2); }
+  if (!argv.length || argv.includes("--help") || argv.includes("-h")) { console.error(USAGE); return argv.length ? 0 : 2; }
   const OPTIONS = { snapshot: { type: "boolean" }, against: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, force: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("design-diff", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.snapshot) {
     const force = !!flags.force;
     const requested = positionals;
-    if (!requested.length) { console.error(USAGE); process.exit(2); }
+    if (!requested.length) { console.error(USAGE); return 2; }
     // Finding 206: a snapshot of ONE file (e.g. design-system/tokens.json, or a screen's own
     // <Screen>__<id>.json) is not a copy of the export it belongs to — no .vars.json, no
     // .assets.json, no pages/index.json, and for a design-system snapshot none of its other 8
@@ -637,24 +637,24 @@ function main(argv: string[]): void {
       } catch { /* the sidecar could not be written — the copy is still the snapshot */ }
       console.log(`snapshot: ${f} -> ${path.relative(process.cwd(), dest)}${n ? ` (+ ${n} asset hash(es))` : ""}${identical ? " (unchanged)" : ""}`);
     }
-    if (refused) process.exitCode = 1; // exitCode, not exit(): let every already-printed line flush first
-    return;
+    return refused ? 1 : 0; // a returned code, not exit(): main's caller sets process.exitCode so every already-printed line flushes first
   }
   const { against, out } = flags;
   const json = !!flags.json;
   const file = positionals[0];
-  if (!file) { console.error(USAGE); process.exit(2); }
+  if (!file) { console.error(USAGE); return 2; }
   const current = readJsonFile(file, "export");
-  const failed = (e: unknown): never => {
+  const failed = (e: unknown): number => {
     // `${e.message}` verbatim: a thrown non-Error prints "undefined" here, as it did.
     const message = e && typeof e === "object" && "message" in e ? e.message : undefined;
-    console.error(`design-diff: ${file}: ${String(message)}`); process.exit(2);
+    console.error(`design-diff: ${file}: ${String(message)}`);
+    return 2;
   };
   let prev: Baseline | null = null;
-  try { prev = previous(file, against, process.cwd(), current); } catch (e) { failed(e); }
+  try { prev = previous(file, against, process.cwd(), current); } catch (e) { return failed(e); }
   if (!prev) {
-    console.error(`design-diff: nothing to compare ${file} against — no snapshot in design/.sync/, and it is not committed in git.\nNext time run \`design-diff.js --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
-    process.exit(2);
+    console.error(`design-diff: nothing to compare ${file} against — no snapshot in design/.sync/, and it is not committed in git.\nNext time run \`${scriptCmd("design-diff")} --snapshot ${file}\` BEFORE re-pulling; for now pass --against <an older copy>.`);
+    return 2;
   }
   let diff: DiffReport;
   try { diff = diffDocs(prev.doc, current, { redrawn: isScreen(current) ? redrawnAssets(file, current, prev, process.cwd()) : new Set() }); }
@@ -668,8 +668,9 @@ function main(argv: string[]): void {
   const text = json ? JSON.stringify(result, null, 2) + "\n" : markdown(result, `${file} vs ${prev.source}`);
   if (out) { fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true }); fs.writeFileSync(out, text); console.log(`wrote ${out} — ${JSON.stringify(result.summary)}${result.warnings.length ? ` — ${result.warnings.length} warning(s), read them` : ""}`); }
   else process.stdout.write(text);
+  return 0;
 }
 
-if (import.meta.main ?? isMainFallback(import.meta.url)) main(process.argv.slice(2));
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 
 export { diffScreens, diffTokens, diffCatalog, diffStyles, diffHygiene, diffManifest, diffDocs, markdown, snapshotPath, previous, redrawnAssets, assetHashes };

@@ -69,7 +69,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 export function isAuditReport(x: unknown): x is AuditReport {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 
 // ---------------------------------------------------------------- cross-check / audit report: componentProposals[]
 function isProposal(x: unknown): x is ComponentProposal {
@@ -100,7 +100,7 @@ export function isVerifyExpectation(x: unknown): x is Expectation {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string")
     && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, …}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, …}";
 
 /** <Screen>.measured.json — the probe's output. Every list optional; the lists that are there must be lists. */
 export function isVerifyMeasured(x: unknown): x is VerifyMeasured {
@@ -124,7 +124,7 @@ export function isVerifyReport(x: unknown): x is VerifyReport {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline)
     && (x.why === undefined || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 
 // ---------------------------------------------------------------- design/plan/<screen>.json
 // A plan is written by plan-skeleton.js and then FILLED by a model or a person, so it is the one document
@@ -156,7 +156,7 @@ function planProblem(x: unknown): string | null {
 export function isPlan(x: unknown): x is Plan {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 /** A plan, or the reason it is not one (one line, naming the field). */
 export function parsePlan(x: unknown): { plan: Plan } | { error: string } {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };

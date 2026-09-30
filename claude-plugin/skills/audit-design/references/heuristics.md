@@ -1,6 +1,6 @@
 # Automated checks — what `audit.js` computes, how to read it, how to do it by hand
 
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/audit.js" <screen.json>... --platform <p> [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
+`node "<scripts>/audit.js" <screen.json>... --platform <p> [--catalog components.local.json] [--grid 4] [--out design/audit/<screen>] [--json] [--gate]`
 
 Output: `summary {blockers, warnings, info}`, `tokenBinding {color, typography, spacing, radius, effects}`
 (`bound/total/pct`), `components[]` (state coverage), `screenStates {loading, empty, error}`,

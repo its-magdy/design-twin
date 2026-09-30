@@ -841,9 +841,11 @@ check("[manifest-guard] junk/undefined input does not throw or false-positive",
     const r = run("drift-lint.ts", ["map.json", goodCat, "--max-age", "-5"]);
     return r.status === 2 && /--max-age expects a positive number of hours/.test(r.stderr);
   })());
-  check("[usage] the usage line names the installed command (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js), not a repo path",
-    /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/drift-lint\.js"/.test(run("drift-lint.ts", []).stderr)
-    && /usage: node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/tokens\.js"/.test(run("tokens.ts", ["--help"]).stdout));
+  // DT-15/F-28: the usage line is text the model copies into Bash, where ${CLAUDE_PLUGIN_ROOT} is empty — so it
+  // names the script by the real path it is running from (here, the source; installed, the bundle).
+  check("[usage] the usage line names the script by its real path (node \"<its own folder>/<name>\"), not ${CLAUDE_PLUGIN_ROOT}",
+    run("drift-lint.ts", []).stderr.includes(`usage: node "${path.join(D2C, "drift-lint.ts")}"`)
+    && run("tokens.ts", ["--help"]).stdout.includes(`usage: node "${path.join(D2C, "tokens.ts")}"`));
 })();
 
 // ---------- tokens: the export's colour profile (the plugin writes Figma's DISPLAY_P3 lowercased: "display_p3") ----------
@@ -1246,6 +1248,106 @@ console.log("map — SLOT props:");
   }
   check("[313] no skill/agent doc quotes the repo-relative design-to-code/ path — every script is ${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js" +
     (offenders.length ? " — offenders: " + offenders.join(", ") : ""), offenders.length === 0);
+})();
+
+// ---------- DT-15 / F-28: every script command resolves to a real path ------------------------------
+// `${CLAUDE_PLUGIN_ROOT}` is substituted into skill/agent Markdown when Claude Code loads it, but it is not
+// an environment variable in the Bash tool, a skill preloaded into an agent kept it literal, and a
+// references/*.md opened with Read is never substituted — so commands built on it ran with an empty path in
+// both field runs. No bin/ launcher: claude.ai and Cowork refuse a plugin with a top-level bin/
+// (https://code.claude.com/docs/en/plugins-reference, "Standard layout"). Instead: skill/agent bodies say
+// `${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js` (substituted there), references/profiles say `<scripts>/…`
+// defined by their SKILL.md, the agent that preloads a skill names the folder itself, and every usage line
+// or printed hint carries the script's own real path.
+(() => {
+  const PLUGIN_ROOT = path.join(import.meta.dirname, "..", "claude-plugin");
+  const REPO = path.join(PLUGIN_ROOT, "..");
+  const SCRIPTS = path.join(PLUGIN_ROOT, "scripts");
+  const entries = fs.readdirSync(SCRIPTS).filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3));
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith(".md") ? [path.join(d, e.name)] : []);
+  const docs = [...walk(path.join(PLUGIN_ROOT, "skills")), ...walk(path.join(PLUGIN_ROOT, "agents"))];
+  const isBody = (f: string) => path.basename(f) === "SKILL.md" || f.includes(`${path.sep}agents${path.sep}`);
+  const lines = (f: string) => fs.readFileSync(f, "utf8").split("\n");
+
+  check("[DT-15] the plugin has no top-level bin/ (claude.ai and Cowork refuse to install such a plugin)", !fs.existsSync(path.join(PLUGIN_ROOT, "bin")));
+
+  const unknown: string[] = [], rootInReadFile: string[] = [], undefinedPlaceholder: string[] = [];
+  for (const f of docs) {
+    const rel = path.relative(PLUGIN_ROOT, f);
+    lines(f).forEach((line, i) => {
+      for (const m of line.matchAll(/(?:\$\{CLAUDE_PLUGIN_ROOT\}|<scripts>)\/scripts\/([a-z][a-z0-9-]*)\.js|<scripts>\/([a-z][a-z0-9-]*)\.js/g)) {
+        const n = m[1] ?? m[2] ?? "";
+        if (!entries.includes(n)) unknown.push(`${rel}:${i + 1} ${n}`);
+      }
+      if (!isBody(f) && line.includes("${CLAUDE_PLUGIN_ROOT}")) rootInReadFile.push(`${rel}:${i + 1}`);
+    });
+  }
+  // A read-as-is file that says <scripts>/<plugin> needs EVERY SKILL.md that sends the model to it — its own
+  // skill's, and any other skill that loads it by name (sync-design and audit-design load build-screen's
+  // profiles and export-layout.md; extract loads help's troubleshooting.md) — to say what that means.
+  const placeholderFiles = docs.filter((f) => !isBody(f)).map((f) => {
+    const text = fs.readFileSync(f, "utf8");
+    return { f, rel: path.relative(PLUGIN_ROOT, f), scripts: text.includes("<scripts>"), plugin: text.includes("<plugin>/") };
+  }).filter((x) => x.scripts || x.plugin);
+  for (const skillMd of docs.filter((f) => path.basename(f) === "SKILL.md")) {
+    const def = fs.readFileSync(skillMd, "utf8");
+    const own = path.dirname(skillMd);
+    for (const pf of placeholderFiles) {
+      const isProfile = pf.rel.split(path.sep).includes("profiles");
+      const loads = pf.f.startsWith(own + path.sep) || def.includes(path.basename(pf.f)) || (isProfile && def.includes("profiles/"));
+      if (!loads) continue;
+      const where = `${path.relative(PLUGIN_ROOT, skillMd)} → ${pf.rel}`;
+      if (pf.scripts && !(def.includes("`<scripts>`") && def.includes("${CLAUDE_PLUGIN_ROOT}/scripts"))) undefinedPlaceholder.push(`${where} (<scripts>)`);
+      if (pf.plugin && !(def.includes("`<plugin>`") && def.includes("${CLAUDE_PLUGIN_ROOT}"))) undefinedPlaceholder.push(`${where} (<plugin>)`);
+    }
+  }
+  check("[DT-15] every script a doc names (${CLAUDE_PLUGIN_ROOT}/scripts/<name>.js or <scripts>/<name>.js) is one the plugin ships" + (unknown.length ? " — " + unknown.join(", ") : ""), unknown.length === 0);
+  check("[DT-15] no references/ or profiles/ file relies on ${CLAUDE_PLUGIN_ROOT} (a file opened with Read is never substituted)" +
+    (rootInReadFile.length ? " — " + rootInReadFile.join(", ") : ""), rootInReadFile.length === 0);
+  check("[DT-15] every SKILL.md that loads a file using <scripts>/<plugin> (its own or another skill's) defines it as the substituted plugin path" +
+    (undefinedPlaceholder.length ? " — " + undefinedPlaceholder.join(", ") : ""), undefinedPlaceholder.length === 0);
+  // F-28: the agent that PRELOADS build-screen (whose body then stays literal) names the folder in its own,
+  // substituted prompt.
+  const builder = fs.readFileSync(path.join(PLUGIN_ROOT, "agents", "screen-builder.md"), "utf8");
+  check("[F-28] screen-builder preloads build-screen and names the scripts folder itself (${CLAUDE_PLUGIN_ROOT}/scripts/ in its own prompt)",
+    /skills:\s*\n\s*-\s*build-screen/.test(builder) && builder.split("---").slice(2).join("---").includes("${CLAUDE_PLUGIN_ROOT}/scripts/"));
+
+  // Sources: usage lines and printed hints give the real path; nothing prints the unsubstituted variable,
+  // and no hint names a bare `<script>.js` (command not found in a consumer project).
+  const D2C_DIR = path.join(REPO, "design-to-code");
+  const NAMES = entries.join("|");
+  const bare = new RegExp("(?<![\\w/.-])(" + NAMES + ")\\.js\\b");
+  // verify-screen's expectation `note` is written into every <screen>.expected.json: its text is part of the
+  // file's sha256 (reports and probes record it), so it keeps its original wording.
+  const DATA_TEXT = ["with `verify-screen.js --compare`; the probe's field names"];
+  const inSources: string[] = [], hints: string[] = [];
+  for (const f of fs.readdirSync(D2C_DIR).filter((x) => x.endsWith(".ts"))) {
+    lines(path.join(D2C_DIR, f)).forEach((line, i) => {
+      if (/\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//.test(line)) inSources.push(`${f}:${i + 1}`);
+      const s = line.trimStart();
+      if (/^(\/\/|\*|\/\*|import )/.test(s) || line.includes("GENERATED by Design Twin") || DATA_TEXT.some((d) => line.includes(d))) return;
+      if (bare.test(line.split(" // ")[0] ?? "")) hints.push(`${f}:${i + 1}`);
+    });
+  }
+  check("[DT-15] no design-to-code source prints ${CLAUDE_PLUGIN_ROOT}/scripts/… (usage and hints use scriptCmd → the real path)" +
+    (inSources.length ? " — " + inSources.join(", ") : ""), inSources.length === 0);
+  check("[DT-15] no script output tells the model to run a bare `<script>.js`" + (hints.length ? " — " + hints.join(", ") : ""), hints.length === 0);
+
+  // The shipped bundles print THEIR OWN folder: run from an unrelated cwd, the usage path and a sibling
+  // script named in a hint both exist.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dt-paths-"));
+  const help = spawnSync(process.execPath, [path.join(SCRIPTS, "tokens.js"), "--help"], { cwd: tmp, encoding: "utf8" });
+  const usagePath = /usage: node "([^"]+)"/.exec(help.stdout)?.[1];
+  check("[DT-15] the shipped tokens.js --help prints its own real path (node \"…/scripts/tokens.js\"), from any cwd",
+    help.status === 0 && usagePath === path.join(SCRIPTS, "tokens.js") && fs.existsSync(usagePath));
+  fs.writeFileSync(path.join(tmp, "map.json"), "{}");
+  fs.writeFileSync(path.join(tmp, "cat.json"), JSON.stringify({ components: [] }));
+  const lint = spawnSync(process.execPath, [path.join(SCRIPTS, "drift-lint.js"), "map.json", "cat.json"], { cwd: tmp, encoding: "utf8" });
+  const hintPath = /node "([^"]+map-validate\.js)"/.exec(lint.stderr)?.[1];
+  check("[DT-15] a hint the shipped drift-lint.js prints names the sibling script by its real path (…/scripts/map-validate.js)",
+    hintPath === path.join(SCRIPTS, "map-validate.js") && fs.existsSync(hintPath));
+  fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
 report();

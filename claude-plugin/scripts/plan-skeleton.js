@@ -3,7 +3,7 @@
 
 // design-to-code/plan-skeleton.ts
 import fs4 from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // design-to-code/types.ts
 function isJsonObject(x) {
@@ -224,18 +224,18 @@ var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in no
 var isHidden = (node, ancestorHidden) => !!ancestorHidden || hiddenSelf(node);
 function walkWithHidden(root, fn, opts) {
   const pathOf = opts && opts.pathOf || ((n, i) => n.name || n.type || String(i));
-  (function go(node, parentHidden, path3, parent, depth) {
+  (function go(node, parentHidden, path4, parent, depth) {
     if (!node || typeof node !== "object") return;
     const hidden = isHidden(node, parentHidden);
-    fn(node, { hidden, parentHidden: !!parentHidden, path: path3, parent, depth });
+    fn(node, { hidden, parentHidden: !!parentHidden, path: path4, parent, depth });
     const kids = Array.isArray(node.children) ? node.children : [];
-    for (const [i, kid] of kids.entries()) go(kid, hidden, (path3 ? path3 + " > " : "") + pathOf(kid, i), node, depth + 1);
+    for (const [i, kid] of kids.entries()) go(kid, hidden, (path4 ? path4 + " > " : "") + pathOf(kid, i), node, depth + 1);
   })(root, false, root ? pathOf(root, 0) : "", null, 0);
 }
 
 // design-to-code/audit-gate.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 
 // design-to-code/color.ts
 var HEX = /^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
@@ -346,7 +346,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -368,7 +368,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -383,7 +383,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -407,7 +407,7 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function parsePlan(x) {
   return isPlan(x) ? { plan: x } : { error: planProblem(x) || "is not a plan" };
 }
@@ -417,8 +417,12 @@ function isStringRecord(x) {
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -465,74 +469,19 @@ ${usage}`);
 
 // bridge/src/is-main.ts
 import fs2 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath(metaUrl));
+    return fs2.realpathSync(argv1) === fs2.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
 }
 
 // design-to-code/cross-check.ts
-if (false) {
-  const argv = process.argv.slice(2);
-  const USAGE2 = `usage: ${scriptCmd2("cross-check")} <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
-  const OPTIONS = {
-    "design-system": { type: "string" },
-    variables: { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    gate: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
-  };
-  const { values: flags, positionals: files } = cliParse2("cross-check", argv, OPTIONS, USAGE2, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) {
-    console.log(USAGE2);
-    process.exit(0);
-  }
-  if (!files.length) {
-    console.error(USAGE2);
-    process.exit(2);
-  }
-  const { "design-system": dsDir, variables: varsFile, out } = flags;
-  const jsonOnly = !!flags.json, gate = !!flags.gate;
-  const ctx = variablesContext(files, varsFile);
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const dsBase = dsDir || "design/design-system";
-  const { variablesPath, variablesDoc } = ctx;
-  if (variablesPath) console.error(`variables: ${variablesPath}`);
-  if (ctx.staleLegacy) {
-    console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  }
-  const res = crossCheck({
-    screens,
-    sliceSources: ctx.sliceSources,
-    variables: variablesDoc,
-    variablesPath,
-    tokens: readOptionalDoc(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc2),
-    components: readOptionalDoc(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog2),
-    componentsLibrary: readOptionalDoc(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog2),
-    stylesText: readOptionalDoc(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc2)
-  });
-  if (jsonOnly) {
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (out) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(out + ".md", toMarkdown(res));
-    console.error(`wrote ${out}.json and ${out}.md`);
-  } else {
-    process.stdout.write(toMarkdown(res));
-  }
-  console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-  for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-}
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/audit.ts
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
@@ -541,108 +490,25 @@ function blockerIds(auditDoc) {
   const findings = auditDoc && typeof auditDoc === "object" && "findings" in auditDoc && Array.isArray(auditDoc.findings) ? auditDoc.findings : [];
   return findings.filter((f) => !!f && typeof f === "object" && "severity" in f && f.severity === "blocker").map((f, i) => `${f.code || "blocker"}#${i}`);
 }
-if (false) {
-  const argv = process.argv.slice(2);
-  const USAGE2 = `usage: ${scriptCmd3("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]
-       [--design-system design/design-system] [--variables design/variables.json]
-       [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
-  --design-system turns on the cross-FILE pass (does this screen come from that design system?).
-  Without it every token-binding % below means "binds SOME variable", not "matches your design system".
-  --out defaults to design/audit/<input file's own basename> \u2014 the same <LayerName>__<node-id>
-  name write-out.js gave the screen file, so re-auditing the same screen always lands on the same
-  report pair instead of a new name each run. Refuses (exit 1) if an existing report in the same
-  directory already covers this node under a DIFFERENT name \u2014 pass --force to write a second one.`;
-  const OPTIONS = {
-    platform: { type: "string" },
-    catalog: { type: "string" },
-    "design-system": { type: "string" },
-    variables: { type: "string" },
-    grid: { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    gate: { type: "boolean" },
-    force: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
-  };
-  const { values: flags, positionals: files } = cliParse3("audit", argv, OPTIONS, USAGE2, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) {
-    console.log(USAGE2);
-    process.exit(0);
-  }
-  const firstFile = files[0];
-  if (firstFile === void 0) {
-    console.error(USAGE2);
-    process.exit(2);
-  }
-  const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
-  const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
-  if (platform && !PLATFORMS.includes(platform)) {
-    console.error(`--platform must be one of ${PLATFORMS.join(", ")}`);
-    process.exit(2);
-  }
-  const grid = gridArg === void 0 ? void 0 : Number(gridArg);
-  if (grid !== void 0 && !(Number.isFinite(grid) && grid > 0)) {
-    console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`);
-    process.exit(2);
-  }
-  const ctx = variablesContext2(files, varsFile, { sliceFallback: true });
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog3, "components", "design-system/components.local.json") : void 0;
-  const designSystem = dsDir ? {
-    tokens: readOptionalDoc2(path.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc3),
-    ...ifDefined("components", readOptionalDoc2(path.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog3) || catalog),
-    componentsLibrary: readOptionalDoc2(path.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog3),
-    stylesText: readOptionalDoc2(path.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc3)
-  } : void 0;
-  const variables = ctx.variablesDoc;
-  if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
-  const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path.join("design", "audit", path.basename(firstFile, ".json"));
-  if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
-    if (dup && !force) {
-      console.error(
-        `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
-      );
-      process.exit(1);
-    }
-  }
-  if (jsonOnly) {
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (outBase) {
-    fs.mkdirSync(path.dirname(outBase), { recursive: true });
-    fs.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(outBase + ".md", md);
-    console.error(`wrote ${outBase}.json and ${outBase}.md`);
-  } else {
-    process.stdout.write(md);
-  }
-  if (res.platformAssumed) console.error("warn  no --platform given \u2014 assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
-  if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-  for (const n of res.crossFile && res.crossFile.notChecked || []) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-}
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/audit-gate.ts
 function slug(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 function locateAuditFile(cwd, screenFile, screenName) {
-  const dir = path.join(cwd, "design", "audit");
+  const dir = path2.join(cwd, "design", "audit");
   if (!fs3.existsSync(dir)) return null;
-  const base = screenFile ? path.basename(screenFile, ".json") : null;
+  const base = screenFile ? path2.basename(screenFile, ".json") : null;
   const candidates = [];
-  if (base) candidates.push(path.join(dir, base + ".json"));
+  if (base) candidates.push(path2.join(dir, base + ".json"));
   let entries = [];
   try {
     entries = fs3.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
     entries = [];
   }
-  for (const c of candidates) if (fs3.existsSync(c)) return path.relative(cwd, c).split(path.sep).join("/");
+  for (const c of candidates) if (fs3.existsSync(c)) return path2.relative(cwd, c).split(path2.sep).join("/");
   const wantSlug = slug(screenName);
   if (wantSlug) {
     const stem = (f) => f.replace(/\.json$/, "");
@@ -655,14 +521,14 @@ function locateAuditFile(cwd, screenFile, screenName) {
       const n = nameOf(f);
       return n !== null && slug(n) === wantSlug;
     });
-    if (hit) return path.relative(cwd, path.join(dir, hit)).split(path.sep).join("/");
+    if (hit) return path2.relative(cwd, path2.join(dir, hit)).split(path2.sep).join("/");
   }
   return null;
 }
 function auditGateStatus(cwd, screenFile, screenName) {
   const rel = locateAuditFile(cwd, screenFile, screenName);
   if (!rel) return { auditFile: null, blockers: [] };
-  const r = readJson(path.join(cwd, rel), isAuditReport);
+  const r = readJson(path2.join(cwd, rel), isAuditReport);
   if (!("doc" in r)) return { auditFile: rel, blockers: [], unreadable: true, error: r.error };
   return { auditFile: rel, blockers: blockerIds(r.doc) };
 }
@@ -698,7 +564,7 @@ var optStrings = (obj, keys, at, err) => {
 };
 function validateMap(map) {
   const errors = [];
-  const err = (path3, message) => errors.push({ path: path3, message });
+  const err = (path4, message) => errors.push({ path: path4, message });
   if (!isObj2(map)) return { ok: false, errors: [{ path: "", message: "map must be an object" }] };
   noExtra(map, KEYS.root, "", err);
   if (map.version !== 1) err("version", "must be 1");
@@ -801,29 +667,8 @@ function validateProp(p, at, err) {
 function isCodeConnectMap(x) {
   return validateMap(x).ok;
 }
-isCodeConnectMap.expected = "a valid component map (map-validate.js <file> lists what is wrong with it)";
-if (false) {
-  const file = process.argv[2];
-  const USAGE2 = `usage: ${scriptCmd4("map-validate")} <map.json>`;
-  if (file === "--help" || file === "-h") {
-    console.log(USAGE2);
-    process.exit(0);
-  }
-  if (!file || file.startsWith("-")) {
-    console.error((file ? `map-validate: unknown flag ${file}
-` : "") + USAGE2);
-    process.exit(1);
-  }
-  const res = validateMap(readJsonFile(file, "component map"));
-  if (res.ok) {
-    console.log("map valid");
-    process.exit(0);
-  }
-  res.errors.forEach((e) => console.error(`  ${e.path || "(root)"}: ${e.message}`));
-  console.error(`
-${res.errors.length} error(s)`);
-  process.exit(1);
-}
+isCodeConnectMap.expected = "a valid component map (the map-validate script lists what is wrong with it)";
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/plan-skeleton.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -1116,7 +961,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   for (const [id, v] of vis.visible) anchors[id] = { name: v.node.name, type: v.node.type, parent: v.parentId, mapModule: "" };
   const nodeId = exp && exp.nodeId || root && root.id || null;
   const title = indexRow && indexRow.title;
-  const rel = screenFile ? path2.relative(cwd || process.cwd(), path2.resolve(screenFile)).split(path2.sep).join("/") : null;
+  const rel = screenFile ? path3.relative(cwd || process.cwd(), path3.resolve(screenFile)).split(path3.sep).join("/") : null;
   const screenName = String(title || exp && exp.screen || root && root.name || "").trim() || null;
   let auditGate = null;
   try {
@@ -1128,7 +973,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
   }
   return {
     schema: "designtwin/plan@2",
-    screen: screenFile ? path2.basename(screenFile).replace(/\.json$/, "") : null,
+    screen: screenFile ? path3.basename(screenFile).replace(/\.json$/, "") : null,
     screenName,
     nodeId,
     route: route || null,
@@ -1202,8 +1047,8 @@ function merge(fresh, prev) {
 }
 var isIndexDoc = (x) => isPagesRootIndex(x) || isPageIndex(x);
 function findIndexRow(screenFile, nodeId) {
-  const dir = path2.dirname(path2.resolve(screenFile));
-  for (const idx of [path2.join(dir, "..", "index.json"), path2.join(dir, "index.json")]) {
+  const dir = path3.dirname(path3.resolve(screenFile));
+  for (const idx of [path3.join(dir, "..", "index.json"), path3.join(dir, "index.json")]) {
     const d = readJsonOrNull(idx, isIndexDoc);
     const hit = (d && d.layers || []).find((r) => r.id === nodeId);
     if (hit) return hit;
@@ -1236,13 +1081,13 @@ function main(argv) {
   if (!hasDs) console.error(`plan-skeleton: no design-system directory at ${dsDir} \u2014 token values come from the screen's own .vars.json, and no catalog match was attempted (components[].catalog is null)`);
   const optional = (file, guard) => {
     if (!hasDs) return { doc: null };
-    const r = readJson(path2.join(dsDir, file), guard);
+    const r = readJson(path3.join(dsDir, file), guard);
     return "doc" in r ? r : r.missing ? { doc: null } : { error: r.error };
   };
   const dsRead = optional("tokens.json", isTokensDoc), catRead = optional("components.local.json", isComponentsCatalog), libRead = optional("components.library.json", isComponentsCatalog);
-  if ("error" in dsRead) return cannotRead("the design system's tokens", path2.join(dsDir, "tokens.json"), dsRead.error);
-  if ("error" in catRead) return cannotRead("the component catalog", path2.join(dsDir, "components.local.json"), catRead.error);
-  if ("error" in libRead) return cannotRead("the library component catalog", path2.join(dsDir, "components.library.json"), libRead.error);
+  if ("error" in dsRead) return cannotRead("the design system's tokens", path3.join(dsDir, "tokens.json"), dsRead.error);
+  if ("error" in catRead) return cannotRead("the component catalog", path3.join(dsDir, "components.local.json"), catRead.error);
+  if ("error" in libRead) return cannotRead("the library component catalog", path3.join(dsDir, "components.library.json"), libRead.error);
   const mapFile = mapFlag || ["design/codeconnect.local.json", "codeconnect.local.json"].find((f) => fs4.existsSync(f));
   let mapKeys = /* @__PURE__ */ new Map();
   if (mapFile) {
@@ -1265,7 +1110,7 @@ function main(argv) {
     }
     const prev = parsed && "plan" in parsed ? parsed.plan : null;
     const { plan, dropped } = merge(fresh, prev);
-    fs4.mkdirSync(path2.dirname(path2.resolve(out)), { recursive: true });
+    fs4.mkdirSync(path3.dirname(path3.resolve(out)), { recursive: true });
     fs4.writeFileSync(out, JSON.stringify(plan, null, 2) + "\n");
     console.error(`plan-skeleton: ${prev ? "merged into" : "wrote"} ${out}` + (prev ? ` (kept every filled field; dropped ${dropped.tokens} token row(s), ${dropped.components} component row(s), ${dropped.anchors} anchor(s) no longer in the export)` : ""));
   }

@@ -3,7 +3,7 @@
 
 // design-to-code/audit.ts
 import fs5 from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -413,7 +413,7 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 function isAuditReport(x) {
   return isObj(x) && isObj(x.summary) && Array.isArray(x.findings) && x.findings.every((f) => isObj(f) && typeof f.severity === "string" && typeof f.code === "string");
 }
-isAuditReport.expected = "an audit report (audit.js --out): an object with `summary` and a `findings` array of {severity, code, message}";
+isAuditReport.expected = "an audit report (written by the audit script's --out): an object with `summary` and a `findings` array of {severity, code, message}";
 function isProposal(x) {
   return isObj(x) && typeof x.name === "string";
 }
@@ -435,7 +435,7 @@ isPageIndex.expected = "a page index (pages/<Page>/index.json): an object with a
 function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
-isVerifyExpectation.expected = "a verify expectation (verify-screen.js --expect): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
+isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
 function isVerifyMeasured(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
 }
@@ -450,7 +450,7 @@ isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nod
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
-isVerifyReport.expected = "a verify report (verify-screen.js --compare): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
+isVerifyReport.expected = "a verify report (the verify-screen script's --compare output): an object with `verdict`, `why[]`, `deltas[]`, `inputs`";
 var PLAN_ARRAYS = ["files", "tokens", "components", "hidden", "deviations", "allowedLiterals"];
 var PLAN_OBJECTS = ["anchors", "verification", "counts"];
 var PLAN_STRINGS = ["schema", "screen", "screenName", "nodeId", "route", "file", "exportedAt", "status"];
@@ -474,15 +474,19 @@ function planProblem(x) {
 function isPlan(x) {
   return planProblem(x) === null;
 }
-isPlan.expected = "a plan (plan-skeleton.js): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
+isPlan.expected = "a plan (started by the plan-skeleton script): an object whose files/tokens/components/deviations are arrays of objects and whose anchors/verification are objects";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
 // design-to-code/cli-args.ts
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-var scriptCmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+var SELF = fileURLToPath(import.meta.url);
+var shellQuote = (p) => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+var scriptCmd = (name) => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 function errCode(e) {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : void 0;
 }
@@ -529,7 +533,7 @@ ${usage}`);
 
 // design-to-code/slice-sources.ts
 import fs3 from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 function sourcesOf(doc, docPath) {
   const out = /* @__PURE__ */ new Map();
   const add = (key, screen) => {
@@ -538,12 +542,12 @@ function sourcesOf(doc, docPath) {
     if (!list.includes(screen)) list.push(screen);
     out.set(key, list);
   };
-  const base = docPath ? path.dirname(docPath) : ".";
+  const base = docPath ? path2.dirname(docPath) : ".";
   for (const sl of doc && Array.isArray(doc._slices) ? doc._slices : []) {
     if (!sl) continue;
     let read = false;
     if (typeof sl.file === "string") {
-      const slice = readJsonOrNull(path.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
+      const slice = readJsonOrNull(path2.join(base, sl.file.replace(/\.json$/, ".vars.json")), isTokensDoc);
       if (slice) {
         for (const v of slice.variables || []) add(v.key, sl.screen);
         read = true;
@@ -555,7 +559,7 @@ function sourcesOf(doc, docPath) {
     for (const vr of c && "variants" in c && c.variants || []) for (const sc of vr.screens || []) add(vr.key, sc);
   }
   if (!out.size && docPath && /\.vars\.json$/.test(docPath)) {
-    for (const v of doc && doc.variables || []) add(v.key, path.basename(docPath, ".vars.json"));
+    for (const v of doc && doc.variables || []) add(v.key, path2.basename(docPath, ".vars.json"));
   }
   return out;
 }
@@ -573,9 +577,9 @@ function variablesContext(screenFiles, varsFile, opts) {
   let variablesPath = varsFile || null;
   const firstFile = files[0];
   if (!variablesPath && firstFile !== void 0) {
-    const exportRoot = path.resolve(path.dirname(firstFile), "..", "..");
-    const rootVars = path.join(exportRoot, "variables.json");
-    const sibling = path.join(path.dirname(firstFile), "variables.json");
+    const exportRoot = path2.resolve(path2.dirname(firstFile), "..", "..");
+    const rootVars = path2.join(exportRoot, "variables.json");
+    const sibling = path2.join(path2.dirname(firstFile), "variables.json");
     if (fs3.existsSync(rootVars)) variablesPath = rootVars;
     else if (fs3.existsSync(sibling)) variablesPath = sibling;
     else if (opts && opts.sliceFallback && files.length === 1 && own[0]) variablesPath = String(firstFile).replace(/\.json$/, ".vars.json");
@@ -583,20 +587,20 @@ function variablesContext(screenFiles, varsFile, opts) {
   const variablesDoc = readTokens(variablesPath);
   let staleLegacy = null;
   if (firstFile !== void 0) {
-    const legacy = path.join(path.resolve(path.dirname(firstFile), "..", ".."), "..", "variables.json");
-    if (fs3.existsSync(legacy) && path.resolve(legacy) !== path.resolve(variablesPath || "")) staleLegacy = legacy;
+    const legacy = path2.join(path2.resolve(path2.dirname(firstFile), "..", ".."), "..", "variables.json");
+    if (fs3.existsSync(legacy) && path2.resolve(legacy) !== path2.resolve(variablesPath || "")) staleLegacy = legacy;
   }
   return { own, variablesPath, variablesDoc, sliceSources: variablesDoc ? sourcesOf(variablesDoc, variablesPath) : null, staleLegacy, invalid };
 }
 
 // bridge/src/is-main.ts
 import fs4 from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function isMainFallback(metaUrl) {
   try {
     const argv1 = process.argv[1];
     if (!argv1) return false;
-    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath(metaUrl));
+    return fs4.realpathSync(argv1) === fs4.realpathSync(fileURLToPath2(metaUrl));
   } catch {
     return false;
   }
@@ -933,7 +937,7 @@ function crossCheck(input) {
       push(
         "blocker",
         "catalog-rekeyed",
-        `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in components.local.json` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run \`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+        `0 of ${s.names} component(s) on this screen resolve to components.local.json by key, but ${s.proposed} of the ${s.withCandidates} whose NAME is in the catalog also match it by prop signature (variant axes + values, prop names + types)${s.remote ? `, and ${s.remote} of the ${s.instances} visible instance(s) say remote:true` : ""}. That is not a foreign library \u2014 it is the SAME components under new keys: one or both Figma files are duplicates (duplicating a file re-mints every component key), or the library was re-published. Proposed matches (confirm each before reuse \u2014 nothing is auto-accepted): ` + props.slice(0, 12).map((r) => `'${r.name}' \u2192 ${r.match.id}${r.evidence === "name+no-props" ? " (no props to compare \u2014 weaker)" : ""}${r.tie === "duplicate-definitions" ? " (duplicate definitions, harmless tie)" : ""}`).join(", ") + (props.length > 12 ? `, \u2026 (${props.length} in all \u2014 see componentProposals)` : "") + `. ${residual.length} name(s) are not in components.local.json` + (buckets.libraryKey + buckets.nameOnly ? ` \u2014 of the table's rows, ${buckets.libraryKey + buckets.nameOnly} are third-party components.library.json matches and ${buckets.newWork} new work` : ` and stay new work`) + (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", \u2026" : ""})` : "") + `. To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run the map-bootstrap script (\`<components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\`) \u2014 it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
         { rekey: s, proposals: props.length }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
@@ -974,9 +978,9 @@ function crossCheck(input) {
     }
   }
   const sorted = [...fonts.entries()].sort((a, b) => b[1] - a[1]);
-  const [main, ...strays] = sorted;
-  if (fonts.size > 1 && main) {
-    const [mainFamily, mainCount] = main;
+  const [main2, ...strays] = sorted;
+  if (fonts.size > 1 && main2) {
+    const [mainFamily, mainCount] = main2;
     const total = sorted.reduce((n, [, c]) => n + c, 0);
     push(
       "warning",
@@ -1202,62 +1206,7 @@ function walkWithBg(node, bgToken, fn) {
   fn(node, bg);
   for (const c of node.children || []) walkWithBg(c, bg, fn);
 }
-if (false) {
-  const argv = process.argv.slice(2);
-  const USAGE = `usage: ${scriptCmd2("cross-check")} <screen.json>... [--design-system design/design-system] [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]`;
-  const OPTIONS = {
-    "design-system": { type: "string" },
-    variables: { type: "string" },
-    out: { type: "string" },
-    json: { type: "boolean" },
-    gate: { type: "boolean" },
-    help: { type: "boolean", short: "h" }
-  };
-  const { values: flags, positionals: files } = cliParse2("cross-check", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) {
-    console.log(USAGE);
-    process.exit(0);
-  }
-  if (!files.length) {
-    console.error(USAGE);
-    process.exit(2);
-  }
-  const { "design-system": dsDir, variables: varsFile, out } = flags;
-  const jsonOnly = !!flags.json, gate = !!flags.gate;
-  const ctx = variablesContext2(files, varsFile);
-  for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const screens = files.map((f, i) => ({ doc: readDocFile2(f, "screen export", isScreenDoc2), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
-  const dsBase = dsDir || "design/design-system";
-  const { variablesPath, variablesDoc } = ctx;
-  if (variablesPath) console.error(`variables: ${variablesPath}`);
-  if (ctx.staleLegacy) {
-    console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
-  }
-  const res = crossCheck({
-    screens,
-    sliceSources: ctx.sliceSources,
-    variables: variablesDoc,
-    variablesPath,
-    tokens: readOptionalDoc2(path.join(dsBase, "tokens.json"), "design-system tokens", isTokensDoc2),
-    components: readOptionalDoc2(path.join(dsBase, "components.local.json"), "component catalog", isComponentsCatalog2),
-    componentsLibrary: readOptionalDoc2(path.join(dsBase, "components.library.json"), "library component catalog", isComponentsCatalog2),
-    stylesText: readOptionalDoc2(path.join(dsBase, "styles.text.json"), "text styles", isTextStylesDoc2)
-  });
-  if (jsonOnly) {
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
-  } else if (out) {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out + ".json", JSON.stringify(res, null, 2) + "\n");
-    fs.writeFileSync(out + ".md", toMarkdown(res));
-    console.error(`wrote ${out}.json and ${out}.md`);
-  } else {
-    process.stdout.write(toMarkdown(res));
-  }
-  console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
-  for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
-}
+if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/audit.ts
 import { parseArgs as parseArgs2 } from "node:util";
@@ -1397,8 +1346,8 @@ function audit(input, opts = {}) {
   }
   function walk2(node, ancestors, ctx) {
     if (!node || typeof node !== "object") return;
-    const path3 = [...ancestors.map((a) => a.name), node.name].join(" > ");
-    const here = { label: ctx.label, path: path3 };
+    const path4 = [...ancestors.map((a) => a.name), node.name].join(" > ");
+    const here = { label: ctx.label, path: path4 };
     const hiddenBranch = isHidden(node, ancestors.some((a) => hiddenSelf(a)));
     if (Array.isArray(node.annotations)) for (const a of node.annotations) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, ...ifDefined("label", a.label || a.markdown) });
     if (node.devStatusNote) annotations.push({ nodeId: node.id, nodeName: node.name, screen: ctx.label, label: `dev note: ${node.devStatusNote}` });
@@ -1745,7 +1694,7 @@ function toMarkdown(res) {
       );
       if (c.rekey && c.rekey.rekeyed) {
         L.push(
-          `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the catalog also match it by prop signature. The proposed matches are listed under \`crossFile.componentProposals\` \u2014 confirm them with the user, then \`map-bootstrap.js \u2026 --from-proposals\` stubs exactly those.`,
+          `**This is the re-keyed-copy case, not a foreign library:** ${c.rekey.proposed} of the ${c.rekey.withCandidates} component(s) whose name is in the catalog also match it by prop signature. The proposed matches are listed under \`crossFile.componentProposals\` \u2014 confirm them with the user, then the map-bootstrap script with \`--from-proposals\` stubs exactly those.`,
           ""
         );
       }
@@ -1814,15 +1763,14 @@ function findExistingAuditFor(dir, nodeId, ownTarget) {
   if (!nodeId || !fs5.existsSync(dir)) return null;
   for (const f of fs5.readdirSync(dir)) {
     if (!f.endsWith(".json")) continue;
-    const full = path2.join(dir, f);
-    if (path2.resolve(full) === path2.resolve(ownTarget)) continue;
+    const full = path3.join(dir, f);
+    if (path3.resolve(full) === path3.resolve(ownTarget)) continue;
     const doc = readJsonOrNull(full, isJsonObject);
     if (doc && Array.isArray(doc.nodeIds) && doc.nodeIds.includes(nodeId)) return full;
   }
   return null;
 }
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv) {
   const USAGE = `usage: ${scriptCmd("audit")} <screen.json>... [--platform web|ios|android|react-native|flutter]
        [--design-system design/design-system] [--variables design/variables.json]
        [--catalog components.local.json] [--grid 4] [--out design/audit] [--json] [--gate] [--force]
@@ -1847,53 +1795,53 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const { values: flags, positionals: files } = cliParse("audit", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
   if (flags.help) {
     console.log(USAGE);
-    process.exit(0);
+    return 0;
   }
   const firstFile = files[0];
   if (firstFile === void 0) {
     console.error(USAGE);
-    process.exit(2);
+    return 2;
   }
   const { platform, catalog: catalogFile, "design-system": dsDir, variables: varsFile, grid: gridArg, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate, force = !!flags.force;
   if (platform && !PLATFORMS.includes(platform)) {
     console.error(`--platform must be one of ${PLATFORMS.join(", ")}`);
-    process.exit(2);
+    return 2;
   }
   const grid = gridArg === void 0 ? void 0 : Number(gridArg);
   if (grid !== void 0 && !(Number.isFinite(grid) && grid > 0)) {
     console.error(`--grid must be a positive number of px, got ${JSON.stringify(gridArg)}`);
-    process.exit(2);
+    return 2;
   }
   const ctx = variablesContext(files, varsFile, { sliceFallback: true });
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
-  const inputs = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path2.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
+  if (ctx.invalid.length) return 2;
+  const inputs = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path3.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) }));
   const catalog = catalogFile ? readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json") : void 0;
   const designSystem = dsDir ? {
-    tokens: readOptionalDoc(path2.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
-    ...ifDefined("components", readOptionalDoc(path2.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog),
-    componentsLibrary: readOptionalDoc(path2.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
-    stylesText: readOptionalDoc(path2.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc)
+    tokens: readOptionalDoc(path3.join(dsDir, "tokens.json"), "design-system tokens", isTokensDoc),
+    ...ifDefined("components", readOptionalDoc(path3.join(dsDir, "components.local.json"), "component catalog", isComponentsCatalog) || catalog),
+    componentsLibrary: readOptionalDoc(path3.join(dsDir, "components.library.json"), "library component catalog", isComponentsCatalog),
+    stylesText: readOptionalDoc(path3.join(dsDir, "styles.text.json"), "text styles", isTextStylesDoc)
   } : void 0;
   const variables = ctx.variablesDoc;
   if (ctx.staleLegacy) console.error(`warn  ${ctx.staleLegacy} also exists and was NOT used (stale sibling of design/export/) \u2014 remove it or re-pull into design/export/.`);
   const res = audit(inputs, { ...ifDefined("platform", platform), ...ifDefined("catalog", catalog), ...ifDefined("designSystem", designSystem), variables, sliceSources: ctx.sliceSources, ...ifDefined("grid", grid) });
   const md = jsonOnly ? "" : toMarkdown(res);
-  const outBase = out || path2.join("design", "audit", path2.basename(firstFile, ".json"));
+  const outBase = out || path3.join("design", "audit", path3.basename(firstFile, ".json"));
   if (!jsonOnly && outBase && res.nodeIds && res.nodeIds.length) {
-    const dup = findExistingAuditFor(path2.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
+    const dup = findExistingAuditFor(path3.dirname(outBase) || ".", res.nodeIds[0], outBase + ".json");
     if (dup && !force) {
       console.error(
         `error  node ${res.nodeIds[0]} already has an audit report at ${dup} \u2014 refusing to also write ${outBase}.json/.md (one screen, one report pair). Use that existing name, or pass --force to write this one anyway.`
       );
-      process.exit(1);
+      return 1;
     }
   }
   if (jsonOnly) {
     process.stdout.write(JSON.stringify(res, null, 2) + "\n");
   } else if (outBase) {
-    fs5.mkdirSync(path2.dirname(outBase), { recursive: true });
+    fs5.mkdirSync(path3.dirname(outBase), { recursive: true });
     fs5.writeFileSync(outBase + ".json", JSON.stringify(res, null, 2) + "\n");
     fs5.writeFileSync(outBase + ".md", md);
     console.error(`wrote ${outBase}.json and ${outBase}.md`);
@@ -1903,8 +1851,9 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (res.platformAssumed) console.error("warn  no --platform given \u2014 assumed 'web'. Touch targets, shadow spread and blur support differ per platform; pass --platform or write design/target.json.");
   if (!jsonOnly) console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   for (const n of res.crossFile && res.crossFile.notChecked || []) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
+  return gate && res.summary.blockers > 0 ? 1 : 0;
 }
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   TOUCH_MIN,
   audit,

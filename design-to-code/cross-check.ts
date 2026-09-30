@@ -556,7 +556,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
             : ` and stay new work`) +
           (residual.length ? ` (${residual.slice(0, 5).map((r) => `'${r.name}'`).join(", ")}${residual.length > 5 ? ", …" : ""})` : "") + `. ` +
           `To use them: show the user the list, set "confirmed": true on each accepted entry of componentProposals in this report's JSON, then run ` +
-          `\`map-bootstrap.js <components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\` — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
+          `the map-bootstrap script (\`<components.local.json> --out design/codeconnect.local.json --from-proposals <this report>.json\`) — it stubs ONLY the confirmed ones, keyed by the screen's own instance key.`,
         { rekey: s, proposals: props.length }
       );
     } else if (coverage.localPct <= WRONG_CATALOG_PCT) {
@@ -997,8 +997,7 @@ export { crossCheck, toMarkdown, composedRgba, ABSURD_NUMBER, WRONG_CATALOG_PCT 
 //        [--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]
 // Every input is checked as it is read (doc-guards.ts / export-shape.ts): a file that is not the kind of
 // document it should be is a one-line error and exit 2.
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv: string[]): number {
   const USAGE =
     `usage: ${scriptCmd("cross-check")} <screen.json>... [--design-system design/design-system] ` +
     "[--variables design/variables.json] [--out design/audit/<screen>.cross] [--json] [--gate]";
@@ -1006,8 +1005,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "design-system": { type: "string" }, variables: { type: "string" }, out: { type: "string" }, json: { type: "boolean" }, gate: { type: "boolean" }, help: { type: "boolean", short: "h" },
   } as const;
   const { values: flags, positionals: files } = cliParse("cross-check", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
-  if (!files.length) { console.error(USAGE); process.exit(2); }
+  if (flags.help) { console.log(USAGE); return 0; }
+  if (!files.length) { console.error(USAGE); return 2; }
   const { "design-system": dsDir, variables: varsFile, out } = flags;
   const jsonOnly = !!flags.json, gate = !!flags.gate;
 
@@ -1020,7 +1019,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // token-collision check reads each screen's own slice (livetest-3 #40/#311).
   const ctx = variablesContext(files, varsFile);
   for (const bad of ctx.invalid) console.error(`error  variables: '${bad.file}' ${bad.error}`);
-  if (ctx.invalid.length) process.exit(2);
+  if (ctx.invalid.length) return 2;
   const screens: CrossCheckScreen[] = files.map((f, i) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json"), ...ifDefined("vars", ctx.own[i]) })); // own[i] is set: own is files.map(...)
   const dsBase = dsDir || "design/design-system";
   const { variablesPath, variablesDoc } = ctx;
@@ -1053,5 +1052,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   }
   console.error(`${res.summary.blockers} blocker(s), ${res.summary.warnings} warning(s), ${res.summary.info} info`);
   for (const n of res.notChecked) console.error(`note  not checked: ${n}`);
-  process.exit(gate && res.summary.blockers > 0 ? 1 : 0);
+  return gate && res.summary.blockers > 0 ? 1 : 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

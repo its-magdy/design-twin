@@ -12,11 +12,25 @@
 // tools: `--grid -1` reads `-1` as a flag, so the value-taking flag reports "needs a value" and the tool's
 // own "must be a positive number" message is unreachable except as `--grid=-1`. cliParse joins a negative
 // number onto the value-taking flag before it (`--grid=-1`) so the tool sees it and says why it is wrong.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { ParseArgsOptionsConfig } from "node:util";
 
-/** The `${CLAUDE_PLUGIN_ROOT}` form every usage string prints: how the installed plugin runs the script. */
-export const scriptCmd = (name: string): string => `node "\${CLAUDE_PLUGIN_ROOT}/scripts/${name}.js"`;
+/**
+ * The command a usage line or a printed hint gives for another script: its REAL path, so the model can copy
+ * it into Bash as-is. Not `${CLAUDE_PLUGIN_ROOT}`: that is substituted in skill/agent Markdown only — it is
+ * not an environment variable in the Bash tool, so a usage line quoting it handed the model a command with an
+ * empty path (field findings DT-15/F-28). In a bundle this module is inlined, so import.meta.url is the bundle
+ * itself (claude-plugin/scripts/<entry>.js) and its folder holds every sibling script; run from a clone, it is
+ * design-to-code/cli-args.ts and the siblings are the .ts sources Node runs directly. Printed output only —
+ * never put it in a file the tools write (an absolute, per-install path would change the file's hash).
+ */
+const SELF = fileURLToPath(import.meta.url);
+// Double quotes keep spaces; a path that also holds a character the shell expands inside them (" $ ` \)
+// is single-quoted instead, with any ' closed, escaped and reopened.
+const shellQuote = (p: string): string => /["$`\\]/.test(p) ? `'${p.replaceAll("'", `'\\''`)}'` : `"${p}"`;
+export const scriptCmd = (name: string): string => `node ${shellQuote(path.join(path.dirname(SELF), name + path.extname(SELF)))}`;
 
 function errCode(e: unknown): string | undefined {
   return e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : undefined;

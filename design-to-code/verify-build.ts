@@ -625,7 +625,7 @@ function validatePlanHeader(plan: Plan): string[] {
   const missing = (["screenName", "nodeId", "route", "file"] as const).filter((k) => plan[k] === undefined || plan[k] === null || plan[k] === "");
   if (!missing.length) return [];
   return [
-    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (plan-skeleton.js writes the header; only the route is yours to fill)`,
+    `plan header is missing ${missing.map((k) => `\`${k}\``).join(", ")} — other skills (verify, sync-design) resolve a screen through this header, not through the free-text \`screen\` field; add ${missing.length > 1 ? "them" : "it"} so this plan is findable by node id/name/route without guessing (the plan-skeleton script writes the header; only the route is yours to fill)`,
   ];
 }
 
@@ -659,6 +659,8 @@ export interface CheckPlanOptions { export?: ExportHit | null; reports?: ReportR
 export interface CheckPlanResult { blocking: string[]; warnings: string[] }
 
 // Returns { blocking: [...], warnings: [...] }.
+// Its `blocking` messages are SAVED into the plan (verification.hook.blocking), a file users commit: name
+// scripts in words here, never with scriptCmd() — that is a per-machine, per-plugin-version absolute path.
 function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOptions): CheckPlanResult {
   const o = opts || {};
   const blocking: string[] = [], warnings: string[] = [];
@@ -763,12 +765,12 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
   // BLOCK 2: every visible design node has an anchor (itself or an ancestor).
   const exp = o.export === undefined ? locateExport(plan, file, cwd) : o.export;
   if (!exp) {
-    warnings.push("could not find this plan's screen export (no `file`/`nodeId` header, and no node id in its name) — the anchor check did not run; plan-skeleton.js writes the header");
+    warnings.push(`could not find this plan's screen export (no \`file\`/\`nodeId\` header, and no node id in its name) — the anchor check did not run; the plan-skeleton script writes the header`);
   } else {
     const cov = anchorCoverage(plan, exp.doc);
     if (cov.unmapped.length) {
       const show = cov.unmapped.slice(0, 10).map((u) => `${u.id} '${String(u.name).trim()}' (${u.type})`).join(", ");
-      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} — plan-skeleton.js lists every visible node`);
+      blocking.push(`${cov.unmappedNodes} visible design node(s) have no anchor in the plan — neither they nor any ancestor map to code. Top of each unmapped subtree: ${show}${cov.unmapped.length > 10 ? `, +${cov.unmapped.length - 10} more` : ""}. Add anchors["<id>"] = {"mapModule": "<the file that renders it>"} on the subtree's top (children inherit it), or {"omitted": "<why it is not built>"} — the plan-skeleton script lists every visible node`);
     }
     if (cov.wrappers.length) warnings.push(`${cov.wrappers.length} visible container(s) have anchored children but no anchor of their own (e.g. ${cov.wrappers.slice(0, 3).map((w) => `${w.id} '${String(w.name).trim()}'`).join(", ")}) — anchor the frame to the screen component so sync-design can place a change to it`);
     if (cov.hiddenAnchored.length) warnings.push(`${cov.hiddenAnchored.length} anchor(s) point at HIDDEN nodes (${cov.hiddenAnchored.slice(0, 4).join(", ")}${cov.hiddenAnchored.length > 4 ? ", …" : ""}) — hidden layers are not built; remove them`);
@@ -796,7 +798,7 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
   let g: ReturnType<typeof auditGateStatus>;
   try { g = auditGateStatus(cwd, screenFile, screenName); } catch { return []; }
   // An audit file that is there but cannot be read gates nothing — say so rather than read it as "no blockers".
-  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run audit.js for this screen`];
+  if (g.auditFile && g.unreadable) return [`${g.auditFile} ${g.error || "could not be read"} — the audit gate was NOT checked; re-run the audit script for this screen`];
   if (!g.auditFile || !g.blockers.length) return [];
   const gate = plan.auditGate;
   if (!gate) {
@@ -869,12 +871,12 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   const v = plan.verification;
   if (!reports.length) {
     if (v && v.mode === "static-only") return { status: "static-only", reasons: [`built and checked statically — not rendered (${v.reason || "no reason recorded"})`] };
-    return { status: "unverified", reasons: ["no verify report found for this screen in design/verify/ — run verify-screen.js --expect/--compare (the report's verdict is what grants \"verified\")"] };
+    return { status: "unverified", reasons: [`no verify report found for this screen in design/verify/ — run ${scriptCmd("verify-screen")} --expect/--compare (the report's verdict is what grants "verified")`] };
   }
   // Finding 316: a report older than verify-report@2 counted hidden layers as "never built" / "failed"
   // (0-for-83 wrong on the live run). Its figures are not repeated as fact — only its verdict, labelled.
   const legacy = reports.filter((r) => r.schema !== REPORT_SCHEMA_V2);
-  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: verify-screen.js --expect, then --compare`) };
+  if (legacy.length) return { status: "unverified", reasons: legacy.map((r) => `${r.rel} is ${r.schema || "an unversioned report"} (its verdict: ${JSON.stringify(r.verdict)}) — it predates ${REPORT_SCHEMA_V2}, whose counts exclude hidden layers, so its verdict and figures are not reliable. Regenerate it: ${scriptCmd("verify-screen")} --expect, then --compare`) };
   const said = (r: ReportRef): string => `${r.rel} says verdict ${JSON.stringify(r.verdict)}${r.headline ? ` (${r.headline})` : r.why.length ? `: ${r.why.join("; ")}` : ""}`;
   const failing = reports.filter((r) => r.verdict === "fail");
   if (failing.length) return { status: "failed", reasons: failing.map(said) };
@@ -888,12 +890,12 @@ function reportVerdict(plan: Plan, cwd: string, exp: ExportHit | null, reports: 
   for (const r of reports) {
     if (!r.exportContentSha256) {
       if (r.expectationChanged) return { status: "unverified", reasons: [`${r.rel} was computed against a different ${r.expectationRel} than the one on disk (inputs.expectationSha256 no longer matches) — re-run --compare`] };
-      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run verify-screen.js --expect and --compare`] };
+      return { status: "unverified", reasons: [`${r.rel} does not record the content hash of the export it measured (inputs.exportContentSha256) — re-run ${scriptCmd("verify-screen")} --expect and --compare`] };
     }
     if (!expSha) return { status: "unverified", reasons: [`cannot find this plan's screen export to compare with ${r.rel}'s inputs.exportContentSha256 — give the plan its \`file\` header`] };
     if (r.exportContentSha256 !== expSha) return { status: "unverified", reasons: [`the design changed since ${r.rel} was computed (export content sha256 ${r.exportContentSha256.slice(0, 12)}… → ${expSha.slice(0, 12)}…, timestamps ignored) — re-run --expect and --compare`] };
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
-    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run verify-screen.js --compare from the project root, where design/plan/ lists this screen's files`] };
+    if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) — re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes(plan, cwd);
     const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code — changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} — re-run --compare`] };
@@ -1067,7 +1069,7 @@ async function main(argv: string[]): Promise<number> {
     setPhase("finding open plans in design/plan/");
     const { plans, bad } = findPlans(cwd);
     // A plan the hook cannot read is not checked — say so on every stop rather than skip it silently.
-    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (plan-skeleton.js rewrites the skeleton fields and keeps what you filled)`);
+    for (const b of bad) console.error(`verify-build: warning: ${path.relative(cwd, b.file)} ${b.error} — it was NOT checked; fix it (${scriptCmd("plan-skeleton")} rewrites the skeleton fields and keeps what you filled)`);
     const open = plans.filter((p) => isOpen(p, cwd));
     if (!open.length) return 0; // fast path
     for (const p of ownPlans(open, input, plans)) all.push({ p, cwd });
@@ -1077,7 +1079,7 @@ async function main(argv: string[]): Promise<number> {
   for (const { p, cwd } of all) {
     const res = checkAndRecord(p, cwd);
     const name = path.basename(p.file);
-    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (verify-build.js --status), never stored`);
+    if (res.cleared) console.error(`verify-build: ${name}: removed the stored "status": "${res.cleared}" — status is computed now (${scriptCmd("verify-build")} --status), never stored`);
     for (const w of res.warnings) console.error(`verify-build: warning (${name}): ${w}`);
     if (res.blocking.length) blockedOut.push(`# ${name}`, ...res.blocking.map((m) => `  - ${m}`));
     const why = res.blocking.length ? "see below" : res.status.reasons[res.status.reasons.length - 1];

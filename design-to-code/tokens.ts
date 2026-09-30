@@ -1249,8 +1249,7 @@ export { toNative, platformOf, PLATFORMS };
 // from every screen (see tokens-native.ts for why and for the shape of each file).
 // The input is the SPLIT token file — design-system.json is a slim pointer manifest since the split
 // and has no `variables` array (see bridge/design-system-layout.js).
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const args = process.argv.slice(2);
+function main(args: string[]): number {
   const USAGE = `usage: ${scriptCmd("tokens")} <design-system/tokens.json | design/variables.json> [outDir]\n` +
     "       [--native swiftui|compose|flutter|react-native] [--package <kotlin.package>] [--web tailwind] [--also-generic]\n" +
     "       With --web/--native, ONLY the target's file is written to [outDir]; pass --also-generic to\n" +
@@ -1258,16 +1257,16 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "       Without a target flag, only the generic set is written (unchanged).";
   const OPTIONS = { native: { type: "string" }, web: { type: "string" }, package: { type: "string" }, "also-generic": { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("tokens", args, OPTIONS, USAGE, 1, (a) => parseArgs({ args: a, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (flags.help) { console.log(USAGE); return 0; }
   const { native, web, package: kotlinPackage } = flags;
   const alsoGeneric = !!flags["also-generic"];
   const input = positionals[0];
   const outDir = positionals[1] || ".";
-  if (!input) { console.error(USAGE); process.exit(1); }
-  if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); process.exit(1); }
+  if (!input) { console.error(USAGE); return 1; }
+  if (native !== undefined && !platformOf(native)) { console.error(`--native: unknown platform "${native}"\n${USAGE}`); return 1; }
   const WEB_TARGETS: Record<string, string> = { tailwind: "theme.css", "web-tailwind": "theme.css" }; // build-screen's profile name works too
   const webFile = web === undefined ? undefined : WEB_TARGETS[web];
-  if (web !== undefined && !webFile) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); process.exit(1); }
+  if (web !== undefined && !webFile) { console.error(`--web: unknown target "${web}" (known: tailwind)\n${USAGE}`); return 1; }
   // The SPLIT token file (or a merged variables.json): the manifest is refused with its own message, and
   // anything else that is not a token catalog is a one-line error — never an empty token set.
   const ds = readSplitFile(input, "token catalog", isTokensDoc, "variables", "design-system/tokens.json",
@@ -1323,4 +1322,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   } else {
     console.log(`wrote tokens.dtcg.json + tokens.css + tokens.resolver.json (+${genericCount} set files under ${RESOLVER_DIR}/) (${(ds.variables || []).length} variables)`);
   }
+  return 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

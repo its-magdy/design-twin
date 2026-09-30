@@ -1150,8 +1150,7 @@ export { buildExpectation, compare, reportToMarkdown, expectNode, normColor, nor
 
 
 // ---------------------------------------------------------------- CLI
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+function main(argv: string[]): number {
   const sha = (file: string): string => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const USAGE =
     "usage:\n" +
@@ -1165,14 +1164,14 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.";
-  if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); process.exit(argv.length ? 0 : 2); }
+  if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
   const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
   const { out, interactions: interactionsFile } = flags;
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
-  if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); process.exit(2); }
-  if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); process.exit(2); }
+  if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); return 2; }
+  if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); return 2; }
 
   const write = (base: string | undefined, obj: unknown, md?: string): void => {
     if (!base) { process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); return; }
@@ -1184,7 +1183,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 
   if (doExpect) {
     const firstFile = files[0];
-    if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); process.exit(2); }
+    if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
     const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
     const exp = buildExpectation(docs);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
@@ -1207,7 +1206,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
         `error  node ${exp.frame.nodeId} already has an expectation at ${dup} — refusing to also write ${target} ` +
           "(one screen, one artefact set). Use that existing name, or pass --force to write this one anyway."
       );
-      process.exit(1);
+      return 1;
     }
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
@@ -1230,11 +1229,11 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
       `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
       `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable) · expectation sha256 ${h.slice(0, 12)}…`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers — interaction coverage cannot be checked, and the report will say so rather than passing.");
-    process.exit(0);
+    return 0;
   }
 
   const [expFile, measuredFile] = files;
-  if (!expFile || !measuredFile) { console.error("--compare needs <expected.json> <measured.json>\n" + USAGE); process.exit(2); }
+  if (!expFile || !measuredFile) { console.error("--compare needs <expected.json> <measured.json>\n" + USAGE); return 2; }
   const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
   const measured = readDocFile(measuredFile, "probe measurements", isVerifyMeasured,
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}.");
@@ -1242,7 +1241,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
     const list = isInteractionEvidenceList(raw) ? raw : isJsonObject(raw) && isInteractionEvidenceList(raw.interactions) ? raw.interactions : null;
-    if (!list) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…]}`); process.exit(2); }
+    if (!list) { console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[…]}`); return 2; }
     extra = list;
   }
   // Artifacts are checked on disk, relative to the working directory (the project root), so a report
@@ -1285,5 +1284,7 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   const compareBase = out || path.join("design", "verify", path.basename(expFile, ".json").replace(/\.expected$/, ""));
   write(compareBase, rep, md);
   console.error(rep.headline);
-  process.exit(rep.verdict === "pass" ? 0 : 1);
+  return rep.verdict === "pass" ? 0 : 1;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));

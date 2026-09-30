@@ -289,39 +289,38 @@ export { driftLint, validateMap, screenCoverage, checkFreshness, checkLiveFreshn
 //        [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]
 // The catalog argument is the SPLIT component file — design-system.json is a slim pointer manifest
 // since the split and has no `components` array (see bridge/design-system-layout.js).
-if (import.meta.main ?? isMainFallback(import.meta.url)) {
-  const argv = process.argv.slice(2);
+async function main(argv: string[]): Promise<number> {
   const USAGE = `usage: ${scriptCmd("drift-lint")} <map.json> <design-system/components.local.json> [--screen design/pages/<Page>/<Screen>.json]... [--max-age <hours>]`;
   // --screen is repeatable: a build usually spans a screen plus its modals, and the question
   // "how much of this can I reuse" is about all of them together.
   const OPTIONS = { "max-age": { type: "string" }, screen: { type: "string", multiple: true }, help: { type: "boolean", short: "h" } } as const;
   const { values: flags, positionals } = cliParse("drift-lint", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (flags.help) { console.log(USAGE); return 0; }
   let maxAgeHours: number | undefined;
   if (flags["max-age"] !== undefined) {
     maxAgeHours = Number(flags["max-age"]);
-    if (!(maxAgeHours > 0)) { console.error("--max-age expects a positive number of hours"); process.exit(2); }
+    if (!(maxAgeHours > 0)) { console.error("--max-age expects a positive number of hours"); return 2; }
   } else if (process.env.DRIFT_MAX_AGE_HOURS) {
     maxAgeHours = Number(process.env.DRIFT_MAX_AGE_HOURS);
-    if (!(maxAgeHours > 0)) { console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours"); process.exit(2); }
+    if (!(maxAgeHours > 0)) { console.error("DRIFT_MAX_AGE_HOURS expects a positive number of hours"); return 2; }
   }
   const maxAgeMs = maxAgeHours ? maxAgeHours * 3600000 : undefined;
   const screenFiles: string[] = flags.screen || [];
 
   const [mapFile, catalogFile] = positionals;
-  if (!mapFile || !catalogFile) { console.error(USAGE); process.exit(2); }
+  if (!mapFile || !catalogFile) { console.error(USAGE); return 2; }
   const catalog = readSplitFile(catalogFile, "component catalog", isComponentsCatalog, "components", "design-system/components.local.json",
     NO_DESIGN_SYSTEM_HINT + "\n       Or build without a component map: every instance then counts as new (build-screen, step 1).");
-  const mapRaw = readJsonFile(mapFile, "component map", "Scaffold one with `map-bootstrap.js <components.local.json> --out codeconnect.local.json`.");
+  const mapRaw = readJsonFile(mapFile, "component map", `Scaffold one with \`${scriptCmd("map-bootstrap")} <components.local.json> --out codeconnect.local.json\`.`);
   // Validate BEFORE linting: driftLint trusts the map's shape. Printed like the lint's own errors,
   // one per line, and exit 1 — the same code a lint error gets (2 is kept for usage mistakes).
   const valid = validateMap(mapRaw);
   if (!valid.ok) {
     valid.errors.forEach((e) => console.error(`ERROR  [map-invalid] ${mapFile}: ${e.path || "(root)"}: ${e.message}`));
-    console.error(`\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`map-validate.js ${mapFile}\`.`);
-    process.exit(1);
+    console.error(`\n${mapFile} is not a valid component map (${valid.errors.length} error(s)) — fix it, or check it with \`${scriptCmd("map-validate")} ${mapFile}\`.`);
+    return 1;
   }
-  if (!isCodeConnectMap(mapRaw)) process.exit(1); // unreachable: validateMap just passed (isCodeConnectMap IS that check)
+  if (!isCodeConnectMap(mapRaw)) return 1; // unreachable: validateMap just passed (isCodeConnectMap IS that check)
   const map = mapRaw;
   const res = driftLint(map, catalog, { ...ifDefined("maxAgeMs", maxAgeMs) });
   res.errors.forEach((e) => console.error(`ERROR  [${e.code}] ${e.message}`));
@@ -357,8 +356,8 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
           `ERROR  [catalog-rekeyed] NONE of the ${cov.distinct} components on this screen resolve to your map or catalog by key — but ` +
             `${rekey.summary.proposed} of the ${rekey.summary.withCandidates} visible component name(s) that exist in the catalog also match it by prop signature.\n` +
             `       That is the SAME library under new keys (one of the Figma files is a duplicate, or the library was re-published), not a foreign one.\n` +
-            `       Get the confirmation list with \`cross-check.js <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
-            `       confirm it (set "confirmed": true per entry), then \`map-bootstrap.js <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
+            `       Get the confirmation list with \`${scriptCmd("cross-check")} <screen.json> --design-system <dir> --out design/audit/<screen>.cross\`, have the user\n` +
+            `       confirm it (set "confirmed": true per entry), then \`${scriptCmd("map-bootstrap")} <components.local.json> --out <map> --from-proposals design/audit/<screen>.cross.json\`.`
         );
       } else if (cov.mapPct === 0) {
         screenFail = true;
@@ -384,17 +383,16 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   // replacement for it.
   const fileKey = process.env.FIGMA_FILE_KEY;
   const token = process.env.FIGMA_TOKEN;
-  const run = async () => {
-    if (fileKey && token) {
-      try {
-        const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
-        if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) — it is confirmed stale, not just old.`);
-      } catch (e) {
-        console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
-      }
+  if (fileKey && token) {
+    try {
+      const live = await checkLiveFreshness(fileKey, token, catalog.exportedAt);
+      if (live && live.aheadOfSnapshot) console.error(`warn   [live-meta] the live Figma file was modified (${live.lastModified}) AFTER this snapshot was exported (${catalog.exportedAt}) — it is confirmed stale, not just old.`);
+    } catch (e) {
+      console.error(`warn   [live-meta] could not verify against the live file: ${errMsg(e)}`);
     }
-    process.exit(res.errors.length || screenFail ? 1 : 0);
-  };
-  // run() reports its own failures and exits; a rejection it did not catch still crashes the process.
-  void run();
+  }
+  // A rejection main() did not catch still crashes the process (it is not handled below).
+  return res.errors.length || screenFail ? 1 : 0;
 }
+
+if (import.meta.main ?? isMainFallback(import.meta.url)) void main(process.argv.slice(2)).then((code) => { process.exitCode = code; }); // exitCode, not exit(): every printed line flushes first
