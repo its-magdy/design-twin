@@ -149,6 +149,9 @@ function planProblem(x: unknown): string | null {
   if (Array.isArray(x.components) && !x.components.every((c) => isObj(c) && typeof c.name === "string")) return "is not a valid plan: every `components` row needs its `name`";
   if (isObj(x.anchors) && !Object.values(x.anchors).every(isObj)) return "is not a valid plan: every `anchors` entry must be an object";
   if (x.auditGate !== undefined && x.auditGate !== null && !isObj(x.auditGate)) return "is not a valid plan: `auditGate` must be an object or null";
+  if (x.target !== undefined && x.target !== null && typeof x.target !== "string" && !isObj(x.target)) return "is not a valid plan: `target` must be a profile name, an object or null";
+  if (x.tagging !== undefined && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
+  if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== undefined && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
   return null;
 }

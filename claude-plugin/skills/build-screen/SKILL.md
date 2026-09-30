@@ -356,7 +356,9 @@ Copy this checklist into your notes and keep it updated:
    - **Merging two Figma tokens because their values coincide.** `Schemes/On Primary` and
      `Schemes/On Surface` are `#ffffff` and `#1b1b21` in Light — and swap in Dark. A build that sees
      one hex and writes one token has made theme switching wrong, invisibly. One Figma name, one code
-     token, always; the Stop hook fails a `codeToken` reached from two different `figmaName`s.
+     token, always; the Stop hook flags a `codeToken` reached from two different `figmaName`s. When
+     sharing really is right (two names for one type-scale step that agree in every mode), say so once
+     on the sharing row — `"acknowledged": "<why>"` — and the hook stops repeating it.
    - **Renaming by role or usage.** A colour named `Outline Variant` that you happen to use on text
      is still `outline-variant`, not `text-outline-variant`. Re-labelling it hides which token it is
      and makes the next person's grep fail. (One real build named `Schemes/On Surface` "on-primary"
@@ -391,7 +393,7 @@ Copy this checklist into your notes and keep it updated:
    each instance. A node left empty is covered by its nearest filled ancestor, so twelve rows from one
    `.map()` or a shell shared with another screen need one entry, not one per node; a visible node you
    deliberately do not build gets `{"omitted": "<why>"}`. A visible node with no anchor at all is one
-   of the two things the hook blocks on: `sync-design` keys its change list by node id, and an
+   of the things the hook blocks on: `sync-design` keys its change list by node id, and an
    unanchored subtree is code nobody can find.
    Rules while building:
    - **Fit the app, not just the design** — before the first file, do the detection in the profile's
@@ -438,10 +440,16 @@ Copy this checklist into your notes and keep it updated:
    - **Carry the node id into the markup** on every element that implements a node one-to-one:
      `data-dt-node="4210:1873"` on web, `accessibilityIdentifier` on SwiftUI, `testTag` on Compose,
      `Semantics(identifier:)` on Flutter — so step 5 measures the right element instead of guessing
-     from text. A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where
+     from text. **Tag, don't comment**: an id in a `// 4210:1873` comment measures nothing. Ids may come
+     from a lookup table (`data-dt-node={IDS.row}`) — the id string just has to appear in a listed file.
+     A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where
      one exists; a shell shared by two screens keeps the ids of the frame it was built from (verify
      matches the other frame through the component path). Both follow the reuse rules; untagged sets
-     are reported as tag coverage, never as "missing". Tags are a measurement aid, never component
+     are reported as tag coverage, never as "missing". On a web profile the Stop hook counts tags
+     across every plan's `files[]`: it **blocks** when no file carries `data-dt-node` at all, warns
+     below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that genuinely
+     cannot tag says so in the plan: `"tagging": {"off": true, "reason": "<why>"}` (no reason, no
+     opt-out). Tags are a measurement aid, never component
      identity — that is the plan's `components[]` (catalog match, `design/codeconnect.local.json`).
 
 4. **States, scaling, theme, direction.** Before calling a component done:
@@ -520,15 +528,22 @@ Copy this checklist into your notes and keep it updated:
      coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations}?}` — never an `a11y`
      result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself).
      Nothing can render: `{mode:"static-only", reason:<what you checked for and didn't find>}`.
-   - **The `Stop` hook** (`verify-build.js`, as your turn ends) **blocks** on exactly two things: a
+   - **The `Stop` hook** (`verify-build.js`, as your turn ends) checks the plans your session wrote
+     (Write/Edit, a redirect, `--out`, `cp`/`mv`, `sed -i`) and the plan whose `files[]` alone lists
+     a file you wrote. A session that claims no plan checks nothing — an orchestrator that only
+     delegated, or one that edited only files several plans share; the screen-builder's own hook
+     still gates each delegated build. It **blocks** on: a
      raw colour in a source file of `files[]` whose value the plan resolved to a real token (`#hex`,
-     `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and the line
-     that *defines* the token, e.g. `--color-figma-brand-600: #5B5FC7`, is not a usage), and a visible
-     design node with no anchor. The rest warns: merged Figma tokens, missing a11y/coverage evidence,
-     `[16px]` where a token exists, a `reused` module nothing imports, a no-token row (`codeToken:
-     null`/`MISSING`) without a `decision` ("no token exists, kept as a one-off literal" is complete),
-     header gaps, a deviation without `{nodeId, field, designed, built, reason}`. A resolved value that
-     must stay literal goes in `allowedLiterals`: `{"value": "#5B5FC7", "reason": "…"}` (exact string,
+     `0xFF…`, `rgb()`; comments, prose strings and `.svg`/`.json` files are not scanned, and a line
+     that *defines* a token, e.g. `--color-figma-brand-600: #5B5FC7`, is not a usage), a visible
+     design node with no anchor, and — web profiles — no `data-dt-node` tag in any plan's files. The
+     rest warns: merged Figma tokens, missing a11y/coverage evidence, tag coverage below 50%,
+     `[16px]` where a token exists, a `reused` module nothing that renders the screen imports, a
+     colour `codeToken` declared nowhere (skipped when the project has a `tailwind.config.*` —
+     Tailwind v3 colours live there), a no-token row (`codeToken: null`/`MISSING`) without a
+     `decision` ("no token exists, kept as a one-off literal" is complete), header gaps, a deviation
+     without `{nodeId, field, designed, built, reason}` or one that says a node was left out while
+     the plan still reuses or anchors it. A resolved value that must stay literal goes in `allowedLiterals`: `{"value": "#5B5FC7", "reason": "…"}` (exact string,
      alpha included) or `{"file": "…", "reason": "…"}` for a generated token file.
    - **Run it by hand** the same way the Stop hook does:
      `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-build.js" design/plan/<Layer>__<id>.json` (the plan

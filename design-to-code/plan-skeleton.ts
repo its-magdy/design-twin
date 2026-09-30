@@ -462,7 +462,7 @@ function skeleton({ doc, vars, ds, catalog, library, mapKeys, screenFile, cwd, r
 export interface MergeResult { plan: Plan; dropped: { tokens: number; components: number; anchors: number } }
 
 // Merge a fresh skeleton into an existing plan without losing anything a person or the model wrote.
-const FILLED_TOKEN = ["codeToken", "verdict", "decision"] as const;
+const FILLED_TOKEN = ["codeToken", "verdict", "decision", "acknowledged"] as const;
 const FILLED_COMPONENT = ["mapModule", "verdict", "decision", "matchedByName"] as const;
 function merge(fresh: SkeletonPlan, prev: Plan | null | undefined): MergeResult {
   if (!prev || typeof prev !== "object") return { plan: fresh, dropped: { tokens: 0, components: 0, anchors: 0 } };

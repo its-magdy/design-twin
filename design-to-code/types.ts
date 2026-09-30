@@ -356,6 +356,9 @@ export interface PlanTokenRow {
   codeToken: string | null;
   verdict?: PlanTokenVerdict | null;
   decision?: string;
+  /** a person's reason for deliberately sharing this row's codeToken with another Figma name (silences
+   *  verify-build's merged-token warning for this row) */
+  acknowledged?: string;
 }
 export interface PlanComponentMatch { by: "key" | MatchEvidence; id?: string; key?: string; name: string; confirmed?: false }
 export interface PlanComponentRow {
@@ -405,6 +408,8 @@ export interface PlanHookRecord {
   planHash: string;
   /** rel path → sha256/16, or null when the file is not on disk */
   files: Record<string, string | null>;
+  /** web profiles: anchored visible nodes whose id appears in a listed file, of how many */
+  tagCoverage?: { tagged: number; anchored: number };
 }
 export interface PlanVerification {
   mode?: "rendered" | "static-only" | (string & {});
@@ -431,8 +436,11 @@ export interface Plan {
   file?: string | null;
   exportedAt?: string | null;
   status?: PlanStoredStatus;
-  target?: JsonObject | null;
+  /** the target profile: "web-tailwind", or {profile: "web-tailwind", stack, …} */
+  target?: JsonObject | string | null;
   architecture?: JsonObject | null;
+  /** opt out of the web data-dt-node tag check (verify-build.ts); honoured only with a non-empty reason */
+  tagging?: { off?: boolean; reason?: string } | null;
   files?: string[];
   tokens?: PlanTokenRow[];
   components?: PlanComponentRow[];
