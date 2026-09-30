@@ -67,7 +67,8 @@ export const HELP: Record<string, string> = {
     "  Cheap: no serialize(), no asset walk — typically under a second once the plugin is warm.\n\n" +
     "  Use it to tell two same-named frames apart BEFORE paying for a full pull: shoot each\n" +
     "  candidate, look, then pull the one you meant.\n\n" +
-    "  --scale N   override the render scale (default: auto, capped at 2048px on the longest side)\n" +
+    "  --scale N   override the render scale (default: auto, capped at 2048px on the longest side);\n" +
+    "              the PNG is then <id>_shot@<N>x.png, so a thumbnail never takes the reference's name\n" +
     "  outDir      default design/export; the PNG lands in its assets/ subdirectory, which is exactly\n" +
     "              where a later `pull --node` of the same frame writes its own reference — so shooting\n" +
     "              first costs nothing and leaves no duplicate.",

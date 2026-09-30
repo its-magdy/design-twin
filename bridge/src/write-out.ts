@@ -186,10 +186,10 @@ const BUSY_SVG_PATHS = 400;
 // same-run collision (figma-plugin/src/assets.ts). Identical bytes are left alone (no-op, not a
 // rewrite) so an unrelated re-pull doesn't touch a file's mtime for nothing.
 //
-// `a.file` (and therefore anything that reads it afterwards — writeScreenAssets, called right after
-// this on the same array, and the `entry.assets`/`root.reference` pointers in writeScreen) is mutated
-// in place to the name ACTUALLY written, so nothing downstream can point at a name this function
-// decided not to use.
+// `a.file` is mutated in place to the name ACTUALLY written. That alone does NOT move the node tree's
+// pointers (`asset` on each node, `reference` on the root), which the plugin built from its own names:
+// callers run writeAssets BEFORE writing the tree and then rewireAssetPointers() (field findings DT-25,
+// F-35, F-08 — nodes pointed at names never written, and on a case-insensitive disk at the wrong file).
 function readExistingDirCaseFold(adir: string): Map<string, string> {
   const map = new Map<string, string>(); // lowercased basename -> real basename on disk
   let names: string[] = [];
@@ -223,6 +223,22 @@ function readExistingDirByContent(adir: string): Map<string, string> {
   return map;
 }
 
+// A file of THIS asset's own name family — `baseName` itself or `<stem>-<6 hex>[_N]<ext>`, the only names
+// writeAssets ever gives it (matched case-insensitively, the disk's own rule) — whose content hashes to
+// `hash`, or undefined. `names` maps lower-cased name → real name for everything on disk or claimed.
+function ownCopyWithContent(adir: string, names: ReadonlyMap<string, string>, baseName: string, hash: string): string | undefined {
+  const ext = path.extname(baseName);
+  const stem = baseName.slice(0, baseName.length - ext.length).toLowerCase();
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const family = new RegExp("^" + esc(stem) + "(-[0-9a-z]{6}(_\\d+)?)?" + esc(ext.toLowerCase()) + "$");
+  const candidates = [...names.entries()].filter(([lower]) => family.test(lower)).map(([, real]) => real)
+    .sort((x, y) => x.length - y.length || (x < y ? -1 : 1)); // the plain name first, then the oldest-looking suffix
+  for (const name of candidates) {
+    try { if (sha1Hex(normalizeForCompare(name, fs.readFileSync(path.join(adir, name)))) === hash) return name; } catch { /* unreadable: not a match */ }
+  }
+  return undefined;
+}
+
 function shortHashOf(a: Asset, bytes: Buffer): string {
   // Prefer the plugin's own contentHash (already normalised for SVG-export noise); fall back to a
   // fresh sha1 of the bytes for an asset that somehow has no `.hash` (manifest-only / older plugin).
@@ -239,6 +255,81 @@ function reuseExisting(a: Asset, dirPrefix: string, existingName: string, priorB
   a.file = dirPrefix + "/" + existingName;
   if (a.text != null) a.text = priorBytes.toString("utf8");
   else if (a.base64 != null) a.base64 = priorBytes.toString("base64");
+}
+
+// The pointer the plugin puts in the tree for an asset: `assets/` + the file's base name. `Asset.file` itself
+// is the BARE name (figma-plugin/src/assets.ts register() returns ASSET_DIR + file), and writeAssets turns
+// it into `./<name>` or `<dir>/<name>` — so the base name is the one stable part to match on.
+const assetPointer = (file: string): string => "assets/" + path.basename(file);
+
+// The names writeAssets actually used, as tree pointers: `before` is each asset's `file` captured before
+// the call (same order), so a content-reused or collision-suffixed asset maps
+// `assets/<plugin name>` → `assets/<name on disk>`. Unchanged names are left out.
+function renamedAssets(assets: Asset[] | null | undefined, before: readonly string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  (assets || []).forEach((a, i) => {
+    const was = before[i];
+    if (was === undefined || !a || !a.file) return;
+    const from = assetPointer(was), to = assetPointer(a.file);
+    if (from !== to && !map.has(from)) map.set(from, to);
+  });
+  return map;
+}
+
+// Point every `asset`/`reference` string in a written tree (screen nodes, a page walk's layersDoc) at the
+// file writeAssets really wrote. A deep walk over plain JSON, so it covers every node of every root and
+// the root-level `reference` of a layer file alike. Returns how many pointers moved.
+function rewireAssetPointers(tree: unknown, renamed: ReadonlyMap<string, string>): number {
+  if (!renamed.size) return 0;
+  let moved = 0;
+  const seen = new Set<object>();
+  const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
+  const visit = (v: unknown): void => {
+    if (!isObj(v) || seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) { for (const x of v) visit(x); return; }
+    const rec = v;
+    for (const k of Object.keys(rec)) {
+      const val = rec[k];
+      if ((k === "asset" || k === "reference") && typeof val === "string") {
+        const to = renamed.get(val);
+        if (to !== undefined) { rec[k] = to; moved++; }
+      } else visit(val);
+    }
+  };
+  visit(tree);
+  return moved;
+}
+
+// Width/height from a PNG's IHDR chunk (bytes 16–23, big-endian); null for anything that isn't a PNG.
+function pngSize(bytes: Buffer): { w: number; h: number } | null {
+  if (bytes.length < 24 || bytes.readUInt32BE(0) !== 0x89504e47 || bytes.toString("latin1", 12, 16) !== "IHDR") return null;
+  return { w: bytes.readUInt32BE(16), h: bytes.readUInt32BE(20) };
+}
+
+// Every `asset`/`reference` pointer in `tree` that names no file under `dir` — checked by EXACT name (a
+// case-insensitive disk would otherwise "find" a different-case file, which is how F-35 shipped the wrong
+// chevron). A pull should never produce one; if it does, say so instead of leaving a silent hole.
+function danglingPointers(dir: string, tree: unknown): string[] {
+  const listings = new Map<string, Set<string>>();
+  const exists = (rel: string): boolean => {
+    const d = path.join(dir, path.dirname(rel));
+    let names = listings.get(d);
+    if (!names) { try { names = new Set(fs.readdirSync(d)); } catch { names = new Set(); } listings.set(d, names); }
+    return names.has(path.basename(rel));
+  };
+  const out = new Set<string>();
+  const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
+  const visit = (v: unknown): void => {
+    if (!isObj(v)) return;
+    if (Array.isArray(v)) { for (const x of v) visit(x); return; }
+    for (const [k, val] of Object.entries(v)) {
+      if ((k === "asset" || k === "reference") && typeof val === "string") { if (!exists(val)) out.add(val); }
+      else visit(val);
+    }
+  };
+  visit(tree);
+  return [...out];
 }
 
 function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string): number {
@@ -270,7 +361,12 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     // (4 Ellipse_2327* files, 6 arrow-down* files, 3 angle-left* files for what should be 1/1/2 real
     // icons) even with the name-only reuse path already in place.
     const contentHash = sha1Hex(normalizeForCompare(baseName, bytes));
-    const byContentName = byContent.get(contentHash);
+    // A reference PNG belongs to ONE frame (the plugin never dedups it — assets.ts register()): two frames
+    // that render identically must keep their own `<id>_ref.png`, or both `reference`s would name one of
+    // them. So a reference reuses only a file of its OWN: its name, or a suffixed copy an earlier pull of
+    // the same frame wrote (`<id>_ref-<hash>[_N].png`, when the plain name held other bytes) — without the
+    // second, every re-pull over an old thumbnail added another `_1`, `_2`, … copy.
+    const byContentName = a.kind === "reference" ? ownCopyWithContent(adir, claimed, baseName, contentHash) : byContent.get(contentHash);
     if (byContentName !== undefined) {
       let priorBytes: Buffer | null = null;
       try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch { /* fall through as new */ }
@@ -360,9 +456,19 @@ function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined): 
 // directory, one name, no duplicate: shoot a node during discovery and the PNG is already in the
 // place build-screen reads, whether or not you go on to pull it.
 const REF_DIR = "assets";
-function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log): { outDir: string; reference: string; wrote: { screenshot: true; assets: number; reference: string } } {
+//
+// An explicit `scale` (a discovery thumbnail, e.g. 0.25) is NOT the frame's reference: it gets its own
+// name, `<id>_shot@<scale>x.png`, so it never takes the `<id>_ref.png` slot a later pull's full-size
+// reference is written to (F-08: a 360 px thumbnail held the slot, the 2048 px export was suffixed, and
+// the index pointed at the thumbnail). The default scale renders exactly what a pull would, so it keeps
+// the shared name and a later pull reuses the same file.
+function writeScreenshot(outDir: string | null | undefined, r: ScreenshotReply, log?: Log, opts?: { scale?: number | undefined }): { outDir: string; reference: string; wrote: { screenshot: true; assets: number; reference: string } } {
   const dir = resolveOutDir(outDir);
   fs.mkdirSync(dir, { recursive: true });
+  const scale = opts && typeof opts.scale === "number" && opts.scale > 0 ? opts.scale : undefined;
+  if (scale !== undefined) for (const a of r.assets) {
+    if (a && a.kind === "reference" && a.file) a.file = path.dirname(a.file) + "/" + path.basename(a.file).replace(/_ref\.png$/i, "").replace(/\.png$/i, "") + `_shot@${Number(scale.toPrecision(4))}x.png`;
+  }
   const assets = writeAssets(dir, r.assets, log, REF_DIR);
   // The path the caller should PRINT. `r.reference` is the plugin's own relative name; recomputing it
   // here from the file actually written is what keeps the message and the file in agreement.
@@ -398,8 +504,16 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     full.layersDoc.sourceFile = full.sourceFile;
     if (full.sourceFileKey) full.layersDoc.sourceFileKey = full.sourceFileKey;
   }
-  const pages = full ? writePages(dir, full.layersDoc, log) : null;
+  // Assets FIRST, then the layer files: writeAssets may reuse or rename a file, and the trees must name
+  // what it actually wrote (DT-25).
+  const before = full ? full.assets.map((a) => a.file) : [];
   const assets = full ? writeAssets(dir, full.assets, log) : 0;
+  if (full) {
+    const moved = rewireAssetPointers(full.layersDoc, renamedAssets(full.assets, before));
+    if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
+  }
+  const pages = full ? writePages(dir, full.layersDoc, log) : null;
+  if (full && log) { const d = danglingPointers(dir, full.layersDoc); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   return {
     outDir: dir,
     wrote: {
@@ -435,13 +549,22 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // top level — the ONE thing doctor.ts's exportSourceCounts() can read without opening a second file, and
   // the reason a project pulled before this field existed is told apart from one whose source is
   // simply unknown (undefined, never a guess). figma-pull.ts resolves it; this is just where it lands.
+  // Assets FIRST: writeAssets reuses a byte-identical file already on disk under another name, and
+  // version-suffixes a same-name (or same-name-but-case) different file. The plugin built every node's
+  // `asset` and the root's `reference` from ITS names, so they are rewired to the names written before the
+  // screen JSON is — otherwise nodes point at files that were never written, or (case-insensitive disk) at
+  // a different icon, and the index's `reference` at whatever thumbnail held the plain name (DT-25/F-35/F-08).
+  const before = (r.assets || []).map((a) => a.file);
+  const assets = writeAssets(dir, r.assets, log);
+  const moved = rewireAssetPointers(r.screen.nodes, renamedAssets(r.assets, before));
+  if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
   const screenDoc = r.sourceFile
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
   writeJson(dir, paths.screen, screenDoc, false, log);
+  if (log) { const d = danglingPointers(dir, r.screen.nodes); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
-  const assets = writeAssets(dir, r.assets, log);
   const assetIndex = writeScreenAssets(dir, paths, r.assets);
   // Finding 30 / acceptance criterion 10: a screen whose icons largely fell back to raw geometry
   // (figma-plugin/src/assets.ts geometryOf) instead of a real SVG export gets a warning AT PULL TIME,
@@ -455,6 +578,17 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // title/texts: findings 16/17/70/90/120 — the visible title a user types is a TEXT node inside the
   // frame, not the Figma layer name (`root.name`/`entry.name` below); see pages-layout.ts deriveTitle.
   const title = deriveTitle(root);
+  // F-118: how the reference PNG maps onto the design's coordinates. The plugin renders it at an auto scale
+  // over the node's RENDER bounds (shadows, outside strokes), so a popup with a 21 px shadow is cropped
+  // differently from its box. referenceScale = PNG px per design px; referenceOffset = where the PNG's
+  // top-left sits relative to the box's top-left (design px, usually <= 0).
+  const refAsset = (r.assets || []).find((a) => a && a.kind === "reference" && a.file && assetPointer(a.file) === root.reference);
+  const refSize = refAsset && refAsset.base64 != null ? pngSize(Buffer.from(refAsset.base64, "base64")) : null;
+  const refBox = root.renderBox || root.box;
+  const referenceScale = refSize && refBox && refBox.w ? Math.round((refSize.w / refBox.w) * 10000) / 10000 : undefined;
+  const referenceOffset = referenceScale !== undefined && root.box && typeof root.box.x === "number" && typeof root.box.y === "number"
+    ? (root.renderBox ? { x: root.renderBox.x - root.box.x, y: root.renderBox.y - root.box.y } : { x: 0, y: 0 })
+    : undefined;
   const texts = collectTexts(root);
   // The index row's join keys. A screen with no id at all (no nodeId on the reply, no root node) could
   // only be indexed as a row nothing can ever address again — refuse it, loudly, rather than write it.
@@ -475,6 +609,8 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
     ...ifDefined("variables", r.variables ? paths.variables : undefined),
     ...ifDefined("assets", assetIndex ? paths.assets : undefined),
     ...ifDefined("reference", root.reference),
+    ...ifDefined("referenceScale", referenceScale),
+    ...ifDefined("referenceOffset", referenceOffset),
     ...ifDefined("nodes", (r.screen.manifest && r.screen.manifest.nodes) || undefined),
     ...ifDefined("w", root.box && root.box.w),
     ...ifDefined("h", root.box && root.box.h),
@@ -669,9 +805,9 @@ function writeScreenVariables(dir: string, paths: ScreenPaths, slice: VariablesD
 // having to know which writer its own command implies. Each member of ExportReply carries a field
 // the others do not — `screen` (a screen pull), `reference` (a screenshot), otherwise a catalog with
 // or without a page walk — so `in` narrows the union to the writer's own reply type.
-function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log) {
+function writeAny(outDir: string | null | undefined, r: Stamped<ExportReply>, log?: Log, opts?: { scale?: number | undefined }) {
   if ("screen" in r) return writeScreen(outDir, r, log);
-  if ("reference" in r) return writeScreenshot(outDir, r, log);
+  if ("reference" in r) return writeScreenshot(outDir, r, log, opts);
   return writeExport(outDir, r, log);
 }
 

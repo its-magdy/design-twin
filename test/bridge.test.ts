@@ -3655,6 +3655,173 @@ void (async () => {
     ok("[svg-tolerance] a byte-identical re-pull reports zero redrawn assets", redrawnIdentical.size === 0);
   }
 
+  // ---------- DT-25 / F-35 / F-08 / F-118: the tree names the asset files actually written ----------
+  // writeAssets reuses a byte-identical file already on disk under another name and version-suffixes a
+  // same-name (or same-name-but-case) different file. The screen JSON used to be written BEFORE that, with
+  // the plugin's own names, so nodes pointed at files never written — or, on a case-insensitive disk, at a
+  // different icon — and the index's `reference` at a thumbnail that held the plain name. Fixtures use the
+  // PLUGIN's shape: `Asset.file` is the bare name, the tree's pointer is `assets/<name>` (assets.ts
+  // register()). Invented names.
+  {
+    const dt = await import("../bridge/src/write-out.ts");
+    // A minimal PNG: signature + IHDR (w, h) — enough for writeScreen's size read; `tag` varies the bytes.
+    const png = (w: number, h: number, tag: number): Buffer => {
+      const b = Buffer.alloc(33);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+      b.writeUInt32BE(13, 8); b.write("IHDR", 12, "latin1"); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); b[32] = tag;
+      return b;
+    };
+    const exactExists = (dir: string, rel: string): boolean => {
+      try { return fs.readdirSync(path.join(dir, path.dirname(rel))).includes(path.basename(rel)); } catch { return false; }
+    };
+    const pointers = (tree: unknown): string[] => {
+      const out: string[] = [];
+      const visit = (v: unknown): void => {
+        if (!v || typeof v !== "object") return;
+        if (Array.isArray(v)) { v.forEach(visit); return; }
+        for (const [k, val] of Object.entries(v)) (k === "asset" || k === "reference") && typeof val === "string" ? out.push(val) : visit(val);
+      };
+      visit(tree);
+      return out;
+    };
+    const ddir = fs.mkdtempSync(path.join(os.tmpdir(), "write-asset-ptrs-"));
+    const adir = path.join(ddir, "assets");
+    fs.mkdirSync(adir, { recursive: true });
+    // Already on disk from an earlier pull: a chevron under the LOWER-case name (different glyph), a dot
+    // under its plain name (same bytes the plugin will send under a suffixed name), and a discovery
+    // thumbnail holding the frame's reference slot.
+    fs.writeFileSync(path.join(adir, "chevron-left.svg"), '<svg viewBox="0 0 18 10"><path d="M0 0L9 10L18 0"/></svg>');
+    const dot = '<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>';
+    fs.writeFileSync(path.join(adir, "Dot.svg"), dot);
+    fs.writeFileSync(path.join(adir, "9_1_ref.png"), png(360, 309, 1));
+    const logged: string[] = [];
+    dt.writeScreen(ddir, screenReply({
+      screenName: "Screen A", nodeId: "9:1", page: "Page A", pageId: "1:1",
+      screen: {
+        screen: "Screen A", exportedAt: "2026-09-30T00:00:00.000Z", manifest: { nodes: 3 },
+        nodes: [{
+          id: "9:1", type: "FRAME", name: "Screen A", reference: "assets/9_1_ref.png",
+          box: { x: 100, y: 50, w: 100, h: 50 }, renderBox: { x: 79, y: 49, w: 142, h: 52 },
+          children: [
+            { id: "9:2", type: "VECTOR", name: "Chevron-left", asset: "assets/Chevron-left.svg" },
+            { id: "9:3", type: "ELLIPSE", name: "Dot", asset: "assets/Dot-1a2b3c.svg" },
+          ],
+        }],
+      },
+      assets: [
+        { id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(284, 104, 2).toString("base64"), kind: "reference" },
+        { id: "9:2", name: "Chevron-left", format: "svg", file: "Chevron-left.svg", text: '<svg viewBox="0 0 10 18"><path d="M10 0L0 9L10 18"/></svg>' },
+        { id: "9:3", name: "Dot", format: "svg", file: "Dot-1a2b3c.svg", text: dot },
+      ],
+    }), (m) => logged.push(m));
+    const screenFile = path.join(ddir, "pages", "Page_A", "Screen_A__9_1.json");
+    const written = JSON.parse(fs.readFileSync(screenFile, "utf8")) as ScreenExport;
+    const ptrs = pointers(written.nodes);
+    const manifestFiles = JSON.parse(fs.readFileSync(path.join(ddir, "pages", "Page_A", "Screen_A__9_1.assets.json"), "utf8")) as { files: Array<{ file: string }>; reference?: Array<{ file: string }> };
+    const listed = new Set([...manifestFiles.files, ...(manifestFiles.reference || [])].map((f) => f.file));
+    ok("[DT-25] every asset/reference pointer in the written screen JSON names a file on disk (exact case)",
+      ptrs.length === 3 && ptrs.every((p) => exactExists(ddir, p)));
+    ok("[DT-25] …and the same file .assets.json lists", ptrs.every((p) => listed.has(p)));
+    const kids = written.nodes[0]?.children ?? [];
+    ok("[DT-25] a content-identical asset points at the file already on disk (Dot.svg), not the plugin's suffixed name",
+      kids[1]?.asset === "assets/Dot.svg");
+    ok("[F-35] a same-name-but-case different glyph gets its own file, and the node points at IT — never at the lower-case chevron",
+      typeof kids[0]?.asset === "string" && kids[0].asset !== "assets/Chevron-left.svg" && kids[0].asset !== "assets/chevron-left.svg" &&
+      fs.readFileSync(path.join(ddir, kids[0].asset), "utf8").includes("M10 0L0 9L10 18"));
+    const rootRow = must((JSON.parse(fs.readFileSync(path.join(ddir, "pages", "index.json"), "utf8")) as PagesRootIndex).layers?.[0], "root row");
+    const refFile = must(rootRow.reference, "rootRow.reference");
+    const refPng = fs.readFileSync(path.join(ddir, refFile));
+    ok("[F-08] the index row's reference is the full-size render this pull wrote, not the thumbnail that held the plain name",
+      refFile !== "assets/9_1_ref.png" && refPng.readUInt32BE(16) === 284 && written.nodes[0]?.reference === refFile);
+    ok("[F-118] the index row records the reference's scale and its offset from the box (render bounds include the shadow)",
+      rootRow.referenceScale === 2 && rootRow.referenceOffset?.x === -21 && rootRow.referenceOffset?.y === -1);
+    ok("[DT-25] the pull says it rewired pointers, and reports no dangling pointer", logged.some((m) => /rewired 3 asset pointer/.test(m)) && !logged.some((m) => /not on disk/.test(m)));
+
+    // A discovery thumbnail at an explicit scale never takes the reference slot.
+    const sh = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-"));
+    const shot = dt.writeScreenshot(sh, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(90, 77, 3).toString("base64"), kind: "reference" }] }, undefined, { scale: 0.25 });
+    ok("[F-08] a screenshot at an explicit --scale is written as <id>_shot@<scale>x.png and leaves <id>_ref.png free",
+      shot.reference === "assets/9_1_shot@0.25x.png" && exactExists(sh, "assets/9_1_shot@0.25x.png") && !exactExists(sh, "assets/9_1_ref.png"));
+    const sh2 = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot2-"));
+    const shot2 = dt.writeScreenshot(sh2, { id: "9:1", name: "Screen A", type: "FRAME", reference: "assets/9_1_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:1:ref", name: "Screen A (reference)", format: "png", file: "9_1_ref.png", base64: png(284, 104, 4).toString("base64"), kind: "reference" }] }, undefined);
+    ok("[F-08] a default-scale screenshot keeps the shared <id>_ref.png name (a later pull reuses the same render)", shot2.reference === "assets/9_1_ref.png");
+
+    // A page walk: the layer files are written after the assets, with rewired pointers too.
+    const pw = fs.mkdtempSync(path.join(os.tmpdir(), "write-walk-"));
+    fs.mkdirSync(path.join(pw, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(pw, "assets", "Dot.svg"), dot);
+    dt.writeExport(pw, {
+      designSystem: { variables: [], collections: [], components: [] },
+      layersDoc: {
+        layers: [{ id: "9:1", name: "Screen A", page: "Page A", pageId: "1:1", tree: node({ id: "9:1", type: "FRAME", name: "Screen A", children: [{ id: "9:3", type: "ELLIPSE", name: "Dot", asset: "assets/Dot-1a2b3c.svg" }] }) }],
+        index: [{ id: "9:1", name: "Screen A", type: "FRAME", page: "Page A", pageId: "1:1" }],
+      },
+      assets: [{ id: "9:3", name: "Dot", format: "svg", file: "Dot-1a2b3c.svg", text: dot }],
+    }, undefined);
+    const walkFiles = fs.readdirSync(path.join(pw, "pages"), { recursive: true }).map(String).filter((f) => f.endsWith(".json") && !f.endsWith("index.json"));
+    const walkPtrs = walkFiles.flatMap((f) => pointers(JSON.parse(fs.readFileSync(path.join(pw, "pages", f), "utf8")) as unknown));
+    ok("[DT-25] a page walk's layer files also point at the file actually on disk", walkPtrs.length === 1 && walkPtrs[0] === "assets/Dot.svg" && exactExists(pw, "assets/Dot.svg"));
+    // Two frames that render identically keep their OWN reference files (the plugin never dedups a
+    // reference; one `reference` naming another frame's PNG is the confusion it exists to prevent).
+    const twin = fs.mkdtempSync(path.join(os.tmpdir(), "write-twin-refs-"));
+    const same = png(200, 100, 7).toString("base64");
+    for (const id of ["9:5", "9:6"]) {
+      const safeId = id.replace(":", "_");
+      dt.writeScreen(twin, screenReply({
+        screenName: "Twin " + safeId, nodeId: id, page: "Page A", pageId: "1:1",
+        screen: { screen: "Twin " + safeId, manifest: { nodes: 1 }, nodes: [{ id, type: "FRAME", name: "Twin " + safeId, reference: `assets/${safeId}_ref.png`, box: { x: 0, y: 0, w: 100, h: 50 } }] },
+        assets: [{ id: id + ":ref", name: "Twin (reference)", format: "png", file: `${safeId}_ref.png`, base64: same, kind: "reference" }],
+      }), undefined);
+    }
+    const twinRows = (JSON.parse(fs.readFileSync(path.join(twin, "pages", "index.json"), "utf8")) as PagesRootIndex).layers ?? [];
+    ok("[DT-25] two identical-looking frames keep their own <id>_ref.png — a reference is never shared across frames",
+      twinRows.length === 2 && twinRows.some((r) => r.reference === "assets/9_5_ref.png") && twinRows.some((r) => r.reference === "assets/9_6_ref.png") &&
+      exactExists(twin, "assets/9_5_ref.png") && exactExists(twin, "assets/9_6_ref.png"));
+    ok("[F-08] a default-scale screenshot followed by the pull's identical render reuses the one file (no suffixed copy)", (() => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "write-shot-then-pull-"));
+      const bytes = png(284, 104, 9).toString("base64");
+      dt.writeScreenshot(d, { id: "9:7", name: "Screen B", type: "FRAME", reference: "assets/9_7_ref.png", manifest: manifest({ nodes: 1 }),
+        assets: [{ id: "9:7:ref", name: "Screen B (reference)", format: "png", file: "9_7_ref.png", base64: bytes, kind: "reference" }] }, undefined);
+      dt.writeScreen(d, screenReply({ screenName: "Screen B", nodeId: "9:7", page: "Page A", pageId: "1:1",
+        screen: { screen: "Screen B", manifest: { nodes: 1 }, nodes: [{ id: "9:7", type: "FRAME", name: "Screen B", reference: "assets/9_7_ref.png", box: { x: 0, y: 0, w: 142, h: 52 } }] },
+        assets: [{ id: "9:7:ref", name: "Screen B (reference)", format: "png", file: "9_7_ref.png", base64: bytes, kind: "reference" }] }), undefined);
+      const files = fs.readdirSync(path.join(d, "assets"));
+      fs.rmSync(d, { recursive: true, force: true });
+      return files.length === 1 && files[0] === "9_7_ref.png";
+    })());
+    // Re-pulls over a reference name that holds OTHER bytes (an old thumbnail): the first pull writes one
+    // suffixed copy, every later pull of the same render reuses it — never `_1`, `_2`, … (review of this fix).
+    const again = fs.mkdtempSync(path.join(os.tmpdir(), "write-repull-"));
+    fs.mkdirSync(path.join(again, "assets"));
+    fs.writeFileSync(path.join(again, "assets", "9_9_ref.png"), png(90, 77, 11));
+    const render = png(284, 104, 12).toString("base64");
+    const pullOnce = () => dt.writeScreen(again, screenReply({ screenName: "Screen C", nodeId: "9:9", page: "Page A", pageId: "1:1",
+      screen: { screen: "Screen C", manifest: { nodes: 1 }, nodes: [{ id: "9:9", type: "FRAME", name: "Screen C", reference: "assets/9_9_ref.png", box: { x: 0, y: 0, w: 142, h: 52 } }] },
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png", file: "9_9_ref.png", base64: render, kind: "reference" }] }), undefined);
+    pullOnce(); pullOnce(); pullOnce();
+    const walkOnce = () => dt.writeExport(again, {
+      designSystem: { variables: [], collections: [], components: [] },
+      layersDoc: { layers: [{ id: "9:9", name: "Screen C", page: "Page A", pageId: "1:1", reference: "assets/9_9_ref.png", tree: node({ id: "9:9", type: "FRAME", name: "Screen C" }) }], index: [{ id: "9:9", name: "Screen C", type: "FRAME", page: "Page A", pageId: "1:1" }] },
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png", file: "9_9_ref.png", base64: render, kind: "reference" }],
+    }, undefined);
+    walkOnce(); walkOnce();
+    const refFiles = fs.readdirSync(path.join(again, "assets")).filter((f) => f.startsWith("9_9_ref")).sort();
+    ok("[DT-25] three pulls and two page walks of an unchanged frame over an old thumbnail leave exactly ONE extra reference file",
+      refFiles.length === 2 && refFiles.includes("9_9_ref.png") && refFiles.some((f) => /^9_9_ref-[0-9a-z]{6}\.png$/.test(f)));
+    const shotsDir = fs.mkdtempSync(path.join(os.tmpdir(), "write-reshoot-"));
+    fs.mkdirSync(path.join(shotsDir, "assets"));
+    fs.writeFileSync(path.join(shotsDir, "assets", "9_9_shot@0.25x.png"), png(20, 10, 13));
+    const thumb = { id: "9:9", name: "Screen C", type: "FRAME", reference: "assets/9_9_ref.png", manifest: manifest({ nodes: 1 }),
+      assets: [{ id: "9:9:ref", name: "Screen C (reference)", format: "png" as const, file: "9_9_ref.png", base64: png(36, 13, 14).toString("base64"), kind: "reference" as const }] };
+    dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
+    dt.writeScreenshot(shotsDir, structuredClone(thumb), undefined, { scale: 0.25 });
+    ok("[F-08] re-shooting the same thumbnail over a stale one adds one file, not one per shot",
+      fs.readdirSync(path.join(shotsDir, "assets")).length === 2);
+    for (const d of [ddir, sh, sh2, pw, twin, again, shotsDir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+
   // ---------------------------------------------------------------- report
   report();
 })();

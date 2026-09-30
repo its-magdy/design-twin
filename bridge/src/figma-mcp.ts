@@ -224,7 +224,7 @@ async function withProgress<R>(extra: ToolExtra | undefined, run: (onTick: OnTic
 /** The two writeShape arguments every export tool reads — what Zod parses them to, not a restatement. */
 type WriteArgs = z.output<z.ZodObject<typeof writeShape>>;
 
-function exportResult(a: WriteArgs, r: ExportReply) {
+function exportResult(a: WriteArgs, r: ExportReply, opts?: { scale?: number | undefined }) {
   let spilled = "";
   if (!a || !a.writeToDisk) {
     const inline = textResult(stripAssets(r));
@@ -237,7 +237,7 @@ function exportResult(a: WriteArgs, r: ExportReply) {
   // Validate BEFORE writing anything: a rejected outDir must not leave a half-written export behind.
   // guarded() turns the throw into an isError result naming the offending path.
   assertInsideCwd(a.outDir);
-  const written = writeAny(a.outDir, r, wlog);
+  const written = writeAny(a.outDir, r, wlog, opts);
   return textResult({
     ...written,
     note: spilled + "Export written to disk; node payloads intentionally omitted from this result. Read the files under outDir (start with the index) to inspect them at your own granularity.",
@@ -611,7 +611,7 @@ server.registerTool(
   guarded(async (a) => {
     const nodeId = toNodeId(a.nodeId);
     if (!nodeId) return errorResult("Provide a node id (e.g. 123:456) or a Figma URL containing ?node-id=... — see figma_list_pages.");
-    return exportResult(a, await bridge.request("screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client));
+    return exportResult(a, await bridge.request("screenshot", { nodeId, ...ifDefined("scale", a.scale) }, TIMEOUTS.export, a && a.client), { scale: a.scale });
   })
 );
 
