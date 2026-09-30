@@ -37,6 +37,9 @@ function project(files: Record<string, string>, plan: unknown, map?: unknown) {
   return root;
 }
 const runHook = (root: string, stdin?: object) => spawnSync(process.execPath, [HOOK], { input: JSON.stringify(stdin || { cwd: root }), encoding: "utf8" });
+// A transcript line as Claude Code writes it: one JSON object per line, tool calls as message.content[] tool_use items.
+const toolUse = (name: string, input: object, sidechain = false) => JSON.stringify({ type: "assistant", isSidechain: sidechain, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_x", name, input }] } });
+const toolResult = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_x", content: text }] } });
 const planOf = (root: string): Plan => readFixture(path.join(root, "design", "plan", "login.json"), isPlan);
 // One row of `verify-build --status --json` (the CLI prints {plan, status, why, reasons, reports}).
 const isStatusRows = (x: unknown): x is StatusRow[] => Array.isArray(x) && x.every((r) => isJsonObject(r) && typeof r.plan === "string" && typeof r.status === "string" && Array.isArray(r.reasons));
@@ -82,7 +85,8 @@ check("[alpha] rgba() percent and decimal alpha land on the SAME key as the #rrg
 })());
 check("[alpha] a scrim is no longer exempted by an allowedLiterals entry for the opaque colour", (() => {
   const scrim = { value: "#ffffff1a", kind: "color", codeToken: "bg-scrim", verdict: "exact" };
-  const pr = problems({ "a.tsx": "bg-[#ffffff1a]" }, { files: ["a.tsx"], tokens: [scrim],
+  // (theme.css is outside files[]: it only declares --color-scrim, so the undeclared-token check is satisfied)
+  const pr = problems({ "a.tsx": "bg-[#ffffff1a]", "theme.css": "@theme { --color-scrim: #ffffff1a; }" }, { files: ["a.tsx"], tokens: [scrim],
     allowedLiterals: [{ value: "#ffffff", reason: "theme defines white" }], verification: STATIC });
   // …and the message names the spelling that is actually in the code, not the other one.
   const msg = must(pr[0], "pr[0]");
@@ -203,7 +207,9 @@ check("[no-token] a REAL token is still enforced — the sentinel list is not a 
 // was called `on-surface`).
 (() => {
   const row = (figmaName: string, value: string, codeToken: string) => ({ figmaName, value, kind: "color", codeToken, verdict: "exact" });
-  const merged = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+  // a theme (outside files[]) declaring every code token below, so only the identity check speaks
+  const THEME = { "a.tsx": "", "theme.css": "@theme { --color-on-surface: #1b1b21; --color-on-primary: #ffffff; }" };
+  const merged = problems(THEME, { files: ["a.tsx"], verification: STATIC, tokens: [
     row("Schemes/On Primary", "#ffffff", "text-on-surface"),
     row("Schemes/On Surface", "#ffffff", "text-on-surface"),
   ] });
@@ -221,11 +227,11 @@ check("[no-token] a REAL token is still enforced — the sentinel list is not a 
   // The same Figma token legitimately appears on several rows (one per node/usage) — that is one
   // identity, not a collision, and flagging it would make honest plans unfinishable.
   check("[identity] the SAME Figma token repeated across rows is not a collision",
-    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+    problems(THEME, { files: ["a.tsx"], verification: STATIC, tokens: [
       row("Schemes/On Primary", "#ffffff", "text-on-primary"),
       row("Schemes/On Primary", "#ffffff", "text-on-primary")] }).length === 0);
   check("[identity] distinct Figma tokens on DISTINCT code tokens is the correct case and passes",
-    problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [
+    problems(THEME, { files: ["a.tsx"], verification: STATIC, tokens: [
       row("Schemes/On Primary", "#ffffff", "text-on-primary"),
       row("Schemes/On Surface", "#1b1b21", "text-on-surface")] }).length === 0);
   // Backward compatibility: plans predating figmaName, and genuinely unbound values, have no
@@ -337,19 +343,20 @@ check("fan-out: an agent is judged on the plan ITS transcript mentions, not a si
   const sibling = path.join(root, "design", "plan", "settings.json");
   fs.writeFileSync(sibling, JSON.stringify(SIBLING));
   const mine = path.join(root, "agent-a.jsonl"), none = path.join(root, "none.jsonl");
-  fs.writeFileSync(mine, JSON.stringify({ tool: "Write", file_path: root + "/design/plan/login.json" }));
+  fs.writeFileSync(mine, toolUse("Write", { file_path: root + "/design/plan/login.json", content: "{}" }));
   fs.writeFileSync(none, "{}");
-  const unscoped = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: none }).status; // no evidence → all plans → blocked
-  fs.writeFileSync(sibling, JSON.stringify(SIBLING)); // forget the unscoped run's record
+  // F-45: a transcript naming no plan checks nothing (it used to fall back to every open plan and block)
+  const unscoped = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: none }).status;
+  const untouched = !readFixture(sibling, isPlan).verification?.hook;
   const r = runHook(root, { cwd: root, agent_id: "a1", agent_transcript_path: mine });
   const sib = readFixture(sibling, isPlan);
-  return unscoped === 2 && r.status === 0 && hookOf(root).result === "pass" && sib.status === "pending" && !sib.verification?.hook;
+  return unscoped === 0 && untouched && r.status === 0 && hookOf(root).result === "pass" && sib.status === "pending" && !sib.verification?.hook;
 })());
 check("fan-out: the session transcript is never used to scope a SUBAGENT's stop", (() => {
   const root = project({ "a.tsx": "text-brand-600", "b.tsx": "#5B5FC7" }, { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC });
   fs.writeFileSync(path.join(root, "design", "plan", "settings.json"), JSON.stringify(SIBLING));
   const main = path.join(root, "main.jsonl");
-  fs.writeFileSync(main, "design/plan/login.json");
+  fs.writeFileSync(main, toolUse("Edit", { file_path: "design/plan/login.json", old_string: "a", new_string: "b" }));
   return runHook(root, { cwd: root, agent_id: "a1", transcript_path: main }).status === 2 && runHook(root, { cwd: root, transcript_path: main }).status === 0;
 })());
 check("missing coverage / a11y evidence WARNS on a passing rendered plan — exit 0", (() => {
@@ -738,6 +745,303 @@ console.log("P2b follow-up — --status on the untouched live plan: precedence, 
   check(`precedence: a failing @2 report is "failed" even before the hook has run, and why still says the hook has not (got ${r2.status})`,
     r2.status === "failed" && /says verdict "fail" \(FAIL — nodes measured 76\/186\)/.test(r2.why ?? "") && /hook: the build-screen Stop hook has not checked/.test(r2.why ?? ""));
   check("--help documents the precedence", /First match wins/.test(spawnSync(process.execPath, [HOOK, "--help"], { encoding: "utf8" }).stdout));
+}
+
+console.log("field-test fixes (F-45, F-31, F-43, F-54, F-58, F-124):");
+{
+  // A second plan in a project() root (project() writes design/plan/login.json).
+  const addPlan = (root: string, name: string, plan: Plan) => fs.writeFileSync(path.join(root, "design", "plan", name + ".json"), JSON.stringify(plan));
+  const planAt = (root: string, name: string) => readFixture(path.join(root, "design", "plan", name + ".json"), isPlan);
+  const BLOCKING: Plan = { status: "pending", files: ["a.tsx"], tokens: [brand], verification: STATIC };
+
+  // F-45: build-screen's Stop hook is skill-scoped, so it fires in an orchestrator session too.
+  check("[F-45] a session transcript that names no plan: exit 0, nothing blocked, no plan written", (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+    const t = path.join(root, "orchestrator.jsonl");
+    fs.writeFileSync(t, JSON.stringify({ role: "assistant", text: "spawned two builders" }));
+    const r = runHook(root, { cwd: root, transcript_path: t });
+    return r.status === 0 && !planOf(root).verification?.hook && !/BLOCKED|raw colour/.test(r.stderr) && r.stderr.trim().split("\n").length <= 1;
+  })());
+  check("[F-45] the screen-builder's SubagentStop still finds its plan through agent_transcript_path (and blocks on it)", (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+    const t = path.join(root, "agent.jsonl");
+    fs.writeFileSync(t, toolUse("Bash", { command: "node plan-skeleton.js … --out design/plan/login.json" }));
+    const r = runHook(root, { cwd: root, agent_id: "b1", agent_transcript_path: t, transcript_path: path.join(root, "orchestrator.jsonl") });
+    return r.status === 2 && hookOf(root).result === "blocked";
+  })());
+
+  // F-31: two tokens that share a hex, each defined in the theme, neither used as a literal.
+  const surface: PlanTokenRow = { figmaName: "Surface/Page", value: "#1d1d1f", kind: "color", codeToken: "surface-page", verdict: "exact" };
+  const canvas: PlanTokenRow = { figmaName: "Surface/Canvas", value: "#1d1d1f", kind: "color", codeToken: "surface-canvas", verdict: "exact" };
+  const twoDefs = (css: string) => split({ "theme.css": css, "Card.tsx": '<div className="bg-surface-page text-surface-canvas" />' },
+    { files: ["theme.css", "Card.tsx"], tokens: [surface, canvas], verification: STATIC });
+  const multi = twoDefs("@theme {\n  --color-surface-page: #1d1d1f;\n  --color-surface-canvas: #1d1d1f;\n}");
+  const oneLine = twoDefs("@theme { --color-surface-page: #1d1d1f; --color-surface-canvas: #1d1d1f; }");
+  check("[F-31] two tokens with one hex, each on its own definition line, never used raw → no block", multi.blocking.length === 0);
+  check("[F-31] …and the same with both definitions on ONE line", oneLine.blocking.length === 0);
+  check("[F-31] no blocking message ever has an empty file list ('raw colour #… in , but')",
+    [...multi.blocking, ...oneLine.blocking].every((m) => !/ in ,? *, but| in , but/.test(m)));
+  check("[F-31] a definition and a raw usage on the same line still blocks (every occurrence must be a definition)",
+    has(split({ "theme.css": ".x { --color-surface-page: #1d1d1f; color: #1d1d1f; }" }, { files: ["theme.css"], tokens: [surface, canvas], verification: STATIC }).blocking, /raw colour #1d1d1f in theme\.css, but/));
+  check("[F-31] the shared hex used raw in a component blocks, naming only that file", (() => {
+    const b = split({ "theme.css": "@theme {\n  --color-surface-page: #1d1d1f;\n  --color-surface-canvas: #1d1d1f;\n}", "Card.tsx": "<div style={{ color: '#1d1d1f' }} />" },
+      { files: ["theme.css", "Card.tsx"], tokens: [surface, canvas], verification: STATIC }).blocking;
+    return b.length === 1 && /in Card\.tsx, but/.test(must(b[0], "b[0]"));
+  })());
+
+  // F-43 (a): a merge a person decided on is acknowledged once, in the plan.
+  const row = (figmaName: string, codeToken: string, extra?: Partial<PlanTokenRow>): PlanTokenRow => ({ figmaName, value: "14", kind: "fontSize", codeToken, verdict: "exact", ...extra });
+  check("[F-43] an `acknowledged` reason on the sharing row silences the merged-token warning",
+    !has(problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [row("Body/Small", "text-sm"), row("Size/Small", "text-sm", { acknowledged: "one type scale step; both names are the same size in every mode" })] }), /DIFFERENT Figma tokens/));
+  check("[F-43] …an empty `acknowledged` does not, and says so", (() => {
+    const pr = problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC, tokens: [row("Body/Small", "text-sm"), row("Size/Small", "text-sm", { acknowledged: " " })] });
+    return has(pr, /DIFFERENT Figma tokens/) && has(pr, /empty `acknowledged`/);
+  })());
+  // F-43 (b): a component rendered through a shared shell that another plan lists.
+  const reusedBar = { name: "TopBar", nodeId: "1:5", mapModule: "src/components/TopBar.tsx", verdict: "reused" };
+  const shellProject = (shellImports: boolean) => {
+    const root = project({ "src/screens/ScreenA.tsx": "import { Shell } from '../layout/Shell';", "src/layout/Shell.tsx": shellImports ? "import { TopBar } from '@/components/TopBar';" : "export const Shell = () => null;", "src/components/TopBar.tsx": "" },
+      { files: ["src/screens/ScreenA.tsx"], components: [reusedBar], verification: STATIC });
+    addPlan(root, "screen-b", { files: ["src/layout/Shell.tsx", "src/components/TopBar.tsx"], verification: STATIC });
+    return checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings;
+  };
+  check("[F-43] a reused module imported by a file of ANOTHER plan (a shared shell) is not 'never imported'", !has(shellProject(true), /imports that module/));
+  check("[F-43] …while one no plan's files import is still reported", has(shellProject(false), /'TopBar' is "reused".*no file in files\[\] imports that module/));
+
+  // F-54: a deviation that says a node was left out, while the plan says it was reused.
+  check("[F-54] a deviation marking a node omitted while components[] says it was reused warns", has(problems({ "a.tsx": "import { Icon } from '@/ui/Icon';" }, { files: ["a.tsx"], verification: STATIC,
+    components: [{ name: "Icon", nodeId: "2:7", mapModule: "@/ui/Icon", verdict: "reused" }],
+    deviations: [{ nodeId: "2:7", designed: "group icon", built: "omitted", reason: "icons in the group header were left out" }] }),
+  /deviation #0 says node 2:7 was not built, but components\[\] marks 'Icon' "reused"/));
+  check("[F-54] …and so does one whose anchor still maps the node to a module", has(problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC,
+    anchors: { "2:8": { mapModule: "src/Card.tsx" } }, deviations: [{ nodeId: "2:8", designed: "badge", built: null, reason: "no data for it" }] }), /node 2:8 was not built, but anchors\["2:8"\] maps it to src\/Card\.tsx/));
+  check("[F-54] a named non-style field (\"leading icon\") built \"omitted\" on a reused node warns", has(problems({ "a.tsx": "import { Icon } from '@/ui/Icon';" }, { files: ["a.tsx"], verification: STATIC,
+    components: [{ name: "Icon", nodeId: "2:7", mapModule: "@/ui/Icon", verdict: "reused" }],
+    deviations: [{ nodeId: "2:7", field: "leading icon", designed: "icon", built: "omitted", reason: "no asset" }] }), /node 2:7 was not built/));
+  check("[F-54] built \"omitted (no asset)\" on an anchored node warns", has(problems({ "a.tsx": "" }, { files: ["a.tsx"], verification: STATIC,
+    anchors: { "2:8": { mapModule: "src/Card.tsx" } }, deviations: [{ nodeId: "2:8", field: "badge", designed: "badge", built: "omitted (no asset)", reason: "the export has no badge image" }] }), /node 2:8 was not built/));
+  check("[F-54] an ordinary value deviation on a reused node does not", !has(problems({ "a.tsx": "import { Icon } from '@/ui/Icon';" }, { files: ["a.tsx"], verification: STATIC,
+    components: [{ name: "Icon", nodeId: "2:7", mapModule: "@/ui/Icon", verdict: "reused" }],
+    deviations: [{ nodeId: "2:7", field: "x", designed: 10, built: 12, reason: "aligned to the grid" }] }), /was not built/));
+
+  // F-58: web builds must carry data-dt-node tags.
+  const anchors4 = { "3:1": { mapModule: "src/ScreenA.tsx" }, "3:2": { mapModule: "src/ScreenA.tsx" }, "3:3": { mapModule: "src/ScreenA.tsx" }, "3:4": { mapModule: "src/ScreenA.tsx" }, "3:5": { omitted: "decorative" } };
+  const web = (src: string, extra?: Partial<Plan>, files?: Record<string, string>) => split({ "src/ScreenA.tsx": src, ...files }, { target: "web-tailwind", files: ["src/ScreenA.tsx"], anchors: anchors4, verification: STATIC, ...extra });
+  check("[F-58] a web plan whose files carry no data-dt-node at all BLOCKS, with the figure", has(web("<div>// 3:1</div>").blocking, /no data-dt-node tags.*0 of 4 anchored visible node/));
+  check("[F-58] one tag of four: a WARNING with the coverage figure, not a block", (() => {
+    const r = web('<div data-dt-node="3:1" />');
+    return r.blocking.length === 0 && has(r.warnings, /tag coverage is 1\/4 anchored visible node\(s\) \(25%\), below 50%/);
+  })());
+  check("[F-58] ids from a lookup table count as tags (data-dt-node={IDS.x})", (() => {
+    const r = web('const IDS = { a: "3:1", b: "3:2", c: "3:3" };\n<div data-dt-node={IDS.a} />');
+    return r.blocking.length === 0 && !has(r.warnings, /tag coverage/) && r.tagCoverage?.tagged === 3 && r.tagCoverage.anchored === 4;
+  })());
+  check("[F-58] tags in a shared shell listed by ANOTHER plan count", (() => {
+    const root = project({ "src/ScreenA.tsx": "<main />", "src/Shell.tsx": '<nav data-dt-node="3:1" /><header data-dt-node="3:2" /><aside data-dt-node="3:3" />' },
+      { target: { profile: "web-tailwind" }, files: ["src/ScreenA.tsx"], anchors: anchors4, verification: STATIC });
+    addPlan(root, "screen-b", { files: ["src/Shell.tsx"], verification: STATIC });
+    const r = checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root);
+    return r.blocking.length === 0 && r.tagCoverage?.tagged === 3;
+  })());
+  check("[F-58] the profile falls back to design/target.json when the plan's target is null", has(web("<div />", { target: null }, { "design/target.json": '{"profile":"web-tailwind"}' }).blocking, /no data-dt-node tags/));
+  check("[F-58] a non-web profile is not checked", web("<div />", { target: "swiftui" }).blocking.length === 0 && web("<div />", { target: null }).blocking.length === 0);
+  check("[F-58] the opt-out with a reason skips the check", (() => { const r = web("<div />", { tagging: { off: true, reason: "the host app strips unknown attributes" } }); return r.blocking.length === 0 && !has(r.warnings, /tagging/); })());
+  check("[F-58] …without a reason it is ignored, and says so", (() => { const r = web("<div />", { tagging: { off: true } }); return has(r.blocking, /no data-dt-node tags/) && has(r.warnings, /`tagging\.off` is set with no `reason`/); })());
+  check("[F-58] the hook records tagCoverage {tagged, anchored} (numbers only) in verification.hook", (() => {
+    const root = project({ "src/ScreenA.tsx": '<div data-dt-node="3:1" /><div data-dt-node="3:2" />' }, { status: "pending", target: "web-tailwind", files: ["src/ScreenA.tsx"], anchors: anchors4, verification: STATIC });
+    const r = runHook(root);
+    const tc = hookOf(root).tagCoverage;
+    return r.status === 0 && tc !== undefined && tc.tagged === 2 && tc.anchored === 4 && Object.keys(tc).length === 2;
+  })());
+
+  // F-124: a colour code token nothing declares.
+  const colourRows: PlanTokenRow[] = [
+    { figmaName: "Surface/Base", value: "#111111", kind: "color", codeToken: "bg-surface-base", verdict: "exact" },
+    { figmaName: "Surface/On Base", value: "#222222", kind: "color", codeToken: "text-on-surface-base", verdict: "exact" },
+  ];
+  const tok = (css: Record<string, string>) => problems({ "src/A.tsx": '<p className="bg-surface-base text-on-surface-base" />', ...css }, { files: ["src/A.tsx"], tokens: colourRows, verification: STATIC });
+  check("[F-124] a colour codeToken declared nowhere (the theme has only its sibling) warns, naming it",
+    has(tok({ "src/theme.css": "@theme {\n  --color-surface-base: #111111;\n  --Surface-On-Base: #222222;\n}" }), /1 colour code token\(s\) are declared nowhere.*'text-on-surface-base'/));
+  check("[F-124] …not when a project .css (not in files[]) declares both", !has(tok({ "src/theme.css": "@theme {\n  --color-surface-base: #111111;\n  --color-on-surface-base: #222222;\n}" }), /declared nowhere/));
+  check("[F-124] a declaration under node_modules/ or design/ does not count", has(tok({ "src/theme.css": "@theme { --color-surface-base: #111111; }", "node_modules/x/a.css": ":root { --color-on-surface-base: #222222; }", "design/notes.css": ":root { --color-on-surface-base: #222222; }" }), /declared nowhere.*'text-on-surface-base'/));
+
+  // Review follow-ups.
+  check("[F-45] an orchestrator whose only mentions are an Agent prompt and a subagent's report: nothing checked", (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+    const t = path.join(root, "orchestrator.jsonl");
+    fs.writeFileSync(t, [toolUse("Agent", { subagent_type: "screen-builder", prompt: "Build Screen A; its plan is design/plan/login.json" }),
+      toolResult("done — wrote design/plan/login.json"), JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "design/plan/login.json is next" }] } }),
+      toolUse("Write", { file_path: "design/plan/login.json" }, true)].join("\n"));
+    const r = runHook(root, { cwd: root, transcript_path: t });
+    return r.status === 0 && !planOf(root).verification?.hook;
+  })());
+  check("[F-45] a builder transcript with a Write to the plan: checked", (() => {
+    const root = project({ "a.tsx": "#5B5FC7" }, BLOCKING);
+    const t = path.join(root, "builder.jsonl");
+    fs.writeFileSync(t, toolUse("Write", { file_path: path.join(root, "design", "plan", "login.json"), content: "{}" }));
+    return runHook(root, { cwd: root, transcript_path: t }).status === 2 && hookOf(root).result === "blocked";
+  })());
+  check("[F-31] a plain CSS property is never a token definition: `border-color: #e5e5e5` with tokens input/border BLOCKS", (() => {
+    const tk = (codeToken: string): PlanTokenRow => ({ figmaName: "Line/" + codeToken, value: "#e5e5e5", kind: "color", codeToken, verdict: "exact" });
+    return has(split({ "a.css": ".card { border-color: #e5e5e5; }" }, { files: ["a.css"], tokens: [tk("input"), tk("border")], verification: STATIC }).blocking, /raw colour #e5e5e5 in a\.css, but/);
+  })());
+  check("[F-43] a module only a SIBLING screen imports (not through this plan's files) is still 'never imported'", (() => {
+    const root = project({ "src/A.tsx": "export const A = () => null;", "src/B.tsx": "import { TopBar } from './TopBar';", "src/TopBar.tsx": "" },
+      { files: ["src/A.tsx"], components: [{ name: "TopBar", nodeId: "1:5", mapModule: "src/TopBar.tsx", verdict: "reused" }], verification: STATIC });
+    addPlan(root, "screen-b", { files: ["src/B.tsx"], verification: STATIC });
+    return has(checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings, /'TopBar' is "reused".*no file in files\[\] imports that module/);
+  })());
+  // F-43: the shell is rendered by an ANCESTOR of this plan's files (Main → routes → this page; Main → Shell → SideNav).
+  const ancestorProject = (cycle: boolean) => {
+    const root = project({
+      "src/Main.tsx": "import { Shell } from './layout/Shell';\nimport { routes } from './routes';",
+      "src/routes.tsx": "import { PageA } from './pages/PageA';" + (cycle ? "\nimport { Main } from './Main';" : ""),
+      "src/pages/PageA.tsx": cycle ? "import { routes } from '../routes';" : "export const PageA = () => null;",
+      "src/layout/Shell.tsx": "import { SideNav } from './SideNav';",
+      "src/layout/SideNav.tsx": "",
+    }, { files: ["src/routes.tsx", "src/pages/PageA.tsx"], components: [{ name: "SideNav", nodeId: "1:6", mapModule: "src/layout/SideNav.tsx", verdict: "reused" }], verification: STATIC });
+    // the shell is shared: listed by more than one plan (a file listed by exactly one OTHER plan is that screen's own)
+    addPlan(root, "app-shell", { files: ["src/Main.tsx", "src/layout/Shell.tsx", "src/layout/SideNav.tsx"], verification: STATIC });
+    addPlan(root, "screen-c", { files: ["src/layout/Shell.tsx"], verification: STATIC });
+    return checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings;
+  };
+  check("[F-43] a module a file RENDERING this plan's files imports through one shell file (Main → Shell → SideNav) is not 'never imported'", !has(ancestorProject(false), /imports that module/));
+  check("[F-43] …and an import cycle in the graph neither hangs nor changes that", !has(ancestorProject(true), /imports that module/));
+  check("[F-43] a sibling screen reached through a common parent (App → Page → {ScreenA, ScreenB}) does not lend plan A ScreenB's imports", (() => {
+    const root = project({ "src/App.tsx": "import { Page } from './Page';", "src/Page.tsx": "import { ScreenA } from './ScreenA';\nimport { ScreenB } from './ScreenB';",
+      "src/ScreenA.tsx": "export const ScreenA = () => null;", "src/ScreenB.tsx": "import { Widget } from './Widget';", "src/Widget.tsx": "" },
+    { files: ["src/ScreenA.tsx"], components: [{ name: "Widget", nodeId: "1:7", mapModule: "src/Widget.tsx", verdict: "reused" }], verification: STATIC });
+    addPlan(root, "screen-b", { files: ["src/ScreenB.tsx", "src/Page.tsx", "src/App.tsx"], verification: STATIC });
+    return has(checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings, /'Widget' is "reused".*no file in files\[\] imports that module/);
+  })());
+  check("[F-54] a FIELD-level deviation on a reused node (a shadow not built) is not a whole-node omission", !has(problems({ "a.tsx": "import { Card } from '@/ui/Card';" }, { files: ["a.tsx"], verification: STATIC,
+    components: [{ name: "Card", nodeId: "2:9", mapModule: "@/ui/Card", verdict: "reused" }],
+    deviations: [{ nodeId: "2:9", field: "effects", designed: "drop shadow", built: "none", reason: "shadow dropped: the host theme has no elevation token" }] }), /was not built/));
+  {
+    const c = (codeToken: string): PlanTokenRow => ({ figmaName: "Brand/" + codeToken, value: "#123456", kind: "color", codeToken, verdict: "exact" });
+    const f124 = (codeToken: string) => problems({ "src/A.tsx": "<p />", "src/theme.css": "@theme { --color-primary: #123456; }" }, { files: ["src/A.tsx"], tokens: [c(codeToken)], verification: STATIC });
+    check("[F-124] free-text / modifier / built-in tokens are quiet: 'bg-primary / text-primary', 'text-primary/80', 'bg-white', 'text-gray-500'",
+      ["bg-primary / text-primary", "text-primary/80", "hover:bg-primary", "bg-white", "text-gray-500"].every((t) => !has(f124(t), /declared nowhere/)));
+    check("[F-124] 'bg-brand' with no --color-brand anywhere warns", has(f124("bg-brand"), /declared nowhere.*'bg-brand' \(needs --color-brand\)/));
+  }
+  check("[F-58] no data-dt-node anywhere: the recorded tagged count is 0, even if ids appear in other attributes", (() => {
+    const r = web('<div id="3:1" data-testid="3:2" />');
+    return has(r.blocking, /no data-dt-node tags/) && r.tagCoverage?.tagged === 0 && r.tagCoverage.anchored === 4;
+  })());
+  check("[F-58] a web plan with no files[] gets the 'files is empty' warning, not a tag block", (() => {
+    const r = split({}, { target: "web-tailwind", anchors: anchors4, verification: STATIC });
+    return r.blocking.length === 0 && has(r.warnings, /`files` is empty/);
+  })());
+
+  check("[F-31] a definition matches free-text codeTokens: 'bg-primary / text-primary', 'text-info/80', 'hover:bg-primary-darker' → no block", (() => {
+    const c = (codeToken: string, value: string): PlanTokenRow => ({ figmaName: "Brand/" + codeToken, value, kind: "color", codeToken, verdict: "exact" });
+    return split({ "theme.css": "@theme {\n  --color-primary: #2255aa;\n  --color-info: #3377cc;\n  --color-primary-darker: #113366;\n}", "Card.tsx": '<p className="bg-primary text-info/80 hover:bg-primary-darker" />' },
+      { files: ["theme.css", "Card.tsx"], tokens: [c("bg-primary / text-primary", "#2255aa"), c("text-info/80", "#3377cc"), c("hover:bg-primary-darker", "#113366")], verification: STATIC }).blocking.length === 0;
+  })());
+  check("[F-124] a project with a tailwind.config.* is not checked (Tailwind v3 colours live there)",
+    !has(problems({ "src/A.tsx": "<p />", "tailwind.config.js": "module.exports = {}" }, { files: ["src/A.tsx"], tokens: [{ figmaName: "Brand/Main", value: "#123456", kind: "color", codeToken: "bg-brand", verdict: "exact" }], verification: STATIC }), /declared nowhere/));
+  {
+    const hookWith = (lines: string[], files?: string[]) => {
+      const root = project({ "a.tsx": "#5B5FC7", "src/Other.tsx": "" }, { ...BLOCKING, files: files || BLOCKING.files });
+      const t = path.join(root, "t.jsonl");
+      fs.writeFileSync(t, lines.join("\n"));
+      return { r: runHook(root, { cwd: root, transcript_path: t }), root };
+    };
+    check("[F-45] a Bash heredoc whose notes mention the plan does not make it this session's", (() => {
+      const { r, root } = hookWith([toolUse("Bash", { command: "cat > notes/handoff.md <<'EOF'\nScreen A: design/plan/login.json is still being filled\nEOF" })]);
+      return r.status === 0 && !planOf(root).verification?.hook;
+    })());
+    check("[F-45] an Edit of a file listed in the plan's files[] makes it this session's", (() => {
+      const { r, root } = hookWith([toolUse("Edit", { file_path: "a.tsx", old_string: "x", new_string: "y" })]);
+      return r.status === 2 && hookOf(root).result === "blocked";
+    })());
+    check("[F-45] a Windows-style path to the plan is matched", (() => {
+      const { r } = hookWith([toolUse("Write", { file_path: "C:\\work\\app\\design\\plan\\login.json", content: "{}" })]);
+      return r.status === 2;
+    })());
+    check("[F-45] a builder that only ran plan-skeleton --out on the plan owns it", (() => {
+      const { r } = hookWith([toolUse("Bash", { command: "node \"/opt/plugin/scripts/plan-skeleton.js\" design/export/pages/P/ScreenA__1_2.json --out design/plan/login.json" })]);
+      return r.status === 2;
+    })());
+    check("[F-45] …while `echo design/plan/login.json` alone does not", hookWith([toolUse("Bash", { command: "echo design/plan/login.json && ls design/plan" })]).r.status === 0);
+  }
+  {
+    // Five open plans; each would BLOCK if checked. login.json alone lists src/OnlyX.tsx; all five list src/Shared.tsx.
+    const five = (lines: (root: string) => string[]) => {
+      const root = project({ "a.tsx": "#5B5FC7", "src/OnlyX.tsx": "", "src/Shared.tsx": "", "a.json": "{}" }, { ...BLOCKING, files: ["a.tsx", "src/OnlyX.tsx", "src/Shared.tsx"] });
+      for (let i = 1; i < 5; i++) addPlan(root, `screen-${i}`, { ...BLOCKING, files: ["a.tsx", "src/Shared.tsx"] });
+      fs.writeFileSync(path.join(root, "design", "plan", "login.json"), JSON.stringify({ ...BLOCKING, files: ["b.tsx", "src/OnlyX.tsx", "src/Shared.tsx"] }));
+      fs.writeFileSync(path.join(root, "b.tsx"), "#5B5FC7");
+      const t = path.join(root, "t.jsonl");
+      fs.writeFileSync(t, lines(root).join("\n"));
+      const r = runHook(root, { cwd: root, transcript_path: t });
+      const checked = ["login", "screen-1", "screen-2", "screen-3", "screen-4"].filter((n) => !!planAt(root, n).verification?.hook);
+      return { status: r.status, checked };
+    };
+    const onlyLogin = (x: { status: number | null; checked: string[] }) => x.status === 2 && x.checked.join() === "login";
+    check("[F-45] an Edit of a file five plans share claims none of them: nothing checked", (() => {
+      const x = five(() => [toolUse("Edit", { file_path: "src/Shared.tsx", old_string: "a", new_string: "b" })]);
+      return x.status === 0 && x.checked.length === 0;
+    })());
+    check("[F-45] an Edit of a file only one plan lists claims that plan alone", onlyLogin(five(() => [toolUse("Edit", { file_path: "src/OnlyX.tsx", old_string: "a", new_string: "b" })])));
+    check("[F-45] `jq … > /tmp/t && mv /tmp/t design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "jq '.route = \"/a\"' design/plan/login.json > /tmp/t && mv /tmp/t design/plan/login.json" })])));
+    check("[F-45] `cp a design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "cp a.json design/plan/login.json" })])));
+    check("[F-45] `sed -i '' 's/a/b/' design/plan/<x>.json` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "sed -i '' 's/a/b/' design/plan/login.json" })])));
+    check("[F-45] `python3 -c \"open('design/plan/<x>.json','w')\"` claims the plan", onlyLogin(five(() => [toolUse("Bash", { command: "python3 -c \"import json; json.dump({}, open('design/plan/login.json','w'))\"" })])));
+    check("[F-45] a Bash heredoc written to a file only plan X lists (`cat > src/OnlyX.tsx <<E`) claims X", onlyLogin(five(() => [toolUse("Bash", { command: "cat > src/OnlyX.tsx <<E\nexport const X = 1;\nE" })])));
+    check("[F-45] a relative path resolves against the transcript entry's own cwd", onlyLogin(five((root) => [JSON.stringify({ type: "assistant", cwd: path.join(root, "design"), message: { role: "assistant", content: [{ type: "tool_use", id: "t", name: "Write", input: { file_path: "plan/login.json", content: "{}" } }] } })])));
+  }
+  check("[F-43] the not-imported warning tells the builder to list a shared layout above the screen", has(shellProject(false), /list that layout file in this plan's files\[\] too/));
+  {
+    const c = (codeToken: string): PlanTokenRow => ({ figmaName: "Brand/" + codeToken, value: "#123456", kind: "color", codeToken, verdict: "exact" });
+    const f124 = (codeToken: string, css: string) => problems({ "src/A.tsx": "<p />", "src/theme.css": css }, { files: ["src/A.tsx"], tokens: [c(codeToken)], verification: STATIC });
+    check("[tokens] Tailwind v4 `bg-(--brand)` needs --brand; `var(--x, #fff)` needs --x; a trailing `!` is stripped",
+      !has(f124("bg-(--brand)", ":root { --brand: #123456; }"), /declared nowhere/) && has(f124("bg-(--brand)", ":root { --color-brand: #123456; }"), /needs --brand\)/)
+      && !has(f124("var(--line, #fff)", ":root { --line: #123456; }"), /declared nowhere/) && !has(f124("bg-primary!", "@theme { --color-primary: #123456; }"), /declared nowhere/));
+    check("[F-124] a tailwind.config.mts at a listed file's package root turns the check off",
+      !has(problems({ "app/src/A.tsx": "<p />", "app/package.json": "{}", "app/tailwind.config.mts": "export default {}" }, { files: ["app/src/A.tsx"], tokens: [c("bg-brand")], verification: STATIC }), /declared nowhere/));
+  }
+  check("[F-54] a style field is read by its LAST segment (`style.shadow`, `fontSize`) — quiet", !has(problems({ "a.tsx": "import { Card } from '@/ui/Card';" }, { files: ["a.tsx"], verification: STATIC,
+    components: [{ name: "Card", nodeId: "2:9", mapModule: "@/ui/Card", verdict: "reused" }],
+    deviations: [{ nodeId: "2:9", field: "style.shadow", designed: "shadow", built: "omitted", reason: "no elevation token" }, { nodeId: "2:9", field: "fontSize", designed: 13, built: null, reason: "inherits the body size" }] }), /was not built/));
+  check("[perf] 1000 files / 40 plans: the hook checks every plan in well under the budget", (() => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "dtwin-perf-"));
+    fs.mkdirSync(path.join(root, "design", "plan"), { recursive: true });
+    const w = (rel: string, body: string) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), body); };
+    w("src/App.tsx", Array.from({ length: 40 }, (_, p) => `import { S${p} } from './screens/s${p}/f0';`).join("\n") + "\nimport { Shell } from './layout/Shell';");
+    w("src/layout/Shell.tsx", "import { Nav } from './Nav';"); w("src/layout/Nav.tsx", "");
+    const planPaths: string[] = [];
+    for (let p = 0; p < 40; p++) {
+      const files: string[] = [];
+      for (let f = 0; f < 25; f++) {
+        const rel = `src/screens/s${p}/f${f}.tsx`;
+        w(rel, (f < 24 ? `import { F } from './f${f + 1}';\n` : "") + `import { Shared${f % 5} } from '../../shared/c${(p + f) % 20}';\nexport const S${p} = () => null;`);
+        files.push(rel);
+      }
+      if (p === 0) files.push("src/App.tsx", "src/layout/Shell.tsx", "src/layout/Nav.tsx");
+      if (p === 1) files.push("src/layout/Shell.tsx");
+      const file = path.join(root, "design", "plan", `s${p}.json`);
+      fs.writeFileSync(file, JSON.stringify({ status: "pending", files, verification: STATIC, components: [{ name: "Nav", nodeId: "9:1", mapModule: "src/layout/Nav.tsx", verdict: "reused" }, { name: "Missing", nodeId: "9:2", mapModule: "src/none/Missing.tsx", verdict: "reused" }] }));
+      planPaths.push(file);
+    }
+    for (let c = 0; c < 20; c++) w(`src/shared/c${c}.tsx`, "");
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [HOOK, ...planPaths], { encoding: "utf8", cwd: root });
+    const ms = Date.now() - t0;
+    console.log(`    (1000+ files / 40 plans: ${ms} ms)`);
+    const navWarned = /'Nav' is "reused"/.test(r.stderr), missingWarned = (r.stderr.match(/'Missing' is "reused"/g) || []).length === 1;
+    return r.status === 0 && ms < 20000 && !navWarned && missingWarned;
+  })());
+
+  // Duplicate warnings: one line per distinct message in a run, naming every plan that has it.
+  check("[dedupe] a warning two plans share is printed once, naming both plans", (() => {
+    const merged: PlanTokenRow[] = [row("Body/Small", "text-sm"), row("Size/Small", "text-sm")];
+    const root = project({ "a.tsx": "" }, { status: "pending", files: ["a.tsx"], tokens: merged, verification: STATIC });
+    addPlan(root, "screen-b", { status: "pending", files: ["a.tsx"], tokens: merged, verification: STATIC });
+    const r = runHook(root);
+    const lines = r.stderr.split("\n").filter((l) => /DIFFERENT Figma tokens/.test(l));
+    return r.status === 0 && lines.length === 1 && /login\.json/.test(must(lines[0], "lines[0]")) && /screen-b\.json/.test(must(lines[0], "lines[0]")) && planAt(root, "screen-b").verification?.hook?.result === "pass";
+  })());
 }
 
 console.log("map-bootstrap --out (the build-screen gate's remedy must actually create the file):");
