@@ -18,6 +18,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      # The shipped web probe's e2e suite (test/verify-probe-e2e.test.ts) runs a real chromium; locally it
+      # skips when no browser is installed, in CI it must run (D3). https://playwright.dev/docs/ci
+      - name: Install Playwright's chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -209,8 +209,49 @@ function isVerifyExpectation(x) {
   return isObj(x) && isObj(x.frame) && Array.isArray(x.nodes) && x.nodes.every((n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.instances, anyObject) && optArrayOf(x.interactions, anyObject) && optArrayOf(x.notComparable, anyObject);
 }
 isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, \u2026}";
-function isVerifyMeasured(x) {
+var isNameVersion = (x) => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+function isProbeIdentity(x) {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var MEASURED_EXTRAS = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"]
+];
+function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
+}
+function isVerifyMeasured(x) {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === void 0 || ok(x[k])) && (x.nodes === void 0 || Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)));
+}
+function readableMeasured(x) {
+  if (!isMeasuredCore(x)) return null;
+  const copy = { ...x };
+  const notes = [];
+  for (const [k, ok, what] of MEASURED_EXTRAS) {
+    if (copy[k] !== void 0 && !ok(copy[k])) {
+      notes.push(`measured.${k} is not ${what}; ignored`);
+      delete copy[k];
+    }
+  }
+  if (Array.isArray(copy.nodes)) {
+    let dropped = 0;
+    copy.nodes = copy.nodes.map((n) => {
+      if (!isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)) return n;
+      dropped++;
+      const { unmeasured: _drop, ...rest } = n;
+      return rest;
+    });
+    if (dropped) notes.push(`${dropped} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
+  }
+  return isVerifyMeasured(copy) ? { doc: copy, notes } : null;
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
@@ -220,6 +261,10 @@ function isInteractionEvidenceList(x) {
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+function isMeasuredComponentList(x) {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === void 0 || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 function isVerifyReport(x) {
   return isObj(x) && optStr(x.schema) && optStr(x.verdict) && optStr(x.screen) && optStr(x.nodeId) && optStr(x.headline) && (x.why === void 0 || isStringArray(x.why)) && optArrayOf(x.deltas, anyObject) && optObj(x.inputs);
 }
@@ -627,6 +672,7 @@ function buildExpectation(docs) {
       frames.push(frame);
       const frameId = frames.length > 1 ? root.id : void 0;
       const stateOf = /* @__PURE__ */ new WeakMap();
+      const chainOf = /* @__PURE__ */ new WeakMap();
       walkWithHidden(root, (n, c) => {
         if (c.hidden) {
           if (!c.parentHidden) hidden.roots.push({ nodeId: n.id, name: n.name, path: c.path });
@@ -638,9 +684,12 @@ function buildExpectation(docs) {
           return;
         }
         const inherited = c.parent ? stateOf.get(c.parent) : void 0;
+        const ancestorIds = c.parent ? chainOf.get(c.parent) ?? [] : [];
+        chainOf.set(n, c.parent ? [...n.id ? [n.id] : [], ...ancestorIds] : []);
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
         const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
+        spec.ancestorIds = ancestorIds;
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
         notComparable.push(...gaps);
@@ -703,19 +752,6 @@ function buildExpectation(docs) {
     hidden: { roots: hidden.roots, ids: hidden.ids }
   };
 }
-var MEASURED_KEYS_DOC = {
-  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
-  "nodes[].styles": "computed values: fontFamily fontSize fontWeight lineHeight letterSpacing color backgroundColor borderColor borderWidth borderRadius (number | [tl,tr,br,bl]) padding ([t,r,b,l]) gap width height x y opacity text",
-  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
-  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
-  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
-  "nodes[].styles.tag": "the element's tagName, lower-case",
-  "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state \u2014 required for a node whose spec has drawnState",
-  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
-  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
-  "expectationSha256": "sha256 of the .expected.json you measured against"
-};
 var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([
   "nodeId",
   "styles",
@@ -724,6 +760,11 @@ var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([
   "note",
   "notes",
   "selector",
+  "selectorCount",
+  "unmeasured",
+  "textFrom",
+  "textFromMixed",
+  "fillSource",
   "fontFamily",
   "fontSize",
   "fontWeight",
@@ -774,6 +815,31 @@ var FIELDS = [
   { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText"];
+var STYLE_KEY_SHAPE = {
+  borderRadius: "number | [tl,tr,br,bl]",
+  padding: "[t,r,b,l]",
+  fill: "an SVG's paint",
+  textBox: "{x,w} of a Range over the text",
+  placeholderText: "el.placeholder",
+  placeholderColor: "the ::placeholder colour",
+  tag: "tagName, lower-case"
+};
+var MEASURED_KEYS_DOC = {
+  "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
+  // GENERATED from STYLE_KEYS, so the list a probe is told to send cannot drift from the list compared (DT-23: `fill` was missing)
+  "nodes[].styles": `computed values, EVERY key on every node (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
+  "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
+  "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
+  "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
+  "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
+  "nodes[].styles.tag": "the element's tagName, lower-case",
+  "nodes[].states.<hover|pressed|focus>": "the same styles, measured WITH the element in that state \u2014 required for a node whose spec has drawnState",
+  "interactions[]": "{nodeId, trigger, ok: true|false|null, selector, selectorCount, detail} \u2014 `ok:true` needs the selector you drove and how many elements it matched (>=1); ok:null = not probed",
+  "components[]": "{setName|nodeId, present: true|false} \u2014 present:false is an explicit claim of absence",
+  "expectationSha256": "sha256 of the .expected.json you measured against"
+};
 var TOKEN_KEYS = {
   color: ["fills", "color"],
   backgroundColor: ["fills"],
@@ -850,6 +916,28 @@ var LIMITS = [
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing (finding 198).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared."
 ];
+var MATCH_BUCKET = {
+  tag: "tag",
+  "data-dt-node": "tag",
+  "tag-shared-path": "tagSharedPath",
+  text: "text",
+  "text-ordinal": "textOrdinal",
+  position: "position",
+  frame: "frame"
+};
+var MATCH_BUCKETS = ["tag", "tagSharedPath", "text", "textOrdinal", "position", "frame", "sharedComponentPath", "other", "unstated"];
+var MATCH_LABEL = {
+  tag: "tag",
+  tagSharedPath: "shared path",
+  text: "text",
+  textOrdinal: "ordinal",
+  position: "position",
+  frame: "frame",
+  sharedComponentPath: "shared component path",
+  other: "other",
+  unstated: "unstated"
+};
+var TYPO_FIELDS = /* @__PURE__ */ new Set(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 var SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 function compare(expectation, measured, opts) {
   opts = opts || {};
@@ -889,6 +977,13 @@ function compare(expectation, measured, opts) {
     const only = c && c.length === 1 ? c[0] : void 0;
     return only ?? null;
   };
+  const probeWhy = /* @__PURE__ */ new Map();
+  for (const e of Array.isArray(measured.notMeasured) ? measured.notMeasured : []) {
+    const row = e;
+    if (!isJsonObject(row) || typeof row.nodeId !== "string") continue;
+    const w = typeof row.why === "string" ? row.why : typeof row.reason === "string" ? row.reason : void 0;
+    if (w && !probeWhy.has(row.nodeId)) probeWhy.set(row.nodeId, w);
+  }
   const deltas = [];
   const notMeasured = [];
   const fieldsNotMeasured = [];
@@ -900,7 +995,10 @@ function compare(expectation, measured, opts) {
     if (present) c.present++;
     census.set(key, c);
   };
-  let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0;
+  let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0, fieldsReportedNull = 0;
+  const matchedByCensus = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
+  const positionMatched = /* @__PURE__ */ new Set();
+  const typographyOn = /* @__PURE__ */ new Map();
   const gap = (spec, field, why) => fieldsNotMeasured.push({ nodeId: spec.nodeId, name: spec.name, field, why });
   const push = (spec, field, severity, bad, extra) => deltas.push(Object.assign({
     severity,
@@ -924,10 +1022,14 @@ function compare(expectation, measured, opts) {
       }
     }
     if (!m) {
-      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why: "no measurement for this node id" });
+      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why: probeWhy.get(String(spec.nodeId)) ?? "no measurement for this node id" });
       continue;
     }
     nodesMeasured++;
+    const rawMatch = typeof m.matchedBy === "string" ? m.matchedBy : "";
+    const bucket = matchedBy && matchedBy.startsWith("shared-component-path") ? "sharedComponentPath" : rawMatch === "" ? "unstated" : MATCH_BUCKET[rawMatch] ?? "other";
+    matchedByCensus[bucket] = (matchedByCensus[bucket] ?? 0) + 1;
+    if (/^position/i.test(rawMatch)) positionMatched.add(String(spec.nodeId));
     const base = m.styles || m;
     let got = base, measuredIn = "rest";
     const state = spec.drawnState;
@@ -936,6 +1038,19 @@ function compare(expectation, measured, opts) {
       got = Object.assign({}, base, st.styles || st);
       measuredIn = state;
     }
+    const stUm = st ? st.unmeasured : void 0;
+    const um = { ...isJsonObject(m.unmeasured) ? m.unmeasured : {}, ...isJsonObject(stUm) ? Object.fromEntries(Object.entries(stUm).filter((e) => typeof e[1] === "string")) : {} };
+    const nullWhy = (...keys) => {
+      for (const k of keys) {
+        const w = um[k];
+        if (typeof w === "string" && w) return w;
+      }
+      return "reported null";
+    };
+    const gapNull = (field, ...keys) => {
+      fieldsReportedNull++;
+      gap(spec, field, nullWhy(...keys));
+    };
     const zeroAtRest = num(base.width) && num(base.height) && base.width === 0 && base.height === 0;
     const stateWhy = state ? `the designer drew this ${spec.drawnStateOwn ? "layer" : "layer's container"} in its ${state} state (${spec.drawnStateWhy}) \u2014 measure it ${state === "hover" ? "hovered" : state} and report the values under states.${state}` : "";
     if (state && measuredIn === "rest" && zeroAtRest) {
@@ -948,6 +1063,8 @@ function compare(expectation, measured, opts) {
     const isText = spec.type === "TEXT";
     const container = isText && isContainer(got);
     const tb = got.textBox && typeof got.textBox === "object" ? got.textBox : null;
+    const tagLc = typeof got.tag === "string" ? got.tag.toLowerCase() : "";
+    if (isText && tagLc && (CONTAINER_TAGS.has(tagLc) || tagLc === "div") && m.textFrom === void 0) typographyOn.set(String(spec.nodeId), tagLc);
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
     const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
     const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container` : "";
@@ -955,14 +1072,17 @@ function compare(expectation, measured, opts) {
       const want0 = spec[f.key];
       if (want0 === void 0) continue;
       let val = got[f.key];
+      let nullKeys = [f.key];
       let present = val !== void 0;
       if (isText && tb && (f.key === "x" || f.key === "width")) {
         val = f.key === "x" ? tb.x : tb.w;
         present = val !== void 0;
+        nullKeys = ["textBox", f.key];
       }
-      if (f.key === "gap" && got.gapVisual !== void 0) {
+      if (f.key === "gap" && got.gapVisual !== void 0 && (got.gapVisual !== null || val == null)) {
         val = got.gapVisual;
         present = true;
+        nullKeys = ["gapVisual", "gap"];
       }
       tally(f.key, present);
       if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) {
@@ -974,13 +1094,21 @@ function compare(expectation, measured, opts) {
         continue;
       }
       if (isText && f.box && container && !tb) {
+        if (got.textBox === null && f.key !== "height") {
+          gapNull(f.label, "textBox");
+          continue;
+        }
         gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => Number(v) > 0) ? " with padding" : ""}, whose box is not the text's \u2014 report textBox (a Range over the text) instead`);
         continue;
       }
       if (isText && tb && f.key === "height") {
         continue;
       }
-      if (f.key === "gap" && table && got.gapVisual === void 0) {
+      if (f.key === "gap" && table && got.gapVisual == null) {
+        if (got.gapVisual === null) {
+          gapNull(f.label, "gapVisual");
+          continue;
+        }
         gap(spec, f.label, `the element is a <${got.tag}>, which spaces rows with border-spacing, not gap \u2014 report gapVisual (the distance between consecutive rows)`);
         continue;
       }
@@ -990,6 +1118,10 @@ function compare(expectation, measured, opts) {
           continue;
         }
         gap(spec, f.label, "the probe did not report this property");
+        continue;
+      }
+      if (val === null) {
+        gapNull(f.label, ...nullKeys);
         continue;
       }
       fieldsChecked++;
@@ -1023,7 +1155,8 @@ function compare(expectation, measured, opts) {
       const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
-      if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
+      if (got.borderRadius === null) gapNull("border-radius", "borderRadius");
+      else if (!c) gap(spec, "border-radius", got.borderRadius === void 0 ? "the probe did not report this property" : `could not read '${JSON.stringify(got.borderRadius)}' as a radius`);
       else {
         const W = num(got.width) ? got.width : spec.width, H = num(got.height) ? got.height : spec.height;
         const [ctl, ctr, cbr, cbl] = c;
@@ -1041,7 +1174,10 @@ function compare(expectation, measured, opts) {
       if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property");
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
-      else {
+      else if (got.padding === null || !Array.isArray(got.padding) || got.padding.some((v) => v === null)) {
+        if (got.padding === null || Array.isArray(got.padding)) gapNull("padding", "padding");
+        else gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as padding [t,r,b,l]`);
+      } else {
         fieldsChecked++;
         const bad = comparePadding(spec.padding, got.padding);
         const allZero = got.padding.every((v) => Number(v) === 0);
@@ -1055,15 +1191,18 @@ function compare(expectation, measured, opts) {
     if (spec.placeholderText !== void 0) {
       tally("placeholderText", got.placeholderText !== void 0);
       if (got.placeholderText === void 0) gap(spec, "placeholder text", "this layer is an input placeholder: report el.placeholder as placeholderText (textContent of an empty input is '')");
+      else if (got.placeholderText === null) gapNull("placeholder text", "placeholderText");
       else {
         fieldsChecked++;
         if (String(got.placeholderText).trim() !== String(spec.placeholderText).trim()) push(spec, "placeholder text", "high", { want: spec.placeholderText, got: got.placeholderText, delta: null });
       }
     }
     if (spec.text !== void 0) {
-      tally("text", got.text !== void 0 && got.text !== null);
-      if (got.text === null) gap(spec, "text", "the probe reported text: null \u2014 an element with child elements still has text; report its textContent");
-      else if (got.text !== void 0) {
+      tally("text", got.text !== void 0);
+      if (got.text === null) {
+        fieldsReportedNull++;
+        gap(spec, "text", um.text || "the probe reported text: null \u2014 an element with child elements still has text; report its textContent");
+      } else if (got.text !== void 0) {
         fieldsChecked++;
         const w = String(spec.text).replace(/ /g, " ").trim();
         const g = String(got.text).replace(/ /g, " ").trim();
@@ -1104,6 +1243,21 @@ function compare(expectation, measured, opts) {
       }
     }
   }
+  const addNote = (d, note) => {
+    d.note = d.note ? `${d.note}; ${note}` : note;
+  };
+  const typoLabels = new Set(FIELDS.filter((f) => TYPO_FIELDS.has(f.key)).map((f) => f.label));
+  for (const d of deltas) {
+    const tag = typographyOn.get(String(d.nodeId));
+    if (tag && typoLabels.has(d.field)) addNote(d, `typography read from a <${tag}>, not the text run \u2014 if the text sits in a child element, measure that element (the shipped probe does, and says textFrom)`);
+    if (positionMatched.has(String(d.nodeId))) addNote(d, "low confidence: this node was matched by position, not by its data-dt-node tag or its text \u2014 the element measured may not be the one the design means");
+  }
+  const knownIds = /* @__PURE__ */ new Set([...expectedIds, ...hiddenSet, ...[expectation.frame, ...expectation.frames || []].map((f) => f && f.nodeId).filter((id) => typeof id === "string")]);
+  for (const id of expectedIds) {
+    const alt = viaSharedPath(id);
+    if (alt) knownIds.add(alt);
+  }
+  const measuredIdsNotInExpectation = [...byId.keys()].filter((id) => !knownIds.has(id));
   const fieldsNeverMeasured = [];
   for (const [key, c] of census) {
     if (FIELDS.some((f) => f.key === key && f.optional)) continue;
@@ -1112,7 +1266,7 @@ function compare(expectation, measured, opts) {
       fieldsNeverMeasured.push({ field: key, expectedOn: c.expected, measuredOn: 0, ...hinted.length ? { probeSent: hinted } : {} });
     }
   }
-  const comps = Array.isArray(measured.components) ? measured.components : [];
+  const comps = [...Array.isArray(measured.components) ? measured.components : [], ...Array.isArray(opts.components) ? opts.components : []];
   const reported = comps.filter((c) => c && c.present !== false);
   const namesSeen = new Set(reported.map((c) => String(c.setName || c.name || c)));
   const idsSeen = /* @__PURE__ */ new Set([...reported.map((c) => c.nodeId).filter(Boolean).map(String), ...byId.keys()]);
@@ -1169,6 +1323,10 @@ function compare(expectation, measured, opts) {
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
   const high = deltas.filter((d) => d.severity === "high").length;
   const medium = deltas.filter((d) => d.severity === "medium").length;
+  const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
+  const probeRaw = measured.probe;
+  const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : void 0;
+  if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
   const inputs = {
     expectationSchema: expectation.schema || "(none)",
     ...ifDefined("expectationSha256", opts.expectationSha256),
@@ -1177,7 +1335,10 @@ function compare(expectation, measured, opts) {
     // P2b round 2 (findings 314/317): WHAT was measured, by content — the design (timestamps stripped)
     // and the code (sha256 of each file in the plan's files[], the hashes the Stop hook records).
     ...ifDefined("exportContentSha256", expectation.exportContentSha256 || void 0),
-    ...ifDefined("code", opts.code || void 0)
+    ...ifDefined("code", opts.code || void 0),
+    // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
+    // comparable round to round — a changed probe changes what "measured" means.
+    probe: probeIdentity ?? "unknown"
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1197,7 +1358,7 @@ function compare(expectation, measured, opts) {
   if (interactionsFailed.length) reasons.push(`${interactionsFailed.length} designed interaction(s) failed`);
   if (interactionsNotProbed.length) reasons.push(`${interactionsNotProbed.length} designed interaction(s) were not probed`);
   const fieldGapsOther = fieldsNotMeasured.length;
-  if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe`);
+  if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null \u2014 the probe could not read them)` : ""}`);
   const verdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
   const coverage = {
     nodesExpected,
@@ -1216,10 +1377,27 @@ function compare(expectation, measured, opts) {
     interactionsExpected: interactions.length,
     interactionsPassed: interactionsPassed.length,
     interactionsFailed: interactionsFailed.length,
-    interactionsNotProbed: interactionsNotProbed.length
+    interactionsNotProbed: interactionsNotProbed.length,
+    matchedBy: matchedByCensus
   };
+  let against;
+  if (opts.against) {
+    const prev = opts.against.report;
+    const pc = prev.coverage;
+    const shaOf = (p) => isJsonObject(p) && typeof p.sha256 === "string" ? p.sha256 : null;
+    const prevSha = shaOf(prev.inputs && prev.inputs.probe), curSha = probeIdentity ? probeIdentity.sha256 : null;
+    const prevExp = prev.inputs && typeof prev.inputs.expectationSha256 === "string" ? prev.inputs.expectationSha256 : null;
+    against = {
+      report: opts.against.file,
+      nodesMeasured: { before: pc && num(pc.nodesMeasured) ? pc.nodesMeasured : null, after: nodesMeasured },
+      nodesExpected: { before: pc && num(pc.nodesExpected) ? pc.nodesExpected : null, after: nodesExpected },
+      probeChanged: prevSha === null && curSha === null ? null : prevSha !== curSha,
+      expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null
+    };
+  }
+  const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
-  const headline = `${mark} \u2014 ` + (fieldsNeverMeasured.length ? `NEVER MEASURED: ${fieldsNeverMeasured.map((f) => `'${f.field}' present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected} \xB7 ${fieldsChecked} values compared \xB7 ${high} high, ${medium} medium \xB7 interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)`;
+  const headline = `${mark} \u2014 ` + (fieldsNeverMeasured.length ? `NEVER MEASURED: ${fieldsNeverMeasured.map((f) => `'${f.field}' present in 0 of ${nodesMeasured} measurements${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected} \xB7 ${fieldsChecked} values compared \xB7 ${high} high, ${medium} medium \xB7 interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "");
   return {
     schema: REPORT_SCHEMA,
     ...ifDefined("screen", expectation.screen),
@@ -1247,10 +1425,25 @@ function compare(expectation, measured, opts) {
       duplicateNodeIds,
       interactionEvidenceOnHiddenLayers: interactionEvidenceOnHidden,
       interactionEvidenceNotInExpectation: unexpectedInteractionEvidence,
-      measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length
+      measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length,
+      measuredIdsNotInExpectation: measuredIdsNotInExpectation.length,
+      measuredIdsNotInExpectationSample: measuredIdsNotInExpectation.slice(0, 5),
+      ...inputNotes.length ? { inputNotes } : {}
     },
+    ...ifDefined("against", against),
     limits: LIMITS
   };
+}
+function matchedLine(census) {
+  const c = census || {};
+  const always = ["tag", "text", "textOrdinal", "position"];
+  const keys = [...always, ...MATCH_BUCKETS.filter((b) => !always.includes(b) && (c[b] ?? 0) > 0)];
+  return keys.map((k) => `${MATCH_LABEL[k] ?? k} ${c[k] ?? 0}`).join(" \xB7 ");
+}
+function probeLine(r) {
+  const p = r.inputs && r.inputs.probe;
+  const who = p && p !== "unknown" ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}\u2026) \xB7 ${p.playwright.package} ${p.playwright.version} \xB7 ${p.browser.name} ${p.browser.version}` : "probe unknown (hand-written \u2014 not comparable round to round)";
+  return `${who} \xB7 matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
 }
 function reportToMarkdown(r) {
   const L = [];
@@ -1274,6 +1467,16 @@ function reportToMarkdown(r) {
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) \xB7 ${c.hiddenLayersSkipped.specsSkipped} spec(s) \xB7 ${c.hiddenLayersSkipped.instancesSkipped} instance(s) \xB7 ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence \u2014 coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
   L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected} |`, "");
+  if (r.against) {
+    const a = r.against;
+    L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
+  }
+  L.push("## How nodes were matched", "");
+  const ip = r.inputs && r.inputs.probe;
+  L.push(ip && ip !== "unknown" ? `Probe: ${ip.name} ${ip.version ?? "(no version)"} \xB7 sha256 ${ip.sha256.slice(0, 12)}\u2026 \xB7 ${ip.playwright.package} ${ip.playwright.version} \xB7 ${ip.browser.name} ${ip.browser.version}` : "Probe: unknown (a hand-written measured.json \u2014 its numbers are not comparable round to round).", "");
+  L.push("| rule | node specs |", "|---|---|");
+  for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
+  L.push("");
   if (r.deltas.length) {
     L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token |", "|---|---|---|---|---|---|");
     for (const d of r.deltas) {
@@ -1322,11 +1525,13 @@ function reportToMarkdown(r) {
     L.push("");
   }
   const p = r.probe || {};
-  if (p.unknownKeys && p.unknownKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers) {
+  if (p.unknownKeys && p.unknownKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.inputNotes && p.inputNotes.length) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}\xD7) is not read by verify-screen${k.canonical ? ` \u2014 the canonical key is \`${k.canonical}\`` : ""}`);
     if (p.duplicateNodeIds) L.push(`- ${p.duplicateNodeIds} duplicate node id(s) in nodes[] \u2014 the first measurement of each id was used`);
     if (p.measuredIdsOnHiddenLayers) L.push(`- ${p.measuredIdsOnHiddenLayers} measurement(s) are for hidden layers and were ignored`);
+    for (const n of p.inputNotes || []) L.push(`- ${n}`);
+    if (p.measuredIdsNotInExpectation) L.push(`- ${p.measuredIdsNotInExpectation} measured node id(s) are not in the expectation (e.g. ${(p.measuredIdsNotInExpectationSample || []).map((id) => `\`${id}\``).join(", ")}) \u2014 measured against another screen or an older expectation?`);
     if (p.interactionEvidenceOnHiddenLayers) L.push(`- ${p.interactionEvidenceOnHiddenLayers} interaction result(s) are for hidden layers and were ignored \u2014 a hidden layer cannot be driven`);
     L.push("");
   }
@@ -1354,18 +1559,21 @@ function main(argv) {
       Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.
       Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this
       directory \u2014 pass --force to write a second one anyway.
-  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] --out design/verify/<Screen>
+  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] --out design/verify/<Screen>
       writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares
       two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>
-      (a JSON array, or {interactions:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail}).
-      --out defaults to design/verify/<the .expected.json file's own basename>.`;
+      (a JSON array, or {interactions:[\u2026], components:[\u2026]}, of {nodeId, trigger, ok, selector, selectorCount, detail};
+      components[] rows {setName|nodeId, present} are merged with measured.json's).
+      --out defaults to design/verify/<the .expected.json file's own basename>.
+      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes
+      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.`;
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) {
     console.log(USAGE);
     return argv.length ? 0 : 2;
   }
-  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } };
+  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } };
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: true }));
-  const { out, interactions: interactionsFile } = flags;
+  const { out, interactions: interactionsFile, against: againstFile } = flags;
   const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
   if (doExpect === doCompare) {
     console.error("pass exactly one of --expect / --compare\n" + USAGE);
@@ -1373,6 +1581,10 @@ function main(argv) {
   }
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
+    return 2;
+  }
+  if (againstFile !== void 0 && !doCompare) {
+    console.error("--against only applies to --compare\n" + USAGE);
     return 2;
   }
   const write = (base, obj, md2) => {
@@ -1433,21 +1645,31 @@ function main(argv) {
     return 2;
   }
   const expectation = readDocFile(expFile, "expectation", isVerifyExpectation);
-  const measured = readDocFile(
+  const measuredRaw = readJsonFile(
     measuredFile,
     "probe measurements",
-    isVerifyMeasured,
     "Render the built screen and write {measuredAt, renderer, viewport, artifacts, expectationSha256, nodes:[{nodeId,styles}], components:[], interactions:[]}."
   );
+  const readable = readableMeasured(measuredRaw);
+  if (!readable) {
+    console.error(`error  probe measurements: '${measuredFile}' is not ${isVerifyMeasured.expected}`);
+    return 2;
+  }
+  const measured = readable.doc;
+  for (const n of readable.notes) console.error(`note  ${measuredFile}: ${n}`);
   let extra;
+  let extraComponents;
   if (interactionsFile) {
     const raw = readJsonFile(interactionsFile, "interaction evidence", "Write a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}.");
-    const list = isInteractionEvidenceList(raw) ? raw : isJsonObject(raw) && isInteractionEvidenceList(raw.interactions) ? raw.interactions : null;
-    if (!list) {
-      console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[\u2026]}`);
+    const obj = isJsonObject(raw) ? raw : null;
+    const list = isInteractionEvidenceList(raw) ? raw : obj && isInteractionEvidenceList(obj.interactions) ? obj.interactions : obj && obj.interactions === void 0 && obj.components !== void 0 ? [] : null;
+    const comps = obj && obj.components !== void 0 ? isMeasuredComponentList(obj.components) ? obj.components : null : [];
+    if (!list || !comps) {
+      console.error(`--interactions ${interactionsFile}: expected a JSON array or {interactions:[\u2026], components:[\u2026]}`);
       return 2;
     }
     extra = list;
+    if (comps.length) extraComponents = comps;
   }
   const artifacts = measured.artifacts || [];
   const artifactCheck = artifacts.map((a) => {
@@ -1475,18 +1697,37 @@ function main(argv) {
       console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) \u2014 the report records no code hashes, so its status cannot be tied to the code` : "note  no plan in design/plan/ describes this frame \u2014 the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
   }
-  const rep = compare(expectation, measured, { ...ifDefined("interactions", extra), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code) });
-  const md = reportToMarkdown(rep);
   const compareBase = out || path3.join("design", "verify", path3.basename(expFile, ".json").replace(/\.expected$/, ""));
+  let against;
+  if (againstFile !== void 0) {
+    const r = readJson(againstFile, isVerifyReport);
+    if (!("doc" in r)) {
+      console.error(`--against '${againstFile}' ${r.error}`);
+      return 2;
+    }
+    against = { file: againstFile, report: r.doc };
+  } else {
+    const own = compareBase + ".report.json";
+    const r = readJson(own, isVerifyReport);
+    if ("doc" in r) against = { file: own, report: r.doc };
+    else if (!r.missing) console.error(`note  ${own} ${r.error} \u2014 no coverage baseline this round (it is about to be overwritten)`);
+  }
+  const rep = compare(expectation, measured, { ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against) });
+  const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
+  console.error(probeLine(rep));
+  const nie = rep.probe.measuredIdsNotInExpectation || 0;
+  if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) \u2014 measured against another screen or an older expectation?`);
   return rep.verdict === "pass" ? 0 : 1;
 }
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 export {
   EXPECTATION_SCHEMA,
   FIELDS,
+  MEASURED_KEYS_DOC,
   REPORT_SCHEMA,
+  STYLE_KEYS,
   TOLERANCE,
   buildExpectation,
   compare,
@@ -1496,6 +1737,7 @@ export {
   normColor,
   normFamily,
   normWeight,
+  probeLine,
   radiusCorners,
   reportToMarkdown,
   tokenFor

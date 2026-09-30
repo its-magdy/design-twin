@@ -10,10 +10,11 @@
 //
 // Each guard carries an `expected` string: what read-json.ts prints when a file fails it.
 import { isJsonObject } from "./types.ts";
+import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
-  AuditOverridesDoc, AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, PageIndex, PagesRootIndex, Plan,
-  ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  AuditOverridesDoc, AuditReport, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
+  ProbeFrame, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
 
@@ -127,11 +128,64 @@ export function isVerifyExpectation(x: unknown): x is Expectation {
 }
 isVerifyExpectation.expected = "a verify expectation (the verify-screen script's --expect output): an object with `frame` and a `nodes` array of {nodeId, …}";
 
-/** <Screen>.measured.json — the probe's output. Every list optional; the lists that are there must be lists. */
-export function isVerifyMeasured(x: unknown): x is VerifyMeasured {
+const isNameVersion = (x: unknown): boolean => isObj(x) && typeof x.version === "string" && (typeof x.package === "string" || typeof x.name === "string");
+/** measured.probe — the shipped probe's identity (verify-probe.ts). */
+export function isProbeIdentity(x: unknown): x is ProbeIdentity {
+  return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string"
+    && isNameVersion(x.playwright) && isNameVersion(x.browser);
+}
+const isProbeFrame = (x: unknown): x is ProbeFrame => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
+const isCountMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "number");
+const isNavigation = (x: unknown): boolean => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+const isReasonMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+// The group-7 extras of a measured.json: optional, and a hand-written file may carry its own thing under
+// the same name (`probe: "handmade"`, `notMeasured: {}`). readableMeasured() drops a malformed one with a
+// note rather than refusing a file whose measurements are perfectly readable.
+const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => boolean, what: string]> = [
+  ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} — read as probe: unknown"],
+  ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
+  ["frames", (x) => Array.isArray(x) && x.every(isProbeFrame), "a list of probe frames {nodeId, selector, via, rect}"],
+  ["navigation", isNavigation, "a navigation log {events[], afterInitialLoad, reruns}"],
+  ["matchedByCensus", isCountMap, "a {rule: count} map"],
+  ["notMeasured", Array.isArray, "a list — the probe's reasons for unmatched nodes are not used"],
+];
+/** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
+function isMeasuredCore(x: unknown): x is JsonObject {
   return isObj(x) && optArrayOf(x.nodes, (n): n is object => isObj(n) && typeof n.nodeId === "string")
     && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === undefined || Array.isArray(x.artifacts))
     && optStr(x.mode) && optStr(x.expectationSha256);
+}
+/** <Screen>.measured.json — the probe's output. Every list optional; the lists that are there must be lists,
+ *  and the shipped probe's extras (probe, frame(s), navigation, matchedByCensus, notMeasured[], nodes[].unmeasured),
+ *  when present, have their shapes. notMeasured[] entries stay open (bare ids, {nodeId, reason}, {nodeId, why}).
+ *  A hand-written file with a malformed extra: read it through readableMeasured(). */
+export function isVerifyMeasured(x: unknown): x is VerifyMeasured {
+  return isMeasuredCore(x) && MEASURED_EXTRAS.every(([k, ok]) => x[k] === undefined || ok(x[k]))
+    && (x.nodes === undefined || (Array.isArray(x.nodes) && x.nodes.every((n) => !isObj(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured))));
+}
+/**
+ * A measured.json as --compare reads it: null when the measurements themselves are unreadable (not an object,
+ * nodes without ids, lists that are not lists); otherwise the document with every MALFORMED optional extra
+ * dropped, and one note per drop — so a hand-written file with its own `probe` or `notMeasured` still compares.
+ */
+export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: string[] } | null {
+  if (!isMeasuredCore(x)) return null;
+  const copy: JsonObject = { ...x };
+  const notes: string[] = [];
+  for (const [k, ok, what] of MEASURED_EXTRAS) {
+    if (copy[k] !== undefined && !ok(copy[k])) { notes.push(`measured.${k} is not ${what}; ignored`); delete copy[k]; }
+  }
+  if (Array.isArray(copy.nodes)) {
+    let dropped = 0;
+    copy.nodes = copy.nodes.map((n) => {
+      if (!isObj(n) || n.unmeasured === undefined || isReasonMap(n.unmeasured)) return n;
+      dropped++;
+      const { unmeasured: _drop, ...rest } = n;
+      return rest;
+    });
+    if (dropped) notes.push(`${dropped} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
+  }
+  return isVerifyMeasured(copy) ? { doc: copy, notes } : null;
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 
@@ -143,6 +197,12 @@ export function isInteractionEvidenceList(x: unknown): x is InteractionEvidence[
   return Array.isArray(x) && x.every(isEvidence);
 }
 isInteractionEvidenceList.expected = "interaction evidence: a JSON array of {nodeId, trigger, ok, selector, selectorCount, detail}";
+
+/** An --interactions file's components[]: {setName|nodeId, present, …} rows (merged with measured.json's). */
+export function isMeasuredComponentList(x: unknown): x is MeasuredComponent[] {
+  return Array.isArray(x) && x.every((c) => isObj(c) && optStr(c.setName) && optStr(c.name) && optStr(c.nodeId) && (c.present === undefined || typeof c.present === "boolean"));
+}
+isMeasuredComponentList.expected = "component evidence: a JSON array of {setName|nodeId, present: true|false}";
 
 /** <Screen>.report.json (either schema): only the fields verify-build reads are checked. */
 export function isVerifyReport(x: unknown): x is VerifyReport {
