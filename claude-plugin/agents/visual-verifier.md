@@ -166,6 +166,10 @@ Also collect:
     with a result from a different control.
   - Did not drive it? `"ok": null` with the reason — it is reported `not-probed`, not `fail`. Drove it
     and it did not do what the export says? `"ok": false` with what happened.
+  - A row marked `destinationExported: false` (its destination was never exported) is still driven and
+    recorded like any other; `--compare` reports it `undesigned`, which never fails the screen. A control
+    that looks deliberately inert is still recorded as it behaves — descoping it is the user's decision,
+    and you never write waivers or descopes.
 
 On web, `components` and `interactions` go to `design/verify/<Screen>.evidence.json` (§4) and the probe writes
 `measured.json`. On native stacks write it all to `design/verify/<screen>.measured.json`:

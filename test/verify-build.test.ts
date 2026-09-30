@@ -12,6 +12,7 @@ import { checkPlan, computeStatus, colorLiterals, arbitraryPx, colorKey, isStale
 import { blockerIds } from "../design-to-code/audit.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
 import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/content-hash.ts";
+import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
 import type { CodeConnectMap, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
@@ -53,7 +54,7 @@ const problems = (files: Record<string, string>, plan: Plan, map?: CodeConnectMa
 const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => split(files, plan, map).blocking;
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
-const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, ...r });
+const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, ...r });
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server in package.json" };
@@ -711,7 +712,64 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   const noCode = Object.assign({}, rep, { inputs: Object.assign({}, rep.inputs, { code: undefined }) });
   fs.writeFileSync(repFile, JSON.stringify(noCode));
   check("[317] a report with no inputs.code is never verified — it cannot say which code it measured", /does not record which code it measured/.test(st().reasons.join(" ")));
+
+  // Group 9 (D5/D20/D21): pass-with-deviations and the plan's waivers[]/descopes[]. A fresh --compare of
+  // the code as it is now; its verdict is set by hand like the "pass" above.
+  vs(["--compare", `design/verify/${JR}.expected.json`, "design/verify/m.json"]);
+  const fresh = readFixture(repFile, isVerifyReport);
+  const withReport = (verdict: string, waivers: { plan: string; sha256: string } | null) => {
+    const r = structuredClone(fresh);
+    r.verdict = verdict;
+    const inputs = Object.assign({}, r.inputs);
+    delete inputs.waivers;
+    if (waivers) inputs.waivers = waivers;
+    r.inputs = inputs;
+    fs.writeFileSync(repFile, JSON.stringify(r, null, 2));
+  };
+  withReport("pass", null);
+  hook();
+  const g0 = st();
+  check(`[DT-28] a report written before waivers existed (no inputs.waivers) beside a plan with none still verifies (got ${g0.status})`, g0.status === "verified");
+  withReport("pass-with-deviations", null);
+  const g1hook = spawnSync(process.execPath, [HOOK, planFile], { cwd: root, encoding: "utf8" }); // checked by name: the Stop hook's fast path is silent on a plan it already passed
+  const g1 = st();
+  check(`[DT-28] every report passing, one "pass-with-deviations" → verified-with-deviations (got ${g1.status}; was: unverified)`,
+    g1.status === "verified-with-deviations" && /pass-with-deviations/.test(g1.reasons.join(" ")));
+  check("[DT-28] the Stop hook does not block on a pass-with-deviations report, and prints the computed status",
+    g1hook.status === 0 && /hook passed · computed status: verified-with-deviations/.test(g1hook.stderr));
+  // The owner accepts a delta: the plan gains waivers[] — the hook's planHash must not move.
+  const accepted = readFixture(planFile, isPlan);
+  const hashBefore = accepted.verification?.hook?.planHash;
+  accepted.waivers = [{ nodeId: "7314:87192", field: "font-size", designed: 14, built: 16, exportContentSha256: fresh.inputs?.exportContentSha256 || "", reason: "brand type scale", decidedBy: "owner", decidedAt: "2026-09-30" }];
+  fs.writeFileSync(planFile, JSON.stringify(accepted, null, 2));
+  const g2 = st();
+  check(`[DT-28] adding a waiver does not send the hook back to pending (planHash excludes waivers[]/descopes[]); the report is stale until re-compared (got ${g2.status})`,
+    g2.status === "unverified" && !/plan changed after the hook's last check/.test(g2.reasons.join(" ")) && /waivers changed since the last compare — re-run --compare/.test(g2.reasons.join(" ")));
+  const g2hook = hook();
+  check("[DT-28] …and the hook, re-run, records the same planHash", g2hook.status === 0 && readFixture(planFile, isPlan).verification?.hook?.planHash === hashBefore);
+  withReport("pass-with-deviations", { plan: `design/plan/${JR}.json`, sha256: waiversHash(accepted) });
+  const g3 = st();
+  check(`[DT-28] re-compared with those waivers → verified-with-deviations (got ${g3.status})`, g3.status === "verified-with-deviations");
+  const edited2 = readFixture(planFile, isPlan);
+  must(must(edited2.waivers, "edited2.waivers")[0], "edited2.waivers[0]").built = 18;
+  fs.writeFileSync(planFile, JSON.stringify(edited2, null, 2));
+  const g4 = st();
+  check(`[DT-28] a waiver edited after the compare → not verified, saying the waivers changed (got ${g4.status})`,
+    g4.status === "unverified" && /waivers changed since the last compare — re-run --compare/.test(g4.reasons.join(" ")));
+  withReport("fail", { plan: `design/plan/${JR}.json`, sha256: waiversHash(accepted) });
+  const g5 = st();
+  check(`[DT-28] a failing report stays failed after the owner accepts something, and says to re-compare (got ${g5.status})`,
+    g5.status === "failed" && /waivers changed since the last compare/.test(g5.reasons.join(" ")));
 }
+check("[DT-28] a plan claiming \"pass-with-deviations\" beside that report is no contradiction (/pass/i also matched the new verdict)",
+  verificationContradictions({ verification: { verifyScreenVerdict: "pass-with-deviations" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "pass-with-deviations" })]).length === 0
+  && verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "incomplete" })]).length === 1);
+check("[review] a plan summarising a pass-with-deviations report as a plain \"pass\" gets a warning to say the deviations",
+  verificationContradictions({ verification: { verifyScreenVerdict: "pass" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "pass-with-deviations" })]).some((w) => /say the accepted deviations/.test(w)));
+check("[review] a hand-stored \"verified-with-deviations\" is ignored and noted like a stored \"verified\"", (() => {
+  const src = fs.readFileSync(path.join(import.meta.dirname, "..", "design-to-code", "verify-build.ts"), "utf8");
+  return /COMPUTED_STORED = new Set<string>\(\[[^\]]*"verified-with-deviations"/.test(src);
+})());
 check("[325] the block message names the file that USES the literal, not the allow-listed token file", (() => {
   const b = blocks({ "app/src/theme/theme.css": ".x { background: #5B5FC7 }", "app/src/Screen.tsx": "<div style={{ color: '#5B5FC7' }} />" },
     { files: ["app/src/theme/theme.css", "app/src/Screen.tsx"], tokens: [brand], allowedLiterals: [{ file: "app/src/theme/theme.css", reason: "generated token source" }], verification: STATIC });

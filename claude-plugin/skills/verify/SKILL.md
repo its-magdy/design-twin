@@ -157,7 +157,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
   [--interactions design/verify/<Screen>.evidence.json] --out design/verify/<Screen>   # --interactions only when the verifier wrote that file
 ```
 
-The baseline is implicit: the existing `<Screen>.report.json` about to be overwritten; `--against <prev report>` overrides it. Exit 0 only when the verdict is `pass`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
+The baseline is implicit: the existing `<Screen>.report.json` about to be overwritten; `--against <prev report>` overrides it. Exit 0 only when the verdict is `pass` or `pass-with-deviations`. It writes `<Screen>.report.json` and `<Screen>.report.md`,
 and prints the **headline** — the coverage line, verdict first:
 
 ```
@@ -170,10 +170,15 @@ field nobody measured was once silently "not wrong" for a whole phase. A field o
 listed under that node instead — unless the probe sent it under another name, or no measured node
 carries that key at all.
 
-How the verdict is computed, all of it deliberate:
+How the verdict is computed, all of it deliberate. It is one of four values:
 
+- **pass** — nothing open: no mismatch, every designed interaction driven and working, everything measured.
+- **pass-with-deviations** — nothing open, and at least one delta the user accepted (a plan waiver) or
+  one interaction the user descoped. The accepted deltas stay listed in the report, marked `accepted`
+  with who and why; say them as deviations, never as "matches". It exits 0 like `pass`.
 - **fail** — a high-severity mismatch (type, colour, copy, or a node the design places inside the
-  frame rendering outside it), a designed interaction that was driven and did not work, or a
+  frame rendering outside it — except below the fold of a page that scrolls: a non-fixed node pushed
+  down past the frame's bottom edge by a longer page is medium, so incomplete), a designed interaction that was driven and did not work, or a
   component the probe explicitly reported absent (`present: false`).
 - **incomplete** — medium mismatches (size, spacing, radius, position), interactions nobody probed,
   node specs never measured, fields the probe did not report, a measurement taken against a different
@@ -182,8 +187,11 @@ How the verdict is computed, all of it deliberate:
 - **An unmeasured expectation is not a passed one.** `notMeasured` has one row per node spec that got
   no measurement (so `nodesExpected − nodesMeasured` is exactly its length); `fieldsNotMeasured` lists
   values a measured node did not report. Both block the pass. Silence is not evidence.
-- **Three interaction states, not two:** `pass` (driven, with the selector), `fail` (driven, did not
-  work), `not-probed` (nobody drove it — neither passed nor failed).
+- **Interaction states, not two:** `pass` (driven, with the selector), `fail` (driven, did not
+  work), `not-probed` (nobody drove it — neither passed nor failed), `undesigned` (its destination was
+  never exported: counted in the headline, never blocks a pass; a probe showing it working still passes —
+  decided at `--expect` from `pages/index.json`, so re-run `--expect` after exporting that destination),
+  `descoped` (the user decided it stays inert — see below).
 - **`untaggedInstanceSets` is tag coverage, not presence.** It lists instance sets the probe could not
   point at (no `data-dt-node`, no reported setName). A list rendered by one `.map()` and a shared app
   shell tagged with another frame's ids both leave gaps here by design, so it never fails a screen on
@@ -223,6 +231,32 @@ never "matches". Don't soften or drop deltas, and don't fix them here. Never wri
 "verified"` into a plan — status is computed, never stored (see build-screen).
 
 ## 6. Offer the next step, don't take it
+
+**Accepting a deviation is the user's call, never yours.** When the user says a listed delta is
+intended ("keep the 16 px, it's our type scale"), and only on their explicit word — never because a
+delta looks small, never to get a screen to pass — record it and re-run the compare:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --accept design/verify/<Screen>.report.json \
+  (--node <nodeId> --field "<label>" | --group <groupId>) --reason "<the user's reason>" --by "<the user>"
+```
+
+`--node` needs `--field` (the delta's field label from the report), or `--all-fields` when the user
+means every delta on that node — one "keep the 16px" must not also waive a colour or copy delta. `--plan <plan.json>` points at the plan when the report cannot find it. Accepting the same
+node + field again replaces its waiver.
+
+It writes a waiver into the screen's plan (`waivers[]`), bound to node id + field + designed value +
+built value (± the field's tolerance) + the content hash of the whole export. Then re-run step 4: the
+old report is stale until then (`verify-build.js --status` says "waivers changed since the last compare").
+A waiver reopens by itself when any of those change — a re-export, a new designed value, a build that
+drifted further — and the report lists it under `waivers.reopened`; one whose delta is gone is listed
+under `waivers.unused` (fixed? offer to drop it). Never waivable: a missing component, a failed
+interaction, anything not measured. An interaction that is deliberately inert is a **descope**
+(`descopes[]` in the plan), which only the user decides — write it only on their word, with their
+reason; the best a screen with one can get is `pass-with-deviations`. A descope row is
+`{nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}` — `trigger` as the report
+spells it (`on_click`), the hash from the report's `inputs.exportContentSha256`; a malformed row is ignored
+with a note in the report, so read the next report to confirm it applied.
 
 Differences in the code → the user can ask for them to be fixed (a normal edit; when the screen has a
 plan, record the new `verification` there, pointing at the report file — the report, not the plan,

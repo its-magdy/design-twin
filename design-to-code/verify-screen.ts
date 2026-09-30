@@ -35,7 +35,8 @@ import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
-import { isInteractionEvidenceList, isMeasuredComponentList, isPlan, isProbeIdentity, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
+import { isInteractionEvidenceList, isMeasuredComponentList, isPageIndex, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
+import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
 import { readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd } from "./cli-args.ts";
 import { parseArgs } from "node:util";
@@ -43,8 +44,8 @@ import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { colorKey } from "./color.ts";
 import type {
-  Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
-  NotComparable, Paint, Plan, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
+  Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
+  NotComparable, Paint, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
   VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
@@ -307,6 +308,10 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     else spec.backgroundColor = normColor(fill.color);
   }
   if (fill && n.type === "TEXT" && !spec.color) spec.color = normColor(fill.color);
+  // Paint this method does not compare (a shadow, a blur, a gradient or image fill) is still paint: such a
+  // wrapper is drawn, so a plan may never fold it away (F-77).
+  const paints = Array.isArray(n.fills) ? n.fills : [];
+  if ((Array.isArray(n.effects) && n.effects.length > 0) || paints.some((p) => p && p.type !== "solid" && p.visible !== false)) spec.decorated = true;
 
   if (isPlaceholder(n)) {
     spec.placeholder = true;
@@ -419,8 +424,53 @@ export interface BuiltExpectation extends VerifyExpectation {
 }
 /** One screen export handed to buildExpectation(): the parsed document and the label it is known by. */
 export interface ExpectInput { doc: ScreenDoc | undefined; label?: string }
+/** buildExpectation()'s context beyond the screens: the export's pages/index.json layers (F-60), to tell an
+ *  interaction whose destination was never exported. `sourceFile` = the index's own (a row's wins). */
+export interface ExpectOptions { index?: { layers: IndexRow[]; sourceFile?: string } | null }
 
-function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
+// F-104: the shape a sibling row is recognised by — the same component, or the same tree of node types.
+function rowSignature(n: IrNode): string {
+  const mc = n.type === "INSTANCE" ? n.mainComponent : undefined;
+  if (mc) return `I:${mc.setKey || mc.key || mc.setName || mc.name || ""}`;
+  return `${n.type}(${(Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden).map(rowSignature).join(",")})`;
+}
+// F-104: under every parent, >=3 visible children with one signature are sibling ROWS; a TEXT at the same
+// relative path (child indices) in >=3 of them with the IDENTICAL string is the designer's repeated placeholder
+// copy ("14 Feb, 2026" in every row), not a claim about each row's data. Each such cluster is one group.
+function markRepeatedText(root: IrNode, specById: Map<string, VerifySpec>): void {
+  const visibleKids = (n: IrNode): IrNode[] => (Array.isArray(n.children) ? n.children : []).filter((c) => c && !c.hidden);
+  const texts = (n: IrNode, rel: string, out: Map<string, Array<{ id: string; text: string }>>): void => {
+    if (n.type === "TEXT" && typeof n.text === "string" && n.id) getOrInit(out, rel, () => []).push({ id: n.id, text: n.text.trim() });
+    visibleKids(n).forEach((c, i) => texts(c, rel ? `${rel}/${i}` : String(i), out));
+  };
+  (function go(p: IrNode): void {
+    if (p.hidden) return;
+    const kids = visibleKids(p);
+    const bySig = new Map<string, IrNode[]>();
+    for (const k of kids) getOrInit(bySig, rowSignature(k), () => []).push(k);
+    for (const rows of bySig.values()) {
+      if (rows.length < 3) continue;
+      const slots = new Map<string, Array<{ id: string; text: string }>>();
+      for (const r of rows) texts(r, "", slots);
+      for (const [rel, list] of slots) {
+        const byText = new Map<string, string[]>();
+        for (const e of list) if (e.text) getOrInit(byText, e.text, () => []).push(e.id);
+        let k = 0;
+        for (const ids of byText.values()) {
+          if (ids.length < 3) continue;
+          const group = `${p.id}>${rel || "."}#${k++}`;
+          for (const id of ids) {
+            const spec = specById.get(id);
+            if (spec && spec.type === "TEXT" && spec.text !== undefined && !spec.repeatedText) { spec.repeatedText = true; spec.repeatedTextGroup = group; }
+          }
+        }
+      }
+    }
+    for (const k of kids) go(k);
+  })(root);
+}
+
+function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): BuiltExpectation {
   const nodes: VerifySpec[] = [];
   const instances: VerifyInstance[] = [];
   const interactions: VerifyInteraction[] = [];
@@ -430,9 +480,17 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
   const frames: Array<Partial<VerifyFrame>> = [];
   const seen = new Set<string>();
   let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
+  // F-60: every node id each Figma file's docs carry (ids are per FILE), and the file each interaction came from
+  const idsByFile = new Map<string, Set<string>>();
+  const interactionFile = new Map<VerifyInteraction, string | undefined>();
+  const roots: IrNode[] = [];
 
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
+    // (a screen export and a page-walk layer file both say which Figma file they came from; a bare node does not)
+    const sf: unknown = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : undefined;
+    const sourceFile = typeof sf === "string" && sf ? sf : undefined;
+    const fileIds = getOrInit(idsByFile, sourceFile ?? "", () => new Set<string>());
     if (!screen) screen = (exp && exp.screen) || label;
     if (!exportedAt) exportedAt = exp ? exp.exportedAt : undefined;
     for (const root of screenRoots(doc)) {
@@ -444,7 +502,12 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
       const stateOf = new WeakMap<IrNode, InheritedState>(); // node -> inherited drawn-state { state, why, from }
       // node -> the ancestorIds its CHILDREN get: itself then its own ancestors (the frame root contributes none)
       const chainOf = new WeakMap<IrNode, string[]>();
+      // F-61: a frame's fixed children (pinned while scrolling) and everything inside them. Figma keeps them "on
+      // top of scrolling children" (plugin typings, numberOfFixedChildren) — the LAST N of children[], which is bottom-to-top.
+      const fixedNodes = new WeakSet<IrNode>();
+      roots.push(root);
       walkWithHidden(root, (n, c) => {
+        if (n.id) fileIds.add(n.id);
         if (c.hidden) {
           // Counted, never specified. The ids travel with the expectation so --compare can say "you
           // drove a hidden layer" instead of crediting it (finding 187).
@@ -465,6 +528,11 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
         if (n.id) seen.add(n.id);
         const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         spec.ancestorIds = ancestorIds;
+        if (n.absolute) spec.absolute = true;
+        const par = c.parent;
+        const sibs = par && Array.isArray(par.children) ? par.children : [];
+        const nFixed = par && typeof par.fixedChildren === "number" ? par.fixedChildren : 0;
+        if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
         notComparable.push(...gaps);
@@ -490,17 +558,46 @@ function buildExpectation(docs: ExpectInput[]): BuiltExpectation {
           const trigger = (r.trigger && (typeof r.trigger === "object" ? r.trigger.type || r.trigger : r.trigger)) || r.on || "on_click";
           for (const a of actions) {
             if (!a || !(a.type || a.navigation)) continue;
-            interactions.push({
+            const row: VerifyInteraction = {
               nodeId: n.id,
               name: n.name,
               trigger: String(trigger).toLowerCase(),
               ...ifDefined("action", a.navigation || a.type),
               ...ifDefined("destinationId", a.destinationId),
               ...ifDefined("destination", a.destination),
-            });
+            };
+            interactions.push(row);
+            interactionFile.set(row, sourceFile ?? "");
           }
         }
       });
+    }
+  }
+
+  // F-104: repeated placeholder copy in sibling rows
+  const specById = new Map(nodes.map((s) => [s.nodeId, s]));
+  for (const r of roots) markRepeatedText(r, specById);
+
+  // F-60 / D22: a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
+  // Figma node ids are per file — a join across files would match unrelated nodes. Decided only when every
+  // index row resolves to ONE answer for its file: all rows name a file (a screen that names its file is looked
+  // up among that file's rows), or none does (an export written before the bridge stamped sourceFile, as every
+  // field-test export was: one unnamed file, matched only by a screen that names none). And the index must
+  // cover this screen — one of its rows is a node of this export, in the same file — or an index of another
+  // file would call every destination "never exported". Otherwise the row is left as it was (graded as before).
+  const index = opts && opts.index;
+  const rowFile = (l: IndexRow): string | undefined => l.sourceFile ?? index?.sourceFile;
+  const named = index ? index.layers.filter((l) => !!rowFile(l)).length : 0;
+  const consistent = !!index && (named === 0 || named === index.layers.length);
+  if (index && consistent) {
+    for (const row of interactions) {
+      const file = interactionFile.get(row);
+      if (!row.destinationId || file === undefined || (file === "") !== (named === 0)) continue;
+      const known = idsByFile.get(file);
+      if (known && known.has(row.destinationId)) continue;
+      const ofFile = index.layers.filter((l) => (rowFile(l) ?? "") === file);
+      if (!known || !ofFile.some((l) => known.has(l.id))) continue; // the index does not cover this screen
+      if (!ofFile.some((l) => l.id === row.destinationId)) row.destinationExported = false;
     }
   }
 
@@ -696,7 +793,44 @@ export interface CompareOptions {
   artifactCheck?: ArtifactCheck[] | null; code?: CodeInputs; against?: { file: string; report: VerifyReport } | null;
   /** what readableMeasured() dropped from the measured file (malformed optional extras) — reported, never judged */
   inputNotes?: string[] | null;
+  /** D5: the plan's waivers[] — a matching delta is accepted (still listed, out of the counts) */
+  waivers?: PlanWaiver[] | null;
+  /** D20: the plan's descopes[] — a matching interaction is removed from the graded set */
+  descopes?: PlanDescope[] | null;
+  /** F-77: the plan's anchors{} — `foldedInto` takes a layout-only wrapper out of the denominator */
+  anchors?: Record<string, PlanAnchor> | null;
+  /** recorded as report.inputs.waivers: the plan file and waiversHash() of it */
+  waiversInput?: { plan: string; sha256: string } | null;
 }
+
+// ---- D5 waivers: does a waiver's recorded value still describe this round's delta?
+/** The slack a waiver's designed/built values are matched with — the field's own tolerance (null = exact). */
+function fieldTolerance(label: string): number | null {
+  const f = FIELDS.find((x) => x.label === label);
+  if (f) return f.tol;
+  if (label === "padding") return TOLERANCE.padding;
+  if (label.startsWith("border-radius (")) return TOLERANCE.radius;
+  if (label === "placement") return TOLERANCE.position;
+  return null;
+}
+const NUM_IN_TEXT = /-?\d+(?:\.\d+)?/g;
+/** Equal within `tol`: numbers by distance, lists item by item, strings exactly — or, with a tolerance, with
+ *  every number in them within it (a placement actual "bottom edge at y=1450 in a 900-high frame"). */
+function sameWithin(a: JsonValue, b: JsonValue, tol: number | null): boolean {
+  const t = tol ?? 0;
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= t + 1e-9;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => { const y = b[i]; return y !== undefined && sameWithin(x, y, tol); });
+  if (typeof a === "string" && typeof b === "string") {
+    if (tol == null) return a.trim() === b.trim();
+    if (a.replace(NUM_IN_TEXT, "#") !== b.replace(NUM_IN_TEXT, "#")) return false;
+    const na = a.match(NUM_IN_TEXT) || [], nb = b.match(NUM_IN_TEXT) || [];
+    return na.length === nb.length && na.every((x, i) => Math.abs(Number(x) - Number(nb[i])) <= t + 1e-9);
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+// F-77: what makes a spec more than a layout wrapper — it paints or carries copy, so it is built, never folded.
+const PAINT_KEYS = ["decorated", "text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderColor", "borderWidth", "borderWidths", "borderRadius", "radiusCorners", "opacity"] as const;
+const paintOf = (s: VerifySpec): string[] => PAINT_KEYS.filter((k) => s[k] !== undefined);
 
 // How the probe found each measured spec (coverage.matchedBy). The shipped probe writes the first six
 // values; a hand-written probe wrote free text ("data-dt-node" is its spelling of a tag match), which is
@@ -791,6 +925,21 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     expected: bad.want, actual: bad.got, delta: bad.delta,
   }, extra));
 
+  // F-77: plan anchors that fold a layout-only wrapper into a measured ancestor
+  const anchors = opts.anchors && isJsonObject(opts.anchors) ? opts.anchors : {};
+  const folded: VerifyReportV2["folded"] = [];
+  const probeFrames: ProbeFrame[] = [...(Array.isArray(measured.frames) ? measured.frames : []), ...(measured.frame ? [measured.frame] : [])];
+  const multiFrame = (expectation.frames || []).length > 1;
+  const frameMeasured = (id: string): boolean => probeFrames.some((f) => f.nodeId === id);
+  // F-104: the BUILD's texts per repeated-text group — varied texts are real data, one text for all is a copy bug
+  const builtTexts = new Map<string, string[]>();
+  for (const s of specs) {
+    if (!s.repeatedTextGroup) continue;
+    const mm = byId.get(String(s.nodeId));
+    const t = mm ? (mm.styles || mm).text : undefined;
+    if (typeof t === "string") getOrInit(builtTexts, s.repeatedTextGroup, () => []).push(t.replace(/\u00a0/g, " ").trim());
+  }
+
   for (const spec of specs) {
     let m = byId.get(String(spec.nodeId));
     let matchedBy: string | null = m ? m.matchedBy || "id" : null;
@@ -799,7 +948,27 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (alt) { m = byId.get(alt); matchedBy = `shared-component-path (${alt})`; nodesMatchedByComponentPath++; }
     }
     if (!m) {
-      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why: probeWhy.get(String(spec.nodeId)) ?? "no measurement for this node id" });
+      let why = probeWhy.get(String(spec.nodeId)) ?? "no measurement for this node id";
+      const anchor = anchors[spec.nodeId];
+      const into = anchor && typeof anchor.foldedInto === "string" && anchor.foldedInto.trim() ? anchor.foldedInto.trim() : null;
+      const paint = paintOf(spec);
+      const frameId = frameOf(spec).nodeId;
+      if (into) {
+        // Folding is a CLAIM, checked: only a wrapper with nothing to paint, folded into its own measured ancestor.
+        const refuse = paint.length ? `it states ${paint.join("/")} — a node that paints or carries copy is built, never folded`
+          : !((spec.ancestorIds || []).includes(into) || into === frameId) ? `${into} is not an ancestor of this node in the export`
+          : !(byId.has(into) || viaSharedPath(into) || frameMeasured(into)) ? `${into} was not measured, so nothing stands in for this node`
+          : null;
+        if (!refuse) {
+          folded.push({ nodeId: spec.nodeId, name: spec.name, into, why: `plan anchor foldedInto ${into}: a layout-only wrapper the build merged into that measured ancestor` });
+          continue;
+        }
+        why += ` — plan anchor foldedInto ${into} refused: ${refuse}`;
+      } else if (!paint.length) {
+        const parent = (spec.ancestorIds || [])[0] ?? frameId;
+        why += ` — foldable (no paint — anchor it foldedInto its parent${parent ? ` ${parent}` : ""} if the build merged it there)`;
+      }
+      notMeasured.push({ nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), why });
       continue;
     }
     nodesMeasured++;
@@ -990,9 +1159,21 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           // "Job Role▲": the designed string plus glyphs that are not letters or digits (a sort caret,
           // an icon font) — the copy is intact; name the extra glyphs rather than calling it a copy bug.
           const extraGlyphs = !caseOnly && g.startsWith(w) && !/[\p{L}\p{N}]/u.test(g.slice(w.length));
-          push(spec, "text", caseOnly || extraGlyphs ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
+          // F-104: the design repeats this string in >=3 sibling rows (placeholder copy). Low ONLY when the build's
+          // texts in those rows differ from each other (real data); one wrong string in every row stays high.
+          const rowTexts = spec.repeatedText && spec.repeatedTextGroup ? builtTexts.get(spec.repeatedTextGroup) : undefined;
+          // Real data = at least three different built values, and the designed string in at most half the rows
+          // (a realistic placeholder — "Active" — may well be one of the real values). A typo among correct rows
+          // ({View×3, Veiw}: 2 values; {View×3, Veiw, Vew}: View is the majority) or one wrong label everywhere plus
+          // a typo stays high. Trade-off: two-state data ({Active, Inactive}) stays high — too close to a copy bug.
+          const distinct = rowTexts ? new Set(rowTexts).size : 0;
+          const asDesigned = rowTexts ? rowTexts.filter((t) => t === w).length : 0;
+          const realData = !caseOnly && !extraGlyphs && !!rowTexts && distinct >= 3 && asDesigned * 2 <= rowTexts.length;
+          push(spec, "text", caseOnly || extraGlyphs || realData ? "low" : "high", { want: spec.text, got: got.text, delta: null }, {
             ...ifDefined("note", caseOnly ? "differs only in case — check for a text-transform, which Figma applies at render time while storing the original"
-              : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)` : undefined),
+              : extraGlyphs ? `the designed text is intact, followed by '${g.slice(w.length).trim()}' (an icon or caret inside the same element?)`
+              : realData ? `repeated placeholder copy: the design shows '${w}' in every sibling row; the build shows ${distinct} different values across them (real data?) — check the copy is the data the design means`
+              : undefined),
           });
         }
         if (/ /.test(String(spec.text))) {
@@ -1016,12 +1197,26 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       const tol = TOLERANCE.position;
       const inDesign = (!num(spec.x) || (spec.x >= -tol && spec.x + (spec.width || 0) <= fr.w + tol)) && (!num(spec.y) || (spec.y >= -tol && spec.y + (spec.height || 0) <= fr.h + tol));
       const out: string[] = [];
-      if (num(bx.y) && bx.y + h > fr.h + tol) out.push(`bottom edge at y=${r2(bx.y + h)} in a ${fr.h}-high frame`);
-      if (num(bx.y) && bx.y < -tol) out.push(`top edge at y=${r2(bx.y)}`);
-      if (num(bx.x) && bx.x + w > fr.w + tol) out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`);
-      if (num(bx.x) && bx.x < -tol) out.push(`left edge at x=${r2(bx.x)}`);
+      const over: number[] = []; // px past each edge — the delta's number, so a waiver's tolerance applies
+      let bottomOnly = true;
+      if (num(bx.y) && bx.y + h > fr.h + tol) { out.push(`bottom edge at y=${r2(bx.y + h)} in a ${fr.h}-high frame`); over.push(bx.y + h - fr.h); }
+      if (num(bx.y) && bx.y < -tol) { out.push(`top edge at y=${r2(bx.y)}`); over.push(-bx.y); bottomOnly = false; }
+      if (num(bx.x) && bx.x + w > fr.w + tol) { out.push(`right edge at x=${r2(bx.x + w)} in a ${fr.w}-wide frame`); over.push(bx.x + w - fr.w); bottomOnly = false; }
+      if (num(bx.x) && bx.x < -tol) { out.push(`left edge at x=${r2(bx.x)}`); over.push(-bx.x); bottomOnly = false; }
       if (inDesign && out.length && !(zeroAtRest)) {
-        deltas.push({ severity: "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "), note: "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
+        // F-61: "below the fold" — a page that is simply longer than the design's frame scrolls to this node.
+        // Medium (still blocks a pass) only when ALL hold: the bottom edge is the only one crossed; the probe
+        // took the viewport as the frame, or the rendered frame is taller than the design's (the page grew);
+        // the node is not absolute/fixed (those do not scroll into view); one frame (not a multi-frame/overlay
+        // expectation). Anything else stays high. Trade-off: a real bug that pushes a CTA below the fold also
+        // reads medium — it still blocks the pass, it only no longer shouts.
+        const pf = probeFrames.find((f) => f.nodeId === fr.nodeId) ?? (!multiFrame && probeFrames.length === 1 ? probeFrames[0] : undefined);
+        const pageGrew = !!pf && (pf.via === "viewport" || (isJsonObject(pf.rect) && num(pf.rect.h) && pf.rect.h > fr.h + tol));
+        const belowFold = bottomOnly && pageGrew && !spec.absolute && !spec.fixed && !multiFrame;
+        deltas.push({ severity: belowFold ? "medium" : "high", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "placement", expected: "inside the frame", actual: out.join(", "),
+          delta: r2(Math.max(...over)), // px past the frame (no `unit`: `actual` is prose, printed as-is)
+          note: belowFold ? "below the fold: the page renders taller than the design's frame and this node sits past its bottom edge — reachable by scrolling; accept it (verify-screen --accept) if the longer page is intended"
+            : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
       }
     }
   }
@@ -1092,9 +1287,30 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (hiddenSet.has(String(r.nodeId))) { interactionEvidenceOnHidden++; continue; }
     exercised.set(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase(), r); // later evidence wins
   }
+  // D20: the owner's descopes — bound to the export like a waiver; a re-export reopens them.
+  const exportSha = expectation.exportContentSha256;
+  const inputNotes = [...(Array.isArray(opts.inputNotes) ? opts.inputNotes : [])];
+  const reopened: VerifyReportV2["waivers"]["reopened"] = [];
+  const unused: VerifyReportV2["waivers"]["unused"] = [];
+  const descopeRows: PlanDescope[] = [];
+  (Array.isArray(opts.descopes) ? opts.descopes : []).forEach((d, i) => { if (isPlanDescope(d)) descopeRows.push(d); else inputNotes.push(`plan descopes[${i}] is not ${isPlanDescope.expected}; ignored`); });
+  const descopeUsed = new Set<PlanDescope>();
+  const descopeFor = (i: VerifyInteraction): PlanDescope | undefined => {
+    const hits = descopeRows.filter((d) => d.nodeId === i.nodeId && d.trigger.toLowerCase() === i.trigger && (d.destinationId === undefined || d.destinationId === i.destinationId));
+    for (const d of hits) descopeUsed.add(d);
+    const live = hits.find((d) => d.exportContentSha256 === exportSha);
+    if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
+    return live;
+  };
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i): VerifyInteractionResult => {
     const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
-    const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId) };
+    const row: VerifyInteraction = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...(i.destinationExported === false ? { destinationExported: false } : {}) };
+    const worked = !!hit && hit.ok === true && hit.result !== "not-probed" && !!hit.selector && Number(hit.selectorCount) >= 1;
+    // D20: removed from the graded set before grading; evidence that it works anyway is noted, never graded.
+    const scoped = descopeFor(i);
+    if (scoped) return Object.assign(row, { result: "descoped" as const, detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...(worked ? { note: "descoped but works — the probe drove it successfully; drop the descope?" } : {}) });
+    // D22: its destination was never exported — nothing designed to arrive at. A probe showing it working still passes.
+    if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned" as const, detail: `destination ${i.destinationId} is not in this Figma file's export — nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed" as const, detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
     if (hit.result === "not-probed" || hit.ok === null || hit.ok === undefined) return Object.assign(row, { result: "not-probed" as const, ...ifDefined("detail", hit.detail) });
@@ -1110,13 +1326,73 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const interactionsFailed = interactions.filter((i) => i.result === "fail");
   const interactionsNotProbed = interactions.filter((i) => i.result === "not-probed");
   const interactionsPassed = interactions.filter((i) => i.result === "pass");
+  const interactionsUndesigned = interactions.filter((i) => i.result === "undesigned");
+  const interactionsDescoped = interactions.filter((i) => i.result === "descoped");
+  for (const d of descopeRows) if (!descopeUsed.has(d)) unused.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "no designed interaction with this node and trigger this round" });
 
-  const high = deltas.filter((d) => d.severity === "high").length;
-  const medium = deltas.filter((d) => d.severity === "medium").length;
+  // ---- D5: the plan's waivers. A waiver accepts ONE delta (node + field) while the design is the one it was
+  // accepted against (whole-export hash, D21), the designed value is the same and the built value has not moved
+  // beyond its tolerance. Anything else reopens it. Never waivable: an absent component, a failed interaction,
+  // a node or value that was not measured — none of them is a delta.
+  const notWaivable = new Map<string, string>();
+  for (const n of notMeasured) notWaivable.set(n.nodeId, "the node was not measured — only a measured delta can be accepted");
+  for (const i of interactionsFailed) notWaivable.set(i.nodeId, "a failed interaction is never waivable (D5) — descope it (plan.descopes, owner-only) if it is deliberately inert");
+  for (const c of componentsAbsent) for (const id of c.nodeIds) notWaivable.set(id, `component set '${c.setName}' is reported ABSENT — a missing component is never waivable (D5)`);
+  let applied = 0;
+  (Array.isArray(opts.waivers) ? opts.waivers : []).forEach((w, i) => {
+    if (!isPlanWaiver(w)) { inputNotes.push(`plan waivers[${i}] is not ${isPlanWaiver.expected}; ignored`); return; }
+    const cands = deltas.filter((d) => d.nodeId === w.nodeId && d.field === w.field && !d.accepted);
+    if (!cands.length) {
+      const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round — only a measured delta can be accepted" : undefined;
+      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? "no such delta this round — fixed? drop the waiver" });
+      return;
+    }
+    if (!exportSha || w.exportContentSha256 !== exportSha) {
+      reopened.push({ nodeId: w.nodeId, field: w.field, why: exportSha ? "design re-exported: the export content changed since the waiver was accepted" : "the expectation records no export content hash — regenerate it with --expect" });
+      return;
+    }
+    const tol = fieldTolerance(w.field);
+    const d = cands.find((x) => sameWithin(w.designed, x.expected, tol) && sameWithin(w.built, x.actual, w.tolerance ?? tol));
+    if (d) {
+      d.accepted = { reason: w.reason, decidedBy: w.decidedBy, decidedAt: w.decidedAt, ...ifDefined("cause", w.cause) };
+      applied++;
+      return;
+    }
+    const c0 = cands.find((x) => sameWithin(w.designed, x.expected, tol));
+    reopened.push({ nodeId: w.nodeId, field: w.field,
+      why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}` });
+  });
+
+  // ---- F-76: presentational groups — one cause, many rows. Counts and verdict stay per delta.
+  // (a) a placement delta inside another node with a placement delta belongs to the OUTERMOST such ancestor's
+  //     group (a footer pushed down carries its children with it);
+  // (b) the same field with the same expected and actual on >=2 nodes is one group (one wrong token/class).
+  // Trade-off: an independent defect inside a group's root is only visible in the member list.
+  const specOf = new Map(specs.map((sp) => [String(sp.nodeId), sp]));
+  const placed = new Map<string, VerifyDelta>();
+  for (const d of deltas) if (d.field === "placement") placed.set(String(d.nodeId), d);
+  for (const d of placed.values()) {
+    const anc = (specOf.get(String(d.nodeId))?.ancestorIds || []).filter((a) => placed.has(a));
+    const root = anc[anc.length - 1];
+    if (root) { d.group = `placement:${root}`; const r = placed.get(root); if (r) r.group = `placement:${root}`; }
+  }
+  const sameKey = new Map<string, VerifyDelta[]>();
+  for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
+  for (const [k, list] of sameKey) {
+    if (list.length < 2) continue;
+    const gid = `same:${crypto.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    for (const d of list) d.group = gid;
+  }
+
+  const open = deltas.filter((d) => !d.accepted);
+  const high = open.filter((d) => d.severity === "high").length;
+  const medium = open.filter((d) => d.severity === "medium").length;
+  const accepted = deltas.length - open.length;
+  const openHigh = open.filter((d) => d.severity === "high");
+  const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
 
   // ---- what the evidence is tied to (findings 153/166/190)
   // (an in-process caller can hand over any object: a probe that is not an identity reads as unknown, with a note)
-  const inputNotes = [...(Array.isArray(opts.inputNotes) ? opts.inputNotes : [])];
   const probeRaw: unknown = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : undefined;
   if (probeRaw !== undefined && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
@@ -1132,6 +1408,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // Which probe produced these numbers (F-101): a hand-written probe is "unknown", and its numbers are not
     // comparable round to round — a changed probe changes what "measured" means.
     probe: probeIdentity ?? "unknown",
+    ...ifDefined("waivers", opts.waiversInput || undefined),
   };
   const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
@@ -1139,7 +1416,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const noRender = !!artifactCheck && !artifactCheck.some((a) => a.exists && a.image);
 
   // The verdict is COMPUTED. Coverage first — how much was looked at decides what the rest is worth.
-  const nodesExpected = specs.length;
+  // (a spec a plan anchor folded into a measured ancestor, F-77, is out of the denominator)
+  const nodesExpected = specs.length - folded.length;
   const reasons: string[] = [];
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (stale) reasons.push(`the measurements were taken against a DIFFERENT expectation (${String(measured.expectationSha256).slice(0, 12)}… vs ${String(opts.expectationSha256).slice(0, 12)}…) — re-measure`);
@@ -1155,7 +1433,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const fieldGapsOther = fieldsNotMeasured.length;
   if (fieldGapsOther) reasons.push(`${fieldGapsOther} value(s) on measured nodes were not reported by the probe${fieldsReportedNull ? ` (${fieldsReportedNull} reported null — the probe could not read them)` : ""}`);
 
-  const verdict: VerifyVerdict = reasons.length === 0 ? "pass" : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
+  // Reasons come from OPEN items only. Nothing open, but something accepted or descoped → pass-with-deviations (D5/D20).
+  const verdict: VerifyVerdict = reasons.length === 0 ? (accepted || interactionsDescoped.length ? "pass-with-deviations" : "pass")
+    : high || componentsAbsent.length || interactionsFailed.length ? "fail" : "incomplete";
 
   const coverage: VerifyCoverageV2 = {
     nodesExpected,
@@ -1175,6 +1455,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     interactionsPassed: interactionsPassed.length,
     interactionsFailed: interactionsFailed.length,
     interactionsNotProbed: interactionsNotProbed.length,
+    interactionsUndesigned: interactionsUndesigned.length,
+    interactionsDescoped: interactionsDescoped.length,
+    deltasAccepted: accepted,
+    nodesFolded: folded.length,
     matchedBy: matchedByCensus,
   };
 
@@ -1206,10 +1490,12 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const headline =
     `${mark} — ` +
     (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} · ` : "") +
-    `nodes measured ${nodesMeasured}/${nodesExpected} · ${fieldsChecked} values compared · ${high} high, ${medium} medium · ` +
+    `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""} · ${fieldsChecked} values compared · ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` +
+    (accepted ? ` · ${accepted} accepted` : "") + (reopened.length ? ` · ${reopened.length} waiver(s) REOPENED` : "") + " · " +
     // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
     (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method · ` : "") +
-    `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed of ${interactions.length} · ` +
+    `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` +
+    (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} · ` +
     `data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` +
     (against && fell ? ` · COVERAGE FELL ${against.nodesMeasured.before}→${against.nodesMeasured.after} vs ${against.report}` : "") +
     (against && against.probeChanged === true ? " · probe changed" : "");
@@ -1227,7 +1513,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     headline,
     why: reasons,
     coverage,
-    summary: { high, medium, low: deltas.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length },
+    summary: { high, medium, low: open.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length,
+      accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, highCauses },
     deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
     untaggedInstanceSets,
@@ -1236,6 +1523,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     fieldsNotMeasured,
     unverifiable,
     notComparable: expectation.notComparable || [],
+    waivers: { applied, reopened, unused },
+    folded,
     probe: {
       unknownKeys: [...unknownKeys].map(([key, count]) => ({ key, count, ...ifDefined("canonical", KEY_HINTS[key]) })),
       unknownTopLevelKeys: Object.keys(measured).filter((k) => !Object.hasOwn(MEASURED_TOP_KEYS, k)).map((key) => ({ key, ...ifDefined("canonical", TOP_KEY_HINTS[key]) })),
@@ -1285,7 +1574,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   const c = r.coverage;
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
-  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""} |`);
+  L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
   L.push(`| individual values compared | ${c.fieldsChecked} |`);
   L.push(`| values on measured nodes the probe did not report | ${c.fieldsNotMeasured} |`);
   if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
@@ -1293,7 +1582,10 @@ function reportToMarkdown(r: VerifyReportV2): string {
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) · ${c.hiddenLayersSkipped.specsSkipped} spec(s) · ${c.hiddenLayersSkipped.instancesSkipped} instance(s) · ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence — coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
-  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected} |`, "");
+  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}` +
+    `${c.interactionsUndesigned ? ` · ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` · ${c.interactionsDescoped} descoped by the owner` : ""} |`);
+  if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
+  L.push("");
   if (r.against) {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
@@ -1306,10 +1598,37 @@ function reportToMarkdown(r: VerifyReportV2): string {
   for (const b of MATCH_BUCKETS) if ((c.matchedBy[b] ?? 0) > 0 || b === "tag") L.push(`| ${MATCH_LABEL[b] ?? b} | ${c.matchedBy[b] ?? 0} |`);
   L.push("");
   if (r.deltas.length) {
-    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token |", "|---|---|---|---|---|---|");
-    for (const d of r.deltas) {
-      L.push(`| ${d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} |`);
+    // F-76: one line per cause first (a group = one cause, many rows); the table still lists every row.
+    const groups = new Map<string, VerifyDelta[]>();
+    for (const d of r.deltas) if (d.group) getOrInit(groups, d.group, () => []).push(d);
+    if (groups.size) {
+      L.push(`## Grouped causes (${groups.size})`, "", "*Presentational: every row still counts on its own.*", "");
+      for (const [g, list] of groups) {
+        const rootId = g.startsWith("placement:") ? g.slice("placement:".length) : null;
+        const root = rootId ? list.find((d) => d.nodeId === rootId) : undefined;
+        const open = list.filter((d) => !d.accepted);
+        L.push(`- \`${g}\` — ${list[0]?.field ?? ""}, **${list.length} rows**${root ? ` (${root.name || root.nodeId} and ${list.length - 1} inside it)` : ` (${fmt(list[0]?.expected)} → ${fmt(list[0]?.actual)})`}` +
+          `${open.length < list.length ? ` · ${list.length - open.length} accepted` : ""} — accept together: \`--accept <report> --group ${g} --reason … --by …\``);
+      }
+      L.push("");
     }
+    L.push(`## Value mismatches (${r.deltas.length})`, "", "| Severity | Node | Field | Expected | Actual | Token | Group / accepted |", "|---|---|---|---|---|---|---|");
+    for (const d of r.deltas) {
+      const status = d.accepted ? `accepted — ${d.accepted.reason} (${d.accepted.decidedBy}, ${d.accepted.decidedAt})` : d.group ? `\`${d.group}\`` : "";
+      L.push(`| ${d.accepted ? `~~${d.severity}~~` : d.severity} | ${d.name || ""} \`${d.nodeId}\` | ${d.field} | ${withUnit(d.expected, d.unit)} | ${withUnit(d.actual, d.unit)} | ${d.token || "—"} | ${status} |`);
+    }
+    L.push("");
+  }
+  const wv = r.waivers;
+  if (wv && (wv.reopened.length || wv.unused.length)) {
+    L.push("## Plan waivers that no longer apply", "");
+    for (const w of wv.reopened) L.push(`- **reopened** \`${w.nodeId}\` (${w.field}) — ${w.why}`);
+    for (const w of wv.unused) L.push(`- unused \`${w.nodeId}\` (${w.field})${w.why ? ` — ${w.why}` : ""}`);
+    L.push("");
+  }
+  if (r.folded && r.folded.length) {
+    L.push(`## Folded into a measured ancestor (${r.folded.length} node specs, out of the count)`, "");
+    for (const f of r.folded) L.push(`- \`${f.nodeId}\` ${f.name || ""} → \`${f.into}\` — ${f.why}`);
     L.push("");
   }
   if (r.componentsAbsent.length) {
@@ -1324,10 +1643,16 @@ function reportToMarkdown(r: VerifyReportV2): string {
     if (r.untaggedInstanceSets.length > 40) L.push(`- …and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");
   }
-  const bad = r.interactions.filter((i) => i.result !== "pass");
+  const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
     for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}`);
+    L.push("");
+  }
+  const ungraded = r.interactions.filter((i) => i.result === "undesigned" || i.result === "descoped");
+  if (ungraded.length) {
+    L.push(`## Interactions not graded (${ungraded.length})`, "", "*undesigned: the destination was never exported; descoped: the owner removed it (plan.descopes).*", "");
+    for (const i of ungraded) L.push(`- \`${i.nodeId}\` ${i.name || ""} — ${i.trigger} → ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` — ${i.detail}` : ""}${i.note ? ` — ${i.note}` : ""}`);
     L.push("");
   }
   if (r.notMeasured.length) {
@@ -1390,7 +1715,43 @@ function findExistingExpectedFor(dir: string, nodeId: string | undefined, ownTar
   return null;
 }
 
-export { buildExpectation, compare, reportToMarkdown, probeLine, expectNode, STYLE_KEYS, MEASURED_KEYS_DOC, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
+// The plan(s) under design/plan/ (relative to the working directory) that describe this frame: by the frame's
+// node id (plan.nodeId, or a `<Layer>__<id>` file name) or by name (the plan's own stem, or its export's).
+function plansFor(frameId: string | undefined, stem: string): Array<{ file: string; plan: Plan }> {
+  const planDir = path.join("design", "plan");
+  const hits: Array<{ file: string; plan: Plan }> = [];
+  for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
+    // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
+    const p = readJsonOrNull(path.join(planDir, f), isPlan);
+    if (!p) continue;
+    const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
+    const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
+    if (byId || byName) hits.push({ file: path.join(planDir, f).split(path.sep).join("/"), plan: p });
+  }
+  return hits;
+}
+
+/** --accept's selection: the report deltas one waiver row each is written for, or why there are none. */
+function selectForAccept(rep: VerifyReport, sel: { node?: string | undefined; field?: string | undefined; group?: string | undefined }): { deltas: VerifyDelta[] } | { error: string } {
+  const deltas: VerifyDelta[] = Array.isArray(rep.deltas) ? rep.deltas : [];
+  const picked = sel.group !== undefined ? deltas.filter((d) => d.group === sel.group)
+    : deltas.filter((d) => d.nodeId === sel.node && (sel.field === undefined || d.field === sel.field));
+  if (picked.length) return { deltas: picked };
+  if (sel.group !== undefined) {
+    const gs = [...new Set(deltas.map((d) => d.group).filter((g): g is string => !!g))];
+    return { error: `no delta in the report belongs to group '${sel.group}'${gs.length ? ` (groups: ${gs.join(", ")})` : " (the report has no groups)"}` };
+  }
+  const id = sel.node;
+  // Not a delta = not waivable (D5): say which kind of item it is instead.
+  if ((rep.componentsAbsent || []).some((c) => c.nodeIds.includes(String(id)))) return { error: `${id} belongs to a component set reported ABSENT — a missing component is never waivable (D5); build it` };
+  if ((rep.interactions || []).some((i) => i.nodeId === id && i.result === "fail")) return { error: `${id} is a failed interaction — never waivable (D5); fix it, or have the owner descope it in plan.descopes (D20)` };
+  if ((rep.notMeasured || []).some((n) => n.nodeId === id)) return { error: `${id} was not measured — there is no delta to accept; measure it (or fold it, plan anchor foldedInto) first` };
+  if (sel.field !== undefined && (rep.fieldsNotMeasured || []).some((n) => n.nodeId === id && n.field === sel.field)) return { error: `${id} (${sel.field}) was not measured — there is no delta to accept` };
+  const fields = deltas.filter((d) => d.nodeId === id).map((d) => d.field);
+  return { error: `no delta in the report for ${id}${sel.field !== undefined ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
+}
+
+export { buildExpectation, compare, reportToMarkdown, selectForAccept, probeLine, expectNode, STYLE_KEYS, MEASURED_KEYS_DOC, normColor, normWeight, normFamily, lineHeightPx, tokenFor, radiusCorners, findExistingExpectedFor, TOLERANCE, FIELDS, EXPECTATION_SCHEMA, REPORT_SCHEMA };
 
 
 // ---------------------------------------------------------------- CLI
@@ -1404,20 +1765,33 @@ function main(argv: string[]): number {
     "      Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this\n" +
     "      directory — pass --force to write a second one anyway.\n" +
     `  ${scriptCmd("verify-screen")} --compare <Screen>.expected.json <measured.json> [--interactions <file>] [--against <report.json>] --out design/verify/<Screen>\n` +
-    "      writes <Screen>.report.json + .md and exits 1 unless the verdict is 'pass'. It has NO browser: it compares\n" +
+    "      writes <Screen>.report.json + .md and exits 1 unless the verdict passes (pass / pass-with-deviations). It has NO browser: it compares\n" +
     "      two JSON files. Interaction results come from measured.json's interactions[] and/or --interactions <file>\n" +
     "      (a JSON array, or {interactions:[…], components:[…]}, of {nodeId, trigger, ok, selector, selectorCount, detail};\n" +
     "      components[] rows {setName|nodeId, present} are merged with measured.json's).\n" +
     "      --out defaults to design/verify/<the .expected.json file's own basename>.\n" +
     "      Coverage is compared with the report this run overwrites (or --against <report.json>): a drop in nodes\n" +
-    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.";
+    "      measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.\n" +
+    "      The plan for this frame (design/plan/, or --plan <plan.json>) supplies waivers[] and descopes[]: an accepted\n" +
+    "      delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).\n" +
+    `  ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]\n` +
+    "      writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed\n" +
+    "      and the built value (any change reopens it). Only on the owner's explicit word. Refuses a node with no delta:\n" +
+    "      absent components, failed interactions and unmeasured nodes are never waivable. Re-run --compare to apply.";
   if (argv.includes("--help") || argv.includes("-h") || !argv.length) { console.log(USAGE); return argv.length ? 0 : 2; }
 
-  const OPTIONS = { out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" }, help: { type: "boolean", short: "h" } } as const;
+  const OPTIONS = {
+    out: { type: "string" }, interactions: { type: "string" }, against: { type: "string" }, force: { type: "boolean" }, expect: { type: "boolean" }, compare: { type: "boolean" },
+    accept: { type: "boolean" }, node: { type: "string" }, field: { type: "string" }, group: { type: "string" }, reason: { type: "string" }, by: { type: "string" }, plan: { type: "string" }, "all-fields": { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+  } as const;
   const { values: flags, positionals: files } = cliParse("verify-screen", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: true }));
-  const { out, interactions: interactionsFile, against: againstFile } = flags;
-  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare;
-  if (doExpect === doCompare) { console.error("pass exactly one of --expect / --compare\n" + USAGE); return 2; }
+  const { out, interactions: interactionsFile, against: againstFile, plan: planFlag } = flags;
+  const force = !!flags.force, doExpect = !!flags.expect, doCompare = !!flags.compare, doAccept = !!flags.accept;
+  if ([doExpect, doCompare, doAccept].filter(Boolean).length !== 1) { console.error("pass exactly one of --expect / --compare / --accept\n" + USAGE); return 2; }
+  for (const k of ["node", "field", "group", "reason", "by", "all-fields"] as const) if (flags[k] !== undefined && !doAccept) { console.error(`--${k} only applies to --accept\n` + USAGE); return 2; }
+  if (planFlag !== undefined && doExpect) { console.error("--plan only applies to --compare / --accept\n" + USAGE); return 2; }
+  if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== undefined && !doCompare) { console.error("--interactions only applies to --compare\n" + USAGE); return 2; }
   if (againstFile !== undefined && !doCompare) { console.error("--against only applies to --compare\n" + USAGE); return 2; }
 
@@ -1433,7 +1807,25 @@ function main(argv: string[]): number {
     const firstFile = files[0];
     if (firstFile === undefined) { console.error("--expect needs at least one screen export\n" + USAGE); return 2; }
     const docs: ExpectInput[] = files.map((f) => ({ doc: readDocFile(f, "screen export", isScreenDoc), label: path.basename(f, ".json") }));
-    const exp = buildExpectation(docs);
+    // F-60: the export's own index (relative to the project root) tells which destinations were exported
+    const indexFile = path.join("design", "export", "pages", "index.json");
+    const idx = readJson(indexFile, isPagesRootIndex);
+    if (!("doc" in idx) && !idx.missing) console.error(`note  ${indexFile} ${idx.error} — interaction destinations are checked against the given export(s) only`);
+    // The root index is REPLACED by a page walk (only single-screen pulls merge into it), so the frames an earlier
+    // walk exported live on only in their page's own pages/<dir>/index.json: read every one on disk too, or a
+    // destination exported by the first walk reads as "never exported" after the second (review H2).
+    const pagesDir = path.join("design", "export", "pages");
+    const pageRows: IndexRow[] = [];
+    let dirs: string[] = [];
+    try { dirs = fs.readdirSync(pagesDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* no pages dir */ }
+    for (const d of dirs) {
+      const pi = readJson(path.join(pagesDir, d, "index.json"), isPageIndex);
+      if ("doc" in pi) pageRows.push(...pi.doc.layers);
+    }
+    const rootRows: IndexRow[] = "doc" in idx ? idx.doc.layers || [] : [];
+    const seen = new Set(rootRows.map((l) => `${l.id}\u0000${l.sourceFile ?? ""}`));
+    const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers, ...ifDefined("sourceFile", "doc" in idx ? idx.doc.sourceFile : undefined) } } : null);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
     // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
     // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST
@@ -1515,27 +1907,33 @@ function main(argv: string[]): number {
   // Finding 317: tie the report to the code it measured — the plan (design/plan/*.json) for this
   // frame lists the files; their content hashes and `git rev-parse HEAD` go into report.inputs.code.
   let code: CodeInputs | undefined;
+  // D5/D20/F-77: the same plan supplies waivers[], descopes[] and foldedInto anchors — found whether or not it lists files.
+  let planHit: { file: string; plan: Plan } | undefined;
+  if (planFlag !== undefined) {
+    const r = readJson(planFlag, isPlan);
+    if (!("doc" in r)) { console.error(`--plan '${planFlag}' ${r.error}`); return 2; }
+    planHit = { file: planFlag.split(path.sep).join("/"), plan: r.doc };
+  }
   {
-    const planDir = path.join("design", "plan");
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path.basename(expFile, ".json").replace(/\.expected$/, "");
-    const hits: Array<{ f: string; p: Plan; files: string[] }> = [];
-    for (const f of fs.existsSync(planDir) ? fs.readdirSync(planDir).filter((x) => x.endsWith(".json")).sort() : []) {
-      // a plan under design/plan/ (plan-skeleton.ts); one that is not a readable plan describes nothing
-      const p = readJsonOrNull(path.join(planDir, f), isPlan);
-      if (!p) continue;
-      const byId = frameId && (p.nodeId === frameId || new RegExp(`__${String(frameId).replace(":", "_")}$`).test(path.basename(f, ".json")));
-      const byName = path.basename(f, ".json") === stem || (p.file && path.basename(String(p.file), ".json") === stem);
-      if ((byId || byName) && p.files) hits.push({ f, p, files: p.files });
-    }
+    const all = planHit ? [planHit] : plansFor(frameId, stem);
+    const hits = all.filter((h) => h.plan.files);
     const onlyHit = hits.length === 1 ? hits[0] : undefined;
-    if (onlyHit) {
-      code = { plan: path.join(planDir, onlyHit.f).split(path.sep).join("/"), files: fileHashes(onlyHit.files, process.cwd()), gitHead: gitHead(process.cwd()) };
+    if (!planHit) planHit = all.length === 1 ? all[0] : onlyHit;
+    if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) — no waivers/descopes applied; pass --plan <plan.json>`);
+    if (onlyHit && onlyHit.plan.files) {
+      code = { plan: onlyHit.file, files: fileHashes(onlyHit.plan.files, process.cwd()), gitHead: gitHead(process.cwd()) };
     } else {
-      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.f).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
+      console.error(hits.length ? `note  ${hits.length} plans in design/plan/ describe this frame (${hits.map((h) => h.file).join(", ")}) — the report records no code hashes, so its status cannot be tied to the code`
+        : all.length ? `note  ${all.map((h) => h.file).join(", ")} list${all.length === 1 ? "s" : ""} no files[] — the report records no code hashes, so verify-build --status cannot tie it to the code`
         : "note  no plan in design/plan/ describes this frame — the report records no code hashes (run from the project root), so verify-build --status cannot tie it to the code");
     }
   }
+  const planInputs = planHit ? {
+    ...ifDefined("waivers", planHit.plan.waivers), ...ifDefined("descopes", planHit.plan.descopes), ...ifDefined("anchors", planHit.plan.anchors),
+    waiversInput: { plan: planHit.file, sha256: waiversHash(planHit.plan) },
+  } : {};
   // Same rule as --expect (P3 #152): default to the EXPECTATION file's own basename (stripping the
   // `.expected` suffix it was written with), so `--compare <Screen>.expected.json <measured.json>`
   // always reports under `<Screen>.report.*`, never a second name for the same screen.
@@ -1554,14 +1952,69 @@ function main(argv: string[]): number {
     if ("doc" in r) against = { file: own, report: r.doc };
     else if (!r.missing) console.error(`note  ${own} ${r.error} — no coverage baseline this round (it is about to be overwritten)`);
   }
-  const rep = compare(expectation, measured, { ...(readable.notes.length ? { inputNotes: readable.notes } : {}), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against) });
+  const rep = compare(expectation, measured, { ...(readable.notes.length ? { inputNotes: readable.notes } : {}), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
   console.error(probeLine(rep));
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older expectation?`);
-  return rep.verdict === "pass" ? 0 : 1;
+  for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
+  if (rep.waivers.unused.length) console.error(`note  ${rep.waivers.unused.length} plan waiver(s)/descope(s) match nothing this round: ${rep.waivers.unused.map((w) => `${w.nodeId} (${w.field})`).join(", ")} — fixed? drop them`);
+  return isPassingVerdict(rep.verdict) ? 0 : 1;
+}
+
+// D23: `--accept <report> (--node <id> [--field <label>] | --group <gid>) --reason … --by … [--plan <plan.json>]`.
+// Copies the report delta(s) into plan.waivers[] — one row per node + field — bound to the export content hash
+// and to the designed and built values. It never grades anything: the next --compare applies (or reopens) them.
+function acceptMain(files: string[], flags: { node?: string | undefined; field?: string | undefined; group?: string | undefined; reason?: string | undefined; by?: string | undefined; plan?: string | undefined; "all-fields"?: boolean | undefined }, USAGE: string): number {
+  const reportFile = files[0];
+  if (!reportFile || files.length > 1) { console.error("--accept needs exactly one <Screen>.report.json\n" + USAGE); return 2; }
+  if ((flags.node === undefined) === (flags.group === undefined)) { console.error("--accept needs exactly one of --node <id> / --group <gid>\n" + USAGE); return 2; }
+  if ((flags.field !== undefined || flags["all-fields"]) && flags.group !== undefined) { console.error("--field / --all-fields go with --node, not --group\n" + USAGE); return 2; }
+  // One "keep the 16px" must not also waive a copy or colour delta on the same node: name the field, or say all.
+  if (flags.node !== undefined && (flags.field === undefined) === !flags["all-fields"]) { console.error("--accept --node needs exactly one of --field \"<label>\" / --all-fields\n" + USAGE); return 2; }
+  const reason = (flags.reason || "").trim(), by = (flags.by || "").trim();
+  if (!reason || !by) { console.error(`--accept needs ${!reason ? "--reason \"<why this deviation is intended>\"" : ""}${!reason && !by ? " and " : ""}${!by ? "--by \"<who decided>\"" : ""} — a waiver without a reason and a decider is not recorded\n` + USAGE); return 2; }
+  const r = readJson(reportFile, isVerifyReport);
+  if (!("doc" in r)) { console.error(`error  report: '${reportFile}' ${r.error}`); return 2; }
+  const report = r.doc;
+  const exportSha = report.inputs && report.inputs.exportContentSha256;
+  if (!exportSha) { console.error(`error  ${reportFile} records no inputs.exportContentSha256 — re-run --expect and --compare, then accept against the new report`); return 1; }
+  const sel = selectForAccept(report, { node: flags.node, field: flags.field, group: flags.group });
+  if ("error" in sel) { console.error(`refused  ${sel.error}`); return 1; }
+
+  // the plan: --plan, else the one the report was compared with, else the one that describes this report's screen
+  const stem = path.basename(reportFile, ".json").replace(/\.report$/, "");
+  const recorded = (report.inputs && report.inputs.waivers && report.inputs.waivers.plan) || (report.inputs && report.inputs.code && report.inputs.code.plan) || undefined;
+  let planFile = flags.plan ?? (recorded && fs.existsSync(recorded) ? recorded : undefined);
+  if (!planFile) {
+    const hits = plansFor(report.nodeId, stem);
+    const only = hits.length === 1 ? hits[0] : undefined;
+    if (!only) { console.error(hits.length ? `error  ${hits.length} plans describe this screen (${hits.map((h) => h.file).join(", ")}) — pass --plan <plan.json>` : "error  no plan in design/plan/ describes this screen (run from the project root, or pass --plan <plan.json>)"); return 1; }
+    planFile = only.file;
+  }
+  const pr = readJson(planFile, isPlan);
+  if (!("doc" in pr)) { console.error(`error  plan: '${planFile}' ${pr.error}`); return 1; }
+  const plan = pr.doc;
+  const decidedAt = new Date().toISOString();
+  const waivers: PlanWaiver[] = Array.isArray(plan.waivers) ? [...plan.waivers] : [];
+  const wrote: string[] = [];
+  for (const d of sel.deltas) {
+    const row: PlanWaiver = { nodeId: d.nodeId, field: d.field, designed: d.expected, built: d.actual, exportContentSha256: exportSha, reason, decidedBy: by, decidedAt, ...ifDefined("cause", flags.group) };
+    // one row per node + field: a new decision replaces the old one
+    const at = waivers.findIndex((w) => isJsonObject(w) && w.nodeId === d.nodeId && w.field === d.field);
+    if (at >= 0) waivers[at] = row; else waivers.push(row);
+    wrote.push(`${at >= 0 ? "replaced" : "added"}  ${d.nodeId} ${d.name ? `(${d.name}) ` : ""}${d.field}: designed ${fmt(d.expected)}, built ${fmt(d.actual)}`);
+  }
+  plan.waivers = waivers;
+  const tmp = `${planFile}.${process.pid}.tmp`; // write-then-rename: a crash never leaves half a plan
+  fs.writeFileSync(tmp, JSON.stringify(plan, null, 2) + "\n");
+  fs.renameSync(tmp, planFile);
+  console.error(`wrote ${wrote.length} waiver(s) to ${planFile} (decided by ${by}: ${reason})`);
+  for (const w of wrote) console.error(`  ${w}`);
+  console.error(`re-run --compare to apply ${wrote.length === 1 ? "it" : "them"}: an accepted delta stays listed, leaves the counts, and reopens if the design is re-exported or the built value moves.`);
+  return 0;
 }
 
 if (import.meta.main ?? isMainFallback(import.meta.url)) process.exitCode = main(process.argv.slice(2));
