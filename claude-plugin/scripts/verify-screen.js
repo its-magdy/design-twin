@@ -1176,6 +1176,7 @@ function buildExpectation(docs, opts) {
   const seen = /* @__PURE__ */ new Set();
   let screen = void 0, exportedAt = void 0, reference = null;
   const idsByFile = /* @__PURE__ */ new Map();
+  const rootsByFile = /* @__PURE__ */ new Map();
   const interactionFile = /* @__PURE__ */ new Map();
   const roots = [];
   for (const { doc, label } of docs) {
@@ -1186,6 +1187,10 @@ function buildExpectation(docs, opts) {
     if (!screen) screen = exp && exp.screen || label;
     if (!exportedAt) exportedAt = exp ? exp.exportedAt : void 0;
     for (const root of screenRoots(doc)) {
+      if (root.id) {
+        const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Map()), root.id, () => /* @__PURE__ */ new Set());
+        for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : void 0]) if (typeof n === "string" && n) names.add(n);
+      }
       if (!reference && root.reference) reference = root.reference;
       const b = root.box || {};
       const frame = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
@@ -1258,19 +1263,32 @@ function buildExpectation(docs, opts) {
   const specById = new Map(nodes.map((s) => [s.nodeId, s]));
   for (const r of roots) markRepeatedText(r, specById);
   const index = opts && opts.index;
-  const rowFile = (l) => l.sourceFile ?? index?.sourceFile;
-  const named = index ? index.layers.filter((l) => !!rowFile(l)).length : 0;
-  const consistent = !!index && (named === 0 || named === index.layers.length);
-  if (index && consistent) {
-    for (const row of interactions) {
-      const file = interactionFile.get(row);
-      if (!row.destinationId || file === void 0 || file === "" !== (named === 0)) continue;
-      const known = idsByFile.get(file);
-      if (known && known.has(row.destinationId)) continue;
-      const ofFile = index.layers.filter((l) => (rowFile(l) ?? "") === file);
-      if (!known || !ofFile.some((l) => known.has(l.id))) continue;
-      if (!ofFile.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  const unnamedIds = idsByFile.get("");
+  const candidatesFor = (file) => {
+    if (!index) return null;
+    const own = rootsByFile.get(file);
+    const sameName = (l) => {
+      const names = own?.get(l.id);
+      return !!names && (!names.size || l.name === void 0 || names.has(l.name));
+    };
+    const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
+    if (!covering.length) return null;
+    let f = file;
+    if (f === "") {
+      const named = new Set(covering.map((l) => l.sourceFile).filter((x) => !!x));
+      if (named.size > 1) return null;
+      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return index.layers;
+      f = [...named][0] ?? "";
     }
+    return index.layers.filter((l) => !l.sourceFile || l.sourceFile === f);
+  };
+  for (const row of interactions) {
+    const file = interactionFile.get(row);
+    if (!row.destinationId || file === void 0) continue;
+    const known = idsByFile.get(file);
+    if (!known || known.has(row.destinationId) || unnamedIds && unnamedIds.has(row.destinationId)) continue;
+    const candidates = candidatesFor(file);
+    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
   }
   const f0 = frames[0] || {};
   const rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip) });
@@ -2787,7 +2805,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
-    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers, ...ifDefined("sourceFile", "doc" in idx ? idx.doc.sourceFile : void 0) } } : null);
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers } } : null);
     const outBase = out || path4.join("design", "verify", path4.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path4.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
