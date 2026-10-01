@@ -621,7 +621,9 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   };
   for (const row of interactions) {
     const file = interactionFile.get(row);
-    if (!row.destinationId || file === undefined) continue;
+    // D28 (live L-4): a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
+    // screen anyone exports — so it is never "undesigned"; undriven, it is not-probed like any other interaction.
+    if (!row.destinationId || file === undefined || String(row.action).toLowerCase() === "change_to") continue;
     const known = idsByFile.get(file);
     if (!known || known.has(row.destinationId) || (unnamedIds && unnamedIds.has(row.destinationId))) continue;
     const candidates = candidatesFor(file);

@@ -1284,7 +1284,7 @@ function buildExpectation(docs, opts) {
   };
   for (const row of interactions) {
     const file = interactionFile.get(row);
-    if (!row.destinationId || file === void 0) continue;
+    if (!row.destinationId || file === void 0 || String(row.action).toLowerCase() === "change_to") continue;
     const known = idsByFile.get(file);
     if (!known || known.has(row.destinationId) || unnamedIds && unnamedIds.has(row.destinationId)) continue;
     const candidates = candidatesFor(file);
