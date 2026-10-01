@@ -560,6 +560,13 @@ function checkVerification(plan: Plan, cwd: string): string[] {
     return ["no `verification.mode` in the plan — record how the build was checked: {mode:\"rendered\", renderer, artifacts:[…], deltas:[…]} after rendering and comparing (references/verify.md), or {mode:\"static-only\", reason} if the project genuinely has no way to render"];
   }
   if (v.mode === "rendered") {
+    // live L-2: an agent wrote artifacts/deltas as OBJECTS ({screenshot: "…"}, {high: 33, …}) — say the shape is wrong, not "empty"/"missing"
+    const shape = (x: unknown): string => x === null ? "null" : Array.isArray(x) ? "an array" : typeof x === "object" ? "an object" : typeof x;
+    // (both shape errors in one round: the field-test plans had both as objects, and this is only a warning — review LOW-1)
+    const wrongShape: string[] = [];
+    if (v.artifacts !== undefined && !Array.isArray(v.artifacts)) wrongShape.push(`verification.artifacts must be an array of paths, got ${shape(v.artifacts)} — e.g. ["design/verify/<Screen>.png", "design/verify/<Screen>.report.json"]`);
+    if (v.deltas !== undefined && !Array.isArray(v.deltas)) wrongShape.push(`verification.deltas must be an array of the residual differences, got ${shape(v.deltas)} — the counts live in the report; list each difference ([] if none were found)`);
+    if (wrongShape.length) return v.deltas === undefined ? [...wrongShape, "verification.deltas is missing — list the residual differences against the reference ([] if none were found)"] : wrongShape;
     const artifacts = Array.isArray(v.artifacts) ? v.artifacts : [];
     if (!artifacts.length) return ["verification.mode is \"rendered\" but `artifacts` is empty — list the screenshot(s)/report the render produced"];
     const missing = artifacts.filter((a) => !fs.existsSync(path.join(cwd, String(a))));
