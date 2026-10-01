@@ -491,8 +491,9 @@ export interface PlanVerification {
   mode?: "rendered" | "static-only" | (string & {});
   reason?: string;
   renderer?: string;
-  artifacts?: string[];
-  deltas?: JsonValue[];
+  /** Documented as arrays; a plan read from disk may hold anything (the guard does not check them — live L-2: objects). */
+  artifacts?: string[] | JsonValue;
+  deltas?: JsonValue[] | JsonValue;
   coverage?: { rendered?: string[]; notChecked?: Array<string | { what?: string; why?: string }> };
   a11y?: { tool?: string; violations?: number };
   verifyScreenVerdict?: string | { verdict?: string };

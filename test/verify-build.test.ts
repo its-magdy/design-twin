@@ -268,6 +268,25 @@ check("a raw literal is still caught when another listed file is missing", has(p
 console.log("verification evidence:");
 check("no verification block is reported (a warning)", has(problems({}, {}), /no `verification.mode`/));
 check("rendered with no artifacts fails", has(problems({}, { verification: { mode: "rendered", artifacts: [], deltas: [] } }), /`artifacts` is empty/));
+// live L-2: the agent's real shape — artifacts and deltas as objects — is named as the wrong type, not "empty"/"missing"
+{
+  // (through the plan guard, as a plan read from disk would be — the shape the field-test agent wrote)
+  const objPlan = (verification: Record<string, unknown>): Plan | null => { const r = parsePlan({ verification }); return "plan" in r ? r.plan : null; };
+  const a = objPlan({ mode: "rendered", artifacts: { screenshot: "design/verify/Orders.png" }, deltas: [] });
+  check("[L-2] artifacts as an object → 'must be an array of paths, got an object', not 'empty'", !!a && has(problems({}, a), /artifacts must be an array of paths, got an object/) && !has(problems({}, a), /`artifacts` is empty/));
+  const both = objPlan({ mode: "rendered", artifacts: { screenshot: "design/verify/Orders.png" }, deltas: { high: 33, medium: 111 } });
+  check("[L-2] both as objects (the real field-test plans) → both shape messages in ONE round", !!both && has(problems({}, both), /artifacts must be an array of paths, got an object/) && has(problems({}, both), /deltas must be an array of the residual differences, got an object/));
+  const noDeltas = objPlan({ mode: "rendered", artifacts: { screenshot: "design/verify/Orders.png" } });
+  check("[L-2] artifacts an object AND deltas absent → both messages in one round", !!noDeltas && has(problems({}, noDeltas), /artifacts must be an array/) && has(problems({}, noDeltas), /deltas is missing/));
+  check("[L-2] deltas as an object with real artifacts → 'deltas must be an array…, got an object', not 'missing'", (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vb-l2-")); fs.writeFileSync(path.join(tmp, "shot.png"), "x");
+    const p = parsePlan({ verification: { mode: "rendered", artifacts: ["shot.png"], deltas: { high: 33 } } });
+    const out = "plan" in p ? checkPlan({ plan: p.plan, file: path.join(tmp, "plan.json") }, tmp) : null;
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const msgs = out ? [...out.blocking, ...out.warnings] : [];
+    return msgs.some((m) => /deltas must be an array of the residual differences, got an object/.test(m)) && !msgs.some((m) => /deltas is missing/.test(m));
+  })());
+}
 check("rendered with an artifact that is not on disk fails", has(problems({}, { verification: { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [] } }), /not found on disk/));
 check("rendered with a real artifact + deltas + coverage + a11y is clean", problems({ "a.tsx": "", "design/verify/login.png": "png" }, { files: ["a.tsx"], verification: { mode: "rendered", renderer: "playwright", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] }, a11y: { tool: "axe-core", violations: 0 } } }).length === 0);
 check("static-only needs a reason", has(problems({}, { verification: { mode: "static-only" } }), /no `reason`/));
