@@ -357,6 +357,65 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
     }
 
     const sides = (prop: (side: string) => string): Array<number | null> => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
+    // D34: a stroke drawn without a border — a ring (`box-shadow: 0 0 0 Npx <colour>`, Tailwind ring / inset-ring)
+    // or an outline at offset 0 / -width — read only when every border side is 0. Parsed by CONTENT, never by
+    // position: Tailwind v4 always computes FIVE comma-separated shadows, the unused ones "rgba(0, 0, 0, 0) 0px 0px
+    // 0px 0px", and the ring may be any of them; Chromium writes the colour first and `inset` last. A shadow with a
+    // transparent colour or spread 0 is padding; a ring is offset 0, blur 0, spread > 0 (the spread is not snapped
+    // like a border width). Several distinct rings: the inset one when exactly one is inset, else none is read.
+    // An outline with style auto (the UA focus ring) is no designed stroke; a centred one (any other offset) is not read.
+    type Stroke = { width: number; color: string | null; from: "box-shadow" | "outline"; align: "inside" | "outside" };
+    let strokeMemo: Stroke | null | undefined;
+    const transparentColour = (c: string | null): boolean => c === null || c === "transparent" || /,\s*0(?:\.0+)?\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
+    const splitTop = (v: string, sep: RegExp): string[] => {
+      const out: string[] = [];
+      let depth = 0, cur = "";
+      for (const ch of v) {
+        if (ch === "(") depth++;
+        else if (ch === ")") depth = Math.max(0, depth - 1);
+        if (depth === 0 && sep.test(ch)) { if (cur.trim()) out.push(cur.trim()); cur = ""; } else cur += ch;
+      }
+      if (cur.trim()) out.push(cur.trim());
+      return out;
+    };
+    const drawnStroke = (): Stroke | null => {
+      if (strokeMemo !== undefined) return strokeMemo;
+      strokeMemo = null;
+      if (sides((s) => `border-${s}-width`).some((w) => w !== 0)) return strokeMemo;
+      const rings: Array<{ key: string; spread: number; color: string | null; inset: boolean }> = [];
+      const shadow = cs.getPropertyValue("box-shadow").trim();
+      if (shadow && shadow !== "none") {
+        for (const entry of splitTop(shadow, /,/)) {
+          const lens: number[] = [];
+          let inset = false, colour = "";
+          for (const tok of splitTop(entry, /\s/)) {
+            if (tok === "inset") inset = true;
+            else if (/^-?(?:\d+\.?\d*|\.\d+)(?:px)?$/.test(tok)) lens.push(parseFloat(tok));
+            else colour = colour ? `${colour} ${tok}` : tok;
+          }
+          const [x = NaN, y = NaN, blur = 0, spread = 0] = lens;
+          const color = colour ? rgba(colour) : rgba(cs.getPropertyValue("color"));
+          if (transparentColour(color) || !(spread > 0) || x !== 0 || y !== 0 || blur !== 0 || lens.length < 2) continue;
+          rings.push({ key: `${color} ${spread} ${inset}`, spread: r2(spread), color, inset });
+        }
+      }
+      const distinct = rings.filter((r, i) => rings.findIndex((o) => o.key === r.key) === i);
+      const insetOnes = distinct.filter((r) => r.inset);
+      const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : undefined;
+      if (ring) return (strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" });
+      if (distinct.length > 1) return strokeMemo;
+      const os = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
+      const oc = rgba(cs.getPropertyValue("outline-color"));
+      if (!os || os === "none" || os === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
+      if (oo === -ow) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" });
+      if (oo === 0) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" });
+      return strokeMemo;
+    };
+    const putStroke = (): void => {
+      const st = drawnStroke();
+      if (st) { styles.strokeFrom = st.from; styles.strokeAlign = st.align; }
+      else if (sides((s) => `border-${s}-width`).some((w) => w !== null && w > 0)) styles.strokeFrom = "border";
+    };
     const fill = (): { v: string | null; why: string; source?: MeasureResult["fillSource"] } => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node — its colour is backgroundColor" };
       if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
@@ -404,10 +463,19 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
         case "borderColor": {
           const ws = sides((s) => `border-${s}-width`);
           const i = ws.findIndex((w) => w !== null && w > 0);
-          put(k, i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) — a ring/box-shadow/outline is not read as a border");
+          const st = i === -1 ? drawnStroke() : null;
+          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width");
+          putStroke();
           break;
         }
-        case "borderWidth": { const ws = sides((s) => `border-${s}-width`).filter((w): w is number => w !== null); put(k, ws.length ? Math.max(...ws) : null, "no computed border width"); break; }
+        case "borderWidth": {
+          const ws = sides((s) => `border-${s}-width`).filter((w): w is number => w !== null);
+          const st = drawnStroke();
+          put(k, st ? st.width : ws.length ? Math.max(...ws) : null, "no computed border width");
+          putStroke();
+          break;
+        }
+        case "display": put(k, cs.getPropertyValue("display").trim() || null, "no computed display"); break;
         case "borderRadius": {
           const corners = ["top-left", "top-right", "bottom-right", "bottom-left"].map((c) => {
             const v = cs.getPropertyValue(`border-${c}-radius`).trim().split(/\s+/)[0] || "0";

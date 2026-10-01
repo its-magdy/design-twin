@@ -40,13 +40,14 @@ console.log("group 8 — a probe's px strings are the numbers they spell:");
 {
   // Every value equals the design; a getComputedStyle-shaped probe wrote them as strings.
   const r = compare(exp, measured([
-    { nodeId: "2:1", styles: loose({ fontSize: "20px", fontWeight: "600", lineHeight: "28px", letterSpacing: "0.15px", color: "rgb(29, 29, 31)", fontFamily: "Inter, sans-serif" }) },
-    { nodeId: "2:2", styles: loose({ width: "320px", height: "120px", gap: "16px", padding: ["8px", "16px", "8px", "16px"], borderWidth: "1px", borderColor: "rgb(224, 224, 224)", backgroundColor: "rgb(255, 255, 255)", borderRadius: ["8px", "8px", "8px", "8px"] }) },
-    { nodeId: "2:4", styles: loose({ width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", borderRadius: "3.35544e+07px" }) },
+    { nodeId: "2:1", styles: loose({ fontSize: "20px", fontWeight: "600", lineHeight: "28px", letterSpacing: "0.15px", color: "rgb(29, 29, 31)", fontFamily: "Inter, sans-serif", opacity: "1" }) },
+    { nodeId: "2:2", styles: loose({ width: "320px", height: "120px", gap: "16px", padding: ["8px", "16px", "8px", "16px"], borderWidth: "1px", borderColor: "rgb(224, 224, 224)", backgroundColor: "rgb(255, 255, 255)", borderRadius: ["8px", "8px", "8px", "8px"], opacity: "1" }) },
+    { nodeId: "2:4", styles: loose({ width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", borderRadius: "3.35544e+07px", opacity: "1" }) },
   ]));
   safe("[DT-42] '20px', '28px', '0.15px', '16px', '1px' equal to the design → no delta", () => r.deltas.length === 0);
   // 2:1 font-size/weight/line-height/letter-spacing/color/family (6) + 2:2 width/height/gap/padding/border-width/border-colour/background/radius (8) + 2:4 width/height/background/radius (4)
-  safe("[DT-42] …and they were compared, not skipped: 18 values checked, none listed as not measured", () => r.fieldsNotMeasured.length === 0 && r.coverage.fieldsChecked === 18);
+  // + opacity on each (group 11, DT-74: a node that paints or carries copy states opacity 1)
+  safe("[DT-42] …and they were compared, not skipped: 21 values checked, none listed as not measured", () => r.fieldsNotMeasured.length === 0 && r.coverage.fieldsChecked === 21);
   safe("[DT-46] a radius list of px strings (['8px',…]) is compared per corner, not 'could not read'", () => !gapOn(r, "2:2", /radius/) && !deltaOn(r, "2:2", /radius/));
   safe("[DT-46] radiusCorners(['8px','8px','8px','8px']) → [8,8,8,8]; '8px 4px' → [8,4,8,4]", () =>
     JSON.stringify(radiusCorners(["8px", "8px", "8px", "8px"])) === "[8,8,8,8]" && JSON.stringify(radiusCorners("8px 4px")) === "[8,4,8,4]");
@@ -133,7 +134,7 @@ console.log("group 8 — a value CSS cannot produce is an artefact, not a mismat
 console.log("group 8 — an icon drawn by an <img> has no readable fill:");
 {
   // the shipped probe: fill null + fillSource "img" (probe-page.ts), on a spec whose export has an .svg asset
-  const shipped = compare(exp, measured([{ nodeId: "2:3", matchedBy: "tag", styles: { width: 16, height: 16, fill: null, tag: "img" }, unmeasured: { fill: "an <img>: its paint is pixels, not a CSS property" }, fillSource: "img" }]));
+  const shipped = compare(exp, measured([{ nodeId: "2:3", matchedBy: "tag", styles: { width: 16, height: 16, fill: null, tag: "img", opacity: 1 }, unmeasured: { fill: "an <img>: its paint is pixels, not a CSS property" }, fillSource: "img" }]));
   safe("[F-81] shipped probe: <img> fill → unverifiable (method limit), not a field gap", () =>
     shipped.unverifiable.some((u) => u.nodeId === "2:3" && /fill/.test(u.field)) && !gapOn(shipped, "2:3", /fill/));
   safe("[F-81] …and 'fill' is not NEVER MEASURED in the headline or the census", () => !/NEVER MEASURED/.test(shipped.headline) && !shipped.coverage.fieldsNeverMeasured.some((f) => f.field === "fill"));
@@ -153,23 +154,24 @@ console.log("group 8 — an icon drawn by an <img> has no readable fill:");
 // ---------------------------------------------------------------- F-59: the NEVER MEASURED denominator
 console.log("group 8 — NEVER MEASURED counts the nodes that state the field:");
 {
-  // Only the Status Pill states `opacity`; 40 other measured nodes carry none of it. Before: "present in 0 of 41 measurements".
+  // Only the Status Pill states `borderWidth`; 40 other measured nodes carry none of it. Before: "present in 0 of 41 measurements".
+  // (group 11: this used to be `opacity`, which every node that paints or carries copy now states — DT-74)
   const rows: NodeInput[] = Array.from({ length: 40 }, (_, i): NodeInput => ({ type: "TEXT", id: `3:${i + 1}`, name: `Name ${i + 1}`, text: `Person ${i + 1}`, font: { family: "Inter", size: 14 } }));
-  const e2 = buildExpectation([doc([...rows, { ...pill, opacity: 0.5 }])]);
-  // (the other nodes DO send opacity — like F-59's 73 nodes that sent y; their specs just do not state it)
-  const r = compare(e2, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, opacity: 1, text: n.text ?? "" } })), { nodeId: "2:4", styles: { width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", borderRadius: 12 } }]));
-  const nm = r.coverage.fieldsNeverMeasured.find((f) => f.field === "opacity");
-  safe("[F-59] the census keeps it: opacity expectedOn 1, measuredOn 0", () => nm?.expectedOn === 1 && nm.measuredOn === 0);
+  const e2 = buildExpectation([doc([...rows, { ...pill, strokes: { colors: ["#2e7d32"], weight: 1 } }])]);
+  // (the other nodes DO send borderWidth — like F-59's 73 nodes that sent y; their specs just do not state it)
+  const r = compare(e2, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, opacity: 1, borderWidth: 0, text: n.text ?? "" } })), { nodeId: "2:4", styles: { width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", borderColor: "rgb(46, 125, 50)", borderRadius: 12, opacity: 1 } }]));
+  const nm = r.coverage.fieldsNeverMeasured.find((f) => f.field === "borderWidth");
+  safe("[F-59] the census keeps it: borderWidth expectedOn 1, measuredOn 0", () => nm?.expectedOn === 1 && nm.measuredOn === 0);
   safe("[F-59] the reason says '0 of the 1 measured node(s) whose spec states it', never '0 of 41'", () => r.why.some((w) => /0 of the 1 measured node/.test(w)) && !r.why.some((w) => /0 of 41/.test(w)));
-  safe("[F-59] one node's gap does not take the headline's NEVER MEASURED slot", () => !/NEVER MEASURED/.test(r.headline) && !!gapOn(r, "2:4", /opacity/));
+  safe("[F-59] one node's gap does not take the headline's NEVER MEASURED slot", () => !/NEVER MEASURED/.test(r.headline) && !!gapOn(r, "2:4", /border-width/));
   // a field the probe got wrong everywhere still leads the headline, with the right denominator
   const all = compare(e2, measured(rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: loose({ fontFamily: "Inter", size: 14, text: n.text ?? "" }) }))));
   safe("[F-59] 'fontSize' missing on all 40 TEXT nodes → headline 'present on 0 of 40 nodes that state it'", () => /NEVER MEASURED: 'fontSize' present on 0 of 40 nodes that state it/.test(all.headline));
   // review L3: a key NO measured node carries is systemic even when one spec states it (DT-23: `fill` missing from the probe)
   const e3 = buildExpectation([doc([...rows, icon])]);
-  const nofill = compare(e3, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, text: n.text ?? "" } })), { nodeId: "2:3", styles: { width: 16, height: 16, tag: "svg" } }]));
+  const nofill = compare(e3, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, opacity: 1, text: n.text ?? "" } })), { nodeId: "2:3", styles: { width: 16, height: 16, tag: "svg", opacity: 1 } }]));
   safe("[review L3] 'fill' absent from every measured node, stated by 1 → still in the headline", () => /NEVER MEASURED: 'fill' present on 0 of 1 nodes that state it/.test(nofill.headline));
-  const hinted = compare(e2, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, opacity: 1, text: n.text ?? "" } })), { nodeId: "2:4", styles: loose({ width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", radius: 12 }) }]));
+  const hinted = compare(e2, measured([...rows.map((n): MeasuredNode => ({ nodeId: n.id, styles: { fontFamily: "Inter", fontSize: 14, opacity: 1, borderWidth: 0, text: n.text ?? "" } })), { nodeId: "2:4", styles: loose({ width: 64, height: 24, backgroundColor: "rgb(232, 245, 233)", borderColor: "rgb(46, 125, 50)", radius: 12, opacity: 1 }) }]));
   safe("[F-59] a one-node field the probe sent under another name (radius) still reaches the headline", () => /NEVER MEASURED: 'borderRadius' present on 0 of 1 nodes that state it \(probe sent 'radius'\)/.test(hinted.headline));
 }
 

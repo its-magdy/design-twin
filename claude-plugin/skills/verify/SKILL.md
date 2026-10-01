@@ -186,7 +186,8 @@ How the verdict is computed, all of it deliberate. It is one of four values:
   down past the frame's bottom edge by a longer page is medium, so incomplete), a designed interaction that was driven and did not work, or a
   component the probe explicitly reported absent (`present: false`) — unless the run's integrity failed (below).
 - **incomplete** — medium mismatches (size, spacing, radius, position), interactions nobody probed,
-  node specs never measured, fields the probe did not report, or no screenshot on disk. An integrity
+  node specs never measured, fields the probe did not report, deltas on low-confidence matches (D39: any
+  delta a match cap lowered), or no screenshot on disk. An integrity
   failure — a measurement taken against a different expectation or naming none, a run whose status had not
   finished, or a status naming another measured file — is listed first and makes the verdict `incomplete`
   even when there are high mismatches: those numbers belong to an unverified run. A screen can match every pixel and still be the dead mockup
@@ -203,6 +204,60 @@ How the verdict is computed, all of it deliberate. It is one of four values:
   point at (no `data-dt-node`, no reported setName). A list rendered by one `.map()` and a shared app
   shell tagged with another frame's ids both leave gaps here by design, so it never fails a screen on
   its own — the old "N components were never built" was this number, and it was 0-for-83 wrong.
+- **A shared shell is counted apart, for information.** An outermost instance whose nodes matched through
+  another screen's id (`tag-shared-path`, `tag-alias`, a shared component path) — or that the plan marks
+  `anchors[<id>].shared: true` — is a shared shell: the headline reads `nodes measured a/b (shared shell c/d)`,
+  and its untagged sets are listed under `untaggedInstanceSetsInShell`. The split never changes the verdict.
+- **Foreign tags are informational.** `data-dt-node` values on the page that name no node of this
+  expectation — a stale id prefix, another screen's id, an alias — are listed in `probe.foreignTags`
+  (classified prefix drift / alias / unknown). They never change the verdict; a stale prefix is worth retagging.
+- **How a node was matched caps its severity.** Every measured node says how it was found (`matchedBy`).
+  A delta on a node matched by `text-ordinal` or `tag-alias` is at most medium; by `position` or any
+  other value a hand-written probe invents (`structural`, …), at most low — the original severity stays on
+  the delta as `cappedFrom`, and `cappedBy` says which cap(s) applied (`"match"` for this one, `"size"` for the
+  `match (size)` cap below). No cap for `tag`, `tag-shared-path`, `text`, `frame`, a shared component path,
+  the hand-written synonyms `data-dt-node` and `id` (read as `tag`), or no `matchedBy` at all. A capped
+  delta keeps its lower severity, but any capped delta blocks a plain pass: the verdict is `incomplete`
+  ("N delta(s) on low-confidence matches — tag these elements"), never `fail`, never `pass`. A tag on the
+  node's own element removes the cap.
+- **`match (size)`: the element may not be the node.** When the matched element is at least twice (or at
+  most half) the designed size on an axis AND at least 8px off (a hug axis that only grew counts only when
+  the other axis is off too; TEXT nodes, leaves and inline matches are exempt, and a frame root's height that
+  only grew counts only when its width is off too), the report adds one medium `match (size)` row (designed `[w, h]` → built
+  `[w, h]`) and caps every other delta of that node at low — they may be measurements of the wrong
+  element. Check which element carries the id. If the user confirms it IS the node, a waiver on
+  `match (size)` accepts the element and lifts ONLY the size cap — its other deltas count again at their
+  own severity, unless a match-confidence cap (`position`, `tag-alias`, `text-ordinal`, a hand-written
+  value) also applies: that one stays until the element is tagged.
+- **Text width.** Hug text (auto width) is compared box to box, tolerance 1px. Fixed- or fill-width text
+  is compared by ink: the built text's width (`textBox`, a `Range` over its characters) against the
+  design's rendered text width (`renderBox.w`), tolerance 3px, labelled `width (text ink)` — the Figma box
+  of a fixed-width text is listed under `notComparable`. Width is not comparable only when the DESIGN
+  truncates — its ink fills the box (ink ≥ box − 3px) or it allows more than one line (`maxLines` > 1); a
+  text set to truncate whose ink ends well inside its box is compared by ink. A placeholder's width and x
+  are not comparable (no `Range` reaches its characters). A TEXT node's x and width come from `textBox`
+  only, so the probe reports it for every TEXT node.
+- **Values a layer cannot show are not compared.** A radius on a layer that draws nothing (no fill, stroke,
+  effect or clip) is `notComparable`; so is padding a fixed axis cannot show — per side: in an overfull
+  fixed box only the side the content does not start from (start-aligned → the end side; centred, or
+  `space-around`/`space-evenly`, → both), and both sides of a centred axis with equal padding. On a wrapping
+  auto-layout list's main axis the padding sets where it wraps, so it shows (even when centred): that axis is
+  overfull only when its largest child alone is wider than the inner width; on its cross axis the content is
+  the stacked lines (children packed into lines, each as tall as its largest child, plus the gap between
+  lines). A FRAME/INSTANCE id on a `display: inline`
+  element measures its text's box, not a frame's: its width, height, x, y, radius and padding are not
+  measured — tag the element that owns the box.
+- **Opacity is stated on every node that paints or carries copy** (1 when the design leaves it at 100%),
+  so a built `opacity: 0` is a delta. A node drawn in a hover/focus state whose opacity was only measured
+  at rest is not measured for opacity (a hover-revealed control reads 0 at rest).
+- **Rows don't draw corners.** `border-radius` on a `<tr>` (or `<thead>`/`<tbody>`/`<tfoot>`) does not
+  render, whatever the computed style says: radius on such an id is not measured — report the corner
+  cells' radii under the id, or tag the cells.
+- **Strokes may be rings.** A stroke built as a ring (`box-shadow: 0 0 0 Npx`, Tailwind `ring` /
+  `inset-ring`) or an outline at offset 0 / −width is read as the border (`strokeFrom` says which,
+  `strokeAlign` which side). A real border width is compared against the design width as CSS draws it
+  (Chromium floors a border to whole pixels, minimum 1px), a ring's against the designed width;
+  tolerance 0.5px either way, so a 1px design built with no stroke is a delta.
 - **Excluded by method** (`notComparable`, `unverifiable`) and the report's `limits` say what this
   method cannot see (`::placeholder` colour unless reported, `::before`/`::after`, a `rotate` that
   reads `transform: none`, the fill of an icon drawn by an `<img>`). Say them; they are not passes.

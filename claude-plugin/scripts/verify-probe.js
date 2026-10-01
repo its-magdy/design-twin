@@ -252,6 +252,62 @@ function measureElements(input) {
       } else textBoxWhy = "the element holds no text";
     }
     const sides = (prop) => ["top", "right", "bottom", "left"].map((s) => px(cs.getPropertyValue(prop(s))));
+    let strokeMemo;
+    const transparentColour = (c) => c === null || c === "transparent" || /,\s*0(?:\.0+)?\)$/.test(c) || /\/\s*0(?:\.0+)?%?\s*\)$/.test(c);
+    const splitTop = (v, sep) => {
+      const out = [];
+      let depth = 0, cur = "";
+      for (const ch of v) {
+        if (ch === "(") depth++;
+        else if (ch === ")") depth = Math.max(0, depth - 1);
+        if (depth === 0 && sep.test(ch)) {
+          if (cur.trim()) out.push(cur.trim());
+          cur = "";
+        } else cur += ch;
+      }
+      if (cur.trim()) out.push(cur.trim());
+      return out;
+    };
+    const drawnStroke = () => {
+      if (strokeMemo !== void 0) return strokeMemo;
+      strokeMemo = null;
+      if (sides((s) => `border-${s}-width`).some((w) => w !== 0)) return strokeMemo;
+      const rings = [];
+      const shadow = cs.getPropertyValue("box-shadow").trim();
+      if (shadow && shadow !== "none") {
+        for (const entry of splitTop(shadow, /,/)) {
+          const lens = [];
+          let inset = false, colour = "";
+          for (const tok of splitTop(entry, /\s/)) {
+            if (tok === "inset") inset = true;
+            else if (/^-?(?:\d+\.?\d*|\.\d+)(?:px)?$/.test(tok)) lens.push(parseFloat(tok));
+            else colour = colour ? `${colour} ${tok}` : tok;
+          }
+          const [x = NaN, y = NaN, blur = 0, spread = 0] = lens;
+          const color = colour ? rgba(colour) : rgba(cs.getPropertyValue("color"));
+          if (transparentColour(color) || !(spread > 0) || x !== 0 || y !== 0 || blur !== 0 || lens.length < 2) continue;
+          rings.push({ key: `${color} ${spread} ${inset}`, spread: r2(spread), color, inset });
+        }
+      }
+      const distinct = rings.filter((r, i) => rings.findIndex((o) => o.key === r.key) === i);
+      const insetOnes = distinct.filter((r) => r.inset);
+      const ring = distinct.length === 1 ? distinct[0] : insetOnes.length === 1 ? insetOnes[0] : void 0;
+      if (ring) return strokeMemo = { width: ring.spread, color: ring.color, from: "box-shadow", align: ring.inset ? "inside" : "outside" };
+      if (distinct.length > 1) return strokeMemo;
+      const os2 = cs.getPropertyValue("outline-style").trim(), ow = px(cs.getPropertyValue("outline-width")), oo = px(cs.getPropertyValue("outline-offset"));
+      const oc = rgba(cs.getPropertyValue("outline-color"));
+      if (!os2 || os2 === "none" || os2 === "auto" || ow === null || !(ow > 0) || oo === null || transparentColour(oc)) return strokeMemo;
+      if (oo === -ow) return strokeMemo = { width: ow, color: oc, from: "outline", align: "inside" };
+      if (oo === 0) return strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" };
+      return strokeMemo;
+    };
+    const putStroke = () => {
+      const st = drawnStroke();
+      if (st) {
+        styles.strokeFrom = st.from;
+        styles.strokeAlign = st.align;
+      } else if (sides((s) => `border-${s}-width`).some((w) => w !== null && w > 0)) styles.strokeFrom = "border";
+    };
     const fill = () => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node \u2014 its colour is backgroundColor" };
       if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
@@ -322,14 +378,21 @@ function measureElements(input) {
         case "borderColor": {
           const ws = sides((s) => `border-${s}-width`);
           const i = ws.findIndex((w) => w !== null && w > 0);
-          put(k, i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) \u2014 a ring/box-shadow/outline is not read as a border");
+          const st = i === -1 ? drawnStroke() : null;
+          put(k, st ? st.color : i === -1 ? null : rgba(cs.getPropertyValue(`border-${["top", "right", "bottom", "left"][i]}-color`)), "no border (border-width 0 on every side) and no ring (box-shadow 0 0 0 Npx) or outline at offset 0 / -width");
+          putStroke();
           break;
         }
         case "borderWidth": {
           const ws = sides((s) => `border-${s}-width`).filter((w) => w !== null);
-          put(k, ws.length ? Math.max(...ws) : null, "no computed border width");
+          const st = drawnStroke();
+          put(k, st ? st.width : ws.length ? Math.max(...ws) : null, "no computed border width");
+          putStroke();
           break;
         }
+        case "display":
+          put(k, cs.getPropertyValue("display").trim() || null, "no computed display");
+          break;
         case "borderRadius": {
           const corners = ["top-left", "top-right", "bottom-right", "bottom-left"].map((c2) => {
             const v = cs.getPropertyValue(`border-${c2}-radius`).trim().split(/\s+/)[0] || "0";
@@ -424,6 +487,7 @@ function focusInfo(path4) {
 }
 
 // design-to-code/probe-match.ts
+var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
 var isMatch = (m) => "matchedBy" in m;
 var normText = (s) => s.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 var attrSelector = (id) => `[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`;
@@ -522,6 +586,16 @@ function chooseMatch(spec, pool, opts) {
     const only = shared.length === 1 ? shared[0] : void 0;
     if (only && only.dt !== null) return { nodeId: id, matchedBy: "tag-shared-path", selector: attrSelector(only.dt), selectorCount: 1, path: only.path, cand: only };
   }
+  const aliases = [...new Set(spec.aliases || [])].filter((a) => a !== id && !pool.expectedIds.has(a));
+  if (aliases.length) {
+    const hitsA = aliases.flatMap((a) => (pool.byTag.get(a) || []).filter(tagVisible));
+    const onlyA = hitsA.length === 1 ? hitsA[0] : void 0;
+    if (onlyA && onlyA.dt !== null) return { nodeId: id, matchedBy: "tag-alias", selector: attrSelector(onlyA.dt), selectorCount: 1, path: onlyA.path, cand: onlyA };
+    if (hitsA.length > 1) {
+      const tags = [...new Set(hitsA.map((c) => c.dt))].join(", ");
+      return { nodeId: id, why: `ambiguous: ${hitsA.length} visible elements carry this node's aliases (${tags}) from other screens' exports; tag the one that is this node's with data-dt-node="${id}"` };
+    }
+  }
   const t = specText(spec);
   let textWhy = null;
   if (t) {
@@ -618,6 +692,11 @@ function shapeNode(spec, match, raw, keys) {
       unmeasured[k] = raw.unmeasured[k] || (raw.found ? "the page reported no value" : "the element was gone when measured");
     } else styles[k] = v;
   }
+  const from = raw.styles.strokeFrom, align = raw.styles.strokeAlign;
+  if (from === "border" || from === "box-shadow" || from === "outline") {
+    styles.strokeFrom = from;
+    if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
+  }
   return {
     nodeId: spec.nodeId,
     matchedBy: match.matchedBy,
@@ -628,12 +707,12 @@ function shapeNode(spec, match, raw, keys) {
     ...raw.fillSource !== void 0 ? { fillSource: raw.fillSource } : {},
     styles,
     ...Object.keys(unmeasured).length ? { unmeasured } : {},
-    ...match.matchedBy === "position" ? { note: "matched by position (\xB12px) \u2014 low confidence; tag it with data-dt-node" } : {}
+    ...match.matchedBy === "position" ? { note: "matched by position (\xB12px) \u2014 low confidence; tag it with data-dt-node" } : match.matchedBy === "tag-alias" ? { note: `matched by another screen's id for this node (${match.selector}) \u2014 tag it with data-dt-node="${spec.nodeId}" to make it certain` } : {}
   };
 }
 function census(nodes, notMeasured) {
-  const c = { tag: 0, sharedPath: 0, text: 0, textOrdinal: 0, position: 0, frame: 0, notMeasured: notMeasured.length };
-  const KEY = { tag: "tag", "tag-shared-path": "sharedPath", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame" };
+  const c = { tag: 0, sharedPath: 0, tagAlias: 0, text: 0, textOrdinal: 0, position: 0, frame: 0, notMeasured: notMeasured.length };
+  const KEY = { tag: "tag", "tag-shared-path": "sharedPath", "tag-alias": "tagAlias", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame" };
   const isMatchedBy = (v) => v !== void 0 && Object.hasOwn(KEY, v);
   for (const n of nodes) if (isMatchedBy(n.matchedBy)) c[KEY[n.matchedBy]]++;
   return c;
@@ -787,6 +866,7 @@ function isBuildIdentity(x) {
 var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
@@ -797,7 +877,9 @@ var MEASURED_EXTRAS = [
   ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
   // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
-  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"]
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -1146,7 +1228,13 @@ var TOLERANCE = {
   // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
   // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
   position: 2,
-  opacity: 0.02
+  opacity: 0.02,
+  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  stroke: 0.5,
+  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
 };
 function normColor(v) {
   if (v == null) return null;
@@ -1206,7 +1294,7 @@ var FIELDS = [
   { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
   { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
   { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.padding, label: "border-width", unit: "px" },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
   { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
   { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
   { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
@@ -1215,7 +1303,7 @@ var FIELDS = [
   { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 var STYLE_KEY_SHAPE = {
   borderRadius: "number | [tl,tr,br,bl]",
   padding: "[t,r,b,l]",
@@ -1223,7 +1311,8 @@ var STYLE_KEY_SHAPE = {
   textBox: "{x,w} of a Range over the text",
   placeholderText: "el.placeholder",
   placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case"
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
 };
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
@@ -1231,7 +1320,9 @@ var MEASURED_KEYS_DOC = {
   "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
   "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
   "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
   "nodes[].styles.tag": "the element's tagName, lower-case",
@@ -1241,6 +1332,7 @@ var MEASURED_KEYS_DOC = {
   "notMeasured[]": "{nodeId, why} for every spec the probe could not find \u2014 the one top-level key for it (not notFound/notFoundInDom); other unknown top-level keys are listed in the report",
   "expectationSha256": "sha256 of the .expected.json you measured against"
 };
+var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
 var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
 var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
 if (false) {
@@ -1424,6 +1516,15 @@ async function settle(page, log, ready, timeout) {
     }
   }
 }
+function foreignTags(tagged, expectedIds, frameIds) {
+  const n = /* @__PURE__ */ new Map();
+  for (const c of tagged) {
+    if (c.dt === null || expectedIds.has(c.dt) || frameIds.has(c.dt) || !(c.flags.box && c.flags.visible && !c.flags.inClosedDialog)) continue;
+    n.set(c.dt, (n.get(c.dt) || 0) + 1);
+  }
+  const ids = [...n.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
+  return { count: n.size, ids };
+}
 var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
@@ -1549,7 +1650,8 @@ async function pass(page, log, o) {
       frames: [...frames.values()].filter((f) => f !== null),
       components,
       png,
-      notes
+      notes,
+      tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId)))
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError) throw e;
@@ -1637,7 +1739,7 @@ async function runProbe(browser, o) {
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
       [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
-      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192
+      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
       --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
       --run <id> (from verify-screen --status \u2026 --new-run): writes the run's LIVE status (the run cache,
@@ -1828,6 +1930,7 @@ ${USAGE}`);
     nodes: r.nodes,
     notMeasured: r.notMeasured,
     components: r.components,
+    tagsNotInExpectation: r.tagsNotInExpectation,
     ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
     ...f.run !== void 0 ? { runId: f.run } : {},
     build: { ...run.build, ...gitState(project) }
@@ -1846,7 +1949,9 @@ ${USAGE}`);
   });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
-  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
+  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 alias ${c.tagAlias} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
+  const tn = r.tagsNotInExpectation;
+  if (tn.count) console.error(`note  ${tn.count} data-dt-node value(s) on visible elements are not in the expectation (e.g. ${tn.ids.slice(0, 5).map((x) => x.id).join(", ")}) \u2014 --compare classifies them`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}`);
   if (statusRefused && runId !== void 0) {
@@ -1869,6 +1974,7 @@ export {
   PLAYWRIGHT_PACKAGES,
   buildFrom,
   errorKind,
+  foreignTags,
   installHint,
   isPlaywrightModule,
   main,

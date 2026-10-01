@@ -239,6 +239,19 @@ interface PassResult {
   components: MeasuredComponent[];
   png: Buffer;
   notes: string[];
+  tagsNotInExpectation: NonNullable<VerifyMeasured["tagsNotInExpectation"]>;
+}
+
+/** DT-47: every data-dt-node on a VISIBLE element that names no expected spec/instance/hidden id and no frame —
+ *  a stale prefix, another screen's id, a typo. {count, ids: the first 50 sorted, elements = how many carry it}. */
+export function foreignTags(tagged: Candidate[], expectedIds: ReadonlySet<string>, frameIds: ReadonlySet<string>): NonNullable<VerifyMeasured["tagsNotInExpectation"]> {
+  const n = new Map<string, number>();
+  for (const c of tagged) {
+    if (c.dt === null || expectedIds.has(c.dt) || frameIds.has(c.dt) || !(c.flags.box && c.flags.visible && !c.flags.inClosedDialog)) continue;
+    n.set(c.dt, (n.get(c.dt) || 0) + 1);
+  }
+  const ids = [...n.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
+  return { count: n.size, ids };
 }
 
 const raf2 = (page: Page): Promise<unknown> => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
@@ -358,6 +371,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
       components,
       png,
       notes,
+      tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId))),
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError) throw e;
@@ -438,7 +452,7 @@ const USAGE =
   "usage:\n" +
   `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
   "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
-  "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path →\n" +
+  "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path → alias →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
   "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
   "      --run <id> (from verify-screen --status … --new-run): writes the run's LIVE status (the run cache,\n" +
@@ -599,6 +613,7 @@ export async function main(argv: string[]): Promise<number> {
     nodes: r.nodes,
     notMeasured: r.notMeasured,
     components: r.components,
+    tagsNotInExpectation: r.tagsNotInExpectation,
     ...(run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {}),
     ...(f.run !== undefined ? { runId: f.run } : {}),
     build: { ...run.build, ...gitState(project) },
@@ -613,8 +628,10 @@ export async function main(argv: string[]): Promise<number> {
     ...(expSha ? { expectationSha256: expSha } : {}), measuredSha256: sha256Of(measuredText) });
   const c = census(r.nodes, r.notMeasured);
   console.error(`wrote ${outBase}.measured.json and ${png}`);
-  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
+  console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) — tag ${c.tag} · shared path ${c.sharedPath} · alias ${c.tagAlias} · text ${c.text} · ordinal ${c.textOrdinal} · position ${c.position} · frame ${c.frame} · not measured ${c.notMeasured}` +
     ` · frame root via ${firstFrame ? firstFrame.via : "none"} · navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
+  const tn = r.tagsNotInExpectation;
+  if (tn.count) console.error(`note  ${tn.count} data-dt-node value(s) on visible elements are not in the expectation (e.g. ${tn.ids.slice(0, 5).map((x) => x.id).join(", ")}) — --compare classifies them`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}`);
   if (statusRefused && runId !== undefined) {
