@@ -427,8 +427,8 @@ export interface BuiltExpectation extends VerifyExpectation {
 /** One screen export handed to buildExpectation(): the parsed document and the label it is known by. */
 export interface ExpectInput { doc: ScreenDoc | undefined; label?: string }
 /** buildExpectation()'s context beyond the screens: the export's pages/index.json layers (F-60), to tell an
- *  interaction whose destination was never exported. `sourceFile` = the index's own (a row's wins). */
-export interface ExpectOptions { index?: { layers: IndexRow[]; sourceFile?: string } | null }
+ *  interaction whose destination was never exported. A row's file is its own sourceFile stamp only. */
+export interface ExpectOptions { index?: { layers: IndexRow[] } | null }
 
 // F-104: the shape a sibling row is recognised by — the same component, or the same tree of node types.
 function rowSignature(n: IrNode): string {
@@ -484,6 +484,9 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   let screen: string | undefined = undefined, exportedAt: string | undefined = undefined, reference: string | null = null;
   // F-60: every node id each Figma file's docs carry (ids are per FILE), and the file each interaction came from
   const idsByFile = new Map<string, Set<string>>();
+  // F-60 / L-3: each file's screen roots (id → name) — the index row that IS this screen ties it to its file
+  // (names: the root's own and the export's title — a multi-frame selection pull is indexed as "selection", review M-a)
+  const rootsByFile = new Map<string, Map<string, Set<string>>>();
   const interactionFile = new Map<VerifyInteraction, string | undefined>();
   const roots: IrNode[] = [];
 
@@ -496,6 +499,11 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     if (!screen) screen = (exp && exp.screen) || label;
     if (!exportedAt) exportedAt = exp ? exp.exportedAt : undefined;
     for (const root of screenRoots(doc)) {
+      if (root.id) {
+        const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => new Map<string, Set<string>>()), root.id, () => new Set<string>());
+        // (the title only for the frame the pull is filed under — the index row carries that one id, review LOW-1)
+        for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
+      }
       if (!reference && root.reference) reference = root.reference;
       const b: Partial<Box> = root.box || {};
       const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
@@ -581,26 +589,43 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   for (const r of roots) markRepeatedText(r, specById);
 
   // F-60 / D22: a destination that is no node of the export FOR THE SAME FIGMA FILE was never designed here.
-  // Figma node ids are per file — a join across files would match unrelated nodes. Decided only when every
-  // index row resolves to ONE answer for its file: all rows name a file (a screen that names its file is looked
-  // up among that file's rows), or none does (an export written before the bridge stamped sourceFile, as every
-  // field-test export was: one unnamed file, matched only by a screen that names none). And the index must
-  // cover this screen — one of its rows is a node of this export, in the same file — or an index of another
-  // file would call every destination "never exported". Otherwise the row is left as it was (graded as before).
+  // Figma node ids are per file — a join across files would match unrelated nodes. So a row's file is only ever
+  // its OWN sourceFile stamp (never the index's top-level one: the CLI merges rows of several index files), and a
+  // destination is looked up among the rows that COULD be this screen's file: the rows naming it, plus every row
+  // naming none (an export written before the bridge stamped sourceFile — every field-test export, and the rest
+  // of such an index after one screen is re-pulled, live run L-3). Found in one of those, or among the ids of any
+  // unnamed input, it counts as exported (it may be this file's); found in none, it was never exported.
+  // The screen must be IN the index — a row with its root's id AND name (a bare id like 1:1 recurs across files),
+  // in its file or unnamed — or an index of another file would call every destination "never exported". A screen
+  // naming no file takes its file from that row: one named file → that file's rows + unnamed ones; any unnamed own
+  // row → every row; rows naming two files → nothing decided. Otherwise the row is left as it was (graded as before).
+  // Known misses: sourceFile is the file's NAME — rows pulled before a rename name the old one and are excluded; a
+  // destination frame nested in an exported SECTION/GROUP is no index row of its own, so it reads as never exported.
   const index = opts && opts.index;
-  const rowFile = (l: IndexRow): string | undefined => l.sourceFile ?? index?.sourceFile;
-  const named = index ? index.layers.filter((l) => !!rowFile(l)).length : 0;
-  const consistent = !!index && (named === 0 || named === index.layers.length);
-  if (index && consistent) {
-    for (const row of interactions) {
-      const file = interactionFile.get(row);
-      if (!row.destinationId || file === undefined || (file === "") !== (named === 0)) continue;
-      const known = idsByFile.get(file);
-      if (known && known.has(row.destinationId)) continue;
-      const ofFile = index.layers.filter((l) => (rowFile(l) ?? "") === file);
-      if (!known || !ofFile.some((l) => known.has(l.id))) continue; // the index does not cover this screen
-      if (!ofFile.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  const unnamedIds = idsByFile.get("");
+  const candidatesFor = (file: string): IndexRow[] | null => {
+    if (!index) return null;
+    const own = rootsByFile.get(file);
+    const sameName = (l: IndexRow): boolean => { const names = own?.get(l.id); return !!names && (!names.size || l.name === undefined || names.has(l.name)); };
+    const covering = own ? index.layers.filter((l) => sameName(l) && (file === "" || !l.sourceFile || l.sourceFile === file)) : [];
+    if (!covering.length) return null; // the index does not cover this screen
+    let f = file;
+    if (f === "") {
+      const named = new Set(covering.map((l) => l.sourceFile).filter((x): x is string => !!x));
+      if (named.size > 1) return null;
+      // an unnamed own row may be any file's (review L-c: a duplicated file shares ids AND names) → every row
+      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return index.layers;
+      f = [...named][0] ?? "";
     }
+    return index.layers.filter((l) => !l.sourceFile || l.sourceFile === f);
+  };
+  for (const row of interactions) {
+    const file = interactionFile.get(row);
+    if (!row.destinationId || file === undefined) continue;
+    const known = idsByFile.get(file);
+    if (!known || known.has(row.destinationId) || (unnamedIds && unnamedIds.has(row.destinationId))) continue;
+    const candidates = candidatesFor(file);
+    if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
   }
 
   const f0: Partial<VerifyFrame> = frames[0] || {};
@@ -2110,7 +2135,8 @@ function main(argv: string[]): number | Promise<number> {
     const rootRows: IndexRow[] = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\u0000${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
-    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers, ...ifDefined("sourceFile", "doc" in idx ? idx.doc.sourceFile : undefined) } } : null);
+    // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in — review M2)
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers } } : null);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
     // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
     // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST

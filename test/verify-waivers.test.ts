@@ -55,7 +55,7 @@ const INDEX: ExpectOptions = { index: { layers: [
   { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
   { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" },
   { id: "9:9", name: "Export Dialog", file: "pages/Main/Export_Dialog__9_9.json", sourceFile: "Other Kit" },
-], sourceFile: "Sample Kit" } };
+] } };
 const exp = buildExpectation([doc()], INDEX);
 const SHA = exp.exportContentSha256;
 
@@ -157,17 +157,89 @@ console.log("F-60 / D22 — an interaction whose destination was never exported:
   const noIndex = buildExpectation([doc()]);
   safe("--expect without an index: nothing is marked (unknown, graded as before)", () => noIndex.interactions.every((i) => i.destinationExported === undefined));
   const noFile = buildExpectation([doc("")], INDEX);
-  safe("--expect when the screen names no source file but the index does: nothing is marked (never join ids across files)", () => noFile.interactions.every((i) => i.destinationExported === undefined));
+  // review M1: the screen names no file, but its own index row (id AND name) names Sample Kit → it is that file's screen
+  safe("--expect when the screen names no source file: its own index row names the file → 9:9 (only another file's) marked, 1:50 not", () =>
+    noFile.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && noFile.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
   // the field tests' real shape: an export written before the bridge stamped sourceFile — neither the screen nor
   // any index row names a file, so the index is one (unnamed) file and its ids can be looked up
   const unnamed = buildExpectation([{ doc: screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders" }), label: "Orders" }],
     { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
   // review H2: the screen names its file, the index rows do not (mixed) → never decided
   const mixed = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
-  safe("[review H2] screen names its file, index rows name none → nothing marked (1:50 IS exported)", () => mixed.interactions.every((i) => i.destinationExported === undefined));
+  // L-3 (live run): an unnamed row may be this file's, so 1:50 there is never marked; 9:9, in no row at all, was never exported
+  safe("[review H2 / L-3] screen names its file, index rows name none → 1:50 (in a row) not marked, 9:9 (in none) marked", () =>
+    mixed.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && mixed.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
   // review H2: a merged index — an older page walk wrote rows with no sourceFile, a newer pull one with it
   const merged = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" }] } });
-  safe("[review H2] some index rows name a file, some do not → nothing marked (1:50 may be this file's)", () => merged.interactions.every((i) => i.destinationExported === undefined));
+  safe("[review H2 / L-3] some index rows name a file, some do not → 1:50 (unnamed row, may be this file's) not marked, 9:9 (in no row) marked", () =>
+    merged.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && merged.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
+  // L-3, the live shape: one screen re-pulled by the current bridge (its row names the file), the rest of the index from an
+  // older walk (no sourceFile), and 9:9 exported only from ANOTHER named file — still never joined across files
+  const repulled = buildExpectation([doc()], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+    { id: "1:60", name: "Order List", file: "pages/Main/Order_List__1_60.json" },
+    { id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" },
+  ] } });
+  safe("[L-3] partly re-pulled index: 9:9 only in another named file's row → marked destinationExported:false; 1:50 (in no row) marked too", () =>
+    repulled.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && repulled.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === false);
+  const repulledHas = buildExpectation([doc()], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+    { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" },
+  ] } });
+  safe("[L-3] partly re-pulled index: 1:50 in an unnamed (older) row → not marked", () => repulledHas.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
+  // review M1: an UNNAMED screen against rows of another file only — a row with the same bare id (1:1 recurs across
+  // files) but another name is not this screen, so nothing is decided (never join ids across files)
+  const unnamedVsOther = buildExpectation([doc("")], { index: { layers: [
+    { id: "1:1", name: "Settings", file: "pages/Main/Settings__1_1.json", sourceFile: "Other Kit" },
+    { id: "5:5", name: "Profile", file: "pages/Main/Profile__5_5.json", sourceFile: "Other Kit" },
+  ] } });
+  safe("[review M1] unnamed screen, index rows only of another file (same id 1:1, other name) → nothing marked", () => unnamedVsOther.interactions.every((i) => i.destinationExported === undefined));
+  // …but an unnamed screen whose own row (id AND name) names one file takes that file: its rows + unnamed ones
+  const unnamedOwnRow = buildExpectation([doc("")], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+    { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" },
+    { id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" },
+  ] } });
+  safe("[review M1] unnamed screen whose own row names Sample Kit → 9:9 (Other Kit only) marked, 1:50 not", () =>
+    unnamedOwnRow.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && unnamedOwnRow.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
+  const unnamedTwoFiles = buildExpectation([doc("")], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+    { id: "1:1", name: "Orders", file: "pages/Copy/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
+  ] } });
+  safe("[review M1] unnamed screen whose own row appears under two files → nothing marked", () => unnamedTwoFiles.interactions.every((i) => i.destinationExported === undefined));
+  // review L1: a destination passed as an UNNAMED input (may be this file's) is not "never exported"
+  const DETAILS: NodeInput = { type: "FRAME", id: "1:50", name: "Order Details", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [] };
+  const withUnnamedInput = buildExpectation([doc(), { doc: screenExport([DETAILS], { exportedAt: "2026-09-30T00:00:00Z", screen: "Order Details" }), label: "Order Details" }],
+    { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] } });
+  safe("[review L1] 1:50 given as an unnamed input → not marked; 9:9 still marked", () =>
+    withUnnamedInput.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && withUnnamedInput.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
+  // review M-a: a multi-frame selection pull is indexed under its FIRST frame's id with the title "selection"
+  const CART: NodeInput = { type: "FRAME", id: "1:2", name: "Cart", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [] };
+  const selection = buildExpectation([{ doc: screenExport([SCREEN, CART], { exportedAt: "2026-09-30T00:00:00Z", screen: "selection", nodeId: "1:1", sourceFile: "Sample Kit" }), label: "selection" }],
+    { index: { layers: [{ id: "1:1", name: "selection", file: "pages/Main/selection__1_1.json", sourceFile: "Sample Kit" }, { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" }] } });
+  safe("[review M-a] multi-frame selection pull (row named 'selection') → 9:9 marked, 1:50 not", () =>
+    selection.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false && selection.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined);
+  // review LOW-1: the title is accepted only for the frame the pull is filed under (nodeId), never for its other frames
+  const selFiledElsewhere = buildExpectation([{ doc: screenExport([SCREEN, CART], { exportedAt: "2026-09-30T00:00:00Z", screen: "selection", nodeId: "1:2", sourceFile: "Sample Kit" }), label: "selection" }],
+    { index: { layers: [{ id: "1:1", name: "selection", file: "pages/Main/selection__1_1.json", sourceFile: "Sample Kit" }] } });
+  safe("[review LOW-1] a 'selection' row on a frame the pull is NOT filed under does not cover it → nothing marked", () => selFiledElsewhere.interactions.every((i) => i.destinationExported === undefined));
+  // review L-a: a named screen whose only id+name row belongs to ANOTHER file (a duplicated file) is not covered
+  const otherFileRow = buildExpectation([doc()], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
+    { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit Copy" },
+  ] } });
+  safe("[review L-a] named screen, its id+name row is another file's → nothing marked", () => otherFileRow.interactions.every((i) => i.destinationExported === undefined));
+  // review L-b: a named screen whose own-id row carries another name is not this screen
+  const renamedRow = buildExpectation([doc()], { index: { layers: [{ id: "1:1", name: "Settings", file: "pages/Main/Settings__1_1.json", sourceFile: "Sample Kit" }] } });
+  safe("[review L-b] named screen, row with its id but another name → nothing marked", () => renamedRow.interactions.every((i) => i.destinationExported === undefined));
+  // review L-c: an unnamed screen whose own rows are one unnamed + one named (a duplicate file) → every row is a candidate
+  const dupFile = buildExpectation([doc("")], { index: { layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json" },
+    { id: "1:1", name: "Orders", file: "pages/Copy/Orders__1_1.json", sourceFile: "Sample Kit Copy" },
+    { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json", sourceFile: "Sample Kit" },
+  ] } });
+  safe("[review L-c] unnamed screen, own rows unnamed + another file's → 1:50 (Sample Kit row) not marked; 9:9 (no row) marked", () =>
+    dupFile.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && dupFile.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
   // review: an index that covers only ANOTHER file says nothing about this screen's destinations
   const other = buildExpectation([doc()], { index: { layers: [{ id: "9:9", name: "Export Dialog", file: "pages/Other/Export_Dialog__9_9.json", sourceFile: "Other Kit" }] } });
   safe("[review] an index with no row of this screen's file → nothing marked", () => other.interactions.every((i) => i.destinationExported === undefined));
@@ -331,6 +403,24 @@ console.log("CLI — --expect reads the index; --compare applies the plan; --acc
   safe("[review H2] 9:9 listed only in pages/Dialogs/index.json (an earlier walk) → not marked undesigned", () =>
     we.status === 0 && !!wDoc && (wDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === undefined));
   fs.rmSync(walked, { recursive: true, force: true });
+  // review M2: the root index's top-level sourceFile names its LAST walk (another file); an older unnamed row in the page's own
+  // index must stay a candidate (it may be this file's) — the top-level name is never applied to the merged page rows
+  const m2 = fs.mkdtempSync(path.join(os.tmpdir(), "verify-waivers-m2-"));
+  const putM = (rel: string, v: unknown): string => { fs.mkdirSync(path.dirname(path.join(m2, rel)), { recursive: true }); fs.writeFileSync(path.join(m2, rel), JSON.stringify(v, null, 2)); return rel; };
+  putM("design/export/pages/index.json", { pageDirs: [], sourceFile: "Other Kit", layers: [
+    { id: "7:7", name: "Settings", file: "pages/Else/Settings__7_7.json", sourceFile: "Other Kit" },
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+  ] });
+  putM("design/export/pages/Main/index.json", { page: "Main", layers: [
+    { id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" },
+    { id: "1:50", name: "Order Details", file: "pages/Main/Order_Details__1_50.json" },
+  ] });
+  const mScreen = putM("design/export/pages/Main/Orders__1_1.json", screenExport([SCREEN], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", sourceFile: "Sample Kit" }));
+  const me = spawnSync(process.execPath, [CLI, "--expect", mScreen, "--out", "design/verify/Orders"], { encoding: "utf8", cwd: m2 });
+  const mDoc = readJsonOrNull(path.join(m2, "design/verify/Orders.expected.json"), isVerifyExpectation);
+  safe("[review M2] CLI: 1:50 in an older unnamed page-index row, root index top-level names another file → 1:50 not marked; 9:9 marked", () =>
+    me.status === 0 && !!mDoc && (mDoc.interactions || []).some((i) => i.nodeId === "2:5" && i.destinationExported === undefined) && (mDoc.interactions || []).some((i) => i.nodeId === "2:4" && i.destinationExported === false));
+  fs.rmSync(m2, { recursive: true, force: true });
   const expSha = (() => { try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, "design/verify/Orders.expected.json"))).digest("hex"); } catch { return ""; } })();
   put("design/verify/Orders.measured.json", { ...measure({ "2:1": { fontSize: 16 } }), expectationSha256: expSha, artifacts: ["design/verify/Orders.png"] });
   const c1 = cli("--compare", "design/verify/Orders.expected.json", "design/verify/Orders.measured.json");
