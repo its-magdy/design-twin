@@ -74,14 +74,14 @@ console.log("verify-screen — the spec as data:");
   // primary axis just like SPACE_BETWEEN, ignoring itemSpacing — so a stored gap is slack there too,
   // not a real gap (see the comment above the justifyContent check in verify-screen.ts).
   const evenlyExp = buildExpectation([
-    doc([{ type: "FRAME", id: "3:1", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-evenly" }, box: { w: 300, h: 40 },
+    doc([{ type: "FRAME", id: "3:1", name: "Row", radius: 8, fills: [{ type: "solid", color: "#ffffff" }], layout: { gap: 24, justifyContent: "space-evenly" }, box: { w: 300, h: 40 },
       children: [{ type: "FRAME", id: "3:11", name: "a" }, { type: "FRAME", id: "3:12", name: "b" }] }]),
   ]);
   const evenlyRow = must(evenlyExp.nodes.find((n) => n.nodeId === "3:1"), "evenlyExp.nodes '3:1'");
   ok("[expect] space-evenly: the stored gap is excluded, not treated as a real gap",
     !("gap" in evenlyRow) && evenlyExp.notComparable.some((n) => n.nodeId === "3:1" && n.field === "gap"));
   const aroundExp = buildExpectation([
-    doc([{ type: "FRAME", id: "3:2", name: "Row", radius: 8, layout: { gap: 24, justifyContent: "space-around" }, box: { w: 300, h: 40 },
+    doc([{ type: "FRAME", id: "3:2", name: "Row", radius: 8, fills: [{ type: "solid", color: "#ffffff" }], layout: { gap: 24, justifyContent: "space-around" }, box: { w: 300, h: 40 },
       children: [{ type: "FRAME", id: "3:21", name: "a" }, { type: "FRAME", id: "3:22", name: "b" }] }]),
   ]);
   const aroundRow = must(aroundExp.nodes.find((n) => n.nodeId === "3:2"), "aroundExp.nodes '3:2'");
@@ -140,7 +140,8 @@ console.log("verify-screen — the mismatches three 'pass' verdicts let through:
   // Everything correct, within tolerance. Line-height rounding by a pixel or two is a real browser
   // behaviour and must NOT be reported, or the signal drowns.
   const exp = buildExpectation([doc([textNode("2:1", "T", "Hi", { family: "Poppins", size: 14, weight: "Regular", lineHeight: { value: 21, unit: "px" }, color: "#ffffff" })])]);
-  const rep = compare(exp, measured([{ nodeId: "2:1", styles: { fontFamily: '"Poppins", sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 22, color: "#fff", text: "Hi" } }]));
+  // (opacity: every node that carries copy states opacity 1 since group 11, DT-74 — a full probe reports it)
+  const rep = compare(exp, measured([{ nodeId: "2:1", styles: { fontFamily: '"Poppins", sans-serif', fontSize: 14, fontWeight: 400, lineHeight: 22, color: "#fff", text: "Hi", opacity: 1 } }]));
   ok("[diff] a 1px line-height difference is within tolerance and is not reported", rep.deltas.length === 0);
   ok("[diff] with nothing wrong and nothing unchecked, the verdict is pass", rep.verdict === "pass");
   ok("[diff] and the report still states exactly how much was checked", rep.coverage.fieldsChecked >= 5);
@@ -355,8 +356,9 @@ console.log("verify-screen — an unmeasured expectation is not a passed one:");
     must(stNode.styles, "st.styles").textBox = { ...ifDefined("x", must(pos["18580:60861"], "pos['18580:60861']").textBoxX) };
     const r = compare(gpExp, m);
     const d = r.deltas.find((x) => x.nodeId === "18580:60861" && x.field === "x (frame-relative)");
-    ok("[lt3-xy] Global Policies pre-fix: the Status header is +18.94px right of the design (1296.81 → 1315.75)",
-      () => !!d && d.expected === 1296.81 && d.actual === 1315.75 && d.delta === 18.94);
+    // (F-80, group 11: a hug TEXT's x is its box's left edge — 1296, what a Range reports — not the ink start 1296.81)
+    ok("[lt3-xy] Global Policies pre-fix: the Status header is +19.75px right of the design (1296 → 1315.75)",
+      () => !!d && d.expected === 1296 && d.actual === 1315.75 && d.delta === 19.75);
   }
 
   console.log("verify-screen — livetest-3: the coverage line closes (165/184):");

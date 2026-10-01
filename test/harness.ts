@@ -14,6 +14,7 @@ import type { ScreenReply, FullExportReply, DesignSystemReply, ListLibrariesRepl
 import { argsShapeError } from "../bridge/src/commands.ts";
 import type { ReadOptName } from "../bridge/src/read-opts.ts";
 import { must } from "./fixtures.ts";
+import { buildExpectation } from "../design-to-code/verify-screen.ts";
 
 // ---- the fakes: stand-ins for Plugin API objects. code.js duck-types everything it is handed, so these
 // are plain objects; the types below name only what the harness itself builds or reads back. (The real
@@ -884,6 +885,25 @@ const sandbox: Sandbox = context;
     exportAsync: async () => new Uint8Array([137, 80, 78, 71]) };
   const imgLeaf = await sandbox.serialize(imageRect, 0, false);
   ok("childless image node still exported as PNG asset", typeof imgLeaf.asset === "string" && imgLeaf.asset.indexOf(".png") !== -1);
+
+  // --- [DT-75 / D29] end to end: code.js IR → verify-screen --expect. A fixed-width text box (textAutoResize HEIGHT)
+  // is wider than its words, so its width is expected at the INK width (absoluteRenderBounds → renderBox.w), with the
+  // box width listed as not comparable — never the 121px box a build's hugging <span> can never fill.
+  const inkFrame = {
+    type: "FRAME", name: "Card", visible: true, id: "ink:0", layoutMode: "NONE",
+    absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 100 }, fills: [{ type: "SOLID", visible: true, color: { r: 1, g: 1, b: 1 }, opacity: 1 }],
+    children: [{ type: "TEXT", name: "Date", visible: true, id: "ink:1", characters: "Date", textAutoResize: "HEIGHT", textAlignHorizontal: "LEFT",
+      fontName: { family: "Inter", style: "Regular" }, fontSize: 14, width: 121, height: 20,
+      absoluteBoundingBox: { x: 16, y: 20, width: 121, height: 20 }, absoluteRenderBounds: { x: 16.62, y: 24, width: 32.14, height: 11 },
+      fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }], getStyledTextSegments: () => [] }],
+  };
+  const inkIr = await sandbox.serialize(inkFrame, 0, false);
+  const inkText = inkIr.children?.[0];
+  const inkSpec = buildExpectation([{ doc: { nodes: [inkIr] }, label: "Card" }]).nodes.find((n) => n.nodeId === "ink:1");
+  ok("[DT-75] code.js writes the HEIGHT text's autoResize lowercase and its renderBox narrower than its box",
+    inkText?.autoResize === "height" && inkText.box?.w === 121 && inkText.renderBox?.w === 32.14);
+  ok("[DT-75 / D29] --expect: that TEXT's spec.width === renderBox.w (32.14, the ink), widthFrom renderBox, no height",
+    inkSpec?.width === inkText?.renderBox?.w && inkSpec?.width === 32.14 && inkSpec.widthFrom === "renderBox" && inkSpec.height === undefined);
 
   // --- [RD-noassets] skipAssets: the per-node exportAsync pass is the dominant cost on a real file
   // (it hung a ~1000-node page past 300s and outgrew the bridge's frame limit on --all-pages), yet it

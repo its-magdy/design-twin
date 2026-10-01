@@ -428,7 +428,9 @@ export interface PlanComponentRow {
 /** anchors{}[nodeId]. A node is ANCHORED when one of mapModule/file/symbol/omitted is a non-blank string. */
 export interface PlanAnchor { name?: string; type?: IrNodeType; parent?: string | null; mapModule?: string; file?: string; symbol?: string; omitted?: string;
   /** F-77: a layout-only wrapper (no paint) the build folded into this ancestor id; --compare checks the claim */
-  foldedInto?: string }
+  foldedInto?: string;
+  /** D33: this (outermost instance) node is a shared shell — its subtree is counted apart in coverage.sharedShell */
+  shared?: boolean }
 export interface PlanHiddenRoot { id: string; name: string; type: IrNodeType; nodes: number }
 export interface PlanDeviation { id?: string; nodeId?: string; nodeIds?: string[]; field?: string; designed?: JsonValue; built?: JsonValue; reason?: string; what?: string }
 /** D5: a person's acceptance of ONE report delta (node + field), bound to the export content and the built value.
@@ -590,6 +592,17 @@ export interface VerifySpec {
   repeatedText?: true;
   /** F-104: the rows' group — every spec sharing it is the same text slot in a sibling row */
   repeatedTextGroup?: string;
+  /** D32/D35: the ids of the SAME node (component key + visible name path under the outermost instance) in sibling
+   *  exports of the same Figma file — a probe may match an element tagged with one of them ("tag-alias") */
+  aliases?: string[];
+  /** D29: `width` is the text's INK width (renderBox.w), compared with tolerance textInk */
+  widthFrom?: "renderBox";
+  /** F-79: padding sides that cannot be compared (a fixed axis that is overfull or centres its content) */
+  paddingSkip?: Array<"top" | "right" | "bottom" | "left">;
+  /** D31: how each axis is sized in auto layout (absent = fixed) — a growing hug axis alone is no size suspect */
+  sizing?: { w?: "hug" | "fill"; h?: "hug" | "fill" };
+  /** D34: the design's stroke alignment (strokes.align) — a ring read on the other side of the box is noted, not a delta */
+  strokeAlign?: "inside" | "outside" | "center";
 }
 export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean }
 /** A root frame as an expectation lists it (no position). */
@@ -649,7 +662,12 @@ export interface MeasuredStyles {
   placeholderColor?: string | null;
   tag?: string | null;
   textBox?: { x?: number | null; w?: number | null } | null;
+  /** F-78: getComputedStyle(el).display */
   display?: string | null;
+  /** D34: where borderWidth/borderColor were read when the element draws no real border (a ring) */
+  strokeFrom?: "border" | "box-shadow" | "outline";
+  /** D34: the ring's side of the box — only when strokeFrom is not "border" */
+  strokeAlign?: "inside" | "outside";
   transform?: string | null;
   rotate?: string | null;
   visible?: boolean | null;
@@ -736,6 +754,8 @@ export interface VerifyMeasured {
   runId?: string;
   /** DT-81: the build the probe was served */
   build?: BuildIdentity;
+  /** DT-47: data-dt-node values on visible elements that are no expected/hidden/instance/frame id ({id, elements}: first 50, sorted) */
+  tagsNotInExpectation?: { count: number; ids: Array<{ id: string; elements: number }> };
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -756,6 +776,10 @@ export interface VerifyDelta {
   accepted?: { reason: string; decidedBy: string; decidedAt: string; cause?: string };
   /** F-76: presentational group id (one cause) — counts and verdict stay per delta */
   group?: string;
+  /** D30/D31: the severity before a match-confidence cap lowered it */
+  cappedFrom?: DeltaSeverity;
+  /** D39: which caps bound it — "size" (D31, lifted by a waiver on match (size)) and/or "match" (D30, stays) */
+  cappedBy?: Array<"size" | "match">;
 }
 /** "undesigned" (D22): the destination was never exported; "descoped" (D20): the owner removed it from the graded set. */
 export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
@@ -807,18 +831,24 @@ export interface VerifyReport {
     interactionsUndesigned?: number; interactionsDescoped?: number; deltasAccepted?: number; nodesFolded?: number;
     /** measured specs per matching rule (tag, tagSharedPath, text, textOrdinal, position, frame, sharedComponentPath, other, unstated) */
     matchedBy?: Record<string, number>;
+    /** D33 (informational): outermost instances that are a shared shell, and their specs expected/measured */
+    sharedShell?: { instances: Array<{ nodeId: string; name: string; setName?: string; expected: number; measured: number }>; expected: number; measured: number };
   };
   /** high/medium/low count OPEN deltas only; `accepted` = deltas a plan waiver matched */
   summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number;
     accepted?: number; descoped?: number; undesigned?: number;
     /** distinct causes among the open high deltas (F-76: a group counts once) */
-    highCauses?: number };
+    highCauses?: number;
+    /** D39: open deltas whose severity a match cap lowered (cappedFrom) — any blocks a plain pass */
+    lowConfidence?: number };
   waivers?: VerifyWaiverResult;
   /** F-77: specs a plan anchor folded into a measured ancestor — out of the denominator */
   folded?: Array<{ nodeId: string; name?: string; into: string; why: string }>;
   deltas?: VerifyDelta[];
   componentsAbsent?: Array<{ setName: string; nodeIds: string[]; detail?: string }>;
   untaggedInstanceSets?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
+  /** F-96 (D33): untagged instance sets that live inside a shared shell — not this screen's work */
+  untaggedInstanceSetsInShell?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
   /** @1 only */
   missingComponents?: Array<{ setName: string; setKey?: string; nodeIds: string[]; instances: number }>;
   interactions?: VerifyInteractionResult[];
@@ -834,7 +864,10 @@ export interface VerifyReport {
     /** malformed optional extras of the measured file that were ignored (a hand-written `probe`, a non-list notMeasured) */
     inputNotes?: string[];
     /** DT-29: interaction results whose nodeId + trigger match no designed interaction, with a hint when one is near */
-    unmatchedInteractionEvidence?: Array<{ nodeId: string; trigger: string; hint?: string }> };
+    unmatchedInteractionEvidence?: Array<{ nodeId: string; trigger: string; hint?: string }>;
+    /** DT-47: measured tags/ids not in the expectation, classified — prefixDrift: the `;` suffix equals an expected id's;
+     *  alias: some spec's alias; unknown: neither */
+    foreignTags?: { total: number; prefixDrift: number; alias: number; unknown: number; sample: string[] } };
   /** D18: coverage against the previous report (the one this run overwrote, or --against) */
   against?: VerifyAgainst;
   limits?: string[];

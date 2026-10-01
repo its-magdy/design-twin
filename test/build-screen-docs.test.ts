@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { check, report } from "./assert.ts";
 import { PASSING_VERDICTS } from "../design-to-code/plan-waivers.ts";
+import * as PM from "../design-to-code/probe-match.ts";
 
 const root = process.env.BUILD_SCREEN_DOCS_ROOT ?? path.join(import.meta.dirname, "..");
 const read = (rel: string): string => {
@@ -173,5 +174,63 @@ console.log("verify docs (group 10, run integrity + agent safety):");
   // L-6: integrity failures outrank the grades
   check("[L-6] the verify skill says an integrity failure makes the verdict incomplete even with high mismatches (the numbers belong to an unverified run)",
     /even when there are high mismatches: those numbers belong to an unverified run/.test(verifySkill) && /even with high mismatches/.test(verifySkill));
+}
+
+console.log("verify docs (group 11, match confidence + per-node-type rules):");
+{
+  // the canonical list from the probe's own source (read through the namespace: an older tree is a clean ✗)
+  const pmNs: Record<string, unknown> = { ...PM };
+  const canon = Array.isArray(pmNs.CANONICAL_MATCHED_BY) ? pmNs.CANONICAL_MATCHED_BY.filter((x): x is string => typeof x === "string") : [];
+  const listed = /`matchedBy` is one of the values the probe writes: ((?:`[a-z-]+`(?:, )?)+)\./.exec(verifier)?.[1]?.match(/`([a-z-]+)`/g)?.map((x) => x.slice(1, -1)) ?? [];
+  check(`[F-125] the visual-verifier's matchedBy list = probe-match.ts CANONICAL_MATCHED_BY (doc: ${listed.join(", ")})`, canon.length > 0 && JSON.stringify(listed) === JSON.stringify(canon));
+  check("[D32] the verifier says what tag-alias means (another screen's id for the same node, the row's `aliases`) and the D30 caps",
+    /`tag-alias` is an element tagged with the id the same node has in another screen's export/.test(verifier) && /`aliases`/.test(verifier)
+    && /`text-ordinal` or `tag-alias` is at most medium, by `position` or any value you invent at most\s+low/.test(verifier));
+  check("[F-62] the verifier's textBox row: for EVERY TEXT node, and a TEXT node's x/width come from textBox only",
+    /\| `textBox` \| for every TEXT node:/.test(verifier) && /x and width are compared from `textBox` only/.test(verifier) && !/\| `textBox` \| for a TEXT node:/.test(verifier));
+  check("[DT-74] the verifier: a ring (box-shadow 0 0 0 Npx, five shadows, by content not position) or an inside outline is borderWidth/borderColor with strokeFrom + strokeAlign",
+    /`box-shadow: 0 0 0 Npx`/.test(verifier) && /five shadows/.test(verifier) && /never by\s+its position/.test(verifier) && /`outline-offset: -Npx`/.test(verifier) && /`strokeFrom` \(`box-shadow` \| `outline`\)/.test(verifier) && /`strokeAlign`\s+\(`inside` \| `outside`\)/.test(verifier));
+  check("[D30] the verify skill: text-ordinal/tag-alias at most medium, position and non-canonical at most low, cappedFrom, a tag removes the cap",
+    /`text-ordinal` or `tag-alias` is at most medium; by `position` or any other value a hand-written probe invents \(`structural`, …\), at most low/.test(verifySkill) && /`cappedFrom`/.test(verifySkill) && /removes the cap/.test(verifySkill));
+  check("[D39] the verify skill documents cappedBy (\"match\" | \"size\") beside cappedFrom",
+    /`cappedFrom`, and `cappedBy` says which cap\(s\) applied \(`"match"` for this one, `"size"` for the\s+`match \(size\)` cap below\)/.test(verifySkill));
+  check("[D31] the verify skill: `match (size)` — ≥2× / ≤½ and ≥8px off, hug-growth rule, one medium row, the node's other deltas capped at low, waivable",
+    /`match \(size\)`/.test(verifySkill) && /at least twice \(or at most half\)/.test(verifySkill) && /at least 8px off/.test(verifySkill) && /only when the other axis is off too/.test(verifySkill)
+    && /one medium `match \(size\)` row/.test(verifySkill) && /caps every other delta of that node at low/.test(verifySkill) && /waiver on\s+`match \(size\)` accepts the element/.test(verifySkill));
+  check("[D29] the verify skill: hug text box to box (1px); fixed/fill text by ink width (renderBox.w, 3px, `width (text ink)`), box notComparable",
+    /Hug text \(auto width\) is compared box to box, tolerance 1px/.test(verifySkill) && /`renderBox\.w`\), tolerance 3px, labelled `width \(text ink\)`/.test(verifySkill) && /`notComparable`/.test(verifySkill));
+  check("[D29] [A7] the verify skill: width not comparable only when the DESIGN truncates (ink ≥ box − 3, or maxLines > 1); otherwise by ink; a placeholder's width/x not comparable",
+    /not comparable only when the DESIGN\s+truncates/.test(verifySkill) && /ink ≥ box − 3px/.test(verifySkill) && /`maxLines` > 1/.test(verifySkill) && /compared by ink/.test(verifySkill)
+    && /placeholder's width and x\s+are not comparable/.test(verifySkill) && !/Truncated text's width is not comparable/.test(verifySkill));
+  check("[D30] [A7] caps: `data-dt-node` and `id` read as tag, no matchedBy is no cap — never 'any value outside the probe's own list' (verify skill and verifier)",
+    /synonyms `data-dt-node` and `id` \(read as `tag`\), or no `matchedBy` at all/.test(verifySkill) && !/any\s+value outside the probe's own list/.test(verifySkill)
+    && /`data-dt-node` and `id` read as `tag`; no `matchedBy` is no cap/.test(verifier) && !/by `position` or any other value at most/.test(verifier));
+  check("[F-75] [F-79] [F-78] [opacity] the verify skill: radius on a layer that draws nothing, padding a fixed axis cannot show, inline FRAME ids, stated opacity + at-rest opacity under a drawn state",
+    /radius on a layer that draws nothing/i.test(verifySkill) && /padding a fixed axis cannot show — per side/.test(verifySkill) && /`display: inline`.{0,200}tag the element that owns the box/.test(verifySkill)
+    && /Opacity is stated on every node that paints or carries copy/.test(verifySkill) && /measured\s+at rest is not measured for opacity/.test(verifySkill));
+  check("[D31] [A7] match (size) names its exemptions: TEXT, leaves, inline matches; a frame root's grown height", /TEXT nodes, leaves and inline matches are exempt/.test(verifySkill) && /frame root's height that\s+only grew/.test(verifySkill));
+  check("[DT-48] the verify skill: radius on a <tr>/row group is not measured (rows don't draw corners)", /`border-radius` on a `<tr>`.{0,80}does not\s+render/.test(verifySkill) && /corner\s+cells' radii/.test(verifySkill));
+  check("[DT-74] the verify skill: rings/outlines read as the border; CSS-snapped border width vs raw ring width, tolerance 0.5px",
+    /`box-shadow: 0 0 0 Npx`/.test(verifySkill) && /`strokeFrom`/.test(verifySkill) && /floors a border to whole pixels, minimum 1px/.test(verifySkill) && /tolerance 0\.5px/.test(verifySkill));
+  check("[D33] [DT-47] the verify skill: the shared-shell split and foreign tags are informational, never verdict-changing",
+    /nodes measured a\/b \(shared shell c\/d\)/.test(verifySkill) && /`untaggedInstanceSetsInShell`/.test(verifySkill) && /The split never changes the verdict/.test(verifySkill)
+    && /`probe\.foreignTags`/.test(verifySkill) && /Foreign tags are informational/.test(verifySkill) && /They never change the verdict/.test(verifySkill));
+  check("[F-85] build-screen: a shared shell MAY keep one frame's ids (recovered by component path + name path aliases), but a per-screen id table measures more; either is fine, never invent ids",
+    /shell shared by several screens may keep the ids of ONE frame/.test(skill) && /recovers much of it/.test(skill) && /by name path through\s+the aliases/.test(skill)
+    && /not repeated names, a shell used twice, or a hand-written probe/.test(skill) && /per-screen id table .{0,80}still measures more/.test(skill) && /Either is fine — never invent ids/.test(skill)
+    && !/don't hand-maintain a per-screen id table/.test(skill) && !/keeps the ids of ONE frame/.test(skill));
+  check("[D39] capped deltas block a plain pass (incomplete, never fail/pass, 'tag these elements') — verify skill and verifier",
+    /any capped delta blocks a plain pass: the verdict is `incomplete`/.test(verifySkill) && /low-confidence matches — tag these elements/.test(verifySkill) && /never `fail`, never `pass`/.test(verifySkill)
+    && /Any capped delta keeps the\s+screen from a plain pass \(verdict `incomplete`/.test(verifier));
+  check("[D39] a waiver on match (size) lifts ONLY the size cap; a match-confidence cap (position, tag-alias, text-ordinal, hand-written) stays (old 'restores'/'capped lows never block' gone)",
+    /`match \(size\)` accepts the element and lifts ONLY the size cap/.test(verifySkill) && /unless a match-confidence cap \(`position`, `tag-alias`, `text-ordinal`, a hand-written\s+value\) also applies/.test(verifySkill)
+    && !/restores the node's capped severities/.test(verifySkill) && !/capped lows never block/.test(verifySkill) && !/restores the node's capped/.test(verifier));
+  check("[D39] the verdict list: `incomplete` names deltas on low-confidence matches",
+    /- \*\*incomplete\*\* —[^]*?deltas on low-confidence matches \(D39[^]*?An integrity/.test(verifySkill));
+  check("[F-79] a wrapping list: main-axis padding shows (only its largest child can overflow), cross axis = stacked lines; space-around/space-evenly behave as centred",
+    !/never overfull on its main axis/.test(verifySkill) && /overfull only when its largest child alone is wider than the inner width/.test(verifySkill)
+      && /cross axis the content is\s+the stacked lines/.test(verifySkill) && /`space-around`\/`space-evenly`, → both/.test(verifySkill));
+  check("[F-79] overfull fixed box: only the side the content does not start from is skipped (start → end side; centred → both)",
+    /only the side the content does not start from \(start-aligned → the end side; centred, or\s+`space-around`\/`space-evenly`, → both\)/.test(verifySkill));
 }
 report();

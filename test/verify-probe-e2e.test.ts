@@ -17,7 +17,7 @@ import { readJsonOrNull } from "../design-to-code/read-json.ts";
 import { STYLE_KEYS } from "../design-to-code/verify-screen.ts";
 import { liveStatusFile, stageDirOf } from "../design-to-code/verify-run.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
-import type { MeasuredNode, VerifyMeasured } from "../design-to-code/types.ts";
+import type { MeasuredNode, VerifyMeasured, VerifySpec } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -294,6 +294,65 @@ const b9 = path.join(tmp, "run9", "Staff");
 const r9 = await probe(["--expected", expected, "--url", url("vite"), "--out", b9, "--project", ROOT]);
 const m9 = read(b9);
 check("[DT-81] the fixture's JS changed → a different assetsSha256; /@vite/client served → mode vite-dev", r9.status === 0 && m9?.build !== undefined && m9.build.assetsSha256 !== bd?.assetsSha256 && m9.build.mode === "vite-dev");
+
+// ---- group 11: a shared shell tagged with another screen's ids (D32), foreign tags (DT-47), display (F-78), rings (D34)
+// (the expectation is written here: its `aliases` are what --expect derives from sibling exports of the same file)
+const g11Nodes: VerifySpec[] = [
+  { nodeId: "60:1", name: "Rota Settings", type: "FRAME" },
+  { nodeId: "I60:5;8:1", name: "Top Bar", type: "INSTANCE", aliases: ["I71:9;3:4"] },
+  { nodeId: "I60:5;8:2", name: "Twin", type: "FRAME", aliases: ["I71:9;3:5", "I72:1;3:5"] },
+  { nodeId: "60:20", name: "Caption", type: "TEXT" },
+  { nodeId: "60:21", name: "Caption Word", type: "TEXT" },
+  { nodeId: "60:30", name: "Inset Ring", type: "FRAME" },
+  { nodeId: "60:31", name: "Outer Ring", type: "FRAME" },
+  { nodeId: "60:32", name: "Inside Outline", type: "FRAME" },
+  { nodeId: "60:33", name: "Focus Rest", type: "FRAME" },
+  { nodeId: "60:34", name: "Bordered", type: "FRAME" },
+  { nodeId: "60:35", name: "Offset Ring", type: "FRAME" },
+  { nodeId: "60:36", name: "Raised Card", type: "FRAME" },
+  { nodeId: "60:37", name: "Ringed Card", type: "FRAME" },
+  { nodeId: "60:38", name: "Glow", type: "FRAME" },
+  { nodeId: "60:39", name: "Soft Card", type: "FRAME" },
+  { nodeId: "60:40", name: "Hard Shadow", type: "FRAME" },
+];
+const g11Exp = path.join(tmp, "Rota.expected.json");
+fs.writeFileSync(g11Exp, JSON.stringify({ frame: { nodeId: "60:1", name: "Rota Settings", w: 800, h: 600 }, nodes: g11Nodes }));
+const b12 = path.join(tmp, "run12", "Rota");
+const r12 = await probe(["--expected", g11Exp, "--url", `http://127.0.0.1:${port}/shell-rings.html`, "--out", b12, "--project", ROOT]);
+const m12 = read(b12);
+if (r12.status !== 0) console.log(r12.stderr);
+const shellNode = node(m12, "I60:5;8:1");
+check("[D32] a shell tagged with another screen's id for this node → matchedBy tag-alias on that <nav>, census tagAlias 1",
+  r12.status === 0 && shellNode?.matchedBy === "tag-alias" && shellNode.selector === '[data-dt-node="I71:9;3:4"]' && styleOf(shellNode, "tag") === "nav" && styleOf(shellNode, "height") === 48
+  && m12?.matchedByCensus?.tagAlias === 1);
+check("[D32] two visible elements carry a spec's aliases → notMeasured 'ambiguous', not a guess", node(m12, "I60:5;8:2") === undefined
+  && (m12?.notMeasured || []).some((n) => isJsonObject(n) && n.nodeId === "I60:5;8:2" && typeof n.why === "string" && /^ambiguous: 2 visible elements/.test(n.why)));
+check("[DT-47] tagsNotInExpectation: every visible foreign tag (alias, stale prefix, a tag on 2 elements), sorted; hidden and frame ids left out",
+  JSON.stringify(m12?.tagsNotInExpectation) === JSON.stringify({ count: 5, ids: [{ id: "88:2", elements: 2 }, { id: "I71:9;3:4", elements: 1 }, { id: "I71:9;3:5", elements: 1 }, { id: "I72:1;3:5", elements: 1 }, { id: "I99:9;7:7", elements: 1 }] }));
+check("[DT-47] … and the probe says so on stderr", /note {2}5 data-dt-node value\(s\) on visible elements are not in the expectation \(e\.g\. 88:2, I71:9;3:4/.test(r12.stderr));
+check("[F-78] display on every node: <p> block, its inner <span> inline, the shell <nav> flex",
+  styleOf(node(m12, "60:20"), "display") === "block" && styleOf(node(m12, "60:21"), "display") === "inline" && styleOf(shellNode, "display") === "flex"
+  && (m12?.nodes || []).every((n) => typeof styleOf(n, "display") === "string"));
+const ring30 = node(m12, "60:30"), ring31 = node(m12, "60:31"), out32 = node(m12, "60:32"), rest33 = node(m12, "60:33"), bord34 = node(m12, "60:34");
+const greyCol = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(String(styleOf(ring30, "borderColor")));
+check("[D34] Tailwind `ring-1 ring-inset` (oklch colour, the 4th of five shadows) → borderWidth 1, rgb grey, strokeFrom box-shadow, inside",
+  styleOf(ring30, "borderWidth") === 1 && greyCol !== null && greyCol[1] === greyCol[2] && greyCol[2] === greyCol[3] && Number(greyCol[1]) > 150 && styleOf(ring30, "strokeFrom") === "box-shadow" && styleOf(ring30, "strokeAlign") === "inside");
+check("[D34] `ring-2` without inset → borderWidth 2, its colour, outside", styleOf(ring31, "borderWidth") === 2 && styleOf(ring31, "borderColor") === "rgb(10, 132, 255)" && styleOf(ring31, "strokeAlign") === "outside");
+check("[D34] `outline 1px` at offset -1px → borderWidth 1, outline colour, strokeFrom outline, inside",
+  styleOf(out32, "borderWidth") === 1 && styleOf(out32, "borderColor") === "rgb(118, 118, 128)" && styleOf(out32, "strokeFrom") === "outline" && styleOf(out32, "strokeAlign") === "inside");
+check("[D34] a transparent resting focus outline (offset 2px) is no stroke: borderWidth 0, borderColor null, no strokeFrom",
+  styleOf(rest33, "borderWidth") === 0 && styleOf(rest33, "borderColor") === null && styleOf(rest33, "strokeFrom") === undefined);
+const noStroke = (n: MeasuredNode | undefined): boolean => n !== undefined && styleOf(n, "borderWidth") === 0 && styleOf(n, "borderColor") === null && styleOf(n, "strokeFrom") === undefined;
+check("[D34/M4] two OUTER rings (`ring-2 ring-offset-2`: a white offset ring + the ring) → ambiguous, nothing read", noStroke(node(m12, "60:35")));
+check("[D34/M4] a decorative shadow (`shadow-md`: offsets, blur, negative spread) is no stroke", noStroke(node(m12, "60:36")));
+check("[D34/M4] a glow (`0 0 8px 2px`: no offset, blur > 0, spread > 0) is no stroke", noStroke(node(m12, "60:38")));
+check("[D34/M4] a single decorative shadow (`shadow-xs`: one entry, offset + blur) is no stroke", noStroke(node(m12, "60:39")));
+check("[D34/M4] a hard offset shadow (`4px 4px 0 1px`: blur 0, spread > 0, offset) is no stroke", noStroke(node(m12, "60:40")));
+const ringed = node(m12, "60:37");
+check("[D34/M4] `ring-1` + `shadow-md` together → the ring is read (1, its colour, outside), the shadows ignored",
+  styleOf(ringed, "borderWidth") === 1 && styleOf(ringed, "borderColor") === "rgb(10, 132, 255)" && styleOf(ringed, "strokeFrom") === "box-shadow" && styleOf(ringed, "strokeAlign") === "outside");
+check("[D34] a real border beside a ring → the border (strokeFrom border, no strokeAlign)",
+  styleOf(bord34, "borderWidth") === 1 && styleOf(bord34, "borderColor") === "rgb(5, 5, 5)" && styleOf(bord34, "strokeFrom") === "border" && styleOf(bord34, "strokeAlign") === undefined);
 
 finish();
 report();

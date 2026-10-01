@@ -10,6 +10,9 @@
 //   1. tag              [data-dt-node="<id>"], the first visible hit (selectorCount says how many)
 //   2. tag-shared-path  one element tagged with ANOTHER instance's id for the same component-internal node
 //                       (`I<a>;<suffix>` vs `I<b>;<suffix>`: a shared component built once, tagged once)
+//   2b. tag-alias       one element tagged with one of the spec's aliases (D32: the same node of the same
+//                       component, found by name path in a sibling screen's export at --expect) — still a tag (D17);
+//                       two such elements → not measured. Lower confidence than a tag: compare caps it (D30).
 //   3. text             the innermost visible owner of the spec's exact text (then case-insensitive), scoped
 //                       to a tagged ancestor, tie-broken by the spec's x (≥ 8px clearer), then
 //      text-ordinal     k specs sharing the text and exactly k visible owners → paired in document order
@@ -21,7 +24,9 @@
 import type { Candidate, CollectOutput, MeasureResult, Rect, SizedCandidate } from "./probe-page.ts";
 import type { MeasuredNode, MeasuredStyles, ProbeFrame, VerifySpec } from "./types.ts";
 
-export type MatchedBy = "tag" | "tag-shared-path" | "text" | "text-ordinal" | "position" | "frame";
+export type MatchedBy = "tag" | "tag-shared-path" | "tag-alias" | "text" | "text-ordinal" | "position" | "frame";
+/** Every matchedBy the shipped probe writes, in rule order — the canonical list (D30's caps, the visual-verifier doc). */
+export const CANONICAL_MATCHED_BY: readonly MatchedBy[] = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
 export interface Match {
   nodeId: string; matchedBy: MatchedBy; selector: string; selectorCount?: number; path: string; cand: Candidate | null;
   /** hover-only content not rendered at rest (`hidden group-hover:flex`): the tagged ancestor to hover to reveal it */
@@ -176,6 +181,20 @@ export function chooseMatch(spec: VerifySpec, pool: MatchPool, opts: MatchOption
     if (only && only.dt !== null) return { nodeId: id, matchedBy: "tag-shared-path", selector: attrSelector(only.dt), selectorCount: 1, path: only.path, cand: only };
   }
 
+  // 2b. tag-alias (D32): an element tagged with the id this node has in a sibling screen's export (a shared
+  // shell built once, tagged with that screen's ids). An alias that is itself one of this expectation's ids is
+  // that node's, never this one's. Exactly one visible element; several → not measured (no guess).
+  const aliases = [...new Set(spec.aliases || [])].filter((a) => a !== id && !pool.expectedIds.has(a));
+  if (aliases.length) {
+    const hitsA = aliases.flatMap((a) => (pool.byTag.get(a) || []).filter(tagVisible));
+    const onlyA = hitsA.length === 1 ? hitsA[0] : undefined;
+    if (onlyA && onlyA.dt !== null) return { nodeId: id, matchedBy: "tag-alias", selector: attrSelector(onlyA.dt), selectorCount: 1, path: onlyA.path, cand: onlyA };
+    if (hitsA.length > 1) {
+      const tags = [...new Set(hitsA.map((c) => c.dt))].join(", ");
+      return { nodeId: id, why: `ambiguous: ${hitsA.length} visible elements carry this node's aliases (${tags}) from other screens' exports; tag the one that is this node's with data-dt-node="${id}"` };
+    }
+  }
+
   // 3. text
   const t = specText(spec);
   let textWhy: string | null = null;
@@ -302,6 +321,12 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
       unmeasured[k] = raw.unmeasured[k] || (raw.found ? "the page reported no value" : "the element was gone when measured");
     } else styles[k] = v;
   }
+  // D34: where a stroke was read — only on a node whose page result names it (never a null to explain)
+  const from = raw.styles.strokeFrom, align = raw.styles.strokeAlign;
+  if (from === "border" || from === "box-shadow" || from === "outline") {
+    styles.strokeFrom = from;
+    if (from !== "border" && (align === "inside" || align === "outside")) styles.strokeAlign = align;
+  }
   return {
     nodeId: spec.nodeId,
     matchedBy: match.matchedBy,
@@ -312,15 +337,16 @@ export function shapeNode(spec: VerifySpec, match: Match, raw: MeasureResult, ke
     ...(raw.fillSource !== undefined ? { fillSource: raw.fillSource } : {}),
     styles,
     ...(Object.keys(unmeasured).length ? { unmeasured } : {}),
-    ...(match.matchedBy === "position" ? { note: "matched by position (±2px) — low confidence; tag it with data-dt-node" } : {}),
+    ...(match.matchedBy === "position" ? { note: "matched by position (±2px) — low confidence; tag it with data-dt-node" }
+      : match.matchedBy === "tag-alias" ? { note: `matched by another screen's id for this node (${match.selector}) — tag it with data-dt-node="${spec.nodeId}" to make it certain` } : {}),
   };
 }
 
 /** The matching-strategy census written to measured.matchedByCensus. */
-export interface MatchCensus { tag: number; sharedPath: number; text: number; textOrdinal: number; position: number; frame: number; notMeasured: number }
+export interface MatchCensus { tag: number; sharedPath: number; tagAlias: number; text: number; textOrdinal: number; position: number; frame: number; notMeasured: number }
 export function census(nodes: Array<Pick<MeasuredNode, "matchedBy">>, notMeasured: unknown[]): MatchCensus {
-  const c: MatchCensus = { tag: 0, sharedPath: 0, text: 0, textOrdinal: 0, position: 0, frame: 0, notMeasured: notMeasured.length };
-  const KEY: Record<MatchedBy, keyof MatchCensus> = { tag: "tag", "tag-shared-path": "sharedPath", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame" };
+  const c: MatchCensus = { tag: 0, sharedPath: 0, tagAlias: 0, text: 0, textOrdinal: 0, position: 0, frame: 0, notMeasured: notMeasured.length };
+  const KEY: Record<MatchedBy, keyof MatchCensus> = { tag: "tag", "tag-shared-path": "sharedPath", "tag-alias": "tagAlias", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame" };
   const isMatchedBy = (v: string | undefined): v is MatchedBy => v !== undefined && Object.hasOwn(KEY, v);
   for (const n of nodes) if (isMatchedBy(n.matchedBy)) c[KEY[n.matchedBy]]++;
   return c;

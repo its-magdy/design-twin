@@ -192,6 +192,15 @@ read its computed style. Two ways to find it, in this order:
    rendered row *i*, reported under the designed row's id. Record anything you could not find — do NOT
    quietly skip it. An unfound node becomes `notMeasured`, which blocks the pass, and that is correct.
 
+`matchedBy` is one of the values the probe writes: `tag`, `tag-shared-path`, `tag-alias`, `text`, `text-ordinal`, `position`, `frame`.
+`tag-shared-path` is an element tagged with another instance's id for the same node inside the same
+component (`I<a>;<x>` for `I<b>;<x>`); `tag-alias` is an element tagged with the id the same node has
+in another screen's export of the same file (a shared shell built once, tagged with that screen's ids —
+the expectation lists them under the row's `aliases`). The report trusts them less: a delta on a node
+matched by `text-ordinal` or `tag-alias` is at most medium, by `position` or any value you invent at most
+low (`data-dt-node` and `id` read as `tag`; no `matchedBy` is no cap). Any capped delta keeps the
+screen from a plain pass (verdict `incomplete`, "tag these elements"). Tag the element with its own id to make the match certain.
+
 Read numbers, never eyeball them. **Use the canonical keys — `measuredKeys` in the expectation lists
 them; a differently-named key is not read, and the report's headline will say that field was present
 in 0 measurements.** The web column of this table is what the probe reads for you; use it as the reference
@@ -204,7 +213,7 @@ for a native stack's equivalent:
 | `padding` | `[top, right, bottom, left]` |
 | `gap` / `gapVisual` | CSS `gap`; **and** `gapVisual`, the rendered distance between consecutive children, wherever CSS gap is not what spaces them (a `<table>` uses `border-spacing`) |
 | `width` `height` `x` `y` | `el.getBoundingClientRect()`, with `x`/`y` **minus the frame element's rect** (frame-relative — see `coordinates`) |
-| `textBox` | for a TEXT node: `{x, w}` of a `Range` over its characters, frame-relative — required when the id sits on a padded `<th>`, `<button>` or `<label>`, whose box is not the text's |
+| `textBox` | for every TEXT node: `{x, w}` of a `Range` over its characters, frame-relative — a TEXT node's x and width are compared from `textBox` only (the element's box is not the text's: a padded `<th>`, `<button>` or `<label>`, a fixed-width block); without it they are not measured |
 | `text` | the element's `textContent` — **even when it has child elements** (a `<th>` with a sort caret still has text; skipping it hid every such string) |
 | `fill` | for an SVG/vector node: `getComputedStyle(<path/rect/circle>).fill` — an SVG's colour is never `background-color` |
 | `placeholderText` / `placeholderColor` | for a placeholder spec (`placeholder: true`): `el.placeholder`, and `getComputedStyle(el, '::placeholder').color` or the stylesheet rule — `textContent` of an empty input is `""` |
@@ -226,6 +235,11 @@ the top level, so a report can never be read against a newer expectation than it
 - **Fully rounded**: a design radius of 500 on a 36px box and `rounded-full` (33554400px) are the same
   circle; the comparison clamps both to half the shorter side.
 - **A TEXT node's id on its `<th>`**: the cell's box includes padding; report `textBox`.
+- **A stroke drawn as a ring or an outline**: Tailwind `ring` / `inset-ring` is a `box-shadow: 0 0 0 Npx`
+  (v4 always computes five shadows, the unused ones transparent — find the ring by its content, never by
+  its position in the list), and `outline` with `outline-offset: -Npx` is an inside stroke. Report it as
+  `borderWidth` / `borderColor` with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign`
+  (`inside` | `outside`), as the probe does — `border-width: 0` alone is not a missing stroke.
 
 Also collect:
 

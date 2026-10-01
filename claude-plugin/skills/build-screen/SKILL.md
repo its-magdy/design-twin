@@ -460,8 +460,11 @@ Copy this checklist into your notes and keep it updated:
      from text. **Tag, don't comment**: an id in a `// 4210:1873` comment measures nothing. Ids may come
      from a lookup table (`data-dt-node={IDS.row}`) — the id string just has to appear in a listed file.
      A `.map()` over designed rows tags rendered row *i* with designed row *i*'s id where
-     one exists; a shell shared by two screens keeps the ids of the frame it was built from (verify
-     matches the other frame through the component path). Both follow the reuse rules; untagged sets
+     one exists; a shell shared by several screens may keep the ids of ONE frame (the one it was built
+     from) — verify recovers much of it on the other screens by component path, and by name path through
+     the aliases `--expect` builds from the sibling exports (re-run `--expect` after re-exporting a
+     sibling), but not repeated names, a shell used twice, or a hand-written probe; a per-screen id table
+     (each screen's own ids from its export) still measures more. Either is fine — never invent ids. Both follow the reuse rules; untagged sets
      are reported as tag coverage, never as "missing". On a web profile the Stop hook counts tags
      across every plan's `files[]`: it **blocks** when no file carries `data-dt-node` at all, warns
      below 50% coverage, and records `tagCoverage` in `verification.hook`. A project that genuinely

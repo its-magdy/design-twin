@@ -16,6 +16,9 @@ import { malformed, screenExport } from "./fixtures.ts";
 import type { NodeInput } from "./fixtures.ts";
 import { check, report } from "./assert.ts";
 import { buildPool, census, chooseMatch, claimOnce, isMatch, resolveFrame, shapeNode } from "../design-to-code/probe-match.ts";
+import * as PM from "../design-to-code/probe-match.ts";
+import * as PP from "../design-to-code/probe-page.ts";
+import * as VP from "../design-to-code/verify-probe.ts";
 import type { Match, MatchPool, NoMatch, ResolvedFrame } from "../design-to-code/probe-match.ts";
 import type { Candidate, CollectOutput, ElemFlags, MeasureResult, SizedCandidate } from "../design-to-code/probe-page.ts";
 import { errorKind, installHint, resolvePlaywright } from "../design-to-code/verify-probe.ts";
@@ -193,8 +196,8 @@ block("identity + census", () => {
   t("[census] a legacy 'data-dt-node' matchedBy counts as a tag match", () => compare(e, measured([probeNode("1:2", { padding: [8, 16, 8, 16] }, { matchedBy: "data-dt-node" })])).coverage.matchedBy?.tag === 1);
 });
 
-// ---- F-71 / position notes (severity unchanged)
-block("F-71 / position notes (severity unchanged)", () => {
+// ---- F-71 notes (severity unchanged); a position match caps the severity at low (D30)
+block("F-71 / position notes", () => {
   const e = exp();
   const onButton = compare(e, measured([probeNode("1:4", { fontWeight: 500, text: "New order", tag: "button" })]));
   const d = onButton.deltas.find((x) => x.nodeId === "1:4" && x.field === "font-weight");
@@ -203,7 +206,7 @@ block("F-71 / position notes (severity unchanged)", () => {
   t("[F-71] ... no note when the probe says it read the text run (textFrom)", () => onSpan.deltas.some((x) => x.field === "font-weight" && !/typography read from/.test(x.note || "")));
   const byPos = compare(e, measured([probeNode("1:2", { backgroundColor: "#000000", padding: [8, 16, 8, 16], tag: "div" }, { matchedBy: "position" })]));
   const pd = byPos.deltas.find((x) => x.nodeId === "1:2" && x.field === "background");
-  t("[position] a position-matched delta is marked low confidence, severity unchanged", () => !!pd && pd.severity === "high" && /low confidence/.test(pd.note || ""));
+  t("[position] a position-matched delta is capped at low (D30), its severity kept in cappedFrom, the note says why", () => !!pd && pd.severity === "low" && pd.cappedFrom === "high" && /capped at low: matched by position/.test(pd.note || ""));
 });
 
 // ---- measured ids the expectation does not know
@@ -608,6 +611,120 @@ console.log("verify-probe — the output contract (DT-23):");
     const c = census([{ matchedBy: "tag" }, { matchedBy: "tag" }, { matchedBy: "tag-shared-path" }, { matchedBy: "text" }, { matchedBy: "text-ordinal" }, { matchedBy: "position" }, { matchedBy: "frame" }], [{}, {}]);
     return c.tag === 2 && c.sharedPath === 1 && c.text === 1 && c.textOrdinal === 1 && c.position === 1 && c.frame === 1 && c.notMeasured === 2;
   });
+}
+
+// ---------------------------------------------------------------- group 11: tag-alias (D32), display (F-78), rings (D34), foreign tags (DT-47)
+console.log("verify-probe — group 11 (tag-alias, display, rings, foreign tags):");
+{
+  // read through namespaces, so this block RUNS (and fails cleanly) on a tree without them
+  const pmNs: Record<string, unknown> = { ...PM };
+  const canon: unknown = pmNs.CANONICAL_MATCHED_BY;
+  t("[D30] CANONICAL_MATCHED_BY is the rule order: tag, tag-shared-path, tag-alias, text, text-ordinal, position, frame", () =>
+    JSON.stringify(canon) === JSON.stringify(["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"]));
+  t("[F-78] STYLE_KEYS carries display (measured on every node; not a FIELDS key)", () => STYLE_KEYS.includes("display") && !FIELDS.some((f) => String(f.key) === "display"));
+
+  // D32: the shell built once and tagged with ANOTHER screen's ids
+  const sh = spec({ nodeId: "I60:5;8:1", type: "FRAME", aliases: ["I71:9;3:4"] });
+  const shellEl = cand({ dt: "I71:9;3:4", tag: "nav" });
+  const ma = chooseMatch(sh, pool([sh], { tagged: [shellEl] }), { position: false });
+  t("[D32] one visible element tagged with the spec's alias → matchedBy tag-alias, on that element, selector names the alias", () =>
+    matched(ma)?.matchedBy === "tag-alias" && matched(ma)?.cand === shellEl && matched(ma)?.selector === '[data-dt-node="I71:9;3:4"]' && matched(ma)?.selectorCount === 1);
+  const amb = spec({ nodeId: "I60:5;8:2", type: "FRAME", aliases: ["I71:9;3:5", "I72:1;3:5"] });
+  const mAmb = chooseMatch(amb, pool([amb], { tagged: [cand({ dt: "I71:9;3:5" }), cand({ dt: "I72:1;3:5" })] }), { position: false });
+  t("[D32] two visible elements carry its aliases → not measured, 'ambiguous', naming both and 'tag it'", () =>
+    !isMatch(mAmb) && /^ambiguous: 2 visible elements carry this node's aliases \(I71:9;3:5, I72:1;3:5\)/.test(whyOf(mAmb)) && /data-dt-node="I60:5;8:2"/.test(whyOf(mAmb)));
+  const two = spec({ nodeId: "I60:5;8:6", type: "FRAME", aliases: ["I71:9;3:6"] });
+  t("[D32] the same alias on two visible elements → ambiguous too", () => /^ambiguous: 2 visible/.test(whyOf(chooseMatch(two, pool([two], { tagged: [cand({ dt: "I71:9;3:6" }), cand({ dt: "I71:9;3:6" })] }), { position: false }))));
+  const hiddenOnly = spec({ nodeId: "I60:5;8:7", type: "FRAME", aliases: ["I71:9;3:7"] });
+  t("[D32] an alias only on a hidden element → no alias match (falls through to 'tag it')", () =>
+    /no data-dt-node and no text; tag it/.test(whyOf(chooseMatch(hiddenOnly, pool([hiddenOnly], { tagged: [cand({ dt: "I71:9;3:7", flags: { box: false, visible: false } })] }), { position: false }))));
+  const own = spec({ nodeId: "I60:5;8:3", type: "FRAME", aliases: ["60:9"] });
+  t("[D32] an alias that is one of the expectation's own ids is that node's, never this one's", () =>
+    !isMatch(chooseMatch(own, pool([own, spec({ nodeId: "60:9", type: "FRAME" })], { tagged: [cand({ dt: "60:9" })] }), { position: false })));
+  const both = spec({ nodeId: "I60:5;8:8", type: "FRAME", aliases: ["I71:9;3:8"] });
+  const ownEl = cand({ dt: "I60:5;8:8" });
+  t("[D32] its own tag wins over an alias (rule 1 before 2b)", () => matched(chooseMatch(both, pool([both], { tagged: [cand({ dt: "I71:9;3:8" }), ownEl] }), { position: false }))?.matchedBy === "tag");
+  const sfxSpec = spec({ nodeId: "I60:5;8:9", type: "FRAME", aliases: ["I71:9;3:9"] });
+  t("[D32] tag-shared-path comes before tag-alias", () =>
+    matched(chooseMatch(sfxSpec, pool([sfxSpec], { tagged: [cand({ dt: "I71:9;3:9" }), cand({ dt: "I80:1;8:9" })] }), { position: false }))?.matchedBy === "tag-shared-path");
+  const noAlias = spec({ nodeId: "I60:5;8:10", type: "FRAME" });
+  t("[D32] a spec without aliases (an older expectation) is unaffected", () => !isMatch(chooseMatch(noAlias, pool([noAlias], { tagged: [cand({ dt: "I71:9;3:4" })] }), { position: false })));
+  const shaped = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: {}, unmeasured: {} }, STYLE_KEYS) : null;
+  t("[D32] a tag-alias node says which alias it was matched by (note)", () => shaped?.matchedBy === "tag-alias" && /another screen's id .*I71:9;3:4/.test(shaped.note || ""));
+  t("[census] tag-alias has its own bucket (tagAlias)", () => {
+    const c: Record<string, number> = { ...census([{ matchedBy: "tag" }, { matchedBy: "tag-alias" }, { matchedBy: "tag-alias" }], []) };
+    return c.tagAlias === 2 && c.tag === 1 && c.sharedPath === 0;
+  });
+
+  // DT-47: foreign tags
+  const vpNs: Record<string, unknown> = { ...VP };
+  type ForeignFn = (tagged: Candidate[], expectedIds: ReadonlySet<string>, frameIds: ReadonlySet<string>) => { count: number; ids: Array<{ id: string; elements: number }> };
+  const isForeignFn = (f: unknown): f is ForeignFn => typeof f === "function";
+  const ft = vpNs.foreignTags;
+  const tags = [cand({ dt: "I99:9;7:7" }), cand({ dt: "60:2" }), cand({ dt: "60:1" }), cand({ dt: "88:2" }), cand({ dt: "88:2" }), cand({ dt: "88:1", flags: { box: false, visible: false } }), cand({ dt: "88:3", flags: { inClosedDialog: true } }), cand({ dt: "I71:9;3:4" })];
+  const fr = isForeignFn(ft) ? ft(tags, new Set(["60:2"]), new Set(["60:1"])) : null;
+  t("[DT-47] tagsNotInExpectation: visible tags that are no expected id and no frame id, sorted, with element counts", () =>
+    fr !== null && fr.count === 3 && JSON.stringify(fr.ids) === JSON.stringify([{ id: "88:2", elements: 2 }, { id: "I71:9;3:4", elements: 1 }, { id: "I99:9;7:7", elements: 1 }]));
+  const many = Array.from({ length: 60 }, (_, i) => cand({ dt: `90:${String(i).padStart(2, "0")}` }));
+  const fm = isForeignFn(ft) ? ft(many, new Set(), new Set()) : null;
+  t("[DT-47] … count is all of them, ids the first 50", () => fm !== null && fm.count === 60 && fm.ids.length === 50 && fm.ids[0]?.id === "90:00" && fm.ids[49]?.id === "90:49");
+  t("[DT-47] a measured file carrying tagsNotInExpectation is a VerifyMeasured; one without ids[] is not", () => { const rt: unknown = JSON.parse(JSON.stringify(measured([], { tagsNotInExpectation: { count: 1, ids: [{ id: "88:2", elements: 2 }] } }))); return isVerifyMeasured(rt) && !isVerifyMeasured({ nodes: [], tagsNotInExpectation: { count: 1 } }); });
+
+  // D34 + F-78: measureElements on computed-style strings exactly as Chromium writes them (facts §7). The page
+  // function runs here against a one-element stand-in document (the e2e suite runs it in a real chromium).
+  const ppNs: Record<string, unknown> = { ...PP };
+  type MeasureFn = (input: { frameRect: { x: number; y: number; w: number; h: number }; keys: readonly string[]; items: Array<{ nodeId: string; path: string; isText: boolean; isPaint: boolean; isPlaceholder: boolean; sharesWith: string | null }> }) => MeasureResult[];
+  const isMeasureFn = (f: unknown): f is MeasureFn => typeof f === "function";
+  const measureFn = ppNs.measureElements;
+  const PAD = "rgba(0, 0, 0, 0) 0px 0px 0px 0px";
+  const tw5 = (i: number, ring: string): string => [PAD, PAD, PAD, PAD, PAD].map((p, k) => (k === i ? ring : p)).join(", ");
+  const measureCss = (css: Record<string, string>): MeasureResult["styles"] => {
+    const computed: Record<string, string> = { "border-top-width": "0px", "border-right-width": "0px", "border-bottom-width": "0px", "border-left-width": "0px",
+      "box-shadow": "none", "outline-style": "none", "outline-width": "0px", "outline-offset": "0px", "outline-color": "rgb(0, 0, 0)", display: "block", color: "rgb(0, 0, 0)", ...css };
+    const el = { tagName: "DIV", childNodes: [], children: [], getBoundingClientRect: () => ({ x: 0, y: 0, width: 100, height: 40 }) };
+    Object.assign(globalThis, { document: { querySelector: () => el }, getComputedStyle: () => ({ getPropertyValue: (prop: string) => computed[prop] ?? "" }), scrollX: 0, scrollY: 0 });
+    if (!isMeasureFn(measureFn)) return {};
+    const [r] = measureFn({ frameRect: { x: 0, y: 0, w: 800, h: 600 }, keys: ["borderWidth", "borderColor", "display"], items: [{ nodeId: "60:30", path: "div", isText: false, isPaint: false, isPlaceholder: false, sharesWith: null }] });
+    return r ? r.styles : {};
+  };
+  const inset1 = measureCss({ "box-shadow": tw5(3, "rgb(204, 204, 204) 0px 0px 0px 1px inset") });
+  t("[D34] Tailwind `ring-1 ring-inset`: five shadows, the ring 4th, transparent padding → borderWidth 1, its colour, strokeFrom box-shadow, inside", () =>
+    inset1.borderWidth === 1 && inset1.borderColor === "rgb(204, 204, 204)" && inset1.strokeFrom === "box-shadow" && inset1.strokeAlign === "inside");
+  const insetRing = measureCss({ "box-shadow": tw5(1, "rgb(10, 20, 30) 0px 0px 0px 2px inset") });
+  t("[D34] `inset-ring-2` (the 2nd shadow) → borderWidth 2, inside — read by content, not by index", () => insetRing.borderWidth === 2 && insetRing.borderColor === "rgb(10, 20, 30)" && insetRing.strokeAlign === "inside");
+  const outset1 = measureCss({ "box-shadow": tw5(3, "rgb(204, 204, 204) 0px 0px 0px 1px") });
+  t("[D34] plain `ring-1` (no inset) → borderWidth 1, outside", () => outset1.borderWidth === 1 && outset1.strokeFrom === "box-shadow" && outset1.strokeAlign === "outside");
+  const twoRings = measureCss({ "box-shadow": tw5(1, "rgb(1, 2, 3) 0px 0px 0px 1px inset").replace(/rgba\(0, 0, 0, 0\) 0px 0px 0px 0px, rgba\(0, 0, 0, 0\) 0px 0px 0px 0px, rgba\(0, 0, 0, 0\) 0px 0px 0px 0px$/, `${PAD}, rgb(9, 9, 9) 0px 0px 0px 3px, ${PAD}`) });
+  t("[D34] two rings, one inset → the inset one", () => twoRings.borderWidth === 1 && twoRings.borderColor === "rgb(1, 2, 3)" && twoRings.strokeAlign === "inside");
+  const twoOuter = measureCss({ "box-shadow": `rgb(1, 2, 3) 0px 0px 0px 1px, ${PAD}, rgb(9, 9, 9) 0px 0px 0px 3px` });
+  t("[D34] two outside rings → none read: borderWidth 0, borderColor null, no strokeFrom", () => twoOuter.borderWidth === 0 && twoOuter.borderColor === null && twoOuter.strokeFrom === undefined);
+  const dup = measureCss({ "box-shadow": "rgb(1, 2, 3) 0px 0px 0px 1px inset, rgb(1, 2, 3) 0px 0px 0px 1px inset" });
+  t("[D34] the same ring twice counts once", () => dup.borderWidth === 1 && dup.strokeAlign === "inside");
+  const drop = measureCss({ "box-shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px" });
+  t("[D34] a drop shadow (offset/blur) is no ring", () => drop.borderWidth === 0 && drop.strokeFrom === undefined);
+  const pad5 = measureCss({ "box-shadow": [PAD, PAD, PAD, PAD, PAD].join(", ") });
+  t("[D34] five transparent paddings → no ring", () => pad5.borderWidth === 0 && pad5.borderColor === null);
+  const clearRing = measureCss({ "box-shadow": tw5(3, "rgba(0, 0, 0, 0) 0px 0px 0px 2px inset") });
+  t("[D34] a transparent ring with a spread (ring-transparent) draws nothing → no ring", () => clearRing.borderWidth === 0 && clearRing.strokeFrom === undefined);
+  const outlineIn = measureCss({ "outline-style": "solid", "outline-width": "1px", "outline-offset": "-1px", "outline-color": "rgb(118, 118, 128)" });
+  t("[D34] `outline-1 -outline-offset-1` → borderWidth 1, outline colour, strokeFrom outline, inside", () =>
+    outlineIn.borderWidth === 1 && outlineIn.borderColor === "rgb(118, 118, 128)" && outlineIn.strokeFrom === "outline" && outlineIn.strokeAlign === "inside");
+  const outlineOut = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "0px", "outline-color": "rgb(118, 118, 128)" });
+  t("[D34] an outline at offset 0 → outside", () => outlineOut.borderWidth === 2 && outlineOut.strokeAlign === "outside");
+  const centred = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "-1px", "outline-color": "rgb(118, 118, 128)" });
+  t("[D34] a centred outline (offset −w/2) is not read", () => centred.borderWidth === 0 && centred.strokeFrom === undefined);
+  const restingFocus = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "2px", "outline-color": "rgba(0, 0, 0, 0)" });
+  const transparentAt0 = measureCss({ "outline-style": "solid", "outline-width": "2px", "outline-offset": "0px", "outline-color": "rgba(0, 0, 0, 0)" });
+  const uaRing = measureCss({ "outline-style": "auto", "outline-width": "1px", "outline-offset": "0px", "outline-color": "rgb(16, 16, 16)" });
+  t("[D34] a transparent resting focus outline and the UA's `auto` focus ring are no stroke", () => restingFocus.borderWidth === 0 && transparentAt0.borderWidth === 0 && uaRing.borderWidth === 0 && uaRing.strokeFrom === undefined);
+  const border = measureCss({ "border-top-width": "1px", "border-right-width": "1px", "border-bottom-width": "1px", "border-left-width": "1px", "border-top-color": "rgb(5, 5, 5)", "box-shadow": tw5(3, "rgb(204, 204, 204) 0px 0px 0px 3px inset") });
+  t("[D34] a real border wins over a ring (the ring is read only when every border side is 0): strokeFrom border, no strokeAlign", () =>
+    border.borderWidth === 1 && border.borderColor === "rgb(5, 5, 5)" && border.strokeFrom === "border" && border.strokeAlign === undefined);
+  t("[F-78] display is the computed display", () => measureCss({ display: "inline" }).display === "inline" && inset1.display === "block");
+  const ringNode = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: { ...inset1 }, unmeasured: {} }, STYLE_KEYS) : null;
+  t("[D34] shapeNode carries strokeFrom/strokeAlign through to measured.json", () => ringNode?.styles?.strokeFrom === "box-shadow" && ringNode.styles.strokeAlign === "inside");
+  const noStroke = isMatch(ma) ? shapeNode(sh, ma, { nodeId: sh.nodeId, found: true, styles: {}, unmeasured: {} }, STYLE_KEYS) : null;
+  t("[D34] … and adds neither key (no null to explain) when the page read no stroke", () => noStroke !== null && noStroke.styles !== undefined && !("strokeFrom" in noStroke.styles) && !("strokeAlign" in noStroke.styles));
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

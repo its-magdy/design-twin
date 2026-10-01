@@ -142,6 +142,8 @@ export function isBuildIdentity(x: unknown): x is BuildIdentity {
 const isProbeFrame = (x: unknown): x is ProbeFrame => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 const isCountMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 const isNavigation = (x: unknown): boolean => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+const isTagsNotInExpectation = (x: unknown): boolean => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids)
+  && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 const isReasonMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "string");
 // The group-7 extras of a measured.json: optional, and a hand-written file may carry its own thing under
 // the same name (`probe: "handmade"`, `notMeasured: {}`). readableMeasured() drops a malformed one with a
@@ -156,6 +158,8 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) — the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} — read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {

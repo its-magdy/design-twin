@@ -219,6 +219,7 @@ function isBuildIdentity(x) {
 var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
+var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
@@ -229,7 +230,9 @@ var MEASURED_EXTRAS = [
   ["notMeasured", Array.isArray, "a list \u2014 the probe's reasons for unmatched nodes are not used"],
   // group 10: the run it belongs to (F-72) and the build it was served (DT-81)
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
-  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"]
+  ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
+  // group 11 (DT-47): the shipped probe's foreign tags
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -850,6 +853,9 @@ function colorKey(v) {
   return h === null ? null : h.length === 7 ? h + "ff" : h;
 }
 
+// design-to-code/probe-match.ts
+var CANONICAL_MATCHED_BY = ["tag", "tag-shared-path", "tag-alias", "text", "text-ordinal", "position", "frame"];
+
 // design-to-code/map-util.ts
 function getOrInit(m, k, init) {
   const have = m.get(k);
@@ -890,7 +896,13 @@ var TOLERANCE = {
   // Frame-relative x/y. Loose enough for sub-pixel layout and a glyph's side-bearing, tight enough that
   // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
   position: 2,
-  opacity: 0.02
+  opacity: 0.02,
+  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  stroke: 0.5,
+  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3
 };
 function normColor(v) {
   if (v == null) return null;
@@ -1003,6 +1015,8 @@ function framePosition(n, frame) {
   if (!frame || !num(frame.x) || !num(frame.y)) return null;
   const b = n.box || {}, rb = n.renderBox;
   if (n.type === "TEXT") {
+    const align = n.font && n.font.align;
+    if (num(b.x) && (n.autoResize === "width_and_height" || align === void 0 || align === "left")) return { x: r2(b.x - frame.x), source: "box" };
     if (rb && num(rb.x)) return { x: r2(rb.x - frame.x), source: "renderBox" };
     if (num(b.x)) return { x: r2(b.x - frame.x), source: "box" };
     return null;
@@ -1019,6 +1033,66 @@ var growsAlong = (c, dir) => {
   return lc.grow === 1 || lc.grow === true || (dir === "column" ? lc.heightMode === "fill" : lc.widthMode === "fill");
 };
 var PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+var PAD_SIDES = ["top", "right", "bottom", "left"];
+function wrapLines(mainSizes, crossSizes, inner, gap, crossGap) {
+  if (!num(inner) || !mainSizes.every(num) || !crossSizes.every(num)) return void 0;
+  const lines = [];
+  let used = -1;
+  mainSizes.forEach((w, i) => {
+    const h = crossSizes[i] ?? 0;
+    if (used >= 0 && used + gap + w <= inner + 1) {
+      used += gap + w;
+      lines[lines.length - 1] = Math.max(lines[lines.length - 1] ?? 0, h);
+    } else {
+      used = w;
+      lines.push(h);
+    }
+  });
+  return lines.reduce((s, v) => s + v, 0) + crossGap * Math.max(0, lines.length - 1);
+}
+function paddingNotShown(n, L, pad) {
+  const b = n.box;
+  if (!b || L.display === "grid" || L.mode === "absolute") return [];
+  const dir = L.flexDirection === "column" ? "column" : "row";
+  const flow = inFlowChildren(n);
+  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
+  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
+  const out = [];
+  for (const ax of ["x", "y"]) {
+    if (ax === "x" ? n.widthMode : n.heightMode) continue;
+    const size = ax === "x" ? b.w : b.h;
+    const [i0, i1] = ax === "x" ? [3, 1] : [0, 2];
+    const a = pad[i0] ?? 0, z = pad[i1] ?? 0;
+    if (!num(size) || a === 0 && z === 0) continue;
+    const sides = ax === "x" ? ["left", "right"] : ["top", "bottom"];
+    const main2 = dir === "row" === (ax === "x");
+    const dim = ax === "x" ? "width" : "height";
+    const sizes = flow.map((c) => c.box ? ax === "x" ? c.box.w : c.box.h : void 0);
+    const wraps = L.flexWrap === "wrap";
+    if (flow.length && sizes.every(num)) {
+      let content;
+      if (main2 && !wraps) content = sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
+      else if (!main2 && wraps) {
+        const mainSize = ax === "x" ? b.h : b.w;
+        const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
+        const mainSizes = flow.map((c) => c.box ? ax === "x" ? c.box.h : c.box.w : void 0);
+        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, typeof L.rowGap === "number" ? L.rowGap : 0) ?? Math.max(...sizes);
+      } else content = Math.max(...sizes);
+      if (a + z + content > size + 1) {
+        const al0 = main2 ? L.justifyContent : L.alignItems;
+        const al = al0 === "space-around" || al0 === "space-evenly" ? "center" : al0;
+        const lost = al === "center" ? sides : al === "flex-end" ? [sides[0] ?? "left"] : [sides[1] ?? "right"];
+        const shown = lost.filter((sd) => (pad[PAD_SIDES.indexOf(sd)] ?? 0) !== 0);
+        if (shown.length) out.push({ sides: shown, why: `padding ${a}+${z} plus its content (${r2(content)}px) exceeds the fixed ${size}px ${dim}, and the content is ${al === "center" ? "centred" : al === "flex-end" ? "end-aligned" : "start-aligned"} \u2014 the design cannot show the ${shown.join("/")} padding, so the build need not have it` });
+        continue;
+      }
+    }
+    const centred = main2 ? L.justifyContent === "center" : L.alignItems === "center" && !(wraps && L.alignContent === "space-between");
+    const grows = flow.some((c) => main2 ? growsAlong(c, dir) : (ax === "x" ? c.widthMode === "fill" : c.heightMode === "fill") || c.alignSelf === "stretch");
+    if (flow.length && centred && a === z && !grows && !(main2 && wraps)) out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) \u2014 the padding moves nothing, so the build need not have it` });
+  }
+  return out;
+}
 function expectNode(n, ctxOrPath) {
   return expectNodeRow(n, ctxOrPath).spec;
 }
@@ -1072,8 +1146,14 @@ function expectNodeRow(n, ctxOrPath) {
         return typeof v === "number" ? v : 0;
       });
     }
+    if (st.align) spec.strokeAlign = st.align;
   }
-  if (typeof n.radius === "number") spec.borderRadius = n.radius;
+  const drawsBox = paints.some((p) => p && p.visible !== false) || !!(st && (Array.isArray(st.colors) && st.colors.length > 0 || Array.isArray(st.paints) && st.paints.some((p) => p && p.visible !== false))) || Array.isArray(n.effects) && n.effects.length > 0 || n.clip === true;
+  if (n.radius !== void 0 && n.radius !== null && !drawsBox && n.type !== "TEXT") {
+    const r = n.radius;
+    const rv = typeof r === "number" ? r : { ...ifDefined("tl", r.tl), ...ifDefined("tr", r.tr), ...ifDefined("br", r.br), ...ifDefined("bl", r.bl) };
+    if (typeof r !== "number" || r !== 0) skip("border-radius", rv, "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) \u2014 its corners are invisible in the design too");
+  } else if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
     const corner = (v) => num(v) ? v : 0;
@@ -1095,19 +1175,47 @@ function expectNodeRow(n, ctxOrPath) {
     let pad = null;
     if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
     else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
-    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) spec.padding = pad.map((v) => typeof v === "number" ? v : 0);
+    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
+      const p4 = pad.map((v) => typeof v === "number" ? v : 0);
+      const skipped = [];
+      for (const ax of paddingNotShown(n, L, p4)) {
+        skipped.push(...ax.sides);
+        skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
+      }
+      if (skipped.length < 4) spec.padding = p4;
+      if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
+    }
   }
   if (n.box) {
-    if (typeof n.box.w === "number") spec.width = n.box.w;
-    if (typeof n.box.h === "number") spec.height = n.box.h;
+    if (n.type === "TEXT") {
+      const rb = n.renderBox;
+      const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
+      const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
+      const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= n.box.w - TOLERANCE.textInk);
+      const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+      if (isPlaceholder(n)) skip("width", n.box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+      else if (truncated) skip("width", n.box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
+      else if (n.autoResize === "width_and_height") spec.width = n.box.w;
+      else if (shadowed) skip("width", n.box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
+      else if (rb && num(rb.w)) {
+        spec.width = rb.w;
+        spec.widthFrom = "renderBox";
+        skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words \u2014 the build's text hugs them, so the ink width (renderBox) is compared instead`);
+      } else spec.width = n.box.w;
+    } else {
+      if (typeof n.box.w === "number") spec.width = n.box.w;
+      if (typeof n.box.h === "number") spec.height = n.box.h;
+      if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+    }
   }
-  const pos = framePosition(n, ctx.frame);
+  const pos = isPlaceholder(n) ? null : framePosition(n, ctx.frame);
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== void 0) spec.y = pos.y;
     spec.positionFrom = pos.source;
   }
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
+  else if (spec.text !== void 0 || spec.placeholderText !== void 0 || spec.color !== void 0 || spec.backgroundColor !== void 0 || spec.fill !== void 0 || spec.borderColor !== void 0 || spec.decorated) spec.opacity = 1;
   const own = drawnStateOf(n);
   if (own) {
     spec.drawnState = own.state;
@@ -1125,7 +1233,51 @@ function expectNodeRow(n, ctxOrPath) {
 function checkable(spec) {
   return ["text", "placeholderText", "fontSize", "color", "backgroundColor", "fill", "borderRadius", "radiusCorners", "gap", "padding", "borderColor", "x"].some((k) => spec[k] !== void 0);
 }
-var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x is its INK start (the export's renderBox) \u2014 measure it with a Range over the text and report it as textBox {x,w}. TEXT nodes carry no y (vertical ink depends on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
+var COORDINATES = "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} \u2014 a Range over its characters, never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its words; its x is the box's left edge for hug or left-aligned text, else the ink start. TEXT nodes carry no y and no height (vertical ink and line boxes depend on font metrics). Auto-layout children carry no position (the export does not state one); their parent's is compared.";
+function shellIndex(roots) {
+  const out = /* @__PURE__ */ new Map();
+  const index = (inst) => {
+    const m = /* @__PURE__ */ new Map();
+    const textOf = /* @__PURE__ */ new Map();
+    const noText = [];
+    const go = (n, p, chain, anc) => {
+      if (n.hidden) return [];
+      const mc = n.type === "INSTANCE" ? n.mainComponent : void 0;
+      const here = `${chain}/${n.type}${mc ? `[${mc.key ?? ""}|${mc.setName ?? mc.name}]` : ""}`;
+      const texts = n.type === "TEXT" && typeof n.text === "string" ? [n.text] : [];
+      for (const c of Array.isArray(n.children) ? n.children : []) if (c) texts.push(...go(c, p === "" && n === inst ? c.name : `${p}\0${c.name}`, here, [n, ...anc]));
+      const text = texts.join(" ").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+      textOf.set(n, text);
+      if (n.id) {
+        m.set(p, m.has(p) ? null : { id: n.id, sig: text ? `text:${text}` : `shape:${here}` });
+        if (!text) noText.push({ p, anc });
+      }
+      return texts;
+    };
+    go(inst, "", "", []);
+    for (const { p, anc } of noText) {
+      const e = m.get(p);
+      const owner = anc.find((a) => (textOf.get(a) ?? "") !== "");
+      if (e && owner) e.sig += `|in:${textOf.get(owner) ?? ""}`;
+    }
+    return m;
+  };
+  const walk = (n) => {
+    if (n.hidden) return;
+    const key = n.type === "INSTANCE" && n.mainComponent ? n.mainComponent.key : void 0;
+    if (key) {
+      getOrInit(out, key, () => []).push(index(n));
+      return;
+    }
+    for (const c of Array.isArray(n.children) ? n.children : []) if (c) walk(c);
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+var idSuffix = (id) => {
+  const i = id.indexOf(";");
+  return i === -1 ? null : id.slice(i + 1);
+};
 function rowSignature(n) {
   const mc = n.type === "INSTANCE" ? n.mainComponent : void 0;
   if (mc) return `I:${mc.setKey || mc.key || mc.setName || mc.name || ""}`;
@@ -1179,6 +1331,7 @@ function buildExpectation(docs, opts) {
   const rootsByFile = /* @__PURE__ */ new Map();
   const interactionFile = /* @__PURE__ */ new Map();
   const roots = [];
+  const rootNodesByFile = /* @__PURE__ */ new Map();
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
     const sf = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : void 0;
@@ -1191,6 +1344,7 @@ function buildExpectation(docs, opts) {
         const names = getOrInit(getOrInit(rootsByFile, sourceFile ?? "", () => /* @__PURE__ */ new Map()), root.id, () => /* @__PURE__ */ new Set());
         for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : void 0]) if (typeof n === "string" && n) names.add(n);
       }
+      getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
       if (!reference && root.reference) reference = root.reference;
       const b = root.box || {};
       const frame = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
@@ -1228,6 +1382,16 @@ function buildExpectation(docs, opts) {
         }
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
+        else {
+          const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
+          if (g11.length) gaps.push({
+            nodeId: n.id,
+            name: n.name,
+            field: "node",
+            value: null,
+            why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) \u2014 its radius was its only stated value" : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})`
+          });
+        }
         notComparable.push(...gaps);
         if (n.type === "INSTANCE" && n.mainComponent) {
           instances.push({
@@ -1264,7 +1428,8 @@ function buildExpectation(docs, opts) {
   for (const r of roots) markRepeatedText(r, specById);
   const index = opts && opts.index;
   const unnamedIds = idsByFile.get("");
-  const candidatesFor = (file) => {
+  const candidatesFor = (file) => candidatesOf(file)?.rows ?? null;
+  function candidatesOf(file) {
     if (!index) return null;
     const own = rootsByFile.get(file);
     const sameName = (l) => {
@@ -1277,11 +1442,11 @@ function buildExpectation(docs, opts) {
     if (f === "") {
       const named = new Set(covering.map((l) => l.sourceFile).filter((x) => !!x));
       if (named.size > 1) return null;
-      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return index.layers;
+      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
       f = [...named][0] ?? "";
     }
-    return index.layers.filter((l) => !l.sourceFile || l.sourceFile === f);
-  };
+    return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
+  }
   for (const row of interactions) {
     const file = interactionFile.get(row);
     if (!row.destinationId || file === void 0 || String(row.action).toLowerCase() === "change_to") continue;
@@ -1289,6 +1454,48 @@ function buildExpectation(docs, opts) {
     if (!known || known.has(row.destinationId) || unnamedIds && unnamedIds.has(row.destinationId)) continue;
     const candidates = candidatesFor(file);
     if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  }
+  const readSibling = opts && opts.readSibling;
+  if (index && readSibling) {
+    const ownRootIds = new Set(roots.map((r) => r.id));
+    const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x) => x !== null));
+    const aliases = /* @__PURE__ */ new Map();
+    for (const [file, fileRoots] of rootNodesByFile) {
+      const co = candidatesOf(file);
+      if (!co) continue;
+      const cands = co.rows;
+      const own = shellIndex(fileRoots);
+      if (!own.size) continue;
+      const read = /* @__PURE__ */ new Set();
+      for (const row of cands) {
+        if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
+        read.add(row.file);
+        const sib = readSibling(row.file);
+        if (!sib) continue;
+        const sx = screenExportOf(sib);
+        const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
+        if (co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
+        const theirs = shellIndex(screenRoots(sib));
+        for (const [key, mine] of own) {
+          const other = theirs.get(key);
+          const a = mine.length === 1 ? mine[0] : void 0, b = other && other.length === 1 ? other[0] : void 0;
+          if (!a || !b) continue;
+          for (const [p, mine1] of a) {
+            const their1 = b.get(p);
+            if (!mine1 || !their1 || mine1.sig !== their1.sig) continue;
+            const id = mine1.id, sid = their1.id;
+            if (sid === id) continue;
+            const s2 = idSuffix(sid);
+            if (s2 !== null && specSuffixes.has(s2)) continue;
+            getOrInit(aliases, id, () => /* @__PURE__ */ new Set()).add(sid);
+          }
+        }
+      }
+    }
+    for (const [id, set] of aliases) {
+      const sp = specById.get(id);
+      if (sp) sp.aliases = [...set].sort();
+    }
   }
   const f0 = frames[0] || {};
   const rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip) });
@@ -1360,7 +1567,10 @@ var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([
   "display",
   "transform",
   "rotate",
-  "visible"
+  "visible",
+  // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
+  "strokeFrom",
+  "strokeAlign"
 ]);
 var KEY_HINTS = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap" };
 var FIELDS = [
@@ -1374,7 +1584,7 @@ var FIELDS = [
   { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
   { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
   { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.padding, label: "border-width", unit: "px" },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
   { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
   { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
   { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
@@ -1383,7 +1593,7 @@ var FIELDS = [
   { key: "y", tol: TOLERANCE.position, label: "y (frame-relative)", unit: "px", box: true },
   { key: "opacity", tol: TOLERANCE.opacity, label: "opacity" }
 ];
-var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText"];
+var STYLE_KEYS = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 var STYLE_KEY_SHAPE = {
   borderRadius: "number | [tl,tr,br,bl]",
   padding: "[t,r,b,l]",
@@ -1391,7 +1601,8 @@ var STYLE_KEY_SHAPE = {
   textBox: "{x,w} of a Range over the text",
   placeholderText: "el.placeholder",
   placeholderColor: "the ::placeholder colour",
-  tag: "tagName, lower-case"
+  tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display"
 };
 var MEASURED_KEYS_DOC = {
   "nodes[].nodeId": "the Figma node id the measurement is FOR (from data-dt-node, or matched by text/position)",
@@ -1399,7 +1610,9 @@ var MEASURED_KEYS_DOC = {
   "nodes[].styles": `computed values, EVERY key on every node \u2014 lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) \u2014 (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null \u2014 a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill \u2014 never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required when the id sits on a padded container (<th>, <button>, <label>)",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative \u2014 required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display \u2014 a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
   "nodes[].styles.gapVisual": "the rendered distance between consecutive children \u2014 required for a <table> (border-spacing, not gap)",
   "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
   "nodes[].styles.tag": "the element's tagName, lower-case",
@@ -1448,11 +1661,11 @@ function compareField(f, want, got) {
   const delta = Math.abs(a - b);
   return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
-function comparePadding(want, got) {
+function comparePadding(want, got, skip) {
   if (!Array.isArray(want)) return null;
   const w = want.map(Number);
   if (w.some(Number.isNaN)) return null;
-  const worst = Math.max(...w.map((v, i) => Math.abs(v - (got[i] ?? 0))));
+  const worst = Math.max(0, ...w.map((v, i) => skip && skip.includes(PAD_SIDES[i] ?? "") ? 0 : Math.abs(v - (got[i] ?? 0))));
   return worst <= TOLERANCE.padding ? null : { want: w, got: [...got], delta: Number(worst.toFixed(3)) };
 }
 function radiusCorners(v) {
@@ -1460,6 +1673,12 @@ function radiusCorners(v) {
 }
 var clampRadius = (r, w, h) => num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r;
 var TABLE_TAGS = /* @__PURE__ */ new Set(["table", "thead", "tbody", "tfoot", "tr"]);
+var ROW_TAGS = /* @__PURE__ */ new Set(["tr", "thead", "tbody", "tfoot"]);
+var ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius \u2014 report the corner cells' radii under this id, or tag the cells";
+var INLINE_BOX_FIELDS = /* @__PURE__ */ new Set(["width", "height", "x", "y", "borderRadius"]);
+var inlineWhy = (tag) => `the id sits on an inline <${tag || "element"}>, whose box is its text's \u2014 tag the element that owns the box`;
+var cssBorderWidth = (d) => d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d);
+var normText = (t) => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 var CONTAINER_TAGS = /* @__PURE__ */ new Set(["th", "td", "tr", "button", "label", "li", "a", "section", "article", "header", "footer", "nav", "table", "input"]);
 var LEAF_TAGS = /* @__PURE__ */ new Set(["input", "textarea", "select", "img", "svg", "path", "video", "canvas"]);
 var CONTAINER_TYPES = /* @__PURE__ */ new Set(["FRAME", "INSTANCE", "COMPONENT", "GROUP", "SECTION"]);
@@ -1473,7 +1692,10 @@ var LIMITS = [
   "A rotation applied with the CSS `rotate` property reads `transform: none` (Tailwind v4 `rotate-180`) \u2014 read `rotate` too before calling a rotation missing (finding 198).",
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` \u2014 compare the asset file instead.",
   'Numbers are read as px: a number or a px string ("20px"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).',
-  "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared."
+  "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
+  "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px \u2014 an empirical bound (field runs: \u22120.6\u2026+2.4px); heavy italics or overhanging glyphs may exceed it.",
+  "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
+  "Severity follows the match (D30/D31): a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). D39: an open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap \u2014 a match-confidence cap stays."
 ];
 function fieldTolerance(label) {
   const f = FIELDS.find((x) => x.label === label);
@@ -1481,6 +1703,8 @@ function fieldTolerance(label) {
   if (label === "padding") return TOLERANCE.padding;
   if (label.startsWith("border-radius (")) return TOLERANCE.radius;
   if (label === "placement") return TOLERANCE.position;
+  if (label === "width (text ink)") return TOLERANCE.textInk;
+  if (label === "match (size)") return TOLERANCE.size;
   return null;
 }
 var fieldBase = (f) => f.replace(/\s*\(.*\)$/, "");
@@ -1492,6 +1716,18 @@ var INTEGRITY_PHRASES = {
   unrecorded: "no status of that run records it"
 };
 var isIntegrityReason = (w) => Object.values(INTEGRITY_PHRASES).some((p) => w.includes(p));
+function excludedNow(d, nc) {
+  const rows = nc.filter((g) => g.nodeId === d.nodeId && fieldBase(g.field) === fieldBase(d.field));
+  if (!rows.length) return void 0;
+  if (d.field !== "padding") return rows[0];
+  const skipped = new Set(rows.flatMap((g) => (/^padding \((.*)\)$/.exec(g.field)?.[1] ?? "").split("/")));
+  const e = Array.isArray(d.expected) ? d.expected : [], a = Array.isArray(d.actual) ? d.actual : [];
+  const differs = PAD_SIDES.filter((_, i) => {
+    const x = e[i], y = a[i];
+    return typeof x === "number" && typeof y === "number" && Math.abs(x - y) > TOLERANCE.padding;
+  });
+  return differs.length && differs.every((sd) => skipped.has(sd)) ? rows[0] : void 0;
+}
 function deltaChanges(prev, cur, now) {
   const keyOf = (d) => typeof d.nodeId === "string" && typeof d.field === "string" ? `${d.nodeId}\0${d.field}` : null;
   const curByKey = /* @__PURE__ */ new Map();
@@ -1544,7 +1780,7 @@ function deltaChanges(prev, cur, now) {
       nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: derived.why });
       continue;
     }
-    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d));
+    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d)) ?? excludedNow(d, now.notComparable || []);
     if (method) {
       nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: method.why });
       continue;
@@ -1575,16 +1811,19 @@ var paintOf = (s) => PAINT_KEYS.filter((k) => s[k] !== void 0);
 var MATCH_BUCKET = {
   tag: "tag",
   "data-dt-node": "tag",
+  id: "tag",
   "tag-shared-path": "tagSharedPath",
+  "tag-alias": "tagAlias",
   text: "text",
   "text-ordinal": "textOrdinal",
   position: "position",
   frame: "frame"
 };
-var MATCH_BUCKETS = ["tag", "tagSharedPath", "text", "textOrdinal", "position", "frame", "sharedComponentPath", "other", "unstated"];
+var MATCH_BUCKETS = ["tag", "tagSharedPath", "tagAlias", "text", "textOrdinal", "position", "frame", "sharedComponentPath", "other", "unstated"];
 var MATCH_LABEL = {
   tag: "tag",
   tagSharedPath: "shared path",
+  tagAlias: "alias",
   text: "text",
   textOrdinal: "ordinal",
   position: "position",
@@ -1593,6 +1832,10 @@ var MATCH_LABEL = {
   other: "other",
   unstated: "unstated"
 };
+var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
+var MATCH_SYNONYM = { "data-dt-node": "tag", id: "tag" };
+var NO_CAP = /* @__PURE__ */ new Set(["tag", "tag-shared-path", "text", "frame"]);
+var MEDIUM_CAP = /* @__PURE__ */ new Set(["text-ordinal", "tag-alias"]);
 var TYPO_FIELDS = /* @__PURE__ */ new Set(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
 var SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 var NEVER_MEASURED_HEADLINE_MIN = 2;
@@ -1618,7 +1861,8 @@ var MEASURED_TOP_KEYS = {
   matchedByCensus: true,
   notes: true,
   runId: true,
-  build: true
+  build: true,
+  tagsNotInExpectation: true
 };
 var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
 var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
@@ -1713,8 +1957,9 @@ function compare(expectation, measured, opts) {
   };
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0, fieldsReportedNull = 0;
   const matchedByCensus = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
-  const positionMatched = /* @__PURE__ */ new Set();
   const typographyOn = /* @__PURE__ */ new Map();
+  const matchKind = /* @__PURE__ */ new Map();
+  const matchCapOf = /* @__PURE__ */ new Map();
   const absentGaps = /* @__PURE__ */ new Set();
   const placementGaps = /* @__PURE__ */ new Map();
   const gap = (spec, field, why, absent = false) => {
@@ -1776,9 +2021,9 @@ function compare(expectation, measured, opts) {
     }
     nodesMeasured++;
     const rawMatch = typeof m.matchedBy === "string" ? m.matchedBy : "";
+    matchKind.set(String(spec.nodeId), matchedBy && matchedBy.startsWith("shared-component-path") ? "shared-component-path" : rawMatch);
     const bucket = matchedBy && matchedBy.startsWith("shared-component-path") ? "sharedComponentPath" : rawMatch === "" ? "unstated" : MATCH_BUCKET[rawMatch] ?? "other";
     matchedByCensus[bucket] = (matchedByCensus[bucket] ?? 0) + 1;
-    if (/^position/i.test(rawMatch)) positionMatched.add(String(spec.nodeId));
     const base = m.styles || m;
     let got = base, measuredIn = "rest";
     const state = spec.drawnState;
@@ -1818,14 +2063,20 @@ function compare(expectation, measured, opts) {
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
     const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
     const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) \u2014 tag and measure the container` : "";
-    for (const f of FIELDS) {
-      const want0 = spec[f.key];
+    const rowTag = ROW_TAGS.has(tagLc);
+    const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
+    const textDiffers = isText && spec.text !== void 0 && typeof got.text === "string" && normText(spec.text) !== normText(got.text);
+    const firstDelta = deltas.length;
+    for (const f0 of FIELDS) {
+      const want0 = spec[f0.key];
       if (want0 === void 0) continue;
+      const f = isText && f0.key === "width" && spec.widthFrom === "renderBox" ? { ...f0, label: "width (text ink)", tol: TOLERANCE.textInk } : f0;
       let val = got[f.key];
       let nullKeys = [f.key];
       let present = val !== void 0;
-      if (isText && tb && (f.key === "x" || f.key === "width")) {
-        val = f.key === "x" ? tb.x : tb.w;
+      const textXW = isText && (f.key === "x" || f.key === "width");
+      if (textXW) {
+        val = tb ? f.key === "x" ? tb.x : tb.w : got.textBox === null ? null : void 0;
         present = val !== void 0;
         nullKeys = ["textBox", f.key];
       }
@@ -1839,7 +2090,7 @@ function compare(expectation, measured, opts) {
         continue;
       }
       tally(f.key, present);
-      if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) {
+      if (state && measuredIn === "rest" && (spec.drawnStateOwn && f.colour || f.key === "opacity")) {
         gap(spec, f.label, stateWhy);
         continue;
       }
@@ -1847,7 +2098,23 @@ function compare(expectation, measured, opts) {
         gap(spec, f.label, leafWhy);
         continue;
       }
-      if (isText && f.box && container && !tb) {
+      if (inline && INLINE_BOX_FIELDS.has(f.key)) {
+        gap(spec, f.label, inlineWhy(tagLc));
+        continue;
+      }
+      if (f.key === "borderRadius" && rowTag) {
+        gap(spec, f.label, ROW_RADIUS_WHY);
+        continue;
+      }
+      if (textXW && textDiffers) {
+        gap(spec, f.label, "the text differs from the design's, so its width (and a centred or right-aligned start) does too \u2014 compared once the copy matches");
+        continue;
+      }
+      if (textXW && val === void 0) {
+        gap(spec, f.label, "report textBox {x,w} \u2014 a Range over the text's characters; a TEXT's x/width are never read off its element's box", true);
+        continue;
+      }
+      if (isText && f.box && container && !tb && !textXW) {
         if (got.textBox === null && f.key !== "height") {
           gapNull(f.label, "textBox");
           continue;
@@ -1901,6 +2168,15 @@ function compare(expectation, measured, opts) {
       }
       fieldsChecked++;
       let want = want0, have = val;
+      let strokeNote;
+      if (f.key === "borderWidth" && typeof want0 === "number") {
+        const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
+        if (!ring && cssBorderWidth(want0) !== want0) {
+          want = cssBorderWidth(want0);
+          strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`;
+        }
+        if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign) strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
+      }
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
         if (!c) {
@@ -1926,12 +2202,17 @@ function compare(expectation, measured, opts) {
           ...ifDefined("token", tokenFor(spec, f.key)),
           ...measuredIn !== "rest" ? { measuredIn } : {},
           ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0),
-          ...f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` } : {}
+          ...f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}\xD7${spec.height} box draws ${want}` } : {},
+          ...ifDefined("note", strokeNote)
         });
       }
     }
     if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
-    else if (spec.radiusCorners) {
+    else if (spec.radiusCorners && inline) gap(spec, "border-radius", inlineWhy(tagLc));
+    else if (spec.radiusCorners && rowTag) {
+      tally("borderRadius", got.borderRadius !== void 0);
+      gap(spec, "border-radius", ROW_RADIUS_WHY);
+    } else if (spec.radiusCorners) {
       const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
       tally("borderRadius", got.borderRadius !== void 0);
@@ -1956,18 +2237,18 @@ function compare(expectation, measured, opts) {
       if (got.padding === void 0) gap(spec, "padding", "the probe did not report this property", true);
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells \u2014 report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
+      else if (inline) gap(spec, "padding", inlineWhy(tagLc));
       else if (got.padding === null || Array.isArray(got.padding) && got.padding.some((v) => v === null)) gapNull("padding", "padding");
       else if (!pad) gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as px padding [t,r,b,l]`);
       else if (pad.some((v) => v < 0)) gap(spec, "padding", `${JSON.stringify(got.padding)} is impossible for padding (CSS cannot make it negative) \u2014 a measuring artefact; not compared`);
       else {
         fieldsChecked++;
-        const bad = comparePadding(spec.padding, pad);
+        const bad = comparePadding(spec.padding, pad, spec.paddingSkip);
         const allZero = pad.every((v) => v === 0);
-        if (bad) push(spec, "padding", "medium", bad, {
-          unit: "px",
-          ...ifDefined("token", tokenFor(spec, "padding")),
-          ...allZero && !got.tag ? { note: "measured 0 on every side \u2014 if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" } : {}
-        });
+        const skipNote = spec.paddingSkip && spec.paddingSkip.length ? `${spec.paddingSkip.join("/")} not compared (the design cannot show that padding \u2014 see notComparable)` : void 0;
+        const zeroNote = allZero && !got.tag ? "measured 0 on every side \u2014 if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" : void 0;
+        const padNote = [zeroNote, skipNote].filter((x) => !!x).join("; ");
+        if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")), ...padNote ? { note: padNote } : {} });
       }
     }
     if (spec.placeholderText !== void 0) {
@@ -2067,6 +2348,58 @@ function compare(expectation, measured, opts) {
         });
       }
     }
+    const own = deltas.slice(firstDelta);
+    let sizeRow;
+    if (!isText && !onLeaf && !inline) {
+      const ew = num(spec.width) ? spec.width : null, eh = num(spec.height) ? spec.height : null;
+      const mw = cssPx(got.width), mh = cssPx(got.height);
+      const off = (e, m2) => e !== null && m2 !== null && Math.abs(m2 - e) >= 8 && (Math.min(e, m2) <= 0 || Math.max(m2 / e, e / m2) >= 2);
+      const frameRoot = spec.nodeId === frameOf(spec).nodeId;
+      const growOnlyW = spec.sizing?.w === "hug" && ew !== null && mw !== null && mw > ew;
+      const growOnlyH = (spec.sizing?.h === "hug" || frameRoot) && eh !== null && mh !== null && mh > eh;
+      const rawW = off(ew, mw), rawH = off(eh, mh);
+      if (rawW && (!growOnlyW || rawH) || rawH && (!growOnlyH || rawW)) {
+        const dist = Math.max(ew !== null && mw !== null ? Math.abs(mw - ew) : 0, eh !== null && mh !== null ? Math.abs(mh - eh) : 0);
+        sizeRow = {
+          severity: "medium",
+          nodeId: spec.nodeId,
+          name: spec.name,
+          ...ifDefined("path", spec.path),
+          field: "match (size)",
+          expected: [ew, eh],
+          actual: [mw, mh],
+          delta: r2(dist),
+          unit: "px",
+          ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || void 0 : void 0),
+          note: `the matched element is far from the design's size \u2014 likely the wrong element (a wrapper, a page root, a neighbour); this node's other deltas are capped at low. Tag the element the design means, or accept the match (verify-screen --accept --field "match (size)")`
+        };
+        deltas.push(sizeRow);
+      }
+    }
+    const canon = MATCH_SYNONYM[rawMatch] ?? rawMatch;
+    const cap = rawMatch === "" || NO_CAP.has(canon) ? null : MEDIUM_CAP.has(canon) ? "medium" : "low";
+    if (cap) matchCapOf.set(String(spec.nodeId), cap);
+    for (const d of [...own, ...sizeRow ? [sizeRow] : []]) {
+      let sev = d.severity;
+      const why = [];
+      const by = [];
+      if (sizeRow && d !== sizeRow && SEVERITY_RANK[sev] < SEVERITY_RANK.low) {
+        sev = "low";
+        by.push("size");
+        why.push("capped at low: the matched element's size is far from the design's (see match (size))");
+      }
+      if (cap && SEVERITY_RANK[d.severity] < SEVERITY_RANK[cap]) by.push("match");
+      if (cap && SEVERITY_RANK[sev] < SEVERITY_RANK[cap]) {
+        sev = cap;
+        why.push(`capped at ${cap}: matched by ${rawMatch}${canon === rawMatch && !CANONICAL_MATCH.has(canon) ? " (not a canonical matchedBy)" : ""}, not by its data-dt-node tag \u2014 the element measured may not be the one the design means`);
+      }
+      if (sev !== d.severity) {
+        d.cappedFrom = d.severity;
+        d.cappedBy = by;
+        d.severity = sev;
+        d.note = d.note ? `${d.note}; ${why.join("; ")}` : why.join("; ");
+      }
+    }
   }
   const addNote = (d, note) => {
     d.note = d.note ? `${d.note}; ${note}` : note;
@@ -2075,7 +2408,6 @@ function compare(expectation, measured, opts) {
   for (const d of deltas) {
     const tag = typographyOn.get(String(d.nodeId));
     if (tag && typoLabels.has(d.field)) addNote(d, `typography read from a <${tag}>, not the text run \u2014 if the text sits in a child element, measure that element (the shipped probe does, and says textFrom)`);
-    if (positionMatched.has(String(d.nodeId))) addNote(d, "low confidence: this node was matched by position, not by its data-dt-node tag or its text \u2014 the element measured may not be the one the design means");
   }
   const knownIds = /* @__PURE__ */ new Set([...expectedIds, ...hiddenSet, ...[expectation.frame, ...expectation.frames || []].map((f) => f && f.nodeId).filter((id) => typeof id === "string")]);
   for (const id of expectedIds) {
@@ -2083,6 +2415,25 @@ function compare(expectation, measured, opts) {
     if (alt) knownIds.add(alt);
   }
   const measuredIdsNotInExpectation = [...byId.keys()].filter((id) => !knownIds.has(id));
+  const tniRaw = measured.tagsNotInExpectation;
+  const tni = isJsonObject(tniRaw) && typeof tniRaw.count === "number" && Array.isArray(tniRaw.ids) ? { count: tniRaw.count, ids: tniRaw.ids.filter(isJsonObject).map((r) => r.id).filter((x) => typeof x === "string") } : null;
+  const foreignListed = [.../* @__PURE__ */ new Set([...tni ? tni.ids : [], ...measuredIdsNotInExpectation])];
+  const foreignTotal = (tni ? Math.max(tni.count, tni.ids.length) : 0) + measuredIdsNotInExpectation.filter((id) => !(tni && tni.ids.includes(id))).length;
+  const expectedSuffixes = new Set([...expectedIds].map(idSuffix).filter((x) => x !== null));
+  const aliasIds = new Set(specs.flatMap((sp) => sp.aliases || []));
+  const foreignClass = (id) => {
+    const sf = idSuffix(id);
+    return sf !== null && expectedSuffixes.has(sf) ? "prefixDrift" : aliasIds.has(id) ? "alias" : "unknown";
+  };
+  const prefixDrift = foreignListed.filter((id) => foreignClass(id) === "prefixDrift").length;
+  const aliasTags = foreignListed.filter((id) => foreignClass(id) === "alias").length;
+  const foreignTags = foreignTotal > 0 ? {
+    total: foreignTotal,
+    prefixDrift,
+    alias: aliasTags,
+    unknown: foreignTotal - prefixDrift - aliasTags,
+    sample: [...foreignListed.filter((id) => foreignClass(id) === "unknown"), ...foreignListed.filter((id) => foreignClass(id) !== "unknown")].slice(0, 5)
+  } : void 0;
   const fieldsNeverMeasured = [];
   for (const [key, c] of census) {
     if (FIELDS.some((f) => f.key === key && f.optional)) continue;
@@ -2113,6 +2464,38 @@ function compare(expectation, measured, opts) {
     }
     untaggedInstanceSets.push(v);
   }
+  const visibleInstances = (expectation.instances || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const instanceById = new Map(visibleInstances.map((i) => [String(i.nodeId), i]));
+  const outermostOf = (id) => {
+    const outer = id.startsWith("I") && id.includes(";") ? id.slice(1, id.indexOf(";")) : id;
+    return instanceById.has(outer) ? outer : null;
+  };
+  const foldedIds = new Set(folded.map((f) => f.nodeId));
+  const shellGroups = /* @__PURE__ */ new Map();
+  for (const sp of specs) {
+    const id = String(sp.nodeId);
+    const outer = outermostOf(id);
+    if (!outer || foldedIds.has(id)) continue;
+    const g = getOrInit(shellGroups, outer, () => ({ expected: 0, measured: 0, viaOther: false }));
+    g.expected++;
+    const how = matchKind.get(id);
+    if (how !== void 0) g.measured++;
+    if (how === "tag-shared-path" || how === "tag-alias" || how === "shared-component-path") g.viaOther = true;
+  }
+  const shellIds = new Set([...shellGroups].filter(([id, g]) => g.viaOther || anchors[id] && anchors[id].shared === true).map(([id]) => id));
+  const sharedShell = shellIds.size ? (() => {
+    const rows = [...shellIds].map((id) => {
+      const i = instanceById.get(id);
+      const g = shellGroups.get(id);
+      return { nodeId: id, name: i ? i.name : id, ...ifDefined("setName", i && i.setName), expected: g ? g.expected : 0, measured: g ? g.measured : 0 };
+    });
+    return { instances: rows, expected: rows.reduce((a, r) => a + r.expected, 0), measured: rows.reduce((a, r) => a + r.measured, 0) };
+  })() : void 0;
+  const untaggedInstanceSetsInShell = untaggedInstanceSets.filter((v) => shellIds.size > 0 && v.nodeIds.every((id) => {
+    const o = outermostOf(String(id));
+    return o !== null && shellIds.has(o);
+  }));
+  const untaggedOnScreen = untaggedInstanceSets.filter((v) => !untaggedInstanceSetsInShell.includes(v));
   const componentsAbsent = [];
   for (const c of comps.filter((c2) => c2 && c2.present === false)) {
     const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || c.nodeId !== void 0 && v.nodeIds.includes(c.nodeId));
@@ -2132,6 +2515,7 @@ function compare(expectation, measured, opts) {
   }
   const exportSha = expectation.exportContentSha256;
   const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
+  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0) inputNotes.push("expectation written by an older verify-screen (before group 11: TEXT box widths, no aliases) \u2014 re-run --expect");
   const reopened = [];
   const unused = [];
   const descopeRows = [];
@@ -2202,7 +2586,8 @@ function compare(expectation, measured, opts) {
     const cands = deltas.filter((d2) => d2.nodeId === w.nodeId && d2.field === w.field && !d2.accepted);
     if (!cands.length) {
       const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round \u2014 only a measured delta can be accepted" : void 0;
-      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? "no such delta this round \u2014 fixed? drop the waiver" });
+      const inkNow = w.field === "width" && (deltas.some((d2) => d2.nodeId === w.nodeId && d2.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox")) ? "the field is now 'width (text ink)' (group 11) \u2014 re-accept against the new report" : void 0;
+      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round \u2014 fixed? drop the waiver" });
       return;
     }
     if (!exportSha || w.exportContentSha256 !== exportSha) {
@@ -2223,6 +2608,20 @@ function compare(expectation, measured, opts) {
       why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}`
     });
   });
+  for (const sz of deltas.filter((d) => d.field === "match (size)" && d.accepted)) {
+    const mcap = matchCapOf.get(String(sz.nodeId));
+    for (const d of deltas) {
+      if (d === sz || d.nodeId !== sz.nodeId || !d.cappedFrom || !(d.cappedBy || []).includes("size")) continue;
+      const orig = d.cappedFrom;
+      const sev = mcap && SEVERITY_RANK[orig] < SEVERITY_RANK[mcap] ? mcap : orig;
+      d.severity = sev;
+      if (sev === orig) {
+        delete d.cappedFrom;
+        delete d.cappedBy;
+      } else d.cappedBy = ["match"];
+      d.note = `${d.note ? `${d.note}; ` : ""}size cap lifted: the owner accepted this element (waiver on match (size))${sev !== orig ? ` \u2014 still capped at ${sev} by how it was matched` : ""}`;
+    }
+  }
   const specOf = new Map(specs.map((sp) => [String(sp.nodeId), sp]));
   const placed = /* @__PURE__ */ new Map();
   for (const d of deltas) if (d.field === "placement") placed.set(String(d.nodeId), d);
@@ -2292,6 +2691,8 @@ function compare(expectation, measured, opts) {
   }
   const integrity = [...reasons];
   const integrityFailed = integrity.length > 0;
+  const lowConfidence = open.filter((d) => d.cappedFrom !== void 0).length;
+  if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches \u2014 tag these elements`);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
@@ -2327,7 +2728,8 @@ function compare(expectation, measured, opts) {
     interactionsDescoped: interactionsDescoped.length,
     deltasAccepted: accepted,
     nodesFolded: folded.length,
-    matchedBy: matchedByCensus
+    matchedBy: matchedByCensus,
+    ...ifDefined("sharedShell", sharedShell)
   };
   let against;
   if (opts.against) {
@@ -2348,6 +2750,7 @@ function compare(expectation, measured, opts) {
         notMeasured,
         fieldsNotMeasured,
         unverifiable,
+        notComparable: expectation.notComparable || [],
         specIds: new Set(specs.map((sp) => String(sp.nodeId))),
         absent: absentGaps,
         placementGaps,
@@ -2364,9 +2767,9 @@ function compare(expectation, measured, opts) {
   const fell = against && against.nodesMeasured.before !== null && against.nodesMeasured.after < against.nodesMeasured.before;
   const mark = verdict.toUpperCase();
   const systemic = fieldsNeverMeasured.filter((f) => f.expectedOn >= NEVER_MEASURED_HEADLINE_MIN || f.probeSent || !keysSeen.has(f.field));
-  const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""} \xB7 ${fieldsChecked} values compared \xB7 ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` + (accepted ? ` \xB7 ${accepted} accepted` : "") + (reopened.length ? ` \xB7 ${reopened.length} waiver(s) REOPENED` : "") + " \xB7 " + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
+  const headline = `${mark} \u2014 ` + (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} \xB7 ` : "") + `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""}${sharedShell ? ` (shared shell ${sharedShell.measured}/${sharedShell.expected})` : ""} \xB7 ${fieldsChecked} values compared \xB7 ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` + (lowConfidence ? ` (+${lowConfidence} capped on low-confidence matches)` : "") + (accepted ? ` \xB7 ${accepted} accepted` : "") + (reopened.length ? ` \xB7 ${reopened.length} waiver(s) REOPENED` : "") + " \xB7 " + // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
   (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method \xB7 ` : "") + `interactions ${interactionsPassed.length} pass, ${interactionsFailed.length} fail, ${interactionsNotProbed.length} not-probed` + (interactionsUndesigned.length ? `, ${interactionsUndesigned.length} undesigned` : "") + (interactionsDescoped.length ? `, ${interactionsDescoped.length} descoped` : "") + ` of ${interactions.length} \xB7 data-dt-node/component evidence ${coverage.instanceSetsWithEvidence}/${bySet.size} instance sets (tag coverage, not presence)` + (against && fell ? ` \xB7 COVERAGE FELL ${against.nodesMeasured.before}\u2192${against.nodesMeasured.after} vs ${against.report}` : "") + (against && against.probeChanged === true ? " \xB7 probe changed" : "") + // group 10 — informational, never the verdict
-  (unmatchedCount ? ` \xB7 ${unmatchedCount} probe result(s) matched no designed interaction` : "") + (lost ? ` \xB7 LOST COVERAGE on ${lost} earlier delta(s)` : "") + (sameBuildServed && against ? ` \xB7 SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
+  (unmatchedCount ? ` \xB7 ${unmatchedCount} probe result(s) matched no designed interaction` : "") + (lost ? ` \xB7 LOST COVERAGE on ${lost} earlier delta(s)` : "") + (foreignTags ? ` \xB7 ${foreignTags.total} foreign tag(s) (${foreignTags.prefixDrift} prefix drift, ${foreignTags.alias} alias, ${foreignTags.unknown} unknown)` : "") + (sameBuildServed && against ? ` \xB7 SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
   return {
     schema: REPORT_SCHEMA,
     ...ifDefined("screen", expectation.screen),
@@ -2391,11 +2794,13 @@ function compare(expectation, measured, opts) {
       accepted,
       descoped: interactionsDescoped.length,
       undesigned: interactionsUndesigned.length,
-      highCauses
+      highCauses,
+      lowConfidence
     },
     deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
-    untaggedInstanceSets,
+    untaggedInstanceSets: untaggedOnScreen,
+    ...untaggedInstanceSetsInShell.length ? { untaggedInstanceSetsInShell } : {},
     interactions,
     notMeasured,
     fieldsNotMeasured,
@@ -2413,6 +2818,7 @@ function compare(expectation, measured, opts) {
       measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length,
       measuredIdsNotInExpectation: measuredIdsNotInExpectation.length,
       measuredIdsNotInExpectationSample: measuredIdsNotInExpectation.slice(0, 5),
+      ...ifDefined("foreignTags", foreignTags),
       ...inputNotes.length ? { inputNotes } : {}
     },
     ...ifDefined("against", against),
@@ -2446,6 +2852,7 @@ function reportToMarkdown(r) {
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
   L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
+  if (c.sharedShell) L.push(`| of which in a shared shell (informational \u2014 matched through another screen's id, or plan anchors[id].shared) | ${c.sharedShell.measured} / ${c.sharedShell.expected} in ${c.sharedShell.instances.map((i) => `${i.name} \`${i.nodeId}\` ${i.measured}/${i.expected}`).join(", ")} |`);
   L.push(`| individual values compared | ${c.fieldsChecked} |`);
   L.push(`| values on measured nodes the probe did not report | ${c.fieldsNotMeasured} |`);
   if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
@@ -2541,6 +2948,13 @@ function reportToMarkdown(r) {
     if (r.untaggedInstanceSets.length > 40) L.push(`- \u2026and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");
   }
+  const inShell = r.untaggedInstanceSetsInShell || [];
+  if (inShell.length) {
+    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen (F-96): listed apart, not this screen's work. Not a failure on its own.*", "");
+    for (const m of inShell.slice(0, 40)) L.push(`- ${m.setName} \u2014 ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
+    if (inShell.length > 40) L.push(`- \u2026and ${inShell.length - 40} more`);
+    L.push("");
+  }
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
@@ -2579,7 +2993,7 @@ function reportToMarkdown(r) {
     L.push("");
   }
   const p = r.probe || {};
-  if (p.unknownKeys && p.unknownKeys.length || p.unknownTopLevelKeys && p.unknownTopLevelKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.inputNotes && p.inputNotes.length) {
+  if (p.unknownKeys && p.unknownKeys.length || p.unknownTopLevelKeys && p.unknownTopLevelKeys.length || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.foreignTags || p.inputNotes && p.inputNotes.length) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}\xD7) is not read by verify-screen${k.canonical ? ` \u2014 the canonical key is \`${k.canonical}\`` : ""}`);
     for (const k of p.unknownTopLevelKeys || []) L.push(`- top-level key \`${k.key}\` is not read by verify-screen${k.canonical ? ` \u2014 the canonical key is \`${k.canonical}\`` : ""}`);
@@ -2588,6 +3002,8 @@ function reportToMarkdown(r) {
     for (const n of p.inputNotes || []) L.push(`- ${n}`);
     if (p.measuredIdsNotInExpectation) L.push(`- ${p.measuredIdsNotInExpectation} measured node id(s) are not in the expectation (e.g. ${(p.measuredIdsNotInExpectationSample || []).map((id) => `\`${id}\``).join(", ")}) \u2014 measured against another screen or an older expectation?`);
     if (p.interactionEvidenceOnHiddenLayers) L.push(`- ${p.interactionEvidenceOnHiddenLayers} interaction result(s) are for hidden layers and were ignored \u2014 a hidden layer cannot be driven`);
+    const ft = p.foreignTags;
+    if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id \u2014 a stale or other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` \u2014 e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
     L.push("");
   }
   L.push("## Limits of this method", "");
@@ -2805,7 +3221,9 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
-    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers } } : null);
+    const exportRoot = path4.join("design", "export");
+    const readSibling = (file) => readJsonOrNull(path4.join(exportRoot, file), isScreenDoc);
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers }, readSibling } : null);
     const outBase = out || path4.join("design", "verify", path4.basename(firstFile, ".json"));
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path4.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);

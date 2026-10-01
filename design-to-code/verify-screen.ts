@@ -45,6 +45,8 @@ import { parseArgs } from "node:util";
 import { isJsonObject } from "./types.ts";
 import { isScreenDoc, screenExportOf, screenRoots } from "./export-shape.ts";
 import { colorKey } from "./color.ts";
+import { CANONICAL_MATCHED_BY } from "./probe-match.ts";
+import type { MatchedBy } from "./probe-match.ts";
 import type {
   Action, ArtifactCheck, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
   NotComparable, Paint, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
@@ -75,6 +77,12 @@ const TOLERANCE = {
   // a column 18.94px out of place (finding 192) or a bar 130px below the frame (164) cannot hide.
   position: 2,
   opacity: 0.02,
+  // DT-74 (D34): a stroke's own tolerance, inclusive — a lost 1px border (1 → 0) is a delta; the padding tolerance (1) let it pass
+  stroke: 0.5,
+  // DT-75 (D29): a fixed/fill-width TEXT's INK width (renderBox.w) against a Range's width (the layout advance box,
+  // side bearings included). Empirical: hand-written textBox.w − renderBox.w was −0.63..+2.41 px (p5..p95, n=157)
+  // in the field runs. Known miss: heavy italics/overhang can exceed it.
+  textInk: 3,
 };
 
 // Colours compare exactly after normalisation. There is no "close enough" colour: the live run's
@@ -235,8 +243,12 @@ function framePosition(n: IrNode, frame: Partial<VerifyFrame> | null | undefined
   if (!frame || !num(frame.x) || !num(frame.y)) return null;
   const b: Partial<Box> = n.box || {}, rb = n.renderBox;
   if (n.type === "TEXT") {
-    // Ink start (renderBox.x) is what a Range's getBoundingClientRect().x reports, within a
-    // side-bearing. Vertical ink depends on font metrics, so a TEXT node carries no `y`.
+    // A Range's getBoundingClientRect().x is the text's LAYOUT start (side bearings included, not ink). F-80: for hug
+    // text and left-aligned text that is the text box's own left edge (box.x, when the export states it); for
+    // centred/right-aligned text in a wider box only the ink start (renderBox.x) is near it, within a side-bearing.
+    // Vertical ink depends on font metrics, so a TEXT node carries no `y`.
+    const align = n.font && n.font.align;
+    if (num(b.x) && (n.autoResize === "width_and_height" || align === undefined || align === "left")) return { x: r2(b.x - frame.x), source: "box" };
     if (rb && num(rb.x)) return { x: r2(rb.x - frame.x), source: "renderBox" };
     if (num(b.x)) return { x: r2(b.x - frame.x), source: "box" };
     return null;
@@ -259,6 +271,87 @@ const growsAlong = (c: IrNode, dir: string): boolean => { const lc: LegacyGrow =
 // (itemSpacing, paddingTop/Right/Bottom/Left) beside the producer's gap/padding[].
 interface LegacyLayout extends LayoutSpec { itemSpacing?: number; paddingTop?: number; paddingRight?: number; paddingBottom?: number; paddingLeft?: number }
 const PAD_KEYS = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const;
+const PAD_SIDES = ["top", "right", "bottom", "left"] as const;
+type PadSide = (typeof PAD_SIDES)[number];
+
+// F-79: per FIXED axis (no widthMode/heightMode for it), padding the design cannot show: padding + in-flow content
+// (sum + gaps on the main axis — the largest child when the list wraps — the largest child on the counter axis, or
+// for a wrapping list the stacked lines, see wrapLines) larger than the box (+1) skips the side the overflow runs out
+// at (the end for start alignment, the start for end alignment, both when centred); or content CENTRED on that axis
+// with equal padding and no child growing along it (the padding moves nothing) — never on a wrapping list's main
+// axis, where the padding sets the wrap point and so shows. Flex only (a grid's tracks are not modelled). Known
+// miss: padding split across nested nodes is still compared node by node.
+// The counter-axis extent of a WRAPPING list's stacked lines (Figma layoutWrap "WRAP"; the export writes
+// layout.flexWrap "wrap" and counterAxisSpacing as layout.rowGap whatever the direction). Figma Plugin API
+// (counterAxisAlignContent): each track is sized by its largest child along the counter axis; under "AUTO"
+// counterAxisSpacing is the gap between tracks, under "SPACE_BETWEEN" the free space is split between tracks and
+// the spacing is zero once the tracks overflow (the producer then omits rowGap, so the gap reads as 0 — the
+// least the tracks need, which is what an overfull check wants). Children are packed greedily along the main axis
+// within the inner main size (the box's main size minus its main-axis padding, `gap` between items). Returns
+// undefined when a size is unknown — the caller then falls back to the largest child.
+function wrapLines(mainSizes: ReadonlyArray<number | undefined>, crossSizes: ReadonlyArray<number | undefined>, inner: number, gap: number, crossGap: number): number | undefined {
+  if (!num(inner) || !mainSizes.every(num) || !crossSizes.every(num)) return undefined;
+  const lines: number[] = [];
+  let used = -1;
+  mainSizes.forEach((w, i) => {
+    const h = crossSizes[i] ?? 0;
+    if (used >= 0 && used + gap + w <= inner + 1) { used += gap + w; lines[lines.length - 1] = Math.max(lines[lines.length - 1] ?? 0, h); }
+    else { used = w; lines.push(h); }
+  });
+  return lines.reduce((s, v) => s + v, 0) + crossGap * Math.max(0, lines.length - 1);
+}
+
+function paddingNotShown(n: IrNode, L: LegacyLayout, pad: readonly number[]): Array<{ sides: PadSide[]; why: string }> {
+  const b = n.box;
+  if (!b || L.display === "grid" || L.mode === "absolute") return [];
+  const dir = L.flexDirection === "column" ? "column" : "row";
+  const flow = inFlowChildren(n);
+  const spaced = L.justifyContent === "space-between" || L.justifyContent === "space-evenly" || L.justifyContent === "space-around";
+  const g = !spaced && typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" && !spaced ? L.itemSpacing : 0;
+  const out: Array<{ sides: PadSide[]; why: string }> = [];
+  for (const ax of ["x", "y"] as const) {
+    if (ax === "x" ? n.widthMode : n.heightMode) continue; // hug/fill: the box follows the content, padding shows
+    const size = ax === "x" ? b.w : b.h;
+    const [i0, i1] = ax === "x" ? [3, 1] : [0, 2];
+    const a = pad[i0] ?? 0, z = pad[i1] ?? 0;
+    if (!num(size) || (a === 0 && z === 0)) continue;
+    const sides: PadSide[] = ax === "x" ? ["left", "right"] : ["top", "bottom"];
+    const main = (dir === "row") === (ax === "x");
+    const dim = ax === "x" ? "width" : "height";
+    const sizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.w : c.box.h) : undefined));
+    const wraps = L.flexWrap === "wrap";
+    if (flow.length && sizes.every(num)) {
+      // A WRAPPING list's main-axis padding sets the wrap point and shows: only its largest child can overflow.
+      // Its counter axis holds the stacked lines (wrapLines) when the main size is known; else the largest child.
+      let content: number;
+      if (main && !wraps) content = sizes.reduce((s, v) => s + v, 0) + g * Math.max(0, flow.length - 1);
+      else if (!main && wraps) {
+        const mainSize = ax === "x" ? b.h : b.w;
+        const [m0, m1] = ax === "x" ? [0, 2] : [3, 1];
+        const mainSizes = flow.map((c) => (c.box ? (ax === "x" ? c.box.h : c.box.w) : undefined));
+        content = wrapLines(mainSizes, sizes, mainSize - (pad[m0] ?? 0) - (pad[m1] ?? 0), g, typeof L.rowGap === "number" ? L.rowGap : 0) ?? Math.max(...sizes);
+      } else content = Math.max(...sizes);
+      if (a + z + content > size + 1) {
+        // review H3: Figma still insets the first child by the START padding of a start-aligned box whose content
+        // overflows (the overflow runs out at the end) — only the end side cannot show; mirrored for end alignment;
+        // both only when the content is centred (space-around/space-evenly centre under negative free space in CSS
+        // flexbox; space-between starts at the start).
+        const al0 = main ? L.justifyContent : L.alignItems;
+        const al = al0 === "space-around" || al0 === "space-evenly" ? "center" : al0;
+        const lost: PadSide[] = al === "center" ? sides : al === "flex-end" ? [sides[0] ?? "left"] : [sides[1] ?? "right"];
+        const shown = lost.filter((sd) => (pad[PAD_SIDES.indexOf(sd)] ?? 0) !== 0);
+        if (shown.length) out.push({ sides: shown, why: `padding ${a}+${z} plus its content (${r2(content)}px) exceeds the fixed ${size}px ${dim}, and the content is ${al === "center" ? "centred" : al === "flex-end" ? "end-aligned" : "start-aligned"} — the design cannot show the ${shown.join("/")} padding, so the build need not have it` });
+        continue;
+      }
+    }
+    // (a wrapping list whose lines are spread by alignContent space-between puts its first and last line against the
+    // padding, so that padding shows even with centred items)
+    const centred = main ? L.justifyContent === "center" : L.alignItems === "center" && !(wraps && L.alignContent === "space-between");
+    const grows = flow.some((c) => (main ? growsAlong(c, dir) : (ax === "x" ? c.widthMode === "fill" : c.heightMode === "fill") || c.alignSelf === "stretch"));
+    if (flow.length && centred && a === z && !grows && !(main && wraps)) out.push({ sides, why: `content centred in a fixed ${size}px ${dim} with equal padding (${a}) — the padding moves nothing, so the build need not have it` });
+  }
+  return out;
+}
 
 /** The drawn state a node inherits from an ancestor that was drawn in one. */
 export interface InheritedState { state: DrawnState; why: string; from: string }
@@ -331,11 +424,20 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     // Per-side weights (a divider with only a bottom border) have no single CSS `border-width` to
     // compare against, so record them as their own field rather than picking one arbitrarily.
     else if (st.weights && typeof st.weights === "object") { const ws = st.weights; spec.borderWidths = (["top", "right", "bottom", "left"] as const).map((k) => { const v = ws[k]; return typeof v === "number" ? v : 0; }); }
+    if (st.align) spec.strokeAlign = st.align; // (after the weight/weights chain — review M1)
   }
   // Radius: one number, or per-corner. A per-corner radius with UNEQUAL corners (a table header
   // rounded only at the top) is compared corner by corner — the old code read `radius.tl` only, so
   // a card rounded at the bottom ({bl,br}) produced no radius spec at all (finding 162).
-  if (typeof n.radius === "number") spec.borderRadius = n.radius;
+  // F-75: a radius shows only where something draws the corners — a visible fill or stroke, an effect, or a clip of
+  // the content. On a layer that draws none of them it is invisible in Figma too, and a build need not carry it.
+  const drawsBox = paints.some((p) => p && p.visible !== false) || !!(st && ((Array.isArray(st.colors) && st.colors.length > 0) || (Array.isArray(st.paints) && st.paints.some((p) => p && p.visible !== false))))
+    || (Array.isArray(n.effects) && n.effects.length > 0) || n.clip === true;
+  if (n.radius !== undefined && n.radius !== null && !drawsBox && n.type !== "TEXT") {
+    const r = n.radius;
+    const rv: JsonValue = typeof r === "number" ? r : { ...ifDefined("tl", r.tl), ...ifDefined("tr", r.tr), ...ifDefined("br", r.br), ...ifDefined("bl", r.bl) };
+    if (typeof r !== "number" || r !== 0) skip("border-radius", rv, "radius on a layer that draws nothing (no visible fill, stroke or effect, and it does not clip its content) — its corners are invisible in the design too");
+  } else if (typeof n.radius === "number") spec.borderRadius = n.radius;
   else if (n.radius && typeof n.radius === "object") {
     const rc = n.radius;
     const corner = (v: unknown): number => (num(v) ? v : 0);
@@ -366,19 +468,59 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
     let pad: Array<number | undefined> | null = null;
     if (Array.isArray(L.padding)) pad = L.padding.slice(0, 4);
     else if (PAD_KEYS.some((k) => typeof L[k] === "number")) pad = PAD_KEYS.map((k) => L[k]);
-    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) spec.padding = pad.map((v) => (typeof v === "number" ? v : 0));
+    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) {
+      const p4 = pad.map((v) => (typeof v === "number" ? v : 0));
+      // F-79: padding that cannot show on a FIXED axis is not compared there (paddingSkip + a notComparable row per axis)
+      const skipped: NonNullable<VerifySpec["paddingSkip"]> = [];
+      for (const ax of paddingNotShown(n, L, p4)) {
+        skipped.push(...ax.sides);
+        skip(`padding (${ax.sides.join("/")})`, ax.sides.map((sd) => p4[PAD_SIDES.indexOf(sd)] ?? 0), ax.why);
+      }
+      if (skipped.length < 4) spec.padding = p4;
+      if (skipped.length && skipped.length < 4) spec.paddingSkip = skipped;
+    }
   }
   if (n.box) {
-    if (typeof n.box.w === "number") spec.width = n.box.w;
-    if (typeof n.box.h === "number") spec.height = n.box.h;
+    if (n.type === "TEXT") {
+      // DT-75 / F-62 / F-64 (D29): a TEXT's width. Hug text (autoResize width_and_height) IS its box — compared with
+      // the Range width, tolerance 1. Any other text box (fixed or fill width, height-auto) is wider than its words:
+      // the build's element hugs the text, so the design's INK width (renderBox.w) is compared, tolerance textInk.
+      // Truncation set (ellipsis / line clamp): a Range spans the full unclipped string (text-overflow keeps it), so a
+      // text the DESIGN truncates has no comparable width — but one whose ink ends well inside its box (a "12" in a
+      // 121px cell set to truncate) is not truncated, and its ink is its full width. Several lines: not compared.
+      // No height: neither a Range nor the element gives the line box Figma's text box has (see LIMITS).
+      // A placeholder's characters are not in the DOM (the input's placeholder attribute): no Range measures them.
+      const rb = n.renderBox;
+      const lines = typeof n.maxLines === "number" ? n.maxLines : 0;
+      const truncSet = n.autoResize === "truncate" || n.truncate === true || lines > 0;
+      const truncated = truncSet && (lines > 1 || !rb || !num(rb.w) || rb.w >= n.box.w - TOLERANCE.textInk);
+      const shadowed = Array.isArray(n.effects) && n.effects.length > 0;
+      if (isPlaceholder(n)) skip("width", n.box.w, "an input placeholder: its characters are not in the DOM (the placeholder attribute), so no Range measures their width");
+      else if (truncated) skip("width", n.box.w, "truncated text (ellipsis / line clamp) the design truncates or wraps: a Range over it measures the full unclipped string, not the box");
+      else if (n.autoResize === "width_and_height") spec.width = n.box.w;
+      else if (shadowed) skip("width", n.box.w, "text with an effect (shadow/blur): its render bounds include the effect, so neither box nor ink width is the text's");
+      else if (rb && num(rb.w)) {
+        spec.width = rb.w;
+        spec.widthFrom = "renderBox";
+        skip("width (text box)", n.box.w, `fixed-width text box (${n.widthMode === "fill" ? "fills its parent" : "set by the designer"}) wider than its words — the build's text hugs them, so the ink width (renderBox) is compared instead`);
+      } else spec.width = n.box.w;
+    } else {
+      if (typeof n.box.w === "number") spec.width = n.box.w;
+      if (typeof n.box.h === "number") spec.height = n.box.h;
+      // D31: a hug axis may GROW in the build (more content) without the match being wrong
+      if (n.widthMode || n.heightMode) spec.sizing = { ...ifDefined("w", n.widthMode), ...ifDefined("h", n.heightMode) };
+    }
   }
-  const pos = framePosition(n, ctx.frame);
+  const pos = isPlaceholder(n) ? null : framePosition(n, ctx.frame); // (a placeholder: no Range, see width)
   if (pos) {
     spec.x = pos.x;
     if (pos.y !== undefined) spec.y = pos.y;
     spec.positionFrom = pos.source;
   }
   if (typeof n.opacity === "number" && n.opacity !== 1) spec.opacity = n.opacity;
+  // DT-74: the exporter omits opacity 1 — a node that paints or carries copy states it anyway, so a control
+  // rendered at opacity 0.5 is a delta instead of passing unchecked
+  else if (spec.text !== undefined || spec.placeholderText !== undefined || spec.color !== undefined || spec.backgroundColor !== undefined || spec.fill !== undefined || spec.borderColor !== undefined || spec.decorated) spec.opacity = 1;
 
   const own = drawnStateOf(n);
   if (own) { spec.drawnState = own.state; spec.drawnStateWhy = own.why; spec.drawnStateOwn = true; }
@@ -404,8 +546,11 @@ function checkable(spec: VerifySpec): boolean {
 const COORDINATES =
   "x/y are FRAME-RELATIVE: the node's page-space position minus the frame's own box.x/box.y. Measure " +
   "el.getBoundingClientRect() minus the rendered frame element's rect (the viewport origin when the frame " +
-  "IS the page). A TEXT node's x is its INK start (the export's renderBox) — measure it with a Range over " +
-  "the text and report it as textBox {x,w}. TEXT nodes carry no y (vertical ink depends on font metrics). " +
+  "IS the page). A TEXT node's x and width are read ONLY from textBox {x,w} — a Range over its characters, " +
+  "never the element's box. Its width is the text box for hug text (autoResize width_and_height) and the INK " +
+  "width (the export's renderBox, widthFrom renderBox) for fixed- or fill-width text, whose box is wider than its " +
+  "words; its x is the box's left edge for hug or left-aligned text, else the ink start. TEXT nodes carry no y " +
+  "and no height (vertical ink and line boxes depend on font metrics). " +
   "Auto-layout children carry no position (the export does not state one); their parent's is compared.";
 
 // ts-port: legacy/producer-mismatch read kept as-is (item 3) — the older reaction shape (`action`
@@ -428,7 +573,61 @@ export interface BuiltExpectation extends VerifyExpectation {
 export interface ExpectInput { doc: ScreenDoc | undefined; label?: string }
 /** buildExpectation()'s context beyond the screens: the export's pages/index.json layers (F-60), to tell an
  *  interaction whose destination was never exported. A row's file is its own sourceFile stamp only. */
-export interface ExpectOptions { index?: { layers: IndexRow[] } | null }
+export interface ExpectOptions { index?: { layers: IndexRow[] } | null;
+  /** D32: reads a sibling screen export by its index row's `file` (relative to the export root) — aliases are built
+   *  from the siblings of the SAME Figma file (the F-60/L-3 candidate rows); absent = no aliases */
+  readSibling?: ((file: string) => ScreenDoc | null | undefined) | null }
+
+// D32: the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
+// by the visible NAME PATH from the instance root ("" = the root itself) → node id. A path that repeats inside the
+// instance maps to null (ambiguous). Hidden layers are skipped (hidden.ts: the flag is inherited).
+// Each path also carries a CONTENT signature, and an alias needs both to agree (live run, group 11 review): a selected
+// item moved between wrapper frames per screen, so one name path was unique in each export yet named "Orders" in
+// one and "Invoices" in the other. The signature is the subtree's visible TEXT (concatenated in tree order,
+// whitespace normalised); a subtree with no text uses the node types + main component key/set along the path.
+interface ShellEntry { id: string; sig: string }
+type ShellIndex = Map<string, Array<Map<string, ShellEntry | null>>>;
+function shellIndex(roots: readonly IrNode[]): ShellIndex {
+  const out: ShellIndex = new Map();
+  const index = (inst: IrNode): Map<string, ShellEntry | null> => {
+    const m = new Map<string, ShellEntry | null>();
+    const textOf = new Map<IrNode, string>();
+    const noText: Array<{ p: string; anc: IrNode[] }> = [];
+    // returns the subtree's visible text pieces
+    const go = (n: IrNode, p: string, chain: string, anc: IrNode[]): string[] => {
+      if (n.hidden) return [];
+      const mc = n.type === "INSTANCE" ? n.mainComponent : undefined;
+      const here = `${chain}/${n.type}${mc ? `[${mc.key ?? ""}|${mc.setName ?? mc.name}]` : ""}`;
+      const texts: string[] = n.type === "TEXT" && typeof n.text === "string" ? [n.text] : [];
+      for (const c of Array.isArray(n.children) ? n.children : []) if (c) texts.push(...go(c, p === "" && n === inst ? c.name : `${p}\u0000${c.name}`, here, [n, ...anc]));
+      const text = texts.join(" ").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+      textOf.set(n, text);
+      if (n.id) {
+        m.set(p, m.has(p) ? null : { id: n.id, sig: text ? `text:${text}` : `shape:${here}` });
+        if (!text) noText.push({ p, anc });
+      }
+      return texts;
+    };
+    go(inst, "", "", []);
+    // review M5: a node with no text of its own (a close icon) is also placed by its nearest ancestor (within the
+    // instance) that HAS text — "x" in an "Add Item" popup is not the "x" of an "Edit Category" one
+    for (const { p, anc } of noText) {
+      const e = m.get(p);
+      const owner = anc.find((a) => (textOf.get(a) ?? "") !== "");
+      if (e && owner) e.sig += `|in:${textOf.get(owner) ?? ""}`;
+    }
+    return m;
+  };
+  const walk = (n: IrNode): void => {
+    if (n.hidden) return;
+    const key = n.type === "INSTANCE" && n.mainComponent ? n.mainComponent.key : undefined;
+    if (key) { getOrInit(out, key, () => []).push(index(n)); return; } // outermost: nothing below is
+    for (const c of Array.isArray(n.children) ? n.children : []) if (c) walk(c);
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+const idSuffix = (id: string): string | null => { const i = id.indexOf(";"); return i === -1 ? null : id.slice(i + 1); };
 
 // F-104: the shape a sibling row is recognised by — the same component, or the same tree of node types.
 function rowSignature(n: IrNode): string {
@@ -489,6 +688,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   const rootsByFile = new Map<string, Map<string, Set<string>>>();
   const interactionFile = new Map<VerifyInteraction, string | undefined>();
   const roots: IrNode[] = [];
+  const rootNodesByFile = new Map<string, IrNode[]>(); // D32: each Figma file's input roots
 
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
@@ -504,6 +704,7 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         // (the title only for the frame the pull is filed under — the index row carries that one id, review LOW-1)
         for (const n of [root.name, exp && exp.nodeId === root.id ? exp.screen : undefined]) if (typeof n === "string" && n) names.add(n);
       }
+      getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
       if (!reference && root.reference) reference = root.reference;
       const b: Partial<Box> = root.box || {};
       const frame: Partial<VerifyFrame> = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
@@ -545,6 +746,14 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
         if (par && (fixedNodes.has(par) || (nFixed > 0 && sibs.indexOf(n) >= sibs.length - nFixed))) { fixedNodes.add(n); spec.fixed = true; }
         if (spec.drawnState) stateOf.set(n, inherited || { state: spec.drawnState, why: spec.drawnStateWhy || "", from: n.name || n.id });
         if (checkable(spec)) nodes.push(spec);
+        else {
+          // review M2: a group-11 exclusion (radius on a layer that draws nothing, padding the box cannot show) took the
+          // node's only checkable value — it is not a spec any more; say so rather than let it vanish
+          const g11 = gaps.filter((g) => g.field === "border-radius" || g.field.startsWith("padding ("));
+          if (g11.length) gaps.push({ nodeId: n.id, name: n.name, field: "node", value: null,
+            why: gaps.some((g) => g.field === "border-radius") ? "node not checked: it draws nothing (no fill, stroke, effect or clip) — its radius was its only stated value"
+              : `node not checked: every value it states is excluded by method (${g11.map((g) => g.field).join(", ")})` });
+        }
         notComparable.push(...gaps);
 
         if (n.type === "INSTANCE" && n.mainComponent) {
@@ -603,7 +812,9 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   // destination frame nested in an exported SECTION/GROUP is no index row of its own, so it reads as never exported.
   const index = opts && opts.index;
   const unnamedIds = idsByFile.get("");
-  const candidatesFor = (file: string): IndexRow[] | null => {
+  const candidatesFor = (file: string): IndexRow[] | null => candidatesOf(file)?.rows ?? null;
+  // (resolved: the Figma file the candidate rows belong to — null when they may be any file's)
+  function candidatesOf(file: string): { rows: IndexRow[]; resolved: string | null } | null {
     if (!index) return null;
     const own = rootsByFile.get(file);
     const sameName = (l: IndexRow): boolean => { const names = own?.get(l.id); return !!names && (!names.size || l.name === undefined || names.has(l.name)); };
@@ -614,11 +825,11 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
       const named = new Set(covering.map((l) => l.sourceFile).filter((x): x is string => !!x));
       if (named.size > 1) return null;
       // an unnamed own row may be any file's (review L-c: a duplicated file shares ids AND names) → every row
-      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return index.layers;
+      if (named.size === 0 || covering.some((l) => !l.sourceFile)) return { rows: index.layers, resolved: null };
       f = [...named][0] ?? "";
     }
-    return index.layers.filter((l) => !l.sourceFile || l.sourceFile === f);
-  };
+    return { rows: index.layers.filter((l) => !l.sourceFile || l.sourceFile === f), resolved: f || null };
+  }
   for (const row of interactions) {
     const file = interactionFile.get(row);
     // D28 (live L-4): a change_to's destination is a component VARIANT — a drawn state of this very instance, never a
@@ -628,6 +839,61 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     if (!known || known.has(row.destinationId) || (unnamedIds && unnamedIds.has(row.destinationId))) continue;
     const candidates = candidatesFor(file);
     if (candidates && !candidates.some((l) => l.id === row.destinationId)) row.destinationExported = false;
+  }
+
+  // ---- D32/D35: aliases. A shared shell (sidebar, header) is ONE component instance on every screen, but Figma re-mints
+  // the ids under each instance (`I<instance>;<path>`, nested instances re-mint the path too — F-85), so a build tagged
+  // with screen A's ids misses on screen B. For each outermost instance, the SAME node in a sibling export of the SAME
+  // Figma file (the F-60/L-3 candidate rows — never a join across files: ids and keys would match unrelated nodes) is
+  // the one at the same visible name path under an instance of the same main component key, when that key has exactly
+  // one outermost instance in both exports and the path is unique in both. Its id is an alias; an id whose `;` suffix
+  // equals the spec's own is left out (the probe's tag-shared-path finds it already). Rebuilt from the CURRENT
+  // siblings at every --expect (facts §8: sublayer id stability is undocumented). Known misses: a renamed layer, a
+  // repeated name inside the instance (e.g. same-named menu items), a shell instantiated twice on one screen.
+  const readSibling = opts && opts.readSibling;
+  if (index && readSibling) {
+    const ownRootIds = new Set(roots.map((r) => r.id));
+    const specSuffixes = new Set(nodes.map((n) => idSuffix(n.nodeId)).filter((x): x is string => x !== null));
+    const aliases = new Map<string, Set<string>>();
+    for (const [file, fileRoots] of rootNodesByFile) {
+      const co = candidatesOf(file);
+      if (!co) continue;
+      const cands = co.rows;
+      const own = shellIndex(fileRoots);
+      if (!own.size) continue;
+      const read = new Set<string>();
+      for (const row of cands) {
+        if (ownRootIds.has(row.id) || !row.file || read.has(row.file)) continue;
+        read.add(row.file);
+        const sib = readSibling(row.file);
+        if (!sib) continue;
+        // the sibling's own stamp must not name another file (a row may be unnamed while its export is stamped). An
+        // UNSTAMPED sibling is allowed for a stamped screen (the L-3 partly re-pulled export): the risk is small — an alias
+        // also needs the same component key, a unique name path, the same content and texted ancestor, and a tag-alias
+        // match is capped (D30), so D39 keeps it from making a pass on its own.
+        const sx = screenExportOf(sib);
+        const sibFile: unknown = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : undefined;
+        // (an unstamped screen is checked against the file its index row resolved to — review pass 2)
+        if (co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
+        const theirs = shellIndex(screenRoots(sib));
+        for (const [key, mine] of own) {
+          const other = theirs.get(key);
+          const a = mine.length === 1 ? mine[0] : undefined, b = other && other.length === 1 ? other[0] : undefined;
+          if (!a || !b) continue;
+          for (const [p, mine1] of a) {
+            const their1 = b.get(p);
+            if (!mine1 || !their1 || mine1.sig !== their1.sig) continue; // same path, different content: another node
+            const id = mine1.id, sid = their1.id;
+            if (sid === id) continue;
+            // (an id whose `;` suffix is ANY expected spec's suffix is that spec's tag-shared-path match — review LOW a)
+            const s2 = idSuffix(sid);
+            if (s2 !== null && specSuffixes.has(s2)) continue;
+            getOrInit(aliases, id, () => new Set<string>()).add(sid);
+          }
+        }
+      }
+    }
+    for (const [id, set] of aliases) { const sp = specById.get(id); if (sp) sp.aliases = [...set].sort(); }
   }
 
   const f0: Partial<VerifyFrame> = frames[0] || {};
@@ -675,6 +941,8 @@ const KNOWN_MEASURED_KEYS = new Set([
   "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "fill", "borderColor",
   "borderWidth", "borderRadius", "gap", "gapVisual", "width", "height", "x", "y", "opacity", "padding", "text",
   "placeholderText", "placeholderColor", "tag", "textBox", "display", "transform", "rotate", "visible",
+  // D34: where the probe read borderWidth/borderColor (a real border, or a ring drawn by box-shadow/outline)
+  "strokeFrom", "strokeAlign",
 ]);
 // Suggestions only — the key is NEVER silently accepted (design note: a wrong key must be loud).
 const KEY_HINTS: Record<string, string> = { radius: "borderRadius", borderTopLeftRadius: "borderRadius", background: "backgroundColor", bg: "backgroundColor", w: "width", h: "height", svgFill: "fill", placeholder: "placeholderText", rowGap: "gapVisual", columnGap: "gap" };
@@ -695,7 +963,7 @@ const FIELDS: Field[] = [
   { key: "fill", tol: null, norm: normColor, label: "fill (SVG paint)", high: true, colour: true },
   { key: "placeholderColor", tol: null, norm: normColor, label: "placeholder colour", high: true, colour: true, optional: true },
   { key: "borderColor", tol: null, norm: normColor, label: "border-color", colour: true },
-  { key: "borderWidth", tol: TOLERANCE.padding, label: "border-width", unit: "px" },
+  { key: "borderWidth", tol: TOLERANCE.stroke, label: "border-width", unit: "px" },
   { key: "borderRadius", tol: TOLERANCE.radius, label: "border-radius", unit: "px" },
   { key: "gap", tol: TOLERANCE.gap, label: "gap", unit: "px" },
   { key: "width", tol: TOLERANCE.size, label: "width", unit: "px", box: true },
@@ -708,10 +976,12 @@ const FIELDS: Field[] = [
 // Every key a measured node's `styles` carries — the FIELDS compared one-to-one, plus the keys compared
 // their own way. Exported: the shipped probe (verify-probe.ts) measures exactly these, and MEASURED_KEYS_DOC's
 // styles line is generated from it.
-const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText"];
+// (F-78: `display` — an id on an inline element measures its text's box, not a frame's)
+const STYLE_KEYS: readonly string[] = [...FIELDS.map((f) => f.key), "padding", "gapVisual", "text", "tag", "textBox", "placeholderText", "display"];
 const STYLE_KEY_SHAPE: Record<string, string> = {
   borderRadius: "number | [tl,tr,br,bl]", padding: "[t,r,b,l]", fill: "an SVG's paint", textBox: "{x,w} of a Range over the text",
   placeholderText: "el.placeholder", placeholderColor: "the ::placeholder colour", tag: "tagName, lower-case",
+  display: "getComputedStyle(el).display",
 };
 
 const MEASURED_KEYS_DOC: Record<string, string> = {
@@ -720,7 +990,9 @@ const MEASURED_KEYS_DOC: Record<string, string> = {
   "nodes[].styles": `computed values, EVERY key on every node — lengths as px numbers (a "20px" string is read as 20; %, other units and keywords are not) — (null when it cannot be read, with the reason under unmeasured): ${STYLE_KEYS.map((k) => k + (STYLE_KEY_SHAPE[k] ? ` (${STYLE_KEY_SHAPE[k]})` : "")).join(" ")}`,
   "nodes[].unmeasured": "{<styles key>: why} for every styles key reported null — a null is listed as not measured, never as checked",
   "nodes[].styles.fill": "an SVG's paint: getComputedStyle(<path|rect|circle>).fill — never background-color",
-  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative — required when the id sits on a padded container (<th>, <button>, <label>)",
+  "nodes[].styles.textBox": "{x,w} of a Range over a TEXT node's characters, frame-relative — required for every TEXT node: its x/width are never read off the element's box",
+  "nodes[].styles.display": "getComputedStyle(el).display — a FRAME/INSTANCE id on an inline element measures its text's box, not a frame's",
+  "nodes[].styles.strokeFrom / strokeAlign": "where borderWidth/borderColor were read: border, or a ring (box-shadow spread / outline) and its side (inside | outside)",
   "nodes[].styles.gapVisual": "the rendered distance between consecutive children — required for a <table> (border-spacing, not gap)",
   "nodes[].styles.placeholderText / placeholderColor": "el.placeholder / the ::placeholder colour (getComputedStyle(el,'::placeholder').color or the stylesheet rule)",
   "nodes[].styles.tag": "the element's tagName, lower-case",
@@ -765,12 +1037,13 @@ function compareField(f: Field, want: JsonValue | undefined, got: JsonValue | un
   return delta <= f.tol ? null : { want: a, got: b, delta: Number(delta.toFixed(3)) };
 }
 
-function comparePadding(want: unknown, got: readonly number[]): Bad | null {
+function comparePadding(want: unknown, got: readonly number[], skip?: readonly string[]): Bad | null {
   // (compare() hands over four px numbers — a null or unreadable side is listed as not measured first, DT-43/DT-42)
   if (!Array.isArray(want)) return null;
   const w: number[] = want.map(Number);
   if (w.some(Number.isNaN)) return null;
-  const worst = Math.max(...w.map((v, i) => Math.abs(v - (got[i] ?? 0))));
+  // F-79: a side the design cannot show (expectation paddingSkip) is not compared
+  const worst = Math.max(0, ...w.map((v, i) => (skip && skip.includes(PAD_SIDES[i] ?? "") ? 0 : Math.abs(v - (got[i] ?? 0)))));
   return worst <= TOLERANCE.padding ? null : { want: w, got: [...got], delta: Number(worst.toFixed(3)) };
 }
 
@@ -786,6 +1059,18 @@ function radiusCorners(v: unknown): [number, number, number, number] | null {
 const clampRadius = (r: number, w: unknown, h: unknown): number => (num(w) && num(h) && w > 0 && h > 0 ? Math.min(r, Math.min(w, h) / 2) : r);
 
 const TABLE_TAGS = new Set(["table", "thead", "tbody", "tfoot", "tr"]);
+// DT-48 / F-75: a table row or row group draws no border-radius (CSS Backgrounds 3: radius applies to table and
+// table-cell boxes only) — getComputedStyle still returns the specified value, so neither direction is evidence.
+const ROW_TAGS = new Set(["tr", "thead", "tbody", "tfoot"]);
+const ROW_RADIUS_WHY = "a table row/row-group does not draw border-radius — report the corner cells' radii under this id, or tag the cells";
+// F-78: a FRAME/INSTANCE id on an inline element: its box is the union of its text's line boxes, not a frame's
+const INLINE_BOX_FIELDS = new Set<string>(["width", "height", "x", "y", "borderRadius"]);
+const inlineWhy = (tag: string): string => `the id sits on an inline <${tag || "element"}>, whose box is its text's — tag the element that owns the box`;
+// DT-74 (D34, verified): Chromium FLOORS a computed border width to whole px, with a 1px minimum for any non-zero
+// width (0.5 → 1, 1.5 → 1, 2.7 → 2, at DPR 1/2/3). A design's stroke is compared as the border CSS can draw. A ring
+// (box-shadow spread, outline) is not snapped — it is compared with the raw design width.
+const cssBorderWidth = (d: number): number => (d <= 0 ? 0 : d < 1 ? 1 : Math.floor(d));
+const normText = (t: unknown): string => String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 // A TEXT node's id on an element that is NOT the text's own box (a <th> with padding, a <button>,
 // a <label>) — its width/height/x describe the container, not the text (finding 194: `height 24 → 56`
 // on a Status header that is typographically exact).
@@ -812,6 +1097,9 @@ const LIMITS = [
   "An icon drawn by an <img> (or <canvas>, <object>) has no readable fill: the SVG inside is a separate document, so its fill is listed under `unverifiable` — compare the asset file instead.",
   "Numbers are read as px: a number or a px string (\"20px\"). A percentage, another unit or a keyword (other than letter-spacing: normal = 0) is listed as not measured; so is a value CSS cannot produce (a negative gap, padding or size).",
   "Positions are compared only where the export states one (absolute layers, render/ink boxes); auto-layout children are placed by their parent, whose position is compared.",
+  "A TEXT node's height is not compared (neither a Range nor its element gives the line box Figma's text box has), and the width of text the design truncates is not either (a Range spans the unclipped string). A fixed- or fill-width text is compared at its ink width within 3px — an empirical bound (field runs: −0.6…+2.4px); heavy italics or overhanging glyphs may exceed it.",
+  "Border widths are compared as CSS draws them: Chromium floors a computed border width to whole px, at least 1 (a 1.5px stroke is a 1px border). A ring (box-shadow spread, outline) is compared with the design's own width.",
+  "Severity follows the match (D30/D31): a node matched by position or a non-canonical rule is at most low, by text-ordinal or another screen's id (tag-alias) at most medium; a matched element far from the design's size gets one 'match (size)' row and its other deltas are capped at low (cappedFrom keeps the original, cappedBy says which cap). D39: an open capped delta blocks a plain pass (verdict incomplete, never fail on its own); a waiver on 'match (size)' lifts only the size cap — a match-confidence cap stays.",
 ];
 
 /** compare()'s options — the evidence the CLI ties the report to. `components` = the --interactions file's
@@ -844,6 +1132,8 @@ function fieldTolerance(label: string): number | null {
   if (label === "padding") return TOLERANCE.padding;
   if (label.startsWith("border-radius (")) return TOLERANCE.radius;
   if (label === "placement") return TOLERANCE.position;
+  if (label === "width (text ink)") return TOLERANCE.textInk;
+  if (label === "match (size)") return TOLERANCE.size;
   return null;
 }
 // ---- F-92: the previous round's deltas against this round's, keyed nodeId + field. A delta that is gone only
@@ -868,6 +1158,21 @@ interface CoverageNow {
   /** L-3: nodes whose `placement` (derived from the box) could not be judged this round — absent = an input
    *  (x/y/width/height) was not reported or null (lost coverage), else one was reported but is not a number */
   placementGaps?: Map<string, { absent: boolean; why: string }>;
+  /** D18 (group 11): the design values the expectation excludes by method (expectation.notComparable) — a previous
+   *  delta on one of them is now unverifiable, not fixed (a TEXT box width, padding a fixed box cannot show) */
+  notComparable?: Array<{ nodeId: string; field: string; why: string }>;
+}
+// D18 (group 11): is a previous delta's value now excluded by method (expectation.notComparable)? Padding is per side
+// (review LOW b): a `padding (left/right)` exclusion covers a previous padding delta only when every side that differed
+// is now skipped — a delta on the other axis is still the build's (fixed or open). Other fields: same base field.
+function excludedNow(d: VerifyDelta, nc: ReadonlyArray<{ nodeId: string; field: string; why: string }>): { why: string } | undefined {
+  const rows = nc.filter((g) => g.nodeId === d.nodeId && fieldBase(g.field) === fieldBase(d.field));
+  if (!rows.length) return undefined;
+  if (d.field !== "padding") return rows[0];
+  const skipped = new Set(rows.flatMap((g) => (/^padding \((.*)\)$/.exec(g.field)?.[1] ?? "").split("/")));
+  const e = Array.isArray(d.expected) ? d.expected : [], a = Array.isArray(d.actual) ? d.actual : [];
+  const differs = PAD_SIDES.filter((_, i) => { const x = e[i], y = a[i]; return typeof x === "number" && typeof y === "number" && Math.abs(x - y) > TOLERANCE.padding; });
+  return differs.length && differs.every((sd) => skipped.has(sd)) ? rows[0] : undefined;
 }
 function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow): NonNullable<VerifyAgainst["deltas"]> {
   const keyOf = (d: { nodeId?: unknown; field?: unknown }): string | null => (typeof d.nodeId === "string" && typeof d.field === "string" ? `${d.nodeId}\u0000${d.field}` : null);
@@ -901,7 +1206,7 @@ function deltaChanges(prev: VerifyDelta[], cur: VerifyDelta[], now: CoverageNow)
     const derived = d.field === "placement" ? now.placementGaps?.get(d.nodeId) : undefined;
     if (derived && derived.absent) { out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: `not measured this round: ${derived.why}` }); continue; }
     if (derived) { nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: derived.why }); continue; }
-    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d));
+    const method = gapRow ?? now.unverifiable.find((g) => sameField(g, d)) ?? excludedNow(d, now.notComparable || []);
     if (method) { nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: method.why }); continue; }
     out.fixed++;
   }
@@ -933,13 +1238,19 @@ const paintOf = (s: VerifySpec): string[] => PAINT_KEYS.filter((k) => s[k] !== u
 // counted as `other`, and a node that does not say is `unstated`. `sharedComponentPath` is compare's own
 // fallback (a measurement found under another screen's instance path).
 const MATCH_BUCKET: Record<string, string> = {
-  tag: "tag", "data-dt-node": "tag", "tag-shared-path": "tagSharedPath", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame",
+  tag: "tag", "data-dt-node": "tag", id: "tag", "tag-shared-path": "tagSharedPath", "tag-alias": "tagAlias", text: "text", "text-ordinal": "textOrdinal", position: "position", frame: "frame",
 };
-const MATCH_BUCKETS = ["tag", "tagSharedPath", "text", "textOrdinal", "position", "frame", "sharedComponentPath", "other", "unstated"] as const;
+const MATCH_BUCKETS = ["tag", "tagSharedPath", "tagAlias", "text", "textOrdinal", "position", "frame", "sharedComponentPath", "other", "unstated"] as const;
 const MATCH_LABEL: Record<string, string> = {
-  tag: "tag", tagSharedPath: "shared path", text: "text", textOrdinal: "ordinal", position: "position", frame: "frame",
+  tag: "tag", tagSharedPath: "shared path", tagAlias: "alias", text: "text", textOrdinal: "ordinal", position: "position", frame: "frame",
   sharedComponentPath: "shared component path", other: "other", unstated: "unstated",
 };
+// F-125 (D30): the canonical matchedBy vocabulary (the shipped probe's, probe-match.ts) and the cap each gets.
+// A hand-written probe's synonyms for a tag match ("data-dt-node", "id") read as "tag".
+const CANONICAL_MATCH = new Set<string>(CANONICAL_MATCHED_BY);
+const MATCH_SYNONYM: Record<string, string> = { "data-dt-node": "tag", id: "tag" };
+const NO_CAP = new Set<string>(["tag", "tag-shared-path", "text", "frame"] satisfies MatchedBy[]);
+const MEDIUM_CAP = new Set<string>(["text-ordinal", "tag-alias"] satisfies MatchedBy[]);
 // A TEXT spec's typography read off one of these without the probe naming the text run (textFrom) is the
 // container's font, not the text's (F-71: a 500-weight <button> around a 400-weight <span>).
 const TYPO_FIELDS = new Set<string>(["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color"]);
@@ -953,6 +1264,7 @@ const MEASURED_TOP_KEYS = {
   measuredAt: true, renderer: true, viewport: true, theme: true, artifacts: true, expectationSha256: true, mode: true, reason: true,
   nodes: true, components: true, interactions: true, consoleErrors: true, notMeasured: true, componentsMissing: true, probe: true,
   frame: true, frames: true, navigation: true, matchedByCensus: true, notes: true, runId: true, build: true,
+  tagsNotInExpectation: true,
 } as const satisfies Record<keyof VerifyMeasured, true>;
 // (a hand-written probe's top-level `navEvents` object is its page-wide navigation log — the canonical key is
 // `navigation`; the per-interaction count F-102 reads lives on each interactions[] row, never up here)
@@ -1058,8 +1370,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const tally = (key: string, present: boolean): void => { const c = census.get(key) || { expected: 0, present: 0 }; c.expected++; if (present) c.present++; census.set(key, c); };
   let fieldsChecked = 0, nodesMeasured = 0, nodesMatchedByComponentPath = 0, fieldsReportedNull = 0;
   const matchedByCensus: Record<string, number> = Object.fromEntries(MATCH_BUCKETS.map((b) => [b, 0]));
-  const positionMatched = new Set<string>(); // spec ids matched by position: their deltas are low-confidence
   const typographyOn = new Map<string, string>(); // TEXT spec id -> the container tag its typography was read from
+  const matchKind = new Map<string, string>(); // measured spec id -> how it was found (D33: through another screen's id?)
+  const matchCapOf = new Map<string, DeltaSeverity>(); // D30: a node's match-confidence cap (D39: a size waiver keeps it)
   // H2: the gaps where the measured node lacks the value (the key absent, or null) — the only kind that can LOSE a
   // previous delta; every other gap is the compare declining a value it has (a method gap, not lost coverage)
   const absentGaps = new Set<string>();
@@ -1121,9 +1434,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     }
     nodesMeasured++;
     const rawMatch = typeof m.matchedBy === "string" ? m.matchedBy : "";
+    matchKind.set(String(spec.nodeId), matchedBy && matchedBy.startsWith("shared-component-path") ? "shared-component-path" : rawMatch);
     const bucket = matchedBy && matchedBy.startsWith("shared-component-path") ? "sharedComponentPath" : rawMatch === "" ? "unstated" : MATCH_BUCKET[rawMatch] ?? "other";
     matchedByCensus[bucket] = (matchedByCensus[bucket] ?? 0) + 1;
-    if (/^position/i.test(rawMatch)) positionMatched.add(String(spec.nodeId));
     // DT-43: a null is the probe saying "I could not read this" — listed as not measured with its reason
     // (the shipped probe's unmeasured[key]), never compared, never counted as checked.
     const base: MeasuredStyles = m.styles || m;
@@ -1156,14 +1469,24 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const table = got.tag && TABLE_TAGS.has(String(got.tag).toLowerCase());
     const onLeaf = !!(CONTAINER_TYPES.has(spec.type) && got.tag && LEAF_TAGS.has(String(got.tag).toLowerCase()));
     const leafWhy = onLeaf ? `this ${spec.type}'s id sits on a leaf <${String(got.tag).toLowerCase()}> inside the element that implements it (a ...rest spread?) — tag and measure the container` : "";
+    const rowTag = ROW_TAGS.has(tagLc);
+    const inline = CONTAINER_TYPES.has(spec.type) && typeof got.display === "string" && got.display.trim() === "inline";
+    // DT-75: copy that differs renders a different width (and a centred/right-aligned start) — judge the copy first
+    const textDiffers = isText && spec.text !== undefined && typeof got.text === "string" && normText(spec.text) !== normText(got.text);
+    const firstDelta = deltas.length; // this node's deltas: deltas.slice(firstDelta) (D30/D31 caps below)
 
-    for (const f of FIELDS) {
-      const want0 = spec[f.key];
+    for (const f0 of FIELDS) {
+      const want0 = spec[f0.key];
       if (want0 === undefined) continue;
+      // D29: a fixed/fill-width TEXT's width is its INK width — its own label and tolerance
+      const f: Field = isText && f0.key === "width" && spec.widthFrom === "renderBox" ? { ...f0, label: "width (text ink)", tol: TOLERANCE.textInk } : f0;
       let val: JsonValue | undefined = got[f.key];
       let nullKeys: string[] = [f.key];
       let present = val !== undefined;
-      if (isText && tb && (f.key === "x" || f.key === "width")) { val = f.key === "x" ? tb.x : tb.w; present = val !== undefined; nullKeys = ["textBox", f.key]; }
+      // F-62 (D29): a TEXT's x/width come ONLY from textBox (a Range over its characters) — never its element's box,
+      // which a flex-1 <span> or a padded cell stretches past the words
+      const textXW = isText && (f.key === "x" || f.key === "width");
+      if (textXW) { val = tb ? (f.key === "x" ? tb.x : tb.w) : got.textBox === null ? null : undefined; present = val !== undefined; nullKeys = ["textBox", f.key]; }
       // gapVisual wins when it holds a value; the shipped probe sends every key, so a null gapVisual (not a
       // table) must not hide a measured gap.
       if (f.key === "gap" && got.gapVisual !== undefined && (got.gapVisual !== null || val == null)) { val = got.gapVisual; present = true; nullKeys = ["gapVisual", "gap"]; }
@@ -1173,9 +1496,14 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
       tally(f.key, present);
 
-      if (state && measuredIn === "rest" && spec.drawnStateOwn && f.colour) { gap(spec, f.label, stateWhy); continue; }
+      // (DT-74: opacity too — hover-revealed content reads 0 at rest; any layer inside a drawn state, not only the owner)
+      if (state && measuredIn === "rest" && ((spec.drawnStateOwn && f.colour) || f.key === "opacity")) { gap(spec, f.label, stateWhy); continue; }
       if (onLeaf && LEAF_FIELDS.has(f.key)) { gap(spec, f.label, leafWhy); continue; }
-      if (isText && f.box && container && !tb) {
+      if (inline && INLINE_BOX_FIELDS.has(f.key)) { gap(spec, f.label, inlineWhy(tagLc)); continue; }
+      if (f.key === "borderRadius" && rowTag) { gap(spec, f.label, ROW_RADIUS_WHY); continue; }
+      if (textXW && textDiffers) { gap(spec, f.label, "the text differs from the design's, so its width (and a centred or right-aligned start) does too — compared once the copy matches"); continue; }
+      if (textXW && val === undefined) { gap(spec, f.label, "report textBox {x,w} — a Range over the text's characters; a TEXT's x/width are never read off its element's box", true); continue; }
+      if (isText && f.box && container && !tb && !textXW) {
         if (got.textBox === null && f.key !== "height") { gapNull(f.label, "textBox"); continue; }
         gap(spec, f.label, `this TEXT node's id sits on a <${got.tag || "container"}>${Array.isArray(got.padding) && got.padding.some((v) => (cssPx(v) ?? 0) > 0) ? " with padding" : ""}, whose box is not the text's — report textBox (a Range over the text) instead`);
         continue;
@@ -1222,6 +1550,13 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       }
       fieldsChecked++;
       let want: JsonValue = want0, have: JsonValue = val;
+      let strokeNote: string | undefined;
+      if (f.key === "borderWidth" && typeof want0 === "number") {
+        const ring = got.strokeFrom === "box-shadow" || got.strokeFrom === "outline";
+        if (!ring && cssBorderWidth(want0) !== want0) { want = cssBorderWidth(want0); strokeNote = `the design's ${want0}px stroke draws as a ${want}px CSS border (computed border widths are whole px, at least 1)`; }
+        // a ring drawn on the other side of the box than the design's stroke: noted, never a delta of its own
+        if (ring && got.strokeAlign && spec.strokeAlign && spec.strokeAlign !== "center" && got.strokeAlign !== spec.strokeAlign) strokeNote = `read from a ${got.strokeFrom} ring ${got.strokeAlign} the box; the design's stroke is ${spec.strokeAlign}`;
+      }
       if (f.key === "borderRadius") {
         const c = radiusCorners(val);
         if (!c) { gap(spec, f.label, `could not read '${JSON.stringify(val)}' as a px radius`); fieldsChecked--; continue; }
@@ -1240,12 +1575,15 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
           ...ifDefined("unit", f.unit), ...ifDefined("token", tokenFor(spec, f.key)), ...(measuredIn !== "rest" ? { measuredIn } : {}),
           ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
           ...(f.key === "borderRadius" && spec.borderRadius !== want ? { note: `design radius ${spec.borderRadius} on a ${spec.width}×${spec.height} box draws ${want}` } : {}),
+          ...ifDefined("note", strokeNote),
         });
       }
     }
 
     // ---- per-corner radius (unequal corners)
     if (spec.radiusCorners && onLeaf) gap(spec, "border-radius", leafWhy);
+    else if (spec.radiusCorners && inline) gap(spec, "border-radius", inlineWhy(tagLc));
+    else if (spec.radiusCorners && rowTag) { tally("borderRadius", got.borderRadius !== undefined); gap(spec, "border-radius", ROW_RADIUS_WHY); }
     else if (spec.radiusCorners) {
       const rc = spec.radiusCorners;
       const c = radiusCorners(got.borderRadius);
@@ -1271,15 +1609,18 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       if (got.padding === undefined) gap(spec, "padding", "the probe did not report this property", true);
       else if (got.tag && String(got.tag).toLowerCase() === "tr") gap(spec, "padding", "a table row's padding lives on its cells — report the first/last cell's padding under this id");
       else if (onLeaf) gap(spec, "padding", leafWhy);
+      else if (inline) gap(spec, "padding", inlineWhy(tagLc));
       else if (got.padding === null || (Array.isArray(got.padding) && got.padding.some((v) => v === null))) gapNull("padding", "padding");
       else if (!pad) gap(spec, "padding", `could not read '${JSON.stringify(got.padding)}' as px padding [t,r,b,l]`);
       else if (pad.some((v) => v < 0)) gap(spec, "padding", `${JSON.stringify(got.padding)} is impossible for padding (CSS cannot make it negative) — a measuring artefact; not compared`);
       else {
         fieldsChecked++;
-        const bad = comparePadding(spec.padding, pad);
+        const bad = comparePadding(spec.padding, pad, spec.paddingSkip);
         const allZero = pad.every((v) => v === 0);
-        if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")),
-          ...(allZero && !got.tag ? { note: "measured 0 on every side — if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" } : {}) });
+        const skipNote = spec.paddingSkip && spec.paddingSkip.length ? `${spec.paddingSkip.join("/")} not compared (the design cannot show that padding — see notComparable)` : undefined;
+        const zeroNote = allZero && !got.tag ? "measured 0 on every side — if this id sits on a <tr> or a wrapper, the padding lives on its cells/child: report `tag` and measure the element that carries it" : undefined;
+        const padNote = [zeroNote, skipNote].filter((x): x is string => !!x).join("; ");
+        if (bad) push(spec, "padding", "medium", bad, { unit: "px", ...ifDefined("token", tokenFor(spec, "padding")), ...(padNote ? { note: padNote } : {}) });
       }
     }
     if (spec.placeholderText !== undefined) {
@@ -1376,15 +1717,53 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
             : "the design places this node inside the frame; the build renders it outside, where the user cannot see it without scrolling" });
       }
     }
+
+    // ---- F-65 (D31): is this the element the design means? A matched box far from the design's size (>=2x or
+    // <=1/2 on an axis AND >=8px off) is one medium `match (size)` row, and every other delta of the node is capped
+    // at low (they describe some other element). A hug axis (or a frame root's height — the page scrolls) that only
+    // GREW counts only when the other axis is off too: more content legitimately grows it.
+    const own = deltas.slice(firstDelta);
+    let sizeRow: VerifyDelta | undefined;
+    if (!isText && !onLeaf && !inline) {
+      const ew = num(spec.width) ? spec.width : null, eh = num(spec.height) ? spec.height : null;
+      const mw = cssPx(got.width), mh = cssPx(got.height);
+      const off = (e: number | null, m: number | null): boolean => e !== null && m !== null && Math.abs(m - e) >= 8 && (Math.min(e, m) <= 0 || Math.max(m / e, e / m) >= 2);
+      const frameRoot = spec.nodeId === frameOf(spec).nodeId;
+      const growOnlyW = spec.sizing?.w === "hug" && ew !== null && mw !== null && mw > ew;
+      const growOnlyH = (spec.sizing?.h === "hug" || frameRoot) && eh !== null && mh !== null && mh > eh;
+      const rawW = off(ew, mw), rawH = off(eh, mh);
+      if ((rawW && (!growOnlyW || rawH)) || (rawH && (!growOnlyH || rawW))) {
+        const dist = Math.max(ew !== null && mw !== null ? Math.abs(mw - ew) : 0, eh !== null && mh !== null ? Math.abs(mh - eh) : 0);
+        sizeRow = { severity: "medium", nodeId: spec.nodeId, name: spec.name, ...ifDefined("path", spec.path), field: "match (size)", expected: [ew, eh], actual: [mw, mh], delta: r2(dist), unit: "px",
+          ...ifDefined("matchedBy", matchedBy !== "id" ? matchedBy || undefined : undefined),
+          note: "the matched element is far from the design's size — likely the wrong element (a wrapper, a page root, a neighbour); this node's other deltas are capped at low. Tag the element the design means, or accept the match (verify-screen --accept --field \"match (size)\")" };
+        deltas.push(sizeRow);
+      }
+    }
+    // ---- F-125 (D30): severity is capped by how the element was found. tag / tag-shared-path / text / frame / a
+    // shared component path / unstated: no cap; text-ordinal and tag-alias: at most medium; position and any matchedBy
+    // outside the canonical vocabulary (a hand-written "position-partial-size", "structural"): at most low.
+    const canon = MATCH_SYNONYM[rawMatch] ?? rawMatch;
+    const cap: DeltaSeverity | null = rawMatch === "" || NO_CAP.has(canon) ? null : MEDIUM_CAP.has(canon) ? "medium" : "low";
+    if (cap) matchCapOf.set(String(spec.nodeId), cap);
+    for (const d of [...own, ...(sizeRow ? [sizeRow] : [])]) {
+      let sev = d.severity;
+      const why: string[] = [];
+      const by: NonNullable<VerifyDelta["cappedBy"]> = [];
+      if (sizeRow && d !== sizeRow && SEVERITY_RANK[sev] < SEVERITY_RANK.low) { sev = "low"; by.push("size"); why.push("capped at low: the matched element's size is far from the design's (see match (size))"); }
+      // (recorded whenever the match cap is below the ORIGINAL severity — it still binds if the size cap is lifted)
+      if (cap && SEVERITY_RANK[d.severity] < SEVERITY_RANK[cap]) by.push("match");
+      if (cap && SEVERITY_RANK[sev] < SEVERITY_RANK[cap]) { sev = cap; why.push(`capped at ${cap}: matched by ${rawMatch}${canon === rawMatch && !CANONICAL_MATCH.has(canon) ? " (not a canonical matchedBy)" : ""}, not by its data-dt-node tag — the element measured may not be the one the design means`); }
+      if (sev !== d.severity) { d.cappedFrom = d.severity; d.cappedBy = by; d.severity = sev; d.note = d.note ? `${d.note}; ${why.join("; ")}` : why.join("; "); }
+    }
   }
 
-  // ---- notes that change how far a delta can be trusted, never its severity
+  // ---- notes that change how far a delta can be trusted (the match caps above change severity)
   const addNote = (d: VerifyDelta, note: string): void => { d.note = d.note ? `${d.note}; ${note}` : note; };
   const typoLabels = new Set(FIELDS.filter((f) => TYPO_FIELDS.has(f.key)).map((f) => f.label));
   for (const d of deltas) {
     const tag = typographyOn.get(String(d.nodeId));
     if (tag && typoLabels.has(d.field)) addNote(d, `typography read from a <${tag}>, not the text run — if the text sits in a child element, measure that element (the shipped probe does, and says textFrom)`);
-    if (positionMatched.has(String(d.nodeId))) addNote(d, "low confidence: this node was matched by position, not by its data-dt-node tag or its text — the element measured may not be the one the design means");
   }
 
   // ---- measured ids the expectation does not know (the "134 measured vs 63 matched" case): a probe that
@@ -1392,6 +1771,22 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const knownIds = new Set([...expectedIds, ...hiddenSet, ...[expectation.frame, ...(expectation.frames || [])].map((f) => f && f.nodeId).filter((id): id is string => typeof id === "string")]);
   for (const id of expectedIds) { const alt = viaSharedPath(id); if (alt) knownIds.add(alt); }
   const measuredIdsNotInExpectation = [...byId.keys()].filter((id) => !knownIds.has(id));
+  // ---- DT-47: tags on the page that name no node of this expectation (the shipped probe's tagsNotInExpectation) and
+  // a hand-written probe's measured ids outside it, classified: prefixDrift — the `;` suffix of an expected id under
+  // another instance prefix (a stale id table, another pull's ids); alias — another screen's id for one of these
+  // nodes (D32); unknown — neither. Informational: the verdict never reads it.
+  const tniRaw: unknown = measured.tagsNotInExpectation;
+  const tni = isJsonObject(tniRaw) && typeof tniRaw.count === "number" && Array.isArray(tniRaw.ids) ? { count: tniRaw.count, ids: tniRaw.ids.filter(isJsonObject).map((r) => r.id).filter((x): x is string => typeof x === "string") } : null;
+  const foreignListed = [...new Set([...(tni ? tni.ids : []), ...measuredIdsNotInExpectation])];
+  const foreignTotal = (tni ? Math.max(tni.count, tni.ids.length) : 0) + measuredIdsNotInExpectation.filter((id) => !(tni && tni.ids.includes(id))).length;
+  const expectedSuffixes = new Set([...expectedIds].map(idSuffix).filter((x): x is string => x !== null));
+  const aliasIds = new Set(specs.flatMap((sp) => sp.aliases || []));
+  const foreignClass = (id: string): "prefixDrift" | "alias" | "unknown" => { const sf = idSuffix(id); return sf !== null && expectedSuffixes.has(sf) ? "prefixDrift" : aliasIds.has(id) ? "alias" : "unknown"; };
+  const prefixDrift = foreignListed.filter((id) => foreignClass(id) === "prefixDrift").length;
+  const aliasTags = foreignListed.filter((id) => foreignClass(id) === "alias").length;
+  // (ids past the probe's list of 50 are not classified — they count as unknown)
+  const foreignTags = foreignTotal > 0 ? { total: foreignTotal, prefixDrift, alias: aliasTags, unknown: foreignTotal - prefixDrift - aliasTags,
+    sample: [...foreignListed.filter((id) => foreignClass(id) === "unknown"), ...foreignListed.filter((id) => foreignClass(id) !== "unknown")].slice(0, 5) } : undefined;
 
   // ---- fields in FIELDS that the probe never reported under the canonical key (finding 182)
   const fieldsNeverMeasured: VerifyCoverageV2["fieldsNeverMeasured"] = [];
@@ -1426,6 +1821,37 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     if (v.nodeIds.some((id) => viaSharedPath(id))) { setsViaSharedPath++; continue; }
     untaggedInstanceSets.push(v);
   }
+  // ---- D33 (DT-31, F-96): the shared shell, counted apart (informational — never the verdict). An OUTERMOST instance
+  // (an `I<instance>;…` id names its outermost instance; a plain id is one when it is an instance) is a shared shell
+  // when any node under it was matched through ANOTHER screen's id (tag-shared-path, tag-alias, compare's shared
+  // component path), or the plan marks it (anchors[<instance id>].shared: true).
+  const visibleInstances = (expectation.instances || []).filter((i) => !hiddenSet.has(String(i.nodeId)));
+  const instanceById = new Map(visibleInstances.map((i) => [String(i.nodeId), i]));
+  const outermostOf = (id: string): string | null => {
+    const outer = id.startsWith("I") && id.includes(";") ? id.slice(1, id.indexOf(";")) : id;
+    return instanceById.has(outer) ? outer : null;
+  };
+  const foldedIds = new Set(folded.map((f) => f.nodeId));
+  const shellGroups = new Map<string, { expected: number; measured: number; viaOther: boolean }>();
+  for (const sp of specs) {
+    const id = String(sp.nodeId);
+    const outer = outermostOf(id);
+    if (!outer || foldedIds.has(id)) continue;
+    const g = getOrInit(shellGroups, outer, () => ({ expected: 0, measured: 0, viaOther: false }));
+    g.expected++;
+    const how = matchKind.get(id);
+    if (how !== undefined) g.measured++;
+    if (how === "tag-shared-path" || how === "tag-alias" || how === "shared-component-path") g.viaOther = true;
+  }
+  const shellIds = new Set([...shellGroups].filter(([id, g]) => g.viaOther || (anchors[id] && anchors[id].shared === true)).map(([id]) => id));
+  const sharedShell: VerifyCoverageV2["sharedShell"] = shellIds.size ? (() => {
+    const rows = [...shellIds].map((id) => { const i = instanceById.get(id); const g = shellGroups.get(id); return { nodeId: id, name: i ? i.name : id, ...ifDefined("setName", i && i.setName), expected: g ? g.expected : 0, measured: g ? g.measured : 0 }; });
+    return { instances: rows, expected: rows.reduce((a, r) => a + r.expected, 0), measured: rows.reduce((a, r) => a + r.measured, 0) };
+  })() : undefined;
+  // F-96: an untagged instance set that lives only inside the shared shell is not this screen's work — listed apart
+  const untaggedInstanceSetsInShell = untaggedInstanceSets.filter((v) => shellIds.size > 0 && v.nodeIds.every((id) => { const o = outermostOf(String(id)); return o !== null && shellIds.has(o); }));
+  const untaggedOnScreen = untaggedInstanceSets.filter((v) => !untaggedInstanceSetsInShell.includes(v));
+
   const componentsAbsent: VerifyReportV2["componentsAbsent"] = [];
   for (const c of comps.filter((c) => c && c.present === false)) {
     const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || (c.nodeId !== undefined && v.nodeIds.includes(c.nodeId)));
@@ -1447,6 +1873,9 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   // D20: the owner's descopes — bound to the export like a waiver; a re-export reopens them.
   const exportSha = expectation.exportContentSha256;
   const inputNotes = [...(Array.isArray(opts.inputNotes) ? opts.inputNotes : [])];
+  // review LOW d: expectation.tolerance carries textInk since group 11 — one without it was written by an older
+  // verify-screen (TEXT box widths, no paddingSkip/aliases)
+  if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === undefined) inputNotes.push("expectation written by an older verify-screen (before group 11: TEXT box widths, no aliases) — re-run --expect");
   const reopened: VerifyReportV2["waivers"]["reopened"] = [];
   const unused: VerifyReportV2["waivers"]["unused"] = [];
   const descopeRows: PlanDescope[] = [];
@@ -1528,7 +1957,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     const cands = deltas.filter((d) => d.nodeId === w.nodeId && d.field === w.field && !d.accepted);
     if (!cands.length) {
       const fieldGap = fieldsNotMeasured.some((g) => g.nodeId === w.nodeId && g.field === w.field) ? "that value was not measured this round — only a measured delta can be accepted" : undefined;
-      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? "no such delta this round — fixed? drop the waiver" });
+      // review LOW c: a TEXT width waiver from before group 11 — the field is the ink width now, a different value
+      const inkNow = w.field === "width" && (deltas.some((d) => d.nodeId === w.nodeId && d.field === "width (text ink)") || specs.some((sp) => sp.nodeId === w.nodeId && sp.widthFrom === "renderBox"))
+        ? "the field is now 'width (text ink)' (group 11) — re-accept against the new report" : undefined;
+      unused.push({ nodeId: w.nodeId, field: w.field, why: notWaivable.get(w.nodeId) ?? fieldGap ?? inkNow ?? "no such delta this round — fixed? drop the waiver" });
       return;
     }
     if (!exportSha || w.exportContentSha256 !== exportSha) {
@@ -1546,6 +1978,20 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     reopened.push({ nodeId: w.nodeId, field: w.field,
       why: c0 ? `built value moved: was ${fmt(w.built)}, now ${fmt(c0.actual)}` : `designed value changed: was ${fmt(w.designed)}, now ${fmt(cands[0]?.expected)}` });
   });
+
+  // ---- D39 (refined): the owner accepted a `match (size)` row — the element IS the node, so the SIZE cap on its other
+  // deltas is lifted (a real high then fails). A D30 match-confidence cap stays: how the element was found has not changed.
+  for (const sz of deltas.filter((d) => d.field === "match (size)" && d.accepted)) {
+    const mcap = matchCapOf.get(String(sz.nodeId));
+    for (const d of deltas) {
+      if (d === sz || d.nodeId !== sz.nodeId || !d.cappedFrom || !(d.cappedBy || []).includes("size")) continue;
+      const orig = d.cappedFrom;
+      const sev: DeltaSeverity = mcap && SEVERITY_RANK[orig] < SEVERITY_RANK[mcap] ? mcap : orig;
+      d.severity = sev;
+      if (sev === orig) { delete d.cappedFrom; delete d.cappedBy; } else d.cappedBy = ["match"];
+      d.note = `${d.note ? `${d.note}; ` : ""}size cap lifted: the owner accepted this element (waiver on match (size))${sev !== orig ? ` — still capped at ${sev} by how it was matched` : ""}`;
+    }
+  }
 
   // ---- F-76: presentational groups — one cause, many rows. Counts and verdict stay per delta.
   // (a) a placement delta inside another node with a placement delta belongs to the OUTERMOST such ancestor's
@@ -1631,6 +2077,10 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   }
   const integrity = [...reasons];
   const integrityFailed = integrity.length > 0;
+  // D39 (review H1): a capped delta keeps its lower severity, but the match behind it is not trusted — any open one
+  // blocks a plain pass (and a pass-with-deviations): incomplete, never fail on its own
+  const lowConfidence = open.filter((d) => d.cappedFrom !== undefined).length;
+  if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches — tag these elements`);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering — regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered — the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk — nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
@@ -1671,6 +2121,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     deltasAccepted: accepted,
     nodesFolded: folded.length,
     matchedBy: matchedByCensus,
+    ...ifDefined("sharedShell", sharedShell),
   };
 
   // ---- D18: coverage against the previous round. Printed, recorded, and NEVER part of the verdict — a
@@ -1691,7 +2142,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       nodesExpected: { before: pc && num(pc.nodesExpected) ? pc.nodesExpected : null, after: nodesExpected },
       probeChanged: prevSha === null && curSha === null ? null : prevSha !== curSha,
       expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
-      ...(Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, { notMeasured, fieldsNotMeasured, unverifiable, specIds: new Set(specs.map((sp) => String(sp.nodeId))), absent: absentGaps, placementGaps,
+      ...(Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, { notMeasured, fieldsNotMeasured, unverifiable, notComparable: expectation.notComparable || [], specIds: new Set(specs.map((sp) => String(sp.nodeId))), absent: absentGaps, placementGaps,
         sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256) }) } : {}),
       sameBuild: prevBuild && buildNow ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null,
     };
@@ -1713,7 +2164,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
   const headline =
     `${mark} — ` +
     (systemic.length ? `NEVER MEASURED: ${systemic.map((f) => `'${f.field}' present on 0 of ${f.expectedOn} nodes that state it${f.probeSent ? ` (probe sent '${f.probeSent.join("', '")}')` : ""}`).join("; ")} · ` : "") +
-    `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""} · ${fieldsChecked} values compared · ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` +
+    `nodes measured ${nodesMeasured}/${nodesExpected}${folded.length ? ` (${folded.length} folded)` : ""}${sharedShell ? ` (shared shell ${sharedShell.measured}/${sharedShell.expected})` : ""} · ${fieldsChecked} values compared · ${high} high${highCauses < high ? ` (${highCauses} cause${highCauses === 1 ? "" : "s"})` : ""}, ${medium} medium` +
+    (lowConfidence ? ` (+${lowConfidence} capped on low-confidence matches)` : "") +
     (accepted ? ` · ${accepted} accepted` : "") + (reopened.length ? ` · ${reopened.length} waiver(s) REOPENED` : "") + " · " +
     // (not a verdict reason, like ::placeholder colour — but never silent: an <img> icon's fill is not a pass)
     (unverifiable.length ? `${unverifiable.length} value(s) unverifiable by method · ` : "") +
@@ -1725,6 +2177,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     // group 10 — informational, never the verdict
     (unmatchedCount ? ` · ${unmatchedCount} probe result(s) matched no designed interaction` : "") +
     (lost ? ` · LOST COVERAGE on ${lost} earlier delta(s)` : "") +
+    (foreignTags ? ` · ${foreignTags.total} foreign tag(s) (${foreignTags.prefixDrift} prefix drift, ${foreignTags.alias} alias, ${foreignTags.unknown} unknown)` : "") +
     (sameBuildServed && against ? ` · SAME BUILD SERVED as ${against.report} although the code changed (stale preview/dist?)` : "");
 
   return {
@@ -1742,10 +2195,11 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     integrity,
     coverage,
     summary: { high, medium, low: open.filter((d) => d.severity === "low").length, componentsAbsent: componentsAbsent.length, interactionsFailed: interactionsFailed.length, interactionsNotProbed: interactionsNotProbed.length,
-      accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, highCauses },
+      accepted, descoped: interactionsDescoped.length, undesigned: interactionsUndesigned.length, highCauses, lowConfidence },
     deltas: deltas.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]),
     componentsAbsent,
-    untaggedInstanceSets,
+    untaggedInstanceSets: untaggedOnScreen,
+    ...(untaggedInstanceSetsInShell.length ? { untaggedInstanceSetsInShell } : {}),
     interactions,
     notMeasured,
     fieldsNotMeasured,
@@ -1763,6 +2217,7 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       measuredIdsOnHiddenLayers: [...byId.keys()].filter((id) => hiddenSet.has(id)).length,
       measuredIdsNotInExpectation: measuredIdsNotInExpectation.length,
       measuredIdsNotInExpectationSample: measuredIdsNotInExpectation.slice(0, 5),
+      ...ifDefined("foreignTags", foreignTags),
       ...(inputNotes.length ? { inputNotes } : {}),
     },
     ...ifDefined("against", against),
@@ -1809,6 +2264,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   L.push("## What was actually checked", "");
   L.push("| | |", "|---|---|");
   L.push(`| node specs measured | ${c.nodesMeasured} / ${c.nodesExpected}${c.nodesMatchedByComponentPath ? ` (${c.nodesMatchedByComponentPath} via a shared component's internal path)` : ""}${c.nodesFolded ? ` (+${c.nodesFolded} folded into a measured ancestor, out of the count)` : ""} |`);
+  if (c.sharedShell) L.push(`| of which in a shared shell (informational — matched through another screen's id, or plan anchors[id].shared) | ${c.sharedShell.measured} / ${c.sharedShell.expected} in ${c.sharedShell.instances.map((i) => `${i.name} \`${i.nodeId}\` ${i.measured}/${i.expected}`).join(", ")} |`);
   L.push(`| individual values compared | ${c.fieldsChecked} |`);
   L.push(`| values on measured nodes the probe did not report | ${c.fieldsNotMeasured} |`);
   if (c.fieldsNeverMeasured.length) L.push(`| **fields present in 0 measurements** | ${c.fieldsNeverMeasured.map((f) => `\`${f.field}\`${f.probeSent ? ` (probe sent \`${f.probeSent.join("`, `")}\`)` : ""}`).join(", ")} |`);
@@ -1906,6 +2362,13 @@ function reportToMarkdown(r: VerifyReportV2): string {
     if (r.untaggedInstanceSets.length > 40) L.push(`- …and ${r.untaggedInstanceSets.length - 40} more`);
     L.push("");
   }
+  const inShell = r.untaggedInstanceSetsInShell || [];
+  if (inShell.length) {
+    L.push(`## Instance sets with no evidence, inside the shared shell (${inShell.length})`, "", "*Built once for every screen (F-96): listed apart, not this screen's work. Not a failure on its own.*", "");
+    for (const m of inShell.slice(0, 40)) L.push(`- ${m.setName} — ${m.instances} instance(s), e.g. \`${m.nodeIds[0]}\``);
+    if (inShell.length > 40) L.push(`- …and ${inShell.length - 40} more`);
+    L.push("");
+  }
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
@@ -1946,7 +2409,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
     L.push("");
   }
   const p: Partial<VerifyReportV2["probe"]> = r.probe || {};
-  if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || (p.inputNotes && p.inputNotes.length)) {
+  if ((p.unknownKeys && p.unknownKeys.length) || (p.unknownTopLevelKeys && p.unknownTopLevelKeys.length) || p.duplicateNodeIds || p.interactionEvidenceOnHiddenLayers || p.measuredIdsOnHiddenLayers || p.measuredIdsNotInExpectation || p.foreignTags || (p.inputNotes && p.inputNotes.length)) {
     L.push("## About the probe's input", "");
     for (const k of p.unknownKeys || []) L.push(`- key \`${k.key}\` (${k.count}×) is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
     for (const k of p.unknownTopLevelKeys || []) L.push(`- top-level key \`${k.key}\` is not read by verify-screen${k.canonical ? ` — the canonical key is \`${k.canonical}\`` : ""}`);
@@ -1955,6 +2418,8 @@ function reportToMarkdown(r: VerifyReportV2): string {
     for (const n of p.inputNotes || []) L.push(`- ${n}`);
     if (p.measuredIdsNotInExpectation) L.push(`- ${p.measuredIdsNotInExpectation} measured node id(s) are not in the expectation (e.g. ${(p.measuredIdsNotInExpectationSample || []).map((id) => `\`${id}\``).join(", ")}) — measured against another screen or an older expectation?`);
     if (p.interactionEvidenceOnHiddenLayers) L.push(`- ${p.interactionEvidenceOnHiddenLayers} interaction result(s) are for hidden layers and were ignored — a hidden layer cannot be driven`);
+    const ft = p.foreignTags;
+    if (ft) L.push(`- ${ft.total} tag(s)/id(s) on the page name no node of this expectation (informational): ${ft.prefixDrift} prefix drift (an expected node's \`;\` path under another instance id — a stale or other screen's id table?), ${ft.alias} another screen's id for one of these nodes (alias), ${ft.unknown} unknown${ft.sample.length ? ` — e.g. ${ft.sample.map((id) => `\`${id}\``).join(", ")}` : ""}`);
     L.push("");
   }
   L.push("## Limits of this method", "");
@@ -2138,7 +2603,10 @@ function main(argv: string[]): number | Promise<number> {
     const seen = new Set(rootRows.map((l) => `${l.id}\u0000${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\u0000${l.sourceFile ?? ""}`))];
     // (rows only: the root index's own top-level sourceFile names its last walk, not the page-dir rows merged in — review M2)
-    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers } } : null);
+    // D32: sibling screen exports (aliases for a shared shell's nodes) — read lazily, only the same file's rows
+    const exportRoot = path.join("design", "export");
+    const readSibling = (file: string): ScreenDoc | null => readJsonOrNull(path.join(exportRoot, file), isScreenDoc);
+    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers }, readSibling } : null);
     // P3 #152: `--expect` run once by base name and once by a nickname for the SAME screen wrote
     // two byte-identical files (`positions___7314_87192.expected.json` and `JobRoles.expected.json`)
     // because nothing tied the output name to the screen's own identity. Defaulting to the FIRST
