@@ -30,13 +30,27 @@ then requires a quiet window (no navigation, no DOM churn) before measuring, and
 then exit 4 with nothing written). It does not use `networkidle` — Playwright's docs discourage it, and a
 page with polling or a dev-server socket never reaches it. Do not re-implement any of this by hand.
 
+A screen that is a section of the app (chosen by component state, not the URL) is reached with `--steps <plan.json>`
+(the plan's `navigate`: `click` / `waitFor` / `goto <same-origin path>` — closed, navigation-only, exactly one visible
+match per `click` (a `waitFor` needs at least one), a click never submits; replayed on every page load, a failing step while measuring is exit 4 with
+nothing written; a click either changes the page in place or navigates to ANOTHER URL — a click that reloads the same URL
+loses what it built, one re-run, then exit 4 naming the step; always pass `--ready` with the screen root's tag, or end the
+steps with a `waitFor` of it — a click that lands on another page, a login bounce, is still the step's own). The plan's `route` is advisory. After measuring, the probe drives the overlay/swap `on_click` /
+`on_press` interactions and plan `expect: "dialog"` rows (`on_click` / `on_press` only) itself — skipping a disabled
+opener (`:disabled` / `[disabled]` / `aria-disabled`, on it or an ancestor) and one that would submit a form (`ok: null`), revealing a hover-hidden opener, clicking with the real
+mouse, watching the dialog contract (`:modal`, `dialog[open]`, `[role=dialog]`, `[role=alertdialog]`,
+`[aria-modal="true"]`, `:popover-open`) with the destination frame's `data-dt-node` on or inside the opened element (or on a newly visible ancestor of it) — and
+records `ok: true` or `ok: null`, never `ok: false`. Do not re-drive those rows, and a detector you write by hand uses
+the same contract, never `[role=dialog]` alone. The probe also reads the page's sideways overflow at the design width
+(`overflowX`, a high waivable delta on the root frame).
+
 ## Per-stack rendering
 Use what the project already has; suggest adding the lightest option if nothing exists, and ask before
 installing dependencies.
 
 | Stack | Render | Structure dump |
 |---|---|---|
-| Web (React/Tailwind/CSS Modules) | `<scripts>/verify-probe.js` (drives the project's Playwright and measures; `--check` first). By hand only for looking around: Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
+| Web (React/Tailwind/CSS Modules) | `<scripts>/verify-probe.js` (drives the project's Playwright and measures; `--check` first; `--steps <plan.json>` for a screen reached by clicks). By hand only for looking around: Playwright (or the Playwright MCP): `page.setViewportSize({width: w, height: h})`, `deviceScaleFactor` matching the `.png`, `locator.screenshot()` of the screen root | `getBoundingClientRect()` + `getComputedStyle()` per element; axe-core for a11y |
 | iOS SwiftUI / UIKit | swift-snapshot-testing (`assertSnapshot(of: view, as: .image(layout: .fixed(width: w, height: h)))`), or an Xcode Preview / `xcrun simctl io booted screenshot` on a matching device | `.recursiveDescription` / `dump` strategy for the view hierarchy; Accessibility Inspector |
 | Android Compose | Roborazzi (Robolectric, renders `@Preview`s, `captureRoboImage`) or Paparazzi; `@Preview(widthDp = w, heightDp = h)`; `compose-preview-screenshot-testing` | Roborazzi `.uitree.json` / `composeTestRule.onRoot().printToLog()` semantics tree |
 | React Native | Detox/Maestro screenshot on a simulator/emulator at the frame's size; or react-native-web + Playwright for layout-only checks | `toJSON()` from react-test-renderer; accessibility props |

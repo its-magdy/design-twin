@@ -24,6 +24,10 @@ import type { Candidate, CollectOutput, ElemFlags, MeasureResult, SizedCandidate
 import { errorKind, installHint, resolvePlaywright } from "../design-to-code/verify-probe.ts";
 import type { VerifySpec } from "../design-to-code/types.ts";
 import { must } from "./fixtures.ts";
+import type * as PDT from "../design-to-code/probe-drive.ts";
+import type { VerifyExpectation, VerifyInteraction } from "../design-to-code/types.ts";
+// group 12a: probe-drive.ts is loaded dynamically so this file still RUNS on a tree without it (the "fails before" check)
+const PD: Partial<typeof PDT> = await import("../design-to-code/probe-drive.ts").then((m) => ({ ...m }), () => ({}));
 
 // A check whose body may throw (a missing export on an older tree): a throw is a clean ✗, never a crash.
 const t = (name: string, fn: () => boolean): boolean => { let r = false; try { r = fn(); } catch { r = false; } return check(name, r); };
@@ -729,5 +733,61 @@ console.log("verify-probe — group 11 (tag-alias, display, rings, foreign tags)
 
 fs.rmSync(tmp, { recursive: true, force: true });
 }
+
+// ---- group 12a: which rows the probe drives, its time budget, what it calls an outcome, when it says ok (probe-drive.ts)
+block("[12a] probe-drive:", () => {
+  const { drivable, driveBudget, classifyOutcome, judge } = PD;
+  const ia = (nodeId: string, extra: Partial<VerifyInteraction>): VerifyInteraction => ({ nodeId, name: nodeId, trigger: "on_click", ...extra });
+  const exp: Pick<VerifyExpectation, "interactions" | "hidden"> = {
+    hidden: { roots: [], ids: ["9:9"] },
+    interactions: [
+      ia("1:1", { action: "overlay", destinationId: "5:1", destinationExported: false }),
+      ia("1:2", { action: "overlay", destinationId: "5:2" }),
+      ia("1:3", { action: "swap", trigger: "on_press", destinationId: "5:3" }),
+      ia("1:4", { action: "navigate", destinationId: "5:4" }),
+      ia("1:5", { action: "overlay", trigger: "on_hover", destinationId: "5:5" }),
+      ia("9:9", { action: "overlay", destinationId: "5:6" }),
+      ia("1:6", { action: "overlay", expect: "dialog", source: "plan", destinationId: "5:7" }),
+      ia("1:7", { action: "other", expect: "selector:.x", source: "plan" }),
+      ia("1:2", { action: "overlay", destinationId: "5:8" }),
+      ia("1:8", { action: "change_to", destinationId: "5:9" }),
+      ia("1:9", { action: "overlay", expect: "dialog", source: "plan", trigger: "on_hover", destinationId: "5:7" }),
+      ia("1:10", { action: "overlay", expect: "dialog", source: "plan", trigger: "on_key_down", destinationId: "5:7" }),
+      ia("1:11", { action: "overlay", expect: "dialog", source: "plan", trigger: "on_press", destinationId: "5:7" }),
+    ],
+  };
+  const ids = drivable ? drivable(exp).map((r) => r.nodeId) : [];
+  t("[D40(1)] drivable(): overlay/swap on click/press + plan dialog rows; not navigate, hover, change_to, plan selector:, a hidden layer; one per nodeId|trigger; designed destinations first",
+    () => ids.includes("1:2") && ids.includes("1:3") && ids.includes("1:6") && ids.indexOf("1:1") === ids.length - 1 && !["1:4", "1:5", "9:9", "1:7", "1:8"].some((x) => ids.includes(x)) && ids.filter((x) => x === "1:2").length === 1);
+  t("[L2] drivable(): a plan dialog row is driven only with an on_click/on_press trigger (not on_hover, not a key)",
+    () => JSON.stringify(ids) === JSON.stringify(["1:2", "1:3", "1:6", "1:11", "1:1"]));
+  t("[D41] driveBudget(): min(60 s, --max-time left − 15 s), never below 0", () => !!driveBudget
+    && driveBudget(0, 180_000) === 60_000 && driveBudget(130_000, 180_000) === 35_000 && driveBudget(0, 16_000) === 1_000 && driveBudget(10_000, 16_000) === 0);
+  const opened = { selector: "html > body > dialog", modal: true, position: "fixed", rect: { x: 0, y: 0, w: 10, h: 10 }, scrollY: 0 };
+  t("[F-70] classifyOutcome(overlay): a contract match → dialog-opened (its selector); only the destination tag → selector-appeared via destination-tag; nothing → none", () => !!classifyOutcome
+    && classifyOutcome("overlay", { detectedBy: ":modal", dest: { count: 1, inside: true, newly: true }, opened }).outcome === "dialog-opened"
+    && classifyOutcome("overlay", { detectedBy: ":modal", dest: null, opened }).detectedBy === ":modal"
+    && classifyOutcome("overlay", { detectedBy: null, dest: { count: 1, inside: true, newly: true }, opened }).detectedBy === "destination-tag"
+    && classifyOutcome("overlay", { detectedBy: null, dest: { count: 0, inside: false, newly: false }, opened: null }).outcome === "none");
+  t("[F-70] classifyOutcome(swap): the destination tag appearing → selector-appeared; a dialog without it is reported as what it is (dialog-opened, which a swap does not allow)", () => !!classifyOutcome
+    && classifyOutcome("swap", { detectedBy: ":modal", dest: { count: 1, inside: true, newly: true }, opened }).outcome === "selector-appeared"
+    && classifyOutcome("swap", { detectedBy: ":modal", dest: { count: 0, inside: false, newly: false }, opened }).outcome === "dialog-opened"
+    && classifyOutcome("swap", { detectedBy: null, dest: { count: 0, inside: false, newly: false }, opened: null }).outcome === "none");
+  const good = { selectorCount: 1, outcome: "dialog-opened", navEvents: 0, destination: { nodeId: "5:2", inside: true, count: 1 }, activation: "mouse" as const };
+  t("[D41] judge(): ok:true only with one opener, an allowed outcome, no load, the destination inside, a mouse click", () => !!judge && judge("overlay", good).ok === true);
+  t("[D41] judge(): the destination tag NOT inside what opened → ok:null naming it (never false)", () => !!judge
+    && judge("overlay", { ...good, destination: { nodeId: "5:2", inside: false, count: 1 } }).ok === null
+    && /not inside the opened element/.test(judge("overlay", { ...good, destination: { nodeId: "5:2", inside: false, count: 1 } }).missing.join(";"))
+    && /tag the dialog's root/.test(judge("overlay", { ...good, destination: { nodeId: "5:2", inside: false, count: 0 } }).missing.join(";")));
+  t("[D24/F-70] judge(): a synthetic click, a load, 2 openers, a swap's dialog-opened, no destination id → each ok:null", () => !!judge
+    && judge("overlay", { ...good, activation: "synthetic" }).ok === null && judge("overlay", { ...good, navEvents: 1 }).ok === null
+    && judge("overlay", { ...good, selectorCount: 2 }).ok === null && judge("swap", good).ok === null
+    && judge("overlay", { selectorCount: 1, outcome: "dialog-opened", navEvents: 0, activation: "mouse" }).ok === null);
+  const away = (VP as Partial<typeof VP>).isNavigationAway;
+  t("[H-a] isNavigationAway(): another path or query is a navigation; the same URL (a fragment aside) is a reload", () => !!away
+    && away("http://h/a?s=beds", "http://h/a") && away("http://h/b", "http://h/a#x")
+    && !away("http://h/a", "http://h/a") && !away("http://h/a#y", "http://h/a#x") && !away("http://h/pushed", "http://h/pushed"));
+  t("[F-70] the dialog contract, in detection order", () => JSON.stringify(PD.DIALOG_CONTRACT) === JSON.stringify([":modal", "dialog[open]", "[role=dialog]", "[role=alertdialog]", "[aria-modal=\"true\"]", ":popover-open"]));
+});
 
 report();

@@ -4,7 +4,7 @@
 // design-to-code/verify-screen.ts
 import fs5 from "node:fs";
 import path4 from "node:path";
-import crypto4 from "node:crypto";
+import crypto5 from "node:crypto";
 
 // design-to-code/hidden.ts
 var hiddenSelf = (node) => !!(node && typeof node === "object" && "hidden" in node && node.hidden);
@@ -137,6 +137,81 @@ function readDocFile(file, what, guard, hint) {
   process.exit(2);
 }
 
+// design-to-code/probe-steps.ts
+import crypto3 from "node:crypto";
+
+// design-to-code/plan-waivers.ts
+import crypto2 from "node:crypto";
+var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
+function isPassingVerdict(v) {
+  return typeof v === "string" && PASSING_VERDICTS.includes(v);
+}
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+function waiversHash(plan) {
+  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
+  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
+  return crypto2.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+}
+function planInteractionsSha256(plan) {
+  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
+  return crypto2.createHash("sha256").update(canonical(rows)).digest("hex");
+}
+
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
+};
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
+}
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
+}
+function stepsSha256(steps) {
+  return crypto3.createHash("sha256").update(canonical(steps)).digest("hex");
+}
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+function actionForExpect(expect) {
+  return expect === "dialog" ? "overlay" : expect === "url" ? "navigate" : "other";
+}
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -221,6 +296,13 @@ var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
 var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -232,7 +314,11 @@ var MEASURED_EXTRAS = [
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
-  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"]
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isObj, "an object (behaviour checks)"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -299,6 +385,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 function isPlan(x) {
@@ -314,36 +401,20 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
 isStringRecord.expected = "an object of strings";
 
-// design-to-code/plan-waivers.ts
-import crypto2 from "node:crypto";
-var PASSING_VERDICTS = ["pass", "pass-with-deviations"];
-function isPassingVerdict(v) {
-  return typeof v === "string" && PASSING_VERDICTS.includes(v);
-}
-function canonical(v) {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  if (v && typeof v === "object") {
-    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
-  }
-  return JSON.stringify(v ?? null);
-}
-function waiversHash(plan) {
-  const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
-  const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
-  return crypto2.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
-}
-
 // design-to-code/verify-run.ts
 import fs3 from "node:fs";
 import os from "node:os";
 import path3 from "node:path";
-import crypto3 from "node:crypto";
+import crypto4 from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // design-to-code/cli-args.ts
@@ -410,7 +481,7 @@ function isVerifyStatusV2(x) {
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var sha256Of = (data) => crypto3.createHash("sha256").update(data).digest("hex");
+var sha256Of = (data) => crypto4.createHash("sha256").update(data).digest("hex");
 function sha256File(file) {
   try {
     return sha256Of(fs3.readFileSync(file));
@@ -531,7 +602,7 @@ function writeFileAtomic(file, data) {
   }
 }
 function newRunId() {
-  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto3.randomBytes(3).toString("hex");
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + crypto4.randomBytes(3).toString("hex");
 }
 function readStatusFile(file) {
   const r = readJson(file, anyJson);
@@ -1332,6 +1403,7 @@ function buildExpectation(docs, opts) {
   const interactionFile = /* @__PURE__ */ new Map();
   const roots = [];
   const rootNodesByFile = /* @__PURE__ */ new Map();
+  const visibleById = /* @__PURE__ */ new Map();
   for (const { doc, label } of docs) {
     const exp = screenExportOf(doc);
     const sf = doc && "sourceFile" in doc ? doc.sourceFile : exp ? exp.sourceFile : void 0;
@@ -1347,7 +1419,16 @@ function buildExpectation(docs, opts) {
       getOrInit(rootNodesByFile, sourceFile ?? "", () => []).push(root);
       if (!reference && root.reference) reference = root.reference;
       const b = root.box || {};
-      const frame = { nodeId: root.id, name: root.name, ...ifDefined("w", b.w), ...ifDefined("h", b.h), ...ifDefined("x", b.x), ...ifDefined("y", b.y), clip: root.clip === true };
+      const frame = {
+        nodeId: root.id,
+        name: root.name,
+        ...ifDefined("w", b.w),
+        ...ifDefined("h", b.h),
+        ...ifDefined("x", b.x),
+        ...ifDefined("y", b.y),
+        clip: root.clip === true,
+        ...ifDefined("scroll", root.scroll)
+      };
       frames.push(frame);
       const frameId = frames.length > 1 ? root.id : void 0;
       const stateOf = /* @__PURE__ */ new WeakMap();
@@ -1370,6 +1451,7 @@ function buildExpectation(docs, opts) {
         chainOf.set(n, c.parent ? [...n.id ? [n.id] : [], ...ancestorIds] : []);
         if (n.id && seen.has(n.id)) return;
         if (n.id) seen.add(n.id);
+        if (n.id) visibleById.set(n.id, { name: n.name, file: sourceFile ?? "" });
         const { spec, notComparable: gaps } = expectNodeRow(n, { path: c.path, frame, ...ifDefined("inheritedState", inherited), ...ifDefined("frameId", frameId) });
         spec.ancestorIds = ancestorIds;
         if (n.absolute) spec.absolute = true;
@@ -1423,6 +1505,40 @@ function buildExpectation(docs, opts) {
         }
       });
     }
+  }
+  const planIn = opts && opts.plan;
+  let planInteractions;
+  if (planIn && Array.isArray(planIn.plan.interactions)) {
+    const dropped = [];
+    const keys = new Set(interactions.map((r) => `${r.nodeId}|${r.trigger}`));
+    const hiddenIds = new Set(hidden.ids);
+    let merged = 0;
+    planIn.plan.interactions.forEach((raw, k) => {
+      const at = `interactions[${k}]`;
+      const o = isJsonObject(raw) ? raw : null;
+      const id = o && typeof o.nodeId === "string" && o.nodeId.trim() ? o.nodeId.trim() : null;
+      const drop = (why) => {
+        dropped.push({ nodeId: id ?? `(${at})`, why });
+      };
+      if (!o) return drop(`${at} is not an object`);
+      if (id === null) return drop(`${at} has no nodeId \u2014 a plan interaction is keyed by its node like an export reaction`);
+      if (typeof o.trigger !== "string" || !o.trigger.trim()) return drop("no trigger (on_click, on_press, \u2026)");
+      if (!isPlanExpect(o.expect)) return drop(`expect ${JSON.stringify(o.expect ?? null)} is not dialog | url | selector:<css>`);
+      if (o.destinationId !== void 0 && (typeof o.destinationId !== "string" || !o.destinationId.trim())) return drop("destinationId is not a node id");
+      if (o.expect === "dialog" && o.destinationId === void 0) return drop("expect dialog needs the destinationId of the frame it opens (its root is tagged with it)");
+      const node = visibleById.get(id);
+      if (!node) return drop(hiddenIds.has(id) ? "the node is a hidden layer \u2014 it is not built or driven" : "no visible node of this export has that id");
+      const trigger = o.trigger.trim().toLowerCase();
+      if (o.expect === "dialog" && trigger !== "on_click" && trigger !== "on_press") return drop(`expect dialog needs trigger on_click or on_press (the probe opens a dialog by clicking its opener), not ${trigger}`);
+      if (keys.has(`${id}|${trigger}`)) return drop(`duplicates ${interactions.some((r) => r.nodeId === id && r.trigger === trigger && r.source !== "plan") ? "the export's own interaction" : "an earlier plan row"} for this node and trigger (${trigger})`);
+      keys.add(`${id}|${trigger}`);
+      const destinationId = typeof o.destinationId === "string" ? o.destinationId.trim() : void 0;
+      const row = { nodeId: id, name: node.name, trigger, action: actionForExpect(o.expect), expect: o.expect, ...ifDefined("destinationId", destinationId), source: "plan" };
+      interactions.push(row);
+      interactionFile.set(row, node.file);
+      merged++;
+    });
+    planInteractions = { plan: planIn.file, sha256: planInteractionsSha256(planIn.plan), merged, dropped };
   }
   const specById = new Map(nodes.map((s) => [s.nodeId, s]));
   for (const r of roots) markRepeatedText(r, specById);
@@ -1497,8 +1613,43 @@ function buildExpectation(docs, opts) {
       if (sp) sp.aliases = [...set].sort();
     }
   }
+  const siblingCache = /* @__PURE__ */ new Map();
+  const sibling = (file) => {
+    if (!readSibling) return null;
+    if (!siblingCache.has(file)) siblingCache.set(file, readSibling(file) ?? null);
+    return siblingCache.get(file) ?? null;
+  };
+  const destinationRoot = (destId, file) => {
+    const own = [...rootNodesByFile.get(file) ?? [], ...file !== "" ? rootNodesByFile.get("") ?? [] : []].find((r) => r.id === destId);
+    if (own) return own;
+    const co = candidatesOf(file);
+    for (const row of co ? co.rows : []) {
+      if (row.id !== destId || !row.file) continue;
+      const sib = sibling(row.file);
+      if (!sib) continue;
+      const sx = screenExportOf(sib);
+      const sibFile = "sourceFile" in sib ? sib.sourceFile : sx ? sx.sourceFile : void 0;
+      if (co && co.resolved && typeof sibFile === "string" && sibFile && sibFile !== co.resolved) continue;
+      const hit = screenRoots(sib).find((r) => r.id === destId);
+      if (hit) return hit;
+    }
+    return void 0;
+  };
+  for (const row of interactions) {
+    const act = String(row.action).toLowerCase();
+    if (!row.destinationId || act !== "overlay" && act !== "swap" || row.destinationExported === false) continue;
+    const dest = destinationRoot(row.destinationId, interactionFile.get(row) ?? "");
+    if (!dest) continue;
+    const ov = dest.overlay;
+    row.overlay = {
+      position: ov && typeof ov.position === "string" ? ov.position : "center",
+      closeOnClickOutside: !!ov && ov.closeOnClickOutside === true,
+      background: ov && typeof ov.background === "string" ? ov.background : null,
+      from: ov ? "export" : "default"
+    };
+  }
   const f0 = frames[0] || {};
-  const rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip) });
+  const rootFrame = (f) => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
   return {
     schema: EXPECTATION_SCHEMA,
     ...ifDefined("screen", screen),
@@ -1524,7 +1675,8 @@ function buildExpectation(docs, opts) {
     instances,
     interactions,
     notComparable,
-    hidden: { roots: hidden.roots, ids: hidden.ids }
+    hidden: { roots: hidden.roots, ids: hidden.ids },
+    ...ifDefined("planInteractions", planInteractions)
   };
 }
 var KNOWN_MEASURED_KEYS = /* @__PURE__ */ new Set([
@@ -1705,6 +1857,7 @@ function fieldTolerance(label) {
   if (label === "placement") return TOLERANCE.position;
   if (label === "width (text ink)") return TOLERANCE.textInk;
   if (label === "match (size)") return TOLERANCE.size;
+  if (label === "overflowX") return TOLERANCE.position;
   return null;
 }
 var fieldBase = (f) => f.replace(/\s*\(.*\)$/, "");
@@ -1747,7 +1900,7 @@ function deltaChanges(prev, cur, now) {
     for (const [k, d] of curByKey) if (!prevByKey.has(k)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "new", was: null });
     for (const [k, d] of prevByKey) {
       if (curByKey.has(k)) out.unchanged++;
-      else if (now.specIds.has(d.nodeId)) reclassified.push({ nodeId: d.nodeId, field: d.field, change: "gone", was: was(d) });
+      else if (now.specIds.has(d.nodeId) || d.field === "overflowX") reclassified.push({ nodeId: d.nodeId, field: d.field, change: "gone", was: was(d) });
     }
     return { ...out, sameMeasured: true, reclassified };
   }
@@ -1758,6 +1911,14 @@ function deltaChanges(prev, cur, now) {
   for (const [k, d] of prevByKey) {
     if (curByKey.has(k)) {
       out.unchanged++;
+      continue;
+    }
+    if (d.field === "overflowX") {
+      const po = now.pageOverflow;
+      if (po === void 0 || po === "not measured" || po === "not at design width") out.lostCoverage.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: po === "not at design width" ? "the page was not measured at the design width this round" : "page overflow was not measured this round" });
+      else if (po === "designed to scroll") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the frame is designed to scroll sideways now" });
+      else if (po === "clipped") nowUnverifiable.push({ nodeId: d.nodeId, field: d.field, was: was(d), why: "the page is still wider than the design width but clips it now (overflow-x hidden/clip) \u2014 clipped, not fixed" });
+      else out.fixed++;
       continue;
     }
     if (!now.specIds.has(d.nodeId)) continue;
@@ -1862,7 +2023,10 @@ var MEASURED_TOP_KEYS = {
   notes: true,
   runId: true,
   build: true,
-  tagsNotInExpectation: true
+  tagsNotInExpectation: true,
+  reach: true,
+  page: true,
+  behaviour: true
 };
 var TOP_KEY_HINTS = { notFound: "notMeasured", notFoundInDom: "notMeasured", notMeasuredByProbe: "notMeasured", missing: "notMeasured", measurements: "nodes", elements: "nodes", navEvents: "navigation" };
 var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
@@ -2401,6 +2565,42 @@ function compare(expectation, measured, opts) {
       }
     }
   }
+  const pageRaw = measured.page;
+  const page = isPageOverflow(pageRaw) ? pageRaw : void 0;
+  const pageNotes = [];
+  if (pageRaw !== void 0 && !page) pageNotes.push("measured.page is not a page overflow block; ignored (page overflow: not measured)");
+  const rootF = expectation.frame || {};
+  let pageOverflow = "not measured";
+  if (page) {
+    const over = page.scrollWidth - page.clientWidth;
+    if (!num(rootF.w) || Math.abs(page.viewport.w - rootF.w) > 1) {
+      pageOverflow = "not at design width";
+      pageNotes.push(`page overflow was measured at a ${page.viewport.w}px viewport${num(rootF.w) ? `, the design is ${rootF.w}px wide` : " and the expectation states no frame width"} \u2014 not judged (measure at the design width)`);
+    } else if (rootF.scroll === "horizontal" || rootF.scroll === "both") pageOverflow = "designed to scroll";
+    else if (over <= 1) pageOverflow = "ok";
+    else if (!page.scrollable) {
+      pageOverflow = "clipped";
+      pageNotes.push(`the page is ${page.scrollWidth}px wide in a ${page.clientWidth}px viewport but its root clips it (overflow-x: ${page.overflowX}) \u2014 content past the right edge cannot be scrolled to`);
+    } else {
+      pageOverflow = "overflows";
+      const widest = page.offenders.slice(0, 3).map((o) => `${o.dt ? `\`${o.dt}\` ` : ""}${o.path} \u2192 ${r2(o.right)}px`).join(", ");
+      if (typeof rootF.nodeId === "string") {
+        deltas.push({
+          severity: "high",
+          nodeId: rootF.nodeId,
+          ...ifDefined("name", rootF.name),
+          field: "overflowX",
+          expected: page.clientWidth,
+          actual: page.scrollWidth,
+          delta: r2(over),
+          unit: "px",
+          note: `the page scrolls sideways at the design width${widest ? ` (widest: ${widest})` : ""} \u2014 accept it (verify-screen --accept --node ${rootF.nodeId} --field overflowX) only if intended`
+        });
+      }
+    }
+    const probeNotedQuirks = Array.isArray(measured.notes) && measured.notes.some((n) => typeof n === "string" && n.includes("quirks mode"));
+    if (page.compatMode && page.compatMode !== "CSS1Compat" && !probeNotedQuirks) pageNotes.push(`the page renders in quirks mode (document.compatMode ${page.compatMode}) \u2014 its overflow is measured off <body>`);
+  }
   const addNote = (d, note) => {
     d.note = d.note ? `${d.note}; ${note}` : note;
   };
@@ -2501,7 +2701,24 @@ function compare(expectation, measured, opts) {
     const set = [...bySet.values()].find((v) => v.setName === (c.setName || c.name) || c.nodeId !== void 0 && v.nodeIds.includes(c.nodeId));
     if (set) componentsAbsent.push({ setName: set.setName, nodeIds: set.nodeIds, ...ifDefined("detail", c.detail || c.note) });
   }
-  const allEvidence = [...Array.isArray(measured.interactions) ? measured.interactions : [], ...Array.isArray(opts.interactions) ? opts.interactions : []];
+  const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
+  const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
+  const integrity = [];
+  if (stale) integrity.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
+  if (opts.expectationSha256 && !measured.expectationSha256) integrity.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
+  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
+  if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
+    integrity.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
+  } else if (st) {
+    const stFile = opts.status ? opts.status.file : "status.json";
+    if (!MEASURED_PHASES.includes(st.phase)) integrity.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
+    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) integrity.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
+  }
+  const measuredRows = Array.isArray(measured.interactions) ? measured.interactions : [];
+  const allEvidence = [...measuredRows, ...Array.isArray(opts.interactions) ? opts.interactions : []];
+  const probeBound = isProbeIdentity(measured.probe) && measuredRun !== void 0 && st !== null && st.runId === measuredRun && !!st.measuredSha256 && st.measuredSha256 === opts.measuredSha256 && integrity.length === 0;
+  const fromMeasured = new Set(measuredRows);
+  const probeRows = /* @__PURE__ */ new Map();
   const exercised = /* @__PURE__ */ new Map();
   let interactionEvidenceOnHidden = 0;
   const expectedKeys = new Set((expectation.interactions || []).map((i) => String(i.nodeId) + "|" + i.trigger));
@@ -2511,10 +2728,16 @@ function compare(expectation, measured, opts) {
       interactionEvidenceOnHidden++;
       continue;
     }
-    exercised.set(String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase(), r);
+    const key = String(r.nodeId) + "|" + String(r.trigger || "on_click").toLowerCase();
+    if (probeBound && fromMeasured.has(r)) {
+      if (r.cut !== "budget") probeRows.set(key, r);
+      continue;
+    }
+    exercised.set(key, r);
   }
   const exportSha = expectation.exportContentSha256;
   const inputNotes = [...Array.isArray(opts.inputNotes) ? opts.inputNotes : []];
+  inputNotes.push(...pageNotes);
   if (expectation.tolerance && isJsonObject(expectation.tolerance) && expectation.tolerance.textInk === void 0) inputNotes.push("expectation written by an older verify-screen (before group 11: TEXT box widths, no aliases) \u2014 re-run --expect");
   const reopened = [];
   const unused = [];
@@ -2531,19 +2754,52 @@ function compare(expectation, measured, opts) {
     if (!live) for (const d of hits) reopened.push({ nodeId: d.nodeId, field: `interaction (${d.trigger})`, why: "design re-exported: the export content changed since it was descoped" });
     return live;
   };
+  if (!probeBound && isProbeIdentity(measured.probe) && measuredRows.length) inputNotes.push("the measured file's interaction rows are not run-bound (no finished run's status names this measured file) \u2014 graded as agent evidence (D41)");
   const interactions = (expectation.interactions || []).filter((i) => !hiddenSet.has(String(i.nodeId))).map((i) => {
-    const hit = exercised.get(String(i.nodeId) + "|" + i.trigger);
-    const row = { nodeId: i.nodeId, name: i.name, trigger: i.trigger, ...ifDefined("action", i.action), ...ifDefined("destinationId", i.destinationId), ...i.destinationExported === false ? { destinationExported: false } : {} };
-    const gaps = hit && hit.ok === true && hit.result !== "not-probed" ? evidenceGaps(hit, i.action) : null;
-    const worked = gaps !== null && gaps.length === 0;
-    const said = hit ? { ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : void 0), ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : void 0) } : {};
+    const key = String(i.nodeId) + "|" + i.trigger;
+    const p = probeRows.get(key), a = exercised.get(key);
+    const gapsOf = (h) => h && h.ok === true && h.result !== "not-probed" ? evidenceGaps(h, i.action) : null;
+    const act = String(i.action).toLowerCase();
+    const needsInside = !!i.destinationId && (act === "overlay" || act === "swap");
+    const pGaps = gapsOf(p);
+    const pInside = !needsInside || !!p && !!p.destination && p.destination.inside === true && p.destination.nodeId === i.destinationId;
+    const pPass = pGaps !== null && pGaps.length === 0 && pInside;
+    const hit = p && pPass ? p : a ?? p;
+    const fromProbe = !!hit && hit === p;
+    const insideMiss = fromProbe && pGaps !== null && pGaps.length === 0 && !pInside;
+    const gaps = fromProbe ? insideMiss ? [] : pGaps : gapsOf(hit);
+    const worked = fromProbe ? pPass : gaps !== null && gaps.length === 0;
+    const overridden = fromProbe && pPass && a && !(a.ok === true && (gapsOf(a) ?? []).length === 0) ? `agent row ok: ${a.ok === void 0 ? "(none)" : String(a.ok)}${a.detail ? ` \u2014 ${a.detail}` : ""}` : void 0;
+    if (overridden) inputNotes.push(`${i.nodeId} (${i.trigger}): the run-bound probe's pass overrides the agent's row (${overridden}) \u2014 D41`);
+    const row = {
+      nodeId: i.nodeId,
+      name: i.name,
+      trigger: i.trigger,
+      ...ifDefined("action", i.action),
+      ...ifDefined("destinationId", i.destinationId),
+      ...i.destinationExported === false ? { destinationExported: false } : {},
+      ...i.source === "plan" ? { source: "plan", ...ifDefined("expect", i.expect) } : {}
+    };
+    const str = (v) => typeof v === "string" && v ? v : void 0;
+    const said = hit ? {
+      ...ifDefined("outcome", typeof hit.outcome === "string" ? hit.outcome : void 0),
+      ...ifDefined("navEvents", typeof hit.navEvents === "number" ? hit.navEvents : void 0),
+      ...probeBound ? { evidenceFrom: fromProbe ? "probe" : "agent" } : {},
+      ...ifDefined("activation", str(hit.activation)),
+      ...ifDefined("detectedBy", str(hit.detectedBy)),
+      ...ifDefined("revealedBy", str(hit.revealedBy)),
+      ...ifDefined("overridden", overridden)
+    } : {};
     const scoped = descopeFor(i);
     if (scoped) return Object.assign(row, { result: "descoped", detail: `descoped by ${scoped.decidedBy} (${scoped.decidedAt}): ${scoped.reason}`, ...worked ? { note: "descoped but works \u2014 the probe drove it successfully; drop the descope?" } : {} });
     if (i.destinationExported === false && !worked) return Object.assign(row, { result: "undesigned", detail: `destination ${i.destinationId} is not in this Figma file's export \u2014 nothing designed to check it against${hit && hit.detail ? `; probe said: ${hit.detail}` : ""}` });
     if (!hit) return Object.assign(row, { result: "not-probed", detail: "no probe result for this node and trigger" });
     const count = Number(hit.selectorCount);
-    if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail) });
+    if (hit.result === "not-probed" || hit.ok === null || hit.ok === void 0) return Object.assign(row, { result: "not-probed", ...ifDefined("detail", hit.detail), ...probeBound ? said : {} });
     if (hit.ok === false) return Object.assign(row, { result: "fail", ...ifDefined("detail", hit.detail), ...ifDefined("selector", hit.selector), ...said });
+    if (insideMiss) {
+      return Object.assign(row, { result: "not-probed", detail: `probe pass without the destination tag inside the opened element (D41) \u2014 tag the root of what opens with data-dt-node="${i.destinationId}"${p && p.destination ? ` (the probe found ${p.destination.count} element(s) tagged ${p.destination.nodeId}, none inside it)` : ""}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
+    }
     if (!worked || !hit.selector) {
       return Object.assign(row, { result: "not-probed", detail: `reported ok without evidence \u2014 ${(gaps || []).join("; ")}${hit.detail ? `; probe said: ${hit.detail}` : ""}`, ...ifDefined("selector", hit.selector), ...said });
     }
@@ -2638,7 +2894,7 @@ function compare(expectation, measured, opts) {
   for (const d of deltas) if (!d.group) getOrInit(sameKey, JSON.stringify([d.field, d.expected, d.actual]), () => []).push(d);
   for (const [k, list] of sameKey) {
     if (list.length < 2) continue;
-    const gid = `same:${crypto4.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
+    const gid = `same:${crypto5.createHash("sha256").update(k).digest("hex").slice(0, 8)}`;
     for (const d of list) d.group = gid;
   }
   const open = deltas.filter((d) => !d.accepted);
@@ -2647,12 +2903,34 @@ function compare(expectation, measured, opts) {
   const accepted = deltas.length - open.length;
   const openHigh = open.filter((d) => d.severity === "high");
   const highCauses = new Set(openHigh.map((d, i) => d.group ?? `#${i}`)).size;
+  const planNow = opts.plan || null;
+  const recordedPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.sha256 === "string" ? expectation.planInteractions : void 0;
+  const nowRows = planNow && Array.isArray(planNow.plan.interactions) ? planNow.plan.interactions : null;
+  const otherPlan = recordedPi !== void 0 && planNow !== null && !samePlanFile(recordedPi.plan, planNow.file);
+  const rerunPlanArg = planNow && (planNow.choice === "flag" || planNow.choice === "files" || planNow.choice === "recorded" || otherPlan) ? ` --plan ${planNow.file}` : "";
+  const gone = opts.recordedPlanGone || null;
+  const shaNow = planNow ? planInteractionsSha256(planNow.plan) : "";
+  const planInteractionsChanged = !planNow || !(recordedPi ? shaNow !== recordedPi.sha256 : !!nowRows && nowRows.length > 0) ? null : !recordedPi ? `the plan's interactions[] changed since --expect (${planNow.file}: the expectation merged none) \u2014 re-run --expect${rerunPlanArg}` : otherPlan && planNow.choice === "flag" ? `the plan's interactions[] differ from those --expect merged (${planNow.file}, passed by --plan: sha256 ${shaNow.slice(0, 12)}\u2026; --expect merged ${recordedPi.plan}'s${gone ? `, which ${gone}` : ""}: ${recordedPi.sha256.slice(0, 12)}\u2026) \u2014 re-run --expect --plan ${planNow.file}${gone ? "" : `, or drop --plan at --compare to check against ${recordedPi.plan}`}` : otherPlan ? `the plan's interactions[] at --expect came from ${recordedPi.plan}, which ${gone ?? "--compare did not use"}; the plan found now, ${planNow.file}, declares others (sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 if that plan moved, re-run --compare \u2026 --plan <its path now>; otherwise re-run --expect \u2026 --plan <the plan you intend> (--plan ${planNow.file} to adopt this one)` : `the plan's interactions[] changed since --expect (${planNow.file}: sha256 ${recordedPi.sha256.slice(0, 12)}\u2026 at --expect, ${shaNow.slice(0, 12)}\u2026 now) \u2014 re-run --expect${rerunPlanArg}`;
+  if (recordedPi && planNow && otherPlan && gone && !planInteractionsChanged) inputNotes.push(`the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}; ${planNow.file} (used now) declares the same interactions[]`);
+  if (recordedPi && !planNow) inputNotes.push(gone ? `the expectation merged plan interactions from ${recordedPi.plan}, which ${gone}, and no single plan describes this frame now \u2014 not checked; pass --compare \u2026 --plan <plan.json> (or re-run --expect \u2026 --plan <plan.json>)` : `the expectation merged plan interactions from ${recordedPi.plan}, but no plan was found for this frame now \u2014 not checked`);
+  const reachRaw = measured.reach;
+  const reach = isProbeReach(reachRaw) ? reachRaw : void 0;
+  if (reachRaw !== void 0 && !reach && !inputNotes.some((n) => n.startsWith("measured.reach "))) inputNotes.push("measured.reach is not the probe's steps block; ignored");
+  let reachInput;
+  if (reach) {
+    const nav = planNow && planNow.plan.navigate !== void 0 ? parseSteps({ navigate: planNow.plan.navigate }) : null;
+    const planSha = nav && "steps" in nav ? stepsSha256(nav.steps) : null;
+    const matchesPlan = nav === null ? null : planSha !== null && planSha === reach.sha256;
+    reachInput = { sha256: reach.sha256, steps: reach.steps.length, source: reach.source, matchesPlan };
+    if (matchesPlan === false) inputNotes.push(nav && "error" in nav ? `the plan's navigate ${nav.error} \u2014 the probe's steps (sha ${reach.sha256.slice(0, 12)}\u2026) were not checked against it` : `the probe's steps (sha ${reach.sha256.slice(0, 12)}\u2026, ${reach.source}) are not the plan's navigate (sha ${(planSha ?? "").slice(0, 12)}\u2026) \u2014 measured another way than the plan says`);
+  } else if (reachRaw === void 0 && planNow && Array.isArray(planNow.plan.navigate) && planNow.plan.navigate.length > 0) {
+    inputNotes.push(`the plan declares navigate steps but the probe ran without --steps (${planNow.file}) \u2014 it measured whatever the URL shows first; re-run the probe with --steps ${planNow.file}`);
+  }
   const probeRaw = measured.probe;
   const probeIdentity = isProbeIdentity(probeRaw) ? probeRaw : void 0;
   const buildRaw = measured.build;
   const buildNow = isBuildIdentity(buildRaw) ? buildRaw : void 0;
   if (buildRaw !== void 0 && !buildNow && !inputNotes.some((n) => n.startsWith("measured.build "))) inputNotes.push("measured.build is not a build identity; ignored (build: unknown)");
-  const st = opts.status && opts.status.status !== "v1" ? opts.status.status : null;
   if (opts.status && opts.status.status === "v1") inputNotes.push(`${opts.status.file} is an older hand-written status (no run id, no shas) \u2014 not checked; write it with verify-screen --status`);
   const runId = typeof measured.runId === "string" && measured.runId ? measured.runId : st ? st.runId : void 0;
   if (probeRaw !== void 0 && !probeIdentity && !inputNotes.some((n) => n.startsWith("measured.probe "))) inputNotes.push("measured.probe is not the shipped probe's identity; ignored (probe: unknown)");
@@ -2671,28 +2949,19 @@ function compare(expectation, measured, opts) {
     ...ifDefined("waivers", opts.waiversInput || void 0),
     // DT-81: the build the probe was served — "unknown" when it records none (a hand-written probe, an older one)
     build: buildNow ?? "unknown",
-    ...ifDefined("runId", runId)
+    ...ifDefined("runId", runId),
+    ...ifDefined("reach", reachInput)
   };
-  const stale = !!(opts.expectationSha256 && measured.expectationSha256 && measured.expectationSha256 !== opts.expectationSha256);
   const staticOnly = measured.mode === "static-only";
   const artifactCheck = Array.isArray(opts.artifactCheck) ? opts.artifactCheck : null;
   const noRender = !!artifactCheck && !artifactCheck.some((a) => a.exists && a.image);
   const nodesExpected = specs.length - folded.length;
   const reasons = [];
-  if (stale) reasons.push(`${INTEGRITY_PHRASES.otherExpectation} (${String(measured.expectationSha256).slice(0, 12)}\u2026 vs ${String(opts.expectationSha256).slice(0, 12)}\u2026) \u2014 re-measure`);
-  if (opts.expectationSha256 && !measured.expectationSha256) reasons.push(`${INTEGRITY_PHRASES.noExpectation} \u2014 nothing ties these numbers to this design; re-measure with the shipped probe`);
-  const measuredRun = typeof measured.runId === "string" && measured.runId ? measured.runId : void 0;
-  if (measuredRun !== void 0 && opts.status !== void 0 && (st === null || st.runId !== measuredRun)) {
-    reasons.push(`the measured file was taken in run ${measuredRun}, but ${st ? `${opts.status ? opts.status.file : "the status"} is run ${st.runId}` : opts.status && opts.status.status === "v1" ? `${opts.status.file} is an older hand-written status` : "no status file was found"} \u2014 ${INTEGRITY_PHRASES.unrecorded}; ${st ? `run ${st.runId} is the current run \u2014 re-measure in it (never record run ${measuredRun} over it)` : `record it with --status <Screen> --phase measured --run ${measuredRun}, or re-measure`}`);
-  } else if (st) {
-    const stFile = opts.status ? opts.status.file : "status.json";
-    if (!MEASURED_PHASES.includes(st.phase)) reasons.push(`${stFile} (run ${st.runId}, rev ${st.rev}) is at phase ${st.phase} ${INTEGRITY_PHRASES.unfinished}${st.detail ? ` (${st.detail})` : ""}`);
-    else if (st.measuredSha256 && opts.measuredSha256 && st.measuredSha256 !== opts.measuredSha256) reasons.push(`${stFile} ${INTEGRITY_PHRASES.otherMeasured} (sha ${st.measuredSha256.slice(0, 12)}\u2026, this one ${opts.measuredSha256.slice(0, 12)}\u2026) \u2014 measured again outside run ${st.runId}?`);
-  }
-  const integrity = [...reasons];
+  reasons.push(...integrity);
   const integrityFailed = integrity.length > 0;
   const lowConfidence = open.filter((d) => d.cappedFrom !== void 0).length;
   if (lowConfidence) reasons.push(`${lowConfidence} delta(s) on low-confidence matches \u2014 tag these elements`);
+  if (planInteractionsChanged) reasons.push(planInteractionsChanged);
   if (legacy) reasons.push(`the expectation is ${expectation.schema || "unversioned"}, which predates hidden-layer filtering \u2014 regenerate it with --expect before trusting any number here`);
   if (staticOnly) reasons.push(`not rendered \u2014 the probe reported static-only${measured.reason ? ` (${measured.reason})` : ""}`);
   if (noRender) reasons.push("no screenshot of this render exists on disk \u2014 nothing ties these numbers to a picture (write design/verify/<Screen>.png and list it in artifacts)");
@@ -2729,7 +2998,9 @@ function compare(expectation, measured, opts) {
     deltasAccepted: accepted,
     nodesFolded: folded.length,
     matchedBy: matchedByCensus,
-    ...ifDefined("sharedShell", sharedShell)
+    ...ifDefined("sharedShell", sharedShell),
+    ...probeBound ? { interactionsByProbe: interactions.filter((i) => i.evidenceFrom === "probe").length } : {},
+    pageOverflow
   };
   let against;
   if (opts.against) {
@@ -2754,6 +3025,7 @@ function compare(expectation, measured, opts) {
         specIds: new Set(specs.map((sp) => String(sp.nodeId))),
         absent: absentGaps,
         placementGaps,
+        pageOverflow,
         sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256)
       }) } : {},
       sameBuild: prevBuild && buildNow ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null
@@ -2841,6 +3113,8 @@ function reportToMarkdown(r) {
   L.push(`# Verify \u2014 ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} \xB7 measured ${r.measuredAt}` + (r.inputs && r.inputs.expectationSha256 ? ` \xB7 against expectation ${r.inputs.expectationSha256.slice(0, 12)}\u2026` : "") + (r.inputs && r.inputs.runId ? ` \xB7 run ${r.inputs.runId}` : ""), "");
+  const rc = r.inputs && r.inputs.reach;
+  if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}\u2026, ${rc.source})${rc.matchesPlan === true ? " \u2014 the plan's navigate" : rc.matchesPlan === false ? " \u2014 **not the plan's navigate**" : ""}.`, "");
   const b = r.inputs && r.inputs.build;
   L.push(b && b !== "unknown" ? `Build served: ${b.mode} ${b.url} \xB7 ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}\u2026 \xB7 git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}` : "Build served: build identity unknown (the measured file records none \u2014 measured by a hand-written or older probe).", "");
   if (r.why.length) {
@@ -2860,7 +3134,8 @@ function reportToMarkdown(r) {
   L.push(`| values the method cannot read unaided | ${c.valuesUnverifiable} |`);
   if (c.hiddenLayersSkipped) L.push(`| hidden layers skipped (not built, not measured, not driven) | ${c.hiddenLayersSkipped.layers} layer(s) \xB7 ${c.hiddenLayersSkipped.specsSkipped} spec(s) \xB7 ${c.hiddenLayersSkipped.instancesSkipped} instance(s) \xB7 ${c.hiddenLayersSkipped.interactionsSkipped} interaction(s) |`);
   L.push(`| instance sets the probe could point at (data-dt-node / component evidence \u2014 coverage, NOT presence) | ${c.instanceSetsWithEvidence} / ${c.instanceSets} |`);
-  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}${c.interactionsUndesigned ? ` \xB7 ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` \xB7 ${c.interactionsDescoped} descoped by the owner` : ""} |`);
+  L.push(`| designed interactions: pass / fail / not-probed | ${c.interactionsPassed} / ${c.interactionsFailed} / ${c.interactionsNotProbed} of ${c.interactionsExpected}${c.interactionsUndesigned ? ` \xB7 ${c.interactionsUndesigned} undesigned (destination never exported)` : ""}${c.interactionsDescoped ? ` \xB7 ${c.interactionsDescoped} descoped by the owner` : ""}${c.interactionsByProbe ? ` \xB7 ${c.interactionsByProbe} driven by the shipped probe (dialog contract)` : ""} |`);
+  if (c.pageOverflow !== void 0) L.push(`| page overflow at the design width (overflowX) | ${c.pageOverflow} |`);
   if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
   L.push("");
   if (r.against) {
@@ -2868,12 +3143,12 @@ function reportToMarkdown(r) {
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
     const d = a.deltas;
     if (d && d.sameMeasured) {
-      const rc = d.reclassified || [];
-      L.push(`Previous deltas (node + field): **the same measured file as last round** \u2014 nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open${rc.length ? `, ${rc.length} reclassified by the compare (or the expectation): ${rc.filter((x) => x.change === "gone").length} no longer a delta, ${rc.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
-      if (rc.length) {
-        L.push(`## Reclassified (${rc.length})`, "", "*Same measured file \u2014 the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
-        for (const x of rc.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
-        if (rc.length > 40) L.push(`| \u2026and ${rc.length - 40} more | | | |`);
+      const rc2 = d.reclassified || [];
+      L.push(`Previous deltas (node + field): **the same measured file as last round** \u2014 nothing about the build changed, so nothing is fixed, new or lost; ${d.unchanged} still open${rc2.length ? `, ${rc2.length} reclassified by the compare (or the expectation): ${rc2.filter((x) => x.change === "gone").length} no longer a delta, ${rc2.filter((x) => x.change === "new").length} newly a delta` : ""}.`, "");
+      if (rc2.length) {
+        L.push(`## Reclassified (${rc2.length})`, "", "*Same measured file \u2014 the compare changed, not the build.*", "", "| Node | Field | Change | Was |", "|---|---|---|---|");
+        for (const x of rc2.slice(0, 40)) L.push(`| \`${x.nodeId}\` | ${x.field} | ${x.change === "gone" ? "no longer a delta" : "newly a delta"} | ${x.change === "gone" ? fmt(x.was) : ""} |`);
+        if (rc2.length > 40) L.push(`| \u2026and ${rc2.length - 40} more | | | |`);
         L.push("");
       }
     } else if (d) {
@@ -2958,7 +3233,7 @@ function reportToMarkdown(r) {
   const bad = r.interactions.filter((i) => i.result === "fail" || i.result === "not-probed");
   if (bad.length) {
     L.push(`## Designed interactions not confirmed (${bad.length})`, "");
-    for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} \u2014 ${i.trigger} \u2192 ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}: **${i.result}**${i.detail ? ` \u2014 ${i.detail}` : ""}`);
+    for (const i of bad) L.push(`- \`${i.nodeId}\` ${i.name || ""} \u2014 ${i.trigger} \u2192 ${i.action}${i.destinationId ? ` (${i.destinationId})` : ""}${i.source === "plan" ? " [plan]" : ""}: **${i.result}**${i.detail ? ` \u2014 ${i.detail}` : ""}`);
     L.push("");
   }
   const um = r.probe && r.probe.unmatchedInteractionEvidence || [];
@@ -3038,6 +3313,17 @@ function plansFor(frameId, stem) {
   }
   return hits;
 }
+function samePlanFile(a, b) {
+  return path4.resolve(a) === path4.resolve(b);
+}
+function choosePlan(flagged, frameId, stem) {
+  if (flagged) return { hit: { ...flagged, choice: "flag" }, all: [flagged] };
+  const all = plansFor(frameId, stem);
+  if (all.length === 1 && all[0]) return { hit: { ...all[0], choice: "only" }, all };
+  const withFiles = all.filter((h) => h.plan.files);
+  if (withFiles.length === 1 && withFiles[0]) return { hit: { ...withFiles[0], choice: "files" }, all };
+  return { all };
+}
 function selectForAccept(rep, sel) {
   const integrity = Array.isArray(rep.integrity) ? rep.integrity : (rep.why || []).filter(isIntegrityReason);
   if (integrity.length) return { error: `the report's run is unverified (${integrity.join("; ")}) \u2014 nothing in it can be accepted; re-measure and --compare, then accept against the new report` };
@@ -3057,10 +3343,13 @@ function selectForAccept(rep, sel) {
   return { error: `no delta in the report for ${id}${sel.field !== void 0 ? ` field '${sel.field}'` : ""}${fields.length ? ` (its deltas: ${fields.join(", ")})` : ""}` };
 }
 function main(argv) {
-  const sha = (file) => crypto4.createHash("sha256").update(fs5.readFileSync(file)).digest("hex");
+  const sha = (file) => crypto5.createHash("sha256").update(fs5.readFileSync(file)).digest("hex");
   const USAGE = `usage:
-  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force]
+  ${scriptCmd("verify-screen")} --expect <screen.json>... --out design/verify/<Screen> [--force] [--plan <plan.json>]
       writes <Screen>.expected.json \u2014 the design's own numbers, as data, for VISIBLE layers only.
+      The plan for this frame (--plan, else the one plan in design/plan/ that describes it) adds its interactions[]
+      ({nodeId, trigger, expect: dialog|url|selector:<css>, destinationId?}) the export cannot carry; a row that cannot
+      be graded is dropped with why. Their hash binds the expectation: change them \u2192 re-run --expect.
       Read them; never retype them. --out defaults to design/verify/<the first input file's own basename>.
       Refuses (exit 1) if the same node already has an expectation under a DIFFERENT name in this
       directory \u2014 pass --force to write a second one anyway.
@@ -3074,7 +3363,8 @@ function main(argv) {
       measured prints COVERAGE FELL, a different probe prints 'probe changed'. Neither changes the verdict.
       Integrity first: a measured file naming no or another expectation, or a run status not finished / naming another
       measured file, makes the verdict 'incomplete' even with high mismatches (the numbers belong to an unverified run).
-      The plan for this frame (design/plan/, or --plan <plan.json>) supplies waivers[] and descopes[]: an accepted
+      The plan for this frame (--plan <plan.json>; else the plan file --expect merged interactions from, while it exists;
+      else design/plan/ as at --expect) supplies waivers[] and descopes[]: an accepted
       delta stays listed but leaves the counts; with nothing else open the verdict is 'pass-with-deviations' (exit 0).
   ${scriptCmd("verify-screen")} --accept <Screen>.report.json (--node <id> (--field <label> | --all-fields) | --group <gid>) --reason "<why>" --by "<who>" [--plan <plan.json>]
       writes one plan waiver per node + field from the report's delta(s), bound to the export content, the designed
@@ -3175,10 +3465,6 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
 ` + USAGE);
     return 2;
   }
-  if (planFlag !== void 0 && doExpect) {
-    console.error("--plan only applies to --compare / --accept\n" + USAGE);
-    return 2;
-  }
   if (doAccept) return acceptMain(files, flags, USAGE);
   if (interactionsFile !== void 0 && !doCompare) {
     console.error("--interactions only applies to --compare\n" + USAGE);
@@ -3215,16 +3501,38 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     } catch {
     }
     for (const d of dirs) {
-      const pi = readJson(path4.join(pagesDir, d, "index.json"), isPageIndex);
-      if ("doc" in pi) pageRows.push(...pi.doc.layers);
+      const pi2 = readJson(path4.join(pagesDir, d, "index.json"), isPageIndex);
+      if ("doc" in pi2) pageRows.push(...pi2.doc.layers);
     }
     const rootRows = "doc" in idx ? idx.doc.layers || [] : [];
     const seen = new Set(rootRows.map((l) => `${l.id}\0${l.sourceFile ?? ""}`));
     const layers = [...rootRows, ...pageRows.filter((l) => !seen.has(`${l.id}\0${l.sourceFile ?? ""}`))];
     const exportRoot = path4.join("design", "export");
     const readSibling = (file) => readJsonOrNull(path4.join(exportRoot, file), isScreenDoc);
-    const exp = buildExpectation(docs, "doc" in idx || layers.length ? { index: { layers }, readSibling } : null);
-    const outBase = out || path4.join("design", "verify", path4.basename(firstFile, ".json"));
+    const outBase0 = out || path4.join("design", "verify", path4.basename(firstFile, ".json"));
+    let flagged2;
+    if (planFlag !== void 0) {
+      const r = readJson(planFlag, isPlan);
+      if (!("doc" in r)) {
+        console.error(`--plan '${planFlag}' ${r.error}`);
+        return 2;
+      }
+      flagged2 = { file: planFlag.split(path4.sep).join("/"), plan: r.doc };
+    }
+    const firstRoot = docs.map((d) => screenRoots(d.doc)[0]).find((r) => r !== void 0);
+    const chosen = choosePlan(flagged2, firstRoot && firstRoot.id, path4.basename(outBase0));
+    const planForExpect = chosen.hit;
+    if (chosen.all.length > 1 && chosen.all.some((h2) => h2.plan.interactions !== void 0)) {
+      console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another` : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h2) => h2.file).join(", ")}) \u2014 no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
+    }
+    const expOpts = { ..."doc" in idx || layers.length ? { index: { layers }, readSibling } : {}, ...planForExpect ? { plan: planForExpect } : {} };
+    const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
+    const pi = exp.planInteractions;
+    if (pi) {
+      console.error(`${pi.plan}: ${pi.merged} plan interaction(s) merged${pi.dropped.length ? `, ${pi.dropped.length} dropped` : ""} (plan interactions sha256 ${pi.sha256.slice(0, 12)}\u2026)`);
+      for (const d of pi.dropped) console.error(`warn  plan interaction ${d.nodeId} dropped: ${d.why}`);
+    }
+    const outBase = outBase0;
     const target = outBase + ".expected.json";
     const dup = findExistingExpectedFor(path4.dirname(target) || ".", exp.frame && exp.frame.nodeId, target);
     if (dup && !force) {
@@ -3236,7 +3544,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     const next = JSON.stringify(exp, null, 2) + "\n";
     const prev = fs5.existsSync(target) ? fs5.readFileSync(target, "utf8") : null;
     write(outBase, exp);
-    const h = crypto4.createHash("sha256").update(next).digest("hex");
+    const h = crypto5.createHash("sha256").update(next).digest("hex");
     let prevContent = null;
     try {
       if (prev !== null) {
@@ -3249,7 +3557,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
     else if (prev !== null && prevContent && prevContent === exp.exportContentSha256 && prev.replace(/"exportedAt": "[^"]*"/, "") === next.replace(/"exportedAt": "[^"]*"/, "")) {
       console.error(`note  ${target}: only exportedAt changed (export content sha256 ${exp.exportContentSha256.slice(0, 12)}\u2026 unchanged) \u2014 existing measurements and report still apply`);
     } else if (prev !== null) {
-      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto4.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
+      console.error(`note  REPLACED an existing ${target} that differed (sha256 ${crypto5.createHash("sha256").update(prev).digest("hex").slice(0, 12)}\u2026 \u2192 ${h.slice(0, 12)}\u2026)`);
       const stale = [".measured.json", ".report.json", ".report.md"].map((s) => outBase + s).filter((f) => fs5.existsSync(f));
       if (stale.length) console.error(`warn  ${stale.join(", ")} ${stale.length > 1 ? "were" : "was"} computed against the PREVIOUS expectation \u2014 re-measure and re-compare before reading ${stale.length > 1 ? "them" : "it"}.`);
     }
@@ -3298,21 +3606,36 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   });
   let code;
   let planHit;
+  let recordedPlanGone;
+  const compareNotes = [];
+  let flagged;
   if (planFlag !== void 0) {
     const r = readJson(planFlag, isPlan);
     if (!("doc" in r)) {
       console.error(`--plan '${planFlag}' ${r.error}`);
       return 2;
     }
-    planHit = { file: planFlag.split(path4.sep).join("/"), plan: r.doc };
+    flagged = { file: planFlag.split(path4.sep).join("/"), plan: r.doc };
   }
   {
     const frameId = expectation.frame && expectation.frame.nodeId;
     const stem = path4.basename(expFile, ".json").replace(/\.expected$/, "");
-    const all = planHit ? [planHit] : plansFor(frameId, stem);
+    const chosen = choosePlan(flagged, frameId, stem);
+    const all = chosen.all;
     const hits = all.filter((h) => h.plan.files);
     const onlyHit = hits.length === 1 ? hits[0] : void 0;
-    if (!planHit) planHit = all.length === 1 ? all[0] : onlyHit;
+    planHit = chosen.hit;
+    const recPi = expectation.planInteractions && isJsonObject(expectation.planInteractions) && typeof expectation.planInteractions.plan === "string" ? expectation.planInteractions.plan : void 0;
+    if (recPi !== void 0 && !(planHit && samePlanFile(planHit.file, recPi))) {
+      const r = readJson(recPi, isPlan);
+      if (!("doc" in r)) recordedPlanGone = r.missing ? "no longer exists" : `is not a readable plan now (${r.error})`;
+      else if (!flagged) {
+        const foundNow = planHit ? ` instead of ${planHit.file}, the plan found in design/plan/ now` : all.length ? `; ${all.length} plans in design/plan/ describe this frame now (${all.map((h) => h.file).join(", ")})` : "; no plan in design/plan/ describes this frame";
+        compareNotes.push(`using ${recPi} (the plan --expect merged interactions from)${foundNow} \u2014 its interactions[], waivers, descopes, anchors and navigate apply; pass --plan <plan.json> to use another`);
+        console.error(`note  ${compareNotes[compareNotes.length - 1]}`);
+        planHit = { file: recPi, plan: r.doc, choice: "recorded" };
+      }
+    }
     if (!planHit && all.length > 1) console.error(`note  ${all.length} plans in design/plan/ describe this frame (${all.map((h) => h.file).join(", ")}) \u2014 no waivers/descopes applied; pass --plan <plan.json>`);
     if (onlyHit && onlyHit.plan.files) {
       code = { plan: onlyHit.file, files: fileHashes(onlyHit.plan.files, process.cwd()), gitHead: gitHead(process.cwd()) };
@@ -3345,7 +3668,7 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path4.join(path4.dirname(expFile), path4.basename(measuredBase)) : null;
   const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path4.resolve(probeBase) !== path4.resolve(measuredBase) ? readStatusAt(probeBase) : null);
   const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path4.basename(found.file) : `${path4.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
-  const rep = compare(expectation, measured, { ...statusOpt, ...readable.notes.length ? { inputNotes: readable.notes } : {}, ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs });
+  const rep = compare(expectation, measured, { ...statusOpt, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);

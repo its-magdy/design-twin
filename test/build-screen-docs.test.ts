@@ -233,4 +233,101 @@ console.log("verify docs (group 11, match confidence + per-node-type rules):");
   check("[F-79] overfull fixed box: only the side the content does not start from is skipped (start → end side; centred → both)",
     /only the side the content does not start from \(start-aligned → the end side; centred, or\s+`space-around`\/`space-evenly`, → both\)/.test(verifySkill));
 }
+console.log("build-screen docs (group 12a, steps / dialog driving / precedence / overflow):");
+{
+  const docs = { verifier, verifySkill, verifyRef, skill };
+  check("[D40 7] --steps: closed click / waitFor / goto vocabulary, exactly one visible match, never submit, idempotent, exit 4 with nothing written, replayed on the re-run and every driven row (verifier, verify skill)",
+    [verifier, verifySkill].every((t) => /`--steps`/.test(t) && /`\{"click": "<selector>"\}`, `\{"waitFor": "<selector>"\}`, `\{"goto": "\/same-origin\/path"\}`/.test(t) && /EXACTLY ONE visible\s+element/i.test(t)
+      && /never submits a form/.test(t) && /[Ii]dempotent/.test(t) && /exit 4 and nothing is written/.test(t) && /re-run \(D19\)|D19 re-run/.test(t) && /every page the probe drives an interaction on/.test(t)));
+  check("[D40 7] the plan's `route` is advisory; the skill passes the plan to --steps when it has `navigate` (verifier, verify skill, build-screen, references)",
+    /`route` is advisory/.test(verifier) && /`route` stays advisory/.test(verifySkill) && /`route` \(advisory free text/.test(skill) && /`route` is advisory/.test(verifyRef)
+    && /pass the plan as `--steps`/.test(verifier) && /passes the plan to `--steps` whenever it has one/.test(verifySkill) && /Pass the plan as\s+`--steps` whenever it has `navigate`/.test(skill));
+  check("[D40 7] the probe call in every doc shows --steps",
+    [verifier, verifySkill, skill].every((t) => /verify-probe\.js[^`]*--steps design\/plan\/<screen>\.json/.test(t)) && /`--steps <plan\.json>`/.test(verifyRef));
+  check("[F-70] the shipped probe drives overlay/swap on_click/on_press and plan expect:dialog rows: reveals hover-hidden openers, mouse vs synthetic activation, never ok:false, destination tag inside",
+    [verifier, verifySkill].every((t) => /`overlay` or `swap`|`overlay` \/ `swap`/.test(t) && /`on_click` \/ `on_press`/.test(t) && /`expect: "dialog"`/.test(t) && /hover-hidden opener/.test(t) && /`"synthetic"`/.test(t) && /never a user activation/.test(t)
+      && /never `ok: false`|NEVER `ok: false`/.test(t) && /`data-dt-node` tag (on or )?INSIDE|tag INSIDE|on or inside/i.test(t)));
+  check("[F-70] the dialog contract selectors, in order (verifier, verify skill, references)",
+    [verifier, verifySkill, verifyRef].every((t) => /`:modal`, `dialog\[open\]`, `\[role=dialog\]`, `\[role=alertdialog\]`,\s*`\[aria-modal="true"\]`, `:popover-open`/.test(t)));
+  check("[F-70] the agent does not re-drive rows the probe drove, drives the rest as before, and its own detector uses the same contract — never `[role=dialog]` alone",
+    /Do not re-drive a row the probe drove with `ok: true`/.test(verifier) && /SAME contract the probe does — never a `\[role=dialog\]`-only\s+detector/.test(verifier)
+    && /does NOT re-drive rows the probe drove with `ok: true`/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifySkill) && /never `\[role=dialog\]` alone/.test(verifyRef));
+  check("[D41] builders tag a dialog/overlay's ROOT with its destination frame id (data-dt-node); an untagged dialog is not-probed",
+    /Tag a dialog or overlay's root element with its destination frame id/.test(skill) && /root of the modal\/sheet/.test(skill) && /untagged dialog is `not-probed`/.test(skill));
+  check("[F-95] plan.navigate / plan.interactions rows {nodeId, trigger, expect, destinationId}; --plan at --expect or auto-discovery; changed after --expect → incomplete until re-run",
+    /`plan\.navigate`/.test(skill) && /`plan\.interactions` as `\{nodeId, trigger, expect: "dialog" \| "url" \|\s*"selector:<css>", destinationId\}`/.test(skill) && /`destinationId` required for `dialog`/.test(skill)
+    && /Change `plan\.interactions` afterwards and `--compare` is `incomplete` until `--expect` is re-run/.test(skill)
+    && /`--plan <plan\.json>`, else the ONE plan in\s+`design\/plan\/` that describes the frame/.test(verifySkill) && /`incomplete` until `--expect` is\s+re-run/.test(verifySkill));
+  check("[D41] precedence in plain words: probe rows authoritative only in a --run with an intact status chain; a probe miss never overrides full agent evidence; a `by` field means nothing",
+    /authoritative only in a `--run` with an intact status chain/.test(verifySkill) && /A `by` field in a file means nothing/.test(verifySkill) && /a probe miss \(`ok: null`\) or a row cut by the time budget never overrides an agent row that has full D24 evidence/.test(verifySkill)
+    && /a probe miss\s+never overrides it/.test(verifier));
+  check("[D43] overflowX: a high, waivable delta on the root frame via --accept --node <frame> --field overflowX",
+    /`overflowX`, D43/.test(verifySkill) && /HIGH delta on the root frame \(field `overflowX`/.test(verifySkill) && /recorded as in step 6 with `--node <frame id> --field overflowX`/.test(verifySkill) && /`overflowX`, a high waivable delta on the root frame|\(`overflowX`, a high waivable delta/.test(verifyRef));
+  check("[D43] overflowX is not judged when designed to scroll horizontally, viewport != design width, clipped, or not measured; fixed never counts, off-canvas absolute/transformed drawers do",
+    /designed to scroll horizontally, the viewport is not the design width, the overflow is clipped/.test(verifySkill) && /or the page was not measured/.test(verifySkill) && /`position: fixed` elements never count; an off-canvas\s+absolutely-positioned or transformed drawer does/.test(verifySkill));
+  check("[12a] the new report fields: inputs.reach, coverage.pageOverflow, interactionsByProbe, evidenceFrom",
+    /`inputs\.reach`/.test(verifySkill) && /`coverage\.pageOverflow`/.test(verifySkill) && /`interactionsByProbe`/.test(verifySkill) && /`evidenceFrom`/.test(verifySkill) && /`measured\.reach`/.test(verifySkill));
+  check("[12a] exit 4 lists a failed --steps step in the verifier and the verify skill", /a `--steps` step failed/.test(verifier) && /a `--steps` step that failed/.test(verifySkill));
+  void docs;
+}
+console.log("build-screen docs (group 12a review 1):");
+{
+  check("[12a r1 L2] a plan `expect: \"dialog\"` row needs an on_click / on_press trigger (verifier, verify skill, build-screen, references)",
+    /`expect: "dialog"` \(source `plan`; `--expect` keeps such a row only with an `on_click` \/ `on_press` trigger\)/.test(verifier)
+    && /whose trigger must be `on_click` or `on_press`/.test(verifySkill) && /a `dialog` without `destinationId` or on another trigger/.test(verifySkill)
+    && /a `dialog` row's trigger is\s+`on_click` or `on_press`/.test(skill) && /`expect: "dialog"` rows \(`on_click` \/ `on_press` only\)/.test(verifyRef));
+  check("[12a r1 B2] steps: a `click` matches exactly one visible element, a `waitFor` at least one (verifier, verify skill, build-screen, references)",
+    /A `click` selector must\s+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches/.test(verifier)
+    && /A `click` selector must match exactly ONE visible element \(a `waitFor` succeeds once AT LEAST ONE visible element matches\)/.test(verifySkill)
+    && /each `click` selector matches exactly one visible element, a `waitFor` at least one/.test(skill) && /exactly one visible\s+match per `click` \(a `waitFor` needs at least one\)/.test(verifyRef));
+  check("[12a r1 M4/L3] disabled openers are not driven and an opener that would submit a form is not clicked — ok:null (verifier, verify skill, references)",
+    [verifier, verifySkill].every((t) => /A disabled opener \(`:disabled`,\s+`\[disabled\]` or `aria-disabled="true"`, on it or on an ancestor\) is not driven/.test(t) && /an opener that would submit\s+a form[^.]*is not clicked/.test(t))
+    && /skipping a disabled\s+opener \(`:disabled` \/ `\[disabled\]` \/ `aria-disabled`, on it or an ancestor\) and one that would submit a form \(`ok: null`\)/.test(verifyRef));
+  check("[12a r1 M2] the destination tag: on or inside the opened element, or on a NEWLY visible ancestor — never one visible before the click (verifier ×2, verify skill, build-screen, references)",
+    /or on an ancestor of it that became visible with it — never on one that was already\s+visible/.test(verifier) && /or on a NEWLY visible ancestor of\s+it — never one visible before the click/.test(verifier)
+    && /or on an ancestor of it that became visible with it — never one already visible before the click/.test(verifySkill)
+    && /or on an ancestor of it that became visible with it \(never one visible before the click\)/.test(skill) && /or on a newly visible ancestor of it/.test(verifyRef));
+  check("[12a r1 M3] one plan rule: of several plans, the one listing files[]; --compare picks the same; the re-run names --plan (verify skill, build-screen)",
+    /or — when several do — the one\s+that lists `files\[\]`; `--compare` picks the plan by the same rule/.test(verifySkill) && /with the `--plan` it names, when it names one/.test(verifySkill)
+    && /of several, the one listing `files\[\]`/.test(skill));
+  check("[12a r1 L9] a plan with navigate and a probe run without --steps → an input note (verify skill)", /A plan with `navigate` and a\s+probe run without `--steps` gets an input note/.test(verifySkill));
+  check("[12a r1 known limit] probe rows bind only through the run's status chain; a hand-recorded measured file gains no pass power beyond D24 + the destination tag (verify skill)",
+    /Known limit: the binding is the run's status chain, nothing more/.test(verifySkill) && /its rows gain no pass power beyond what D24 and the destination tag already demand/.test(verifySkill));
+}
+console.log("build-screen docs (group 12a review 2):");
+{
+  check("[12a r2 M-b] --compare checks the plan file --expect merged from while it exists; gone → names both plans and asks for --plan (verify skill, build-screen)",
+    /the plan file `--expect` merged from\s+wins while it still exists — an input note says so — and when that file is gone the reason names both plans/.test(verifySkill)
+    && /`--compare … --plan <its path now>` or `--expect … --plan <the plan you intend>`/.test(verifySkill)
+    && /`--compare`\s+checks the plan file `--expect` merged from while it exists \(if that file moved, pass its new path as `--plan`\)/.test(skill));
+  check("[12a r2 L-e/H-a] step load ownership: a click's navigation to ANOTHER URL is the step's own however late; a same-URL new document never is (verifier, verify skill)",
+    [verifier, verifySkill].every((t) => /a document\s+load that goes to ANOTHER URL than the page shows \(the fragment ignored\), whether its request starts while the click runs\s+or LATER \(until the next `click` \/ `goto` step or the end of the steps\)|a document load that goes to ANOTHER URL than the page shows \(fragment ignored\), whether its request starts while the click runs or later \(until the next `click` \/ `goto` step or the end of the steps\)/.test(t)
+      && /`await save\(\);\s+location\.href = "\/other"` after any delay is the\s+step's own/.test(t) && /A new document at\s+the SAME URL \(`location\.reload\(\)`, a dev-server reload/.test(t)));
+  check("[12a r2 L-e/H-a] an in-place click undone by a reload → one re-run with the steps replayed, then a step-specific exit 4 that names the step, not the dev server (verifier, verify skill, references, build-screen)",
+    [verifier, verifySkill].every((t) => /the pass is re-run once\s+with the steps replayed \(D19\)/.test(t) && /"the page reloaded \(<url> again, not a navigation\) after step N\s+… had changed it in place"/.test(t)
+      && /reach the screen by its own URL \(`--url` or a\s+`goto` step|reach the screen by its own URL, `--url` or a `goto` step/.test(t) && /A reload after a `goto` or (after )?a click's own navigation is\s+(only waited for|only waited for and counted)/.test(t))
+    && /a reload undid an in-place `--steps` click on both passes/.test(verifier) && /a reload that undid an in-place `--steps` click on both passes/.test(verifySkill)
+    && /Only the reload-during-measurement message points at\s+the dev-server watch/.test(verifier)
+    && /a click that reloads the same URL\s+loses what it built, one re-run, then exit 4 naming the step/.test(verifyRef)
+    && /a `click` changes the page in place or navigates to another URL, never reloads the one it is on/.test(skill));
+  check("[12a r2 M-a] every settle first waits for the document to finish loading (readyState complete, 10 s cap, then a note) (verifier, verify skill)",
+    /every settle first waits for the document to finish loading \(`document\.readyState`\s+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",/.test(verifier)
+    && /every settle first waits for the document to finish loading \(`document\.readyState` `"complete"`, at most 10 s per document, then it measures anyway with a note,/.test(verifySkill));
+  check("[12a r2 L-c] the submit refusal also checks the element at the click point (verifier ×2, verify skill ×2)",
+    /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifier) && /typeless button inside a `<form>`, on it or at its click point\) is not clicked/.test(verifier)
+    && /typeless button inside a `<form>`, on the element or at its click point, is refused/.test(verifySkill) && /an opener that would submit a form \(on it or at its click point\) is not clicked/.test(verifySkill));
+}
+console.log("build-screen docs (group 12a review 3):");
+{
+  check("[12a r3 M-2] a same-URL new document is never a click's own — not even one its handler starts at once (verifier, verify skill)",
+    /never a step's own — not even\s+one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifier)
+    && /is never a step's own, not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
+  check("[12a r3 M-1] the 10 s load wait is per document: no later settle waits for that document again (verifier, verify skill)",
+    /at most 10 s per document[^)]*and no later settle waits for that document again\)/.test(verifier) && /at most 10 s per document[^)]*and no later settle waits for that document again\)/.test(verifySkill));
+  check("[12a r3 L-1] with steps, always pass --ready on the screen root (or end with a waitFor of it): a click that lands elsewhere is still the step's own (verifier, verify skill, references, build-screen ×2)",
+    /With steps, always pass `--ready '\[data-dt-node="<frame id>"\]'` \(or end the steps with a\s+`waitFor` of the screen root\)/.test(verifier) && /an expired session bouncing to a login page/.test(verifier)
+    && /With steps, always pass `--ready '\[data-dt-node="<frame id>"\]'` \(or end the steps with a `waitFor` of the screen root\)/.test(verifySkill) && /an expired session bouncing to a login page/.test(verifySkill)
+    && /always pass `--ready` with the screen root's tag, or end the\s+steps with a `waitFor` of it/.test(verifyRef)
+    && /\[--steps design\/plan\/<screen>\.json --ready '\[data-dt-node="<frame id>"\]'\]/.test(skill) && /with `--ready` on the screen root's tag/.test(skill));
+}
 report();

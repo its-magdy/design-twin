@@ -18,7 +18,8 @@ Inputs you need (ask the caller once if missing): the screen name; the **expecta
 spec, instance and designed interaction, the `coordinates` convention, the canonical `measuredKeys`,
 and under `hidden` the ids of every layer the designer switched off); the reference PNG
 (`nodes[0].reference` in the screen export, a path relative to `design/export/`); the plan at
-`design/plan/<screen>.json`; and how to reach the built screen (route / component / preview name).
+`design/plan/<screen>.json`; and how to reach the built screen (route / component / preview name). The plan's `route` is advisory free text; when the
+screen is a section of the app chosen by component state (not by the URL), the plan's `navigate` steps reach it (§4).
 
 **Hidden layers do not exist for you.** Never measure, hover, click or credit an id listed under
 `hidden` — the build correctly omits them. Four hovers on hidden layers once cost four 30-second
@@ -154,8 +155,36 @@ page and browser of the app you opened (§2): the probe writes into `design/veri
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" \
   --expected design/verify/<Screen>.expected.json --url <url> --out design/verify/<Screen> --run <id> \
-  [--ready '[data-dt-node="<frame id>"]']
+  [--ready '[data-dt-node="<frame id>"]'] [--steps design/plan/<screen>.json]
 ```
+
+**`--steps` (or the plan's `navigate`).** A screen that is a section of a single-page app is not reached by `--url` alone:
+the probe would measure the default section and read every spec as "not measured". When the plan has a `navigate`
+list, pass the plan as `--steps` (a JSON array of steps works too). The vocabulary is closed and navigation-only:
+`{"click": "<selector>"}`, `{"waitFor": "<selector>"}`, `{"goto": "/same-origin/path"}` — no fill, press or hover, and a
+click never submits a form (a `[type=submit]` or typeless button inside a `<form>`, on the element or at its click point, is refused). A `click` selector must
+match EXACTLY ONE visible element; a `waitFor` succeeds once AT LEAST ONE visible element matches. The steps are replayed after every page load, before `--ready`: in the measurement pass, in
+its re-run (D19) and on every page the probe drives an interaction on. Idempotent by construction; never write a step
+that changes state. A step that fails while measuring is exit 4 and nothing is written (the log names the step); a bad
+steps file is exit 2. The probe records them as `measured.reach` (`steps`, `sha256`, `source`, `url`) and prints where
+they ended (`reach … → <url>`). With steps, always pass `--ready '[data-dt-node="<frame id>"]'` (or end the steps with a
+`waitFor` of the screen root): a click's navigation to another URL is the step's own even when the app sends it somewhere
+else (an expired session bouncing to a login page), and only the root check tells that page from the screen.
+
+**Which page loads belong to a step.** A `goto` step's load is its own; so is a `click` step's navigation — a document
+load that goes to ANOTHER URL than the page shows (the fragment ignored), whether its request starts while the click runs
+or LATER (until the next `click` / `goto` step or the end of the steps): `await save();
+location.href = "/other"` after any delay is the step's own navigation. A step's own load is never counted in
+`afterInitialLoad`, and every settle first waits for the document to finish loading (`document.readyState`
+`"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",
+and no later settle waits for that document again). A new document at
+the SAME URL (`location.reload()`, a dev-server reload, `location.href = location.href`) is never a step's own — not even
+one the click's handler starts at once (`draw(); location.reload()`). After a
+click that changed the page IN PLACE (no navigation), such a reload wipes what the click built: the pass is re-run once
+with the steps replayed (D19); the same again is exit 4 "the page reloaded (<url> again, not a navigation) after step N
+… had changed it in place". That is a step problem, not a dev-server one: reach the screen by its own URL (`--url` or a
+`goto` step) or by a click that navigates to another URL. A reload after a `goto` or after a click's own navigation is
+only waited for (it counts in `afterInitialLoad`), never a re-run.
 
 **Measure the build the user will run.** A `vite preview` or static server serves the LAST build: rebuild
 first, then measure (an unchanged-but-stale preview measures old code). The probe records the build identity
@@ -170,12 +199,30 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
   identity: a changed probe (or a hand-edited file) makes rounds incomparable, so it is a full re-run (F-101).
 - **Exit 3** (renderer unavailable) → stop and ask the user; never install anything yourself.
   **Exit 4** (the page kept navigating, reloaded twice during measurement, was unreachable, or `--ready` timed
-  out; nothing written) → report the navigation log it printed; do not retry in a loop.
+  out, or a `--steps` step failed, or a reload undid an in-place `--steps` click on both passes; nothing written) →
+  report the navigation log it printed; do not retry in a loop. Only the reload-during-measurement message points at
+  the dev-server watch; the in-place-click one names the step to change.
 - **Untagged nodes** come back in `notMeasured` with the reason "tag it". Report them for the builder to tag
   with `data-dt-node`; do not match them by hand. A `null` style with an `unmeasured[key]` reason is "not
   measured", never a pass.
-- **Designed interactions, and components you judge genuinely absent, are yours.** The probe measures hover
-  and focus only (focus is recorded only when the element really took it; programmatic focus may not
+- **The shipped probe drives the overlay interactions itself.** After measuring, it drives every expectation row
+  that is an `overlay` or `swap` action with an `on_click` / `on_press` trigger, and every plan row with
+  `expect: "dialog"` (source `plan`; `--expect` keeps such a row only with an `on_click` / `on_press` trigger), each on
+  a fresh page (steps replayed): it reveals a hover-hidden opener the same way as the hover states, clicks the element
+  tagged with the row's `nodeId`, and watches for the dialog contract (below). A disabled opener (`:disabled`,
+  `[disabled]` or `aria-disabled="true"`, on it or on an ancestor) is not driven, and an opener that would submit
+  a form (`[type=submit]`, or a typeless button inside a `<form>`, on it or at its click point) is not clicked — both `ok: null` with the reason.
+  It writes the rows into `measured.json`'s `interactions[]`, never `ok: false` — a miss is `ok: null` with the missing
+  piece in `detail`. `ok: true` needs exactly one opener, a real mouse activation (`activation: "mouse"`; a
+  `"synthetic"` in-page click, used when the opener is covered or not actionable, is never a user activation and stays
+  `ok: null`), something of the contract opened, the destination frame's `data-dt-node` tag INSIDE the opened element
+  (or on the element itself, or on an ancestor of it that became visible with it — never on one that was already
+  visible), and no document load. **Do not re-drive a row the probe drove with `ok: true`.** A row the
+  probe left `ok: null` stays yours to drive if you can; your evidence is graded on its own D24 terms and a probe miss
+  never overrides it.
+- **The rest of the designed interactions, and components you judge genuinely absent, are yours.** Drive navigate,
+  `change_to`, hover and pressed rows (every row the probe does not drive) as before. The probe measures hover
+  and focus states only (focus is recorded only when the element really took it; programmatic focus may not
   match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence); pressed and every designed interaction you drive yourself, recording results as in
   "Also collect" below into `<Screen>.evidence.json` (staged, §2) — an object
   `{"interactions": [...], "components": [{"setName", "present": false, "detail"}]}` that the caller passes as
@@ -267,6 +314,13 @@ Also collect:
     `url-changed` (`navEvents` 0) is fine wherever the action allows `url-changed`. An overlay opened as a
     route, or a tab kept in the query string, records what appeared (`dialog-opened`, `selector-appeared`,
     `state-changed`), not the URL. Never infer an outcome from the `detail` text.
+  - **A dialog detector you write yourself uses the SAME contract the probe does — never a `[role=dialog]`-only
+    detector (F-70).** An element newly visible that matches, in this order, `:modal`, `dialog[open]`,
+    `[role=dialog]`, `[role=alertdialog]`, `[aria-modal="true"]`, `:popover-open` (each in its own try/catch: an unknown
+    selector throws), polled every 100 ms for up to 2 s after the click (a framework commits a dialog a frame or two
+    later), and the destination frame's `data-dt-node` tag must be on or inside it (or on a NEWLY visible ancestor of
+    it — never one visible before the click). A native `<dialog>` opened with
+    `showModal()` carries no role — a `[role=dialog]` detector reads it as "nothing opened".
   - Drive the element that carries that node's id (or that you matched to it). Never credit a node
     with a result from a different control.
   - Did not drive it? `"ok": null` with the reason — it is reported `not-probed`, not `fail`. Drove it

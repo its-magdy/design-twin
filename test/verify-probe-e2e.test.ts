@@ -47,6 +47,9 @@ function treeState(root: string): string {
   walk(root);
   return out.sort().join("\n");
 }
+// H-1: with ?hold=1 the SECOND request of a URL (the page's own reload) gets everything but </body> at once and the rest
+// 3 s later — the re-run's goto cuts that load short, and its response body never settles in Playwright
+const holdSeen = new Map<string, number>();
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url || "/", "http://x").pathname;
   if (pathname === "/asset.js" || pathname === "/@vite/client") {
@@ -55,13 +58,28 @@ const server = http.createServer((req, res) => {
     res.end(body);
     return;
   }
+  // H-1: a document whose body never ends; it moves on by itself after 300 ms (closed by finish())
+  if (pathname === "/held-page.html") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.write("<!doctype html><p>loading</p><script>setTimeout(() => location.replace(\"/staff-directory.html?mode=held-doc-done\"), 300)</script>");
+    return;
+  }
   const name = path.basename(pathname);
   if (onPage !== null) { const f = onPage; onPage = null; f(); }
   if (statusWatch !== null) pageSeen.push({ status: fs.existsSync(statusWatch.live) ? fs.readFileSync(statusWatch.live, "utf8") : null, tree: treeState(statusWatch.project) });
   const file = path.join(FIX, name);
   if (!name.endsWith(".html") || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(fs.readFileSync(file));
+  const html = fs.readFileSync(file, "utf8");
+  const n = (holdSeen.get(req.url || "") ?? 0) + 1;
+  holdSeen.set(req.url || "", n);
+  const cut = html.indexOf("</body>");
+  if (new URL(req.url || "/", "http://x").searchParams.get("hold") === "1" && n === 2 && cut > 0) {
+    res.write(html.slice(0, cut));
+    setTimeout(() => res.end(html.slice(cut)), 3000).unref();
+    return;
+  }
+  res.end(html);
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const addr = server.address();
@@ -77,7 +95,7 @@ const probe = (args: string[]): Promise<Run> => new Promise((resolve) => {
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
   p.on("close", (status) => resolve({ status, stdout, stderr }));
 });
-const finish = (): void => { server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
+const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 
 // ---- the expectation, from the real --expect
 const exp = spawnSync(process.execPath, [path.join(ROOT, "design-to-code", "verify-screen.ts"), "--expect", path.join(FIX, "staff-directory.json"), "--out", path.join(tmp, "Staff")], { encoding: "utf8" });
@@ -187,7 +205,32 @@ check("[DT-39] the page reloads once 200ms after load → absorbed by the readin
 const b3 = path.join(tmp, "run3", "Staff");
 const r3 = await probe(["--expected", expected, "--url", url("reload-on-first-hover"), "--out", b3, "--project", ROOT]);
 const m3 = read(b3);
+// (review 2: this check failed once in a full run and never again — print what the probe said when it does)
+if (!(r3.status === 0 && m3?.navigation?.reruns === 1 && allTagged(m3))) console.log(`[DT-39] first-hover reload run: exit ${r3.status}, reruns ${m3?.navigation?.reruns ?? "-"}\n${r3.stderr}`);
 check("[DT-39] a reload DURING measurement (first hover) → one full re-run: exit 0, reruns 1, every tagged spec resolved", r3.status === 0 && m3?.navigation?.reruns === 1 && allTagged(m3));
+
+// H-1: the same, but the reload's response holds its last bytes for 3 s — the re-run's goto aborts it mid-body. The probe
+// waits only for its current pass's bodies, and at most 2 s: exit 0 well inside --max-time (was: the --max-time exit 4)
+const b3h = path.join(tmp, "run3h", "Staff");
+const t3h = Date.now();
+const r3h = await probe(["--expected", expected, "--url", `${url("reload-on-first-hover")}&hold=1`, "--out", b3h, "--project", ROOT, "--max-time", "30000"]);
+const took3h = Date.now() - t3h;
+const m3h = read(b3h);
+if (r3h.status !== 0) console.log(`[H-1] held-reload run: exit ${r3h.status} after ${took3h} ms\n${r3h.stderr}`);
+check(`[H-1] a reload during measurement whose response body never completes (aborted by the re-run's goto) → exit 0 in ${Math.round(took3h / 1000)} s (< 20 s, --max-time 30 s), reruns 1, every tagged spec resolved`,
+  r3h.status === 0 && took3h < 20_000 && m3h?.navigation?.reruns === 1 && allTagged(m3h));
+
+// H-1: a document response cut short by the page's own next navigation IN the measured pass — its body never settles;
+// the wait for the pass's bodies is bounded (2 s) and the unread one is named in a note (was: hung until --max-time, exit 4)
+const b3s = path.join(tmp, "run3s", "Staff");
+const t3s = Date.now();
+const r3s = await probe(["--expected", expected, "--url", url("held-doc"), "--out", b3s, "--project", ROOT, "--max-time", "30000"]);
+const took3s = Date.now() - t3s;
+const m3s = read(b3s);
+if (r3s.status !== 0) console.log(`[H-1] held-document run: exit ${r3s.status} after ${took3s} ms ${JSON.stringify(m3s?.navigation)} ${JSON.stringify(m3s?.notes)}\n${r3s.stderr}`);
+check(`[H-1] a same-pass document load cut short by the next navigation → exit 0 in ${Math.round(took3s / 1000)} s (< 20 s), re-runs 0, the page it moved on to measured, a note naming the unread document`,
+  r3s.status === 0 && took3s < 20_000 && m3s?.navigation?.reruns === 0 && allTagged(m3s)
+  && (m3s.notes || []).some((n) => /^build identity: 1 same-origin response body\(ies\) not hashed — \/held-page\.html \(not received within 2 s/.test(n)));
 
 const b4 = path.join(tmp, "run4", "Staff");
 const r4 = await probe(["--expected", expected, "--url", url("reload-on-every-hover"), "--out", b4, "--project", ROOT]);
