@@ -213,6 +213,20 @@ console.log("F-60 / D22 — an interaction whose destination was never exported:
     { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] } });
   safe("[review L1] 1:50 given as an unnamed input → not marked; 9:9 still marked", () =>
     withUnnamedInput.interactions.find((i) => i.nodeId === "2:5")?.destinationExported === undefined && withUnnamedInput.interactions.find((i) => i.nodeId === "2:4")?.destinationExported === false);
+  // D28 (live L-4): a change_to's destination is a component variant → never "undesigned"; a swap (overlay) keeps the rule
+  const VARIANTS: NodeInput = { type: "FRAME", id: "1:1", name: "Orders", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [
+    { type: "FRAME", id: "3:1", name: "Button", fills: [{ type: "solid", color: "#0000ff" }], reactions: [{ trigger: "on_hover", actions: [{ type: "NODE", navigation: "change_to", destinationId: "88:1" }] }] },
+    { type: "FRAME", id: "3:2", name: "Menu", fills: [{ type: "solid", color: "#00aa00" }], reactions: [{ trigger: "on_click", actions: [{ type: "NODE", navigation: "swap", destinationId: "88:2" }] }] },
+  ] };
+  const variantsExp = buildExpectation([{ doc: screenExport([VARIANTS], { exportedAt: "2026-09-30T00:00:00Z", screen: "Orders", nodeId: "1:1", sourceFile: "Sample Kit" }), label: "Orders" }],
+    { index: { layers: [{ id: "1:1", name: "Orders", file: "pages/Main/Orders__1_1.json", sourceFile: "Sample Kit" }] } });
+  safe("[D28] change_to to an unexported variant → not marked (a variant is a drawn state, not a screen)", () => {
+    const r = variantsExp.interactions.find((i) => i.nodeId === "3:1"); return !!r && r.action === "change_to" && r.destinationExported === undefined; });
+  safe("[D28] swap (overlay) to an unexported frame → still marked destinationExported:false", () => variantsExp.interactions.find((i) => i.nodeId === "3:2")?.destinationExported === false);
+  const variantsRep = compare(variantsExp, { nodes: [], interactions: [] });
+  safe("[D28] …and undriven, the change_to is graded not-probed (blocks a pass), the swap undesigned", () =>
+    ia(variantsRep, "3:1")?.result === "not-probed" && ia(variantsRep, "3:2")?.result === "undesigned" && variantsRep.verdict !== "pass");
+
   // review M-a: a multi-frame selection pull is indexed under its FIRST frame's id with the title "selection"
   const CART: NodeInput = { type: "FRAME", id: "1:2", name: "Cart", box: { x: 0, y: 0, w: 1280, h: 800 }, children: [] };
   const selection = buildExpectation([{ doc: screenExport([SCREEN, CART], { exportedAt: "2026-09-30T00:00:00Z", screen: "selection", nodeId: "1:1", sourceFile: "Sample Kit" }), label: "selection" }],

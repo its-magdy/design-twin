@@ -197,7 +197,7 @@ How the verdict is computed, all of it deliberate. It is one of four values:
 - **Interaction states, not two:** `pass` (driven, with the selector), `fail` (driven, did not
   work), `not-probed` (nobody drove it — neither passed nor failed), `undesigned` (its destination was
   never exported: counted in the headline, never blocks a pass; a probe showing it working still passes —
-  decided at `--expect` from `pages/index.json` and every `pages/<page>/index.json`, per Figma file, so re-run `--expect` after exporting that destination),
+  decided at `--expect` from `pages/index.json` and every `pages/<page>/index.json`, per Figma file — a `change_to` to a component variant never counts as undesigned — so re-run `--expect` after exporting that destination),
   `descoped` (the user decided it stays inert — see below).
 - **`untaggedInstanceSets` is tag coverage, not presence.** It lists instance sets the probe could not
   point at (no `data-dt-node`, no reported setName). A list rendered by one `.map()` and a shared app
