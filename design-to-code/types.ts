@@ -504,6 +504,13 @@ export interface PlanVerification {
   // A model-written verification block often carries more (interactionScript, typecheck, dataDtNode,
   // interactions, …): nothing reads those, and the hook's rewrite carries them through untouched.
 }
+/** L-1 (D40(7)): one step of plan.navigate / probe --steps. `goto` is a same-origin path ("/x?y"). Never fill/press:
+ *  steps are replayed in many contexts, so they must be idempotent and must never submit anything. */
+export type ProbeStep = { click: string } | { waitFor: string } | { goto: string };
+/** F-95: what a plan interaction's activation should produce; `selector:<css>` = that selector appears. */
+export type PlanInteractionExpect = "dialog" | "url" | `selector:${string}`;
+/** F-95 (D40(7)): a plan.interactions[] row — keyed nodeId + trigger like an export reaction. */
+export interface PlanInteraction { nodeId: string; trigger: string; expect: PlanInteractionExpect; destinationId?: string; name?: string }
 export interface Plan {
   schema?: "designtwin/plan@2" | (string & {});
   /** the plan's own file stem: <Layer>__<id> */
@@ -534,6 +541,12 @@ export interface Plan {
   counts?: { tokens: number; tokensVisible: number; instances: number; anchors: number; hiddenNodes: number };
   allowedLiterals?: AllowedLiteral[];
   verification?: PlanVerification;
+  /** L-1 (D40(7)): the steps that take a freshly loaded page to this screen (a section behind a click). Closed,
+   *  navigation-only vocabulary (probe-steps.ts parseSteps); rows are validated where used, not by the plan guard. */
+  navigate?: Array<ProbeStep | JsonValue>;
+  /** F-95 (D40(7)): interactions the export does not carry (no prototype reaction) — merged at --expect when valid
+   *  (probe-steps.ts / verify-screen.ts); only this list's hash binds the expectation (planInteractions.sha256). */
+  interactions?: Array<PlanInteraction | JsonValue>;
   // A filled plan often carries more (layout, states, assets, openQuestions, componentCatalog, …): no
   // reader looks at those, and merge() / the hook's rewrite carry them through untouched.
 }
@@ -604,13 +617,24 @@ export interface VerifySpec {
   /** D34: the design's stroke alignment (strokes.align) — a ring read on the other side of the box is noted, not a delta */
   strokeAlign?: "inside" | "outside" | "center";
 }
-export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean }
+export interface VerifyFrame { nodeId: string; name: string; w?: number; h?: number; x?: number; y?: number; clip?: boolean;
+  /** D43: the frame root's prototype scroll direction (IrNode.scroll) — a frame designed to scroll sideways is no overflowX delta */
+  scroll?: "horizontal" | "vertical" | "both" }
 /** A root frame as an expectation lists it (no position). */
 export type VerifyRootFrame = Omit<VerifyFrame, "x" | "y">;
 export interface VerifyInstance { nodeId: string; name: string; setName?: string; setKey?: string; variant?: string; props?: ComponentPropValues }
 export interface VerifyInteraction { nodeId: string; name: string; trigger: string; action?: string; destinationId?: string; destination?: string;
   /** F-60/D22: false when destinationId is no node of the export for the SAME Figma file (only false is written) */
-  destinationExported?: boolean }
+  destinationExported?: boolean;
+  /** F-95: the row came from plan.interactions[] (absent = the export's reactions) */
+  source?: "plan";
+  /** F-95: the plan row's `expect` (dialog | url | selector:<css>) — `action` is derived from it */
+  expect?: string;
+  /** F-117: the destination frame's overlay settings (an overlay/swap whose destination root is exported); `from:
+   *  "default"` = the export emits no overlay block for it, i.e. Figma's defaults (centred, no scrim, no click-outside) */
+  overlay?: VerifyOverlay }
+/** F-117: serialize.ts emits a destination root's overlay block only when it differs from the default. */
+export interface VerifyOverlay { position: string; closeOnClickOutside: boolean; background: string | null; from: "export" | "default" }
 export interface NotComparable { nodeId: string; name: string; field: string; value: JsonValue; why: string }
 /** <Screen>.expected.json (verify-screen.js buildExpectation) */
 export interface VerifyExpectation {
@@ -632,7 +656,12 @@ export interface VerifyExpectation {
   interactions?: VerifyInteraction[];
   notComparable?: NotComparable[];
   hidden?: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[] };
+  /** F-95: the plan whose interactions[] were merged (D40(7): only their hash binds — a change makes --compare incomplete) */
+  planInteractions?: PlanInteractionsInput;
 }
+/** expectation.planInteractions: which plan, the hash of its interactions[] (plan-waivers.ts planInteractionsSha256),
+ *  how many rows were merged and the ones dropped with why. */
+export interface PlanInteractionsInput { plan: string; sha256: string; merged: number; dropped: Array<{ nodeId: string; why: string }> }
 
 /** What a probe measures for one element. Keys beyond the canonical ones are reported as unknown, so the bag is open.
  *  `null` = the probe could not read the value (the shipped probe gives the reason in MeasuredNode.unmeasured[key]);
@@ -704,7 +733,39 @@ export interface InteractionEvidence { nodeId: string; trigger?: string; ok?: bo
   /** F-102 (D24): documents LOADED in the main frame during the interaction — a reload or a cross-document navigation
    *  (page 'load' events, or a window marker set before and gone after). An in-page URL change (pushState, a hash)
    *  loads none: it is 0. A reload is not an outcome. */
-  navEvents?: number }
+  navEvents?: number;
+  /** F-70: how the shipped probe activated the control — "synthetic" (el.click()) is never a user activation (ok:null) */
+  activation?: ProbeActivation;
+  /** F-70: the first dialog-contract selector the opened element matched (":modal", "dialog[open]", …), or "destination-tag" */
+  detectedBy?: string;
+  /** the hover target that revealed a hover-hidden opener (D16 path) */
+  revealedBy?: string;
+  /** D41: the destination frame's tag — inside = within (or equal to, or an ancestor of) the opened element */
+  destination?: { nodeId: string; inside: boolean; count: number };
+  /** 12b seam: what opened, recorded raw — never graded in 12a */
+  opened?: { selector: string; modal: boolean; position: string; rect: { x: number; y: number; w: number; h: number }; scrollY: number };
+  /** the probe's driving budget ran out before this row: no evidence (D41: never overrides anything) */
+  cut?: "budget";
+  /** L-1: replaying the steps failed in the driving page (the row is not-run) */
+  stepsFailed?: string }
+/** F-70: how the probe clicked an opener. */
+export type ProbeActivation = "mouse" | "synthetic";
+/** measured.reach (L-1): the steps the probe replayed to reach the screen. */
+export interface ProbeReach { steps: ProbeStep[]; sha256: string; source: string; url: string }
+/** measured.page (D43): the document's horizontal overflow at the measured viewport, read in the measurement pass. */
+export interface PageOverflow {
+  viewport: { w: number; h: number };
+  /** documentElement.scrollWidth / clientWidth */
+  scrollWidth: number; clientWidth: number;
+  /** the viewport's propagated overflow-x (html's, else body's) */
+  overflowX: string;
+  /** scrollWidth > clientWidth + 1 and overflowX is not hidden/clip — the user can scroll sideways */
+  scrollable: boolean;
+  /** ≤5 elements with the widest right edges past clientWidth */
+  offenders: Array<{ path: string; dt: string | null; right: number }>;
+  /** document.compatMode when not "CSS1Compat" (quirks mode measures the viewport off body) — informational */
+  compatMode?: string;
+}
 /** measured.build (DT-81): what the probe was served — so a stale preview/dist is visible. */
 export interface BuildIdentity {
   url: string;
@@ -756,6 +817,12 @@ export interface VerifyMeasured {
   build?: BuildIdentity;
   /** DT-47: data-dt-node values on visible elements that are no expected/hidden/instance/frame id ({id, elements}: first 50, sorted) */
   tagsNotInExpectation?: { count: number; ids: Array<{ id: string; elements: number }> };
+  /** L-1: the steps replayed before measuring */
+  reach?: ProbeReach;
+  /** D43: page overflow at the measured viewport */
+  page?: PageOverflow;
+  /** 12b seam: behaviour/a11y checks — carried, never read in 12a */
+  behaviour?: JsonObject;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -781,9 +848,16 @@ export interface VerifyDelta {
   /** D39: which caps bound it — "size" (D31, lifted by a waiver on match (size)) and/or "match" (D30, stays) */
   cappedBy?: Array<"size" | "match">;
 }
+/** D43: coverage.pageOverflow. */
+export type PageOverflowCoverage = "ok" | "overflows" | "clipped" | "not measured" | "not at design width" | "designed to scroll";
 /** "undesigned" (D22): the destination was never exported; "descoped" (D20): the owner removed it from the graded set. */
 export type InteractionResult = "pass" | "fail" | "not-probed" | "undesigned" | "descoped";
-export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string; outcome?: string; navEvents?: number }
+export interface VerifyInteractionResult extends VerifyInteraction { result: InteractionResult; detail?: string; selector?: string; selectorCount?: number; note?: string; outcome?: string; navEvents?: number;
+  /** D41: whose row was graded — the run-bound shipped probe's, or the agent's (--interactions / an unbound measured row) */
+  evidenceFrom?: "probe" | "agent";
+  activation?: string; detectedBy?: string; revealedBy?: string;
+  /** D41: the other side's disagreeing claim that this result overrides */
+  overridden?: string }
 export interface ArtifactCheck { path?: string; exists: boolean; image: boolean; sha256?: string }
 /** report.inputs.code (finding 317): which code was measured, by content. */
 export interface CodeInputs { plan?: string; files: Record<string, string | null>; gitHead?: string | null }
@@ -815,7 +889,9 @@ export interface VerifyReport {
     /** DT-81: the build the probe was served (measured.build), or "unknown" */
     build?: BuildIdentity | "unknown";
     /** F-72: the verify run the measured file belongs to */
-    runId?: string };
+    runId?: string;
+    /** L-1: the steps the probe replayed (measured.reach); matchesPlan = their sha equals the plan's navigate (null: no plan navigate) */
+    reach?: { sha256: string; steps: number; source: string; matchesPlan: boolean | null } };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
   why?: string[];
@@ -833,6 +909,10 @@ export interface VerifyReport {
     matchedBy?: Record<string, number>;
     /** D33 (informational): outermost instances that are a shared shell, and their specs expected/measured */
     sharedShell?: { instances: Array<{ nodeId: string; name: string; setName?: string; expected: number; measured: number }>; expected: number; measured: number };
+    /** D41: interaction results graded on the run-bound shipped probe's rows */
+    interactionsByProbe?: number;
+    /** D43: the page's horizontal overflow at the design width */
+    pageOverflow?: PageOverflowCoverage;
   };
   /** high/medium/low count OPEN deltas only; `accepted` = deltas a plan waiver matched */
   summary?: { high: number; medium: number; low: number; componentsAbsent?: number; interactionsFailed?: number; interactionsNotProbed?: number; missingComponents?: number;

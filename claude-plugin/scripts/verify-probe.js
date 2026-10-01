@@ -4,11 +4,11 @@
 // design-to-code/verify-probe.ts
 import fs4 from "node:fs";
 import path3 from "node:path";
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep } from "node:timers/promises";
+import { setTimeout as sleep2 } from "node:timers/promises";
 import { spawnSync as spawnSync2 } from "node:child_process";
 
 // design-to-code/probe-page.ts
@@ -784,6 +784,68 @@ function readJsonOrNull(file, guard) {
   return "doc" in r ? r.doc : null;
 }
 
+// design-to-code/probe-steps.ts
+import crypto from "node:crypto";
+
+// design-to-code/plan-waivers.ts
+function canonical(v) {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v).filter(([, x]) => x !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+// design-to-code/probe-steps.ts
+var STEP_KINDS = ["click", "waitFor", "goto"];
+var isStepKind = (k) => STEP_KINDS.includes(k);
+var REFUSED = {
+  fill: "a typed value may submit a form when the steps are replayed",
+  type: "a typed value may submit a form when the steps are replayed",
+  press: "a key press may submit a form when the steps are replayed",
+  hover: "a hover is not a navigation (hover-revealed openers are revealed by the probe itself)",
+  check: "a checked box is state, not navigation",
+  select: "a selected option is state, not navigation"
+};
+function describeStep(s, i) {
+  const [k, v] = Object.entries(s)[0] ?? ["?", ""];
+  return `step ${i + 1} {${k}: ${JSON.stringify(v)}}`;
+}
+function isSameOriginPath(v) {
+  return v.startsWith("/") && !v.startsWith("//") && !/[\\\s\u0000-\u001f\u007f]/.test(v);
+}
+function parseSteps(x) {
+  const list = Array.isArray(x) ? x : isJsonObject(x) && x.navigate !== void 0 ? x.navigate : void 0;
+  if (!Array.isArray(list)) {
+    return { error: isJsonObject(x) ? "holds no `navigate` list \u2014 pass a JSON array of steps, or a plan with navigate: [...]" : "is not a list of steps (a JSON array, or a plan with navigate: [...])" };
+  }
+  const steps = [];
+  for (const [i, raw] of list.entries()) {
+    const at = `step ${i + 1}`;
+    if (!isJsonObject(raw)) return { error: `${at} is not an object like {"click": "<selector>"}` };
+    const keys = Object.keys(raw);
+    const k = keys[0];
+    if (keys.length !== 1 || k === void 0) return { error: `${at} has ${keys.length ? `${keys.length} keys (${keys.join(", ")})` : "no key"} \u2014 exactly one of ${STEP_KINDS.join(" / ")}` };
+    const v = raw[k];
+    if (!isStepKind(k)) {
+      const lk = k.toLowerCase();
+      const why = Object.hasOwn(REFUSED, k) ? REFUSED[k] : Object.hasOwn(REFUSED, lk) ? REFUSED[lk] : void 0;
+      return { error: `${at} {${k}: \u2026} is not a step \u2014 the vocabulary is ${STEP_KINDS.join(" / ")} (navigation only)${why ? `: ${why}` : ""}` };
+    }
+    if (typeof v !== "string" || v.trim() === "") return { error: `${at} {${k}: \u2026} needs a non-empty string` };
+    if (k === "goto" && !isSameOriginPath(v)) return { error: `${at} {goto: ${JSON.stringify(v)}} must be a same-origin path starting with "/" (e.g. "/orders?tab=open") \u2014 never "//" or "/\\", and no backslash, whitespace or control character` };
+    steps.push(k === "click" ? { click: v } : k === "waitFor" ? { waitFor: v } : { goto: v });
+  }
+  return { steps };
+}
+function stepsSha256(steps) {
+  return crypto.createHash("sha256").update(canonical(steps)).digest("hex");
+}
+function isPlanExpect(x) {
+  return x === "dialog" || x === "url" || typeof x === "string" && x.startsWith("selector:") && x.length > "selector:".length;
+}
+
 // design-to-code/doc-guards.ts
 function optArrayOf(x, each) {
   return x === void 0 || Array.isArray(x) && x.every(each);
@@ -868,6 +930,13 @@ var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "
 var isNavigation = (x) => isObj(x) && Array.isArray(x.events) && typeof x.afterInitialLoad === "number" && typeof x.reruns === "number";
 var isTagsNotInExpectation = (x) => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids) && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 var isReasonMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+var isNum = (x) => typeof x === "number" && Number.isFinite(x);
+function isProbeReach(x) {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+function isPageOverflow(x) {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -879,7 +948,11 @@ var MEASURED_EXTRAS = [
   ["runId", (x) => typeof x === "string" && x !== "", "a run id (string) \u2014 the measurement is tied to no verify run"],
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
-  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"]
+  ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
+  ["behaviour", isObj, "an object (behaviour checks)"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -924,6 +997,7 @@ function planProblem(x) {
   if (x.tagging !== void 0 && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === void 0 || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return 'is not a valid plan: `tagging` must be {"off": true, "reason": "\u2026"}';
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== void 0 && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  for (const k of ["navigate", "interactions"]) if (x[k] !== void 0 && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 function isPlan(x) {
@@ -939,6 +1013,10 @@ function isPlanDescope(x) {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+function isPlanInteraction(x) {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === void 0 || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 function isStringRecord(x) {
   return isObj(x) && Object.values(x).every((v) => typeof v === "string");
 }
@@ -948,7 +1026,7 @@ isStringRecord.expected = "an object of strings";
 import fs2 from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 
 // design-to-code/cli-args.ts
 import path from "node:path";
@@ -1012,7 +1090,7 @@ function isVerifyStatusV2(x) {
 }
 isVerifyStatusV2.expected = "a verify status @2 {schema, screen, runId, rev, phase, detail, at, by}";
 var statusFile = (base) => base + ".status.json";
-var sha256Of = (data) => crypto.createHash("sha256").update(data).digest("hex");
+var sha256Of = (data) => crypto2.createHash("sha256").update(data).digest("hex");
 var CACHE_NAME = "designtwin-verify";
 var shortSha = (s) => sha256Of(s).slice(0, 16);
 var isDir = (p) => {
@@ -1032,13 +1110,13 @@ function realpath(p) {
   }
   return fs2.realpathSync(p);
 }
-function canonical(p) {
+function canonical2(p) {
   const abs = path2.resolve(p);
   try {
     return realpath(abs);
   } catch {
     const parent = path2.dirname(abs);
-    return parent === abs ? abs : path2.join(canonical(parent), path2.basename(abs));
+    return parent === abs ? abs : path2.join(canonical2(parent), path2.basename(abs));
   }
 }
 var hasPnp = (d) => exists(path2.join(d, ".pnp.cjs")) || exists(path2.join(d, ".pnp.js"));
@@ -1070,7 +1148,7 @@ function installRootOf(dir) {
   return P;
 }
 function runCacheOf(verifyDir) {
-  const v = canonical(verifyDir);
+  const v = canonical2(verifyDir);
   const root = installRootOf(v);
   if (root !== null) {
     const cache = path2.join(root, "node_modules", ".cache", CACHE_NAME);
@@ -1346,6 +1424,449 @@ if (false) {
   });
 }
 
+// design-to-code/probe-drive.ts
+import { setTimeout as sleep } from "node:timers/promises";
+function readPageOverflow(_arg) {
+  const de = document.documentElement, body = document.body;
+  const hs = getComputedStyle(de);
+  const hx = hs.getPropertyValue("overflow-x"), hy = hs.getPropertyValue("overflow-y");
+  const overflowX = hx === "visible" && hy === "visible" && body ? getComputedStyle(body).getPropertyValue("overflow-x") : hx;
+  const scrollWidth = de.scrollWidth, clientWidth = de.clientWidth;
+  const scrollable = scrollWidth > clientWidth + 1 && overflowX !== "hidden" && overflowX !== "clip";
+  const offenders = [];
+  if (scrollWidth > clientWidth + 1 && body) {
+    const pathOf = (el) => {
+      const parts = [];
+      let cur = el;
+      while (cur && cur !== document.documentElement) {
+        const parent = cur.parentElement;
+        if (!parent) break;
+        parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+        cur = parent;
+      }
+      parts.unshift("html");
+      return parts.join(" > ");
+    };
+    const createsBlock = (cs) => {
+      const v = (k) => cs.getPropertyValue(k);
+      if (["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => {
+        const x = v(k);
+        return x !== "" && x !== "none";
+      })) return true;
+      if (v("transform-style") === "preserve-3d") return true;
+      return /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(v("will-change"));
+    };
+    const containsAll = (cs) => /\b(layout|paint|strict|content)\b/.test(cs.getPropertyValue("contain")) || ["auto", "hidden"].includes(cs.getPropertyValue("content-visibility"));
+    const contained = (el) => {
+      const own = getComputedStyle(el).getPropertyValue("position");
+      let mode = own === "fixed" ? "fixed" : own === "absolute" ? "absolute" : "flow";
+      for (let p = el.parentElement; p && p !== body && p !== de; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        const pos = cs.getPropertyValue("position");
+        const block = createsBlock(cs), all = containsAll(cs);
+        if (mode === "fixed" && !block && !all) continue;
+        if (mode === "absolute" && pos === "static" && !block && !all) continue;
+        if (all || cs.getPropertyValue("overflow-x") !== "visible") return true;
+        mode = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "flow";
+      }
+      if (mode !== "fixed") return false;
+      return ![body, de].some((x) => {
+        const cs = getComputedStyle(x);
+        return createsBlock(cs) || containsAll(cs);
+      });
+    };
+    const past = [];
+    for (const el of Array.from(body.querySelectorAll("*"))) {
+      const r = el.getBoundingClientRect();
+      const right = r.right + scrollX;
+      if (r.width > 0 && right > clientWidth + 1 && !contained(el)) past.push({ el, right });
+    }
+    past.sort((a, b) => b.right - a.right);
+    const chosen = [];
+    for (const p of past) {
+      if (chosen.length >= 5) break;
+      if (chosen.some((c) => c.contains(p.el))) continue;
+      chosen.push(p.el);
+      const tagged = p.el.closest("[data-dt-node]");
+      offenders.push({ path: pathOf(p.el), dt: tagged ? tagged.getAttribute("data-dt-node") : null, right: Math.round(p.right) });
+    }
+  }
+  return { viewport: { w: innerWidth, h: innerHeight }, scrollWidth, clientWidth, overflowX, scrollable, offenders, compatMode: document.compatMode };
+}
+function openerState(arg) {
+  const pathOf = (el2) => {
+    const parts = [];
+    let cur = el2;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const hasBox = (el2) => el2.getClientRects().length > 0;
+  const sees = (el2, opacity) => {
+    if (!hasBox(el2)) return false;
+    const r = el2.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el2.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity });
+  };
+  const sel = `[data-dt-node="${arg.id.replace(/["\\]/g, "\\$&")}"]`;
+  let els = Array.from(document.querySelectorAll(sel)).filter((e) => e.closest("dialog:not([open])") === null);
+  if (els.length > 1) els = els.filter(hasBox);
+  const el = els.length === 1 ? els[0] : void 0;
+  if (!el) return { count: els.length, path: null, visible: false, disabled: false, hoverPath: null, hoverDt: null };
+  const visible = sees(el, true);
+  const disabled = el.closest(':disabled, [disabled], [aria-disabled="true" i]') !== null;
+  let hoverPath = null, hoverDt = null;
+  if (!visible) {
+    let plain = null;
+    for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      if (!sees(p, false)) continue;
+      const dt = p.getAttribute("data-dt-node");
+      if (dt !== null) {
+        hoverPath = pathOf(p);
+        hoverDt = dt;
+        break;
+      }
+      if (!plain) plain = p;
+    }
+    if (hoverPath === null && plain) hoverPath = pathOf(plain);
+  }
+  return { count: 1, path: pathOf(el), visible, disabled, hoverPath, hoverDt };
+}
+var DIALOG_CONTRACT = [":modal", "dialog[open]", "[role=dialog]", "[role=alertdialog]", '[aria-modal="true"]', ":popover-open"];
+function armDetector(arg) {
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const seen = (el) => {
+    if (el.getClientRects().length === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
+  };
+  const before = [];
+  for (const s of arg.contract) {
+    try {
+      for (const el of Array.from(document.querySelectorAll(s))) if (seen(el)) before.push(el);
+    } catch {
+    }
+  }
+  const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+  window.__dtDrive = { before, destBefore, destPaths: destBefore.map(pathOf) };
+  return true;
+}
+function pollDetector(arg) {
+  const st = window.__dtDrive;
+  if (!st) return { lost: true, detectedBy: null, opened: null, dest: null };
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const seen = (el) => {
+    if (el.getClientRects().length === 0) return false;
+    const r2 = el.getBoundingClientRect();
+    return r2.width > 0 && r2.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true });
+  };
+  let opened = null, detectedBy = null;
+  for (const s of arg.contract) {
+    let hits = [];
+    try {
+      hits = Array.from(document.querySelectorAll(s)).filter((el) => seen(el) && !st.before.includes(el));
+    } catch {
+      continue;
+    }
+    const first = hits[0];
+    if (first) {
+      opened = first;
+      detectedBy = s;
+      break;
+    }
+  }
+  let dest = null;
+  if (arg.destId !== null) {
+    const tags = Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
+    const fresh = tags.filter((t) => !st.destBefore.includes(t) && !st.destPaths.includes(pathOf(t)));
+    const firstFresh = fresh[0];
+    if (opened === null && firstFresh) opened = firstFresh;
+    const o = opened;
+    dest = { count: tags.length, inside: o !== null && tags.some((t) => t === o || o.contains(t) || t.contains(o) && fresh.includes(t)), newly: fresh.length > 0 };
+  }
+  if (!opened) return { lost: false, detectedBy: null, opened: null, dest };
+  let modal = false;
+  try {
+    modal = opened.matches(":modal");
+  } catch {
+  }
+  const r = opened.getBoundingClientRect();
+  return {
+    lost: false,
+    detectedBy,
+    dest,
+    opened: {
+      selector: pathOf(opened),
+      modal,
+      position: getComputedStyle(opened).getPropertyValue("position"),
+      rect: { x: Math.round(r.x + scrollX), y: Math.round(r.y + scrollY), w: Math.round(r.width), h: Math.round(r.height) },
+      scrollY: Math.round(scrollY)
+    }
+  };
+}
+function syntheticClick(path4) {
+  const el = document.querySelector(path4);
+  if (!el) return false;
+  el.click();
+  return true;
+}
+function submitGuard(el) {
+  const why = (target) => {
+    const ctl = target.closest("button, input") || target;
+    const tag = ctl.tagName.toLowerCase();
+    const type = (ctl.getAttribute("type") || "").toLowerCase();
+    if (type === "submit") return `<${tag} type=submit>`;
+    if (tag === "input" && type === "image") return "<input type=image>";
+    if (tag === "button" && !ctl.hasAttribute("type") && ctl.form) return "a <button> without a type inside a <form> (it submits)";
+    return null;
+  };
+  const own = why(el);
+  if (own !== null) return own;
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  const x0 = Math.max(r.x, 0), x1 = Math.min(r.right, innerWidth), y0 = Math.max(r.y, 0), y1 = Math.min(r.bottom, innerHeight);
+  const onScreen = x1 > x0 && y1 > y0;
+  const cx = onScreen ? (x0 + x1) / 2 : r.x + r.width / 2, cy = onScreen ? (y0 + y1) / 2 : r.y + r.height / 2;
+  const at = [];
+  const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
+  if (hit && hit !== el && el.contains(hit)) at.push(hit);
+  else if (!hit) {
+    for (const c of Array.from(el.querySelectorAll("button, input"))) {
+      const b = c.getBoundingClientRect();
+      if (b.width > 0 && b.height > 0 && cx >= b.x && cx <= b.x + b.width && cy >= b.y && cy <= b.y + b.height && c.checkVisibility({ visibilityProperty: true })) at.push(c);
+    }
+  }
+  for (const t of at) {
+    const w = why(t);
+    if (w !== null) return `${w} at its click point`;
+  }
+  return null;
+}
+var OVERLAY_ACTIONS = /* @__PURE__ */ new Set(["overlay", "swap"]);
+var CLICK_TRIGGERS = /* @__PURE__ */ new Set(["on_click", "on_press"]);
+function drivable(exp) {
+  const hidden = new Set(exp.hidden && exp.hidden.ids || []);
+  const keys = /* @__PURE__ */ new Set();
+  const rows = (exp.interactions || []).filter((r) => {
+    if (hidden.has(r.nodeId)) return false;
+    const trigger = String(r.trigger).toLowerCase();
+    const ok = CLICK_TRIGGERS.has(trigger) && (OVERLAY_ACTIONS.has(String(r.action).toLowerCase()) || r.source === "plan" && r.expect === "dialog");
+    const key = `${r.nodeId}|${trigger}`;
+    if (!ok || keys.has(key)) return false;
+    keys.add(key);
+    return true;
+  });
+  return [...rows.filter((r) => r.destinationExported !== false), ...rows.filter((r) => r.destinationExported === false)];
+}
+var DRIVE_CAP_MS = 6e4;
+var DRIVE_RESERVE_MS = 15e3;
+function driveBudget(now, deadline, capMs = DRIVE_CAP_MS, reserveMs = DRIVE_RESERVE_MS) {
+  return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
+}
+function classifyOutcome(action, read) {
+  const destNew = !!(read.dest && read.dest.newly);
+  if (String(action).toLowerCase() === "swap") {
+    if (destNew) return { outcome: "selector-appeared", detectedBy: read.detectedBy ?? "destination-tag" };
+    return read.detectedBy ? { outcome: "dialog-opened", detectedBy: read.detectedBy } : { outcome: "none" };
+  }
+  if (read.detectedBy) return { outcome: "dialog-opened", detectedBy: read.detectedBy };
+  if (destNew && read.opened) return { outcome: "selector-appeared", detectedBy: "destination-tag" };
+  return { outcome: "none" };
+}
+var ALLOWED = { overlay: ["dialog-opened", "selector-appeared"], swap: ["state-changed", "selector-appeared"] };
+function judge(action, e) {
+  const missing = [];
+  const allowed = ALLOWED[String(action).toLowerCase()] ?? ALLOWED.overlay ?? [];
+  if (e.selectorCount !== 1) missing.push(`the opener matched ${e.selectorCount ?? 0} element(s)`);
+  if (e.outcome === void 0 || !allowed.includes(e.outcome)) missing.push(e.outcome === "none" || e.outcome === void 0 ? "nothing of the dialog contract opened within 2 s" : `outcome ${e.outcome} is not one a ${action} produces`);
+  if (e.navEvents !== 0) missing.push(`${e.navEvents ?? "?"} document load(s) during the interaction`);
+  if (!e.destination) missing.push("no destination frame id to look for");
+  else if (!e.destination.inside) missing.push(e.destination.count ? `the destination tag data-dt-node="${e.destination.nodeId}" is not inside the opened element` : `no visible element is tagged with the destination data-dt-node="${e.destination.nodeId}" \u2014 tag the dialog's root with it`);
+  if (e.activation !== "mouse") missing.push("synthetic click (headless) \u2014 not a user activation");
+  return { ok: missing.length ? null : true, missing };
+}
+var StepError = class extends Error {
+};
+var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var CLOSED = /Target closed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i;
+var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
+var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
+var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
+async function openReached(browser, o, extra) {
+  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: extra?.dsf ?? 1, reducedMotion: "reduce" });
+  if (extra && extra.onContext) extra.onContext(context);
+  let loads = 0;
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(o.timeout);
+    await page.addInitScript({ content: o.initScript });
+    page.on("load", () => {
+      loads++;
+    });
+    await o.reach(page);
+    return { context, page, loads: () => loads };
+  } catch (e) {
+    await context.close().catch(() => void 0);
+    throw e;
+  }
+}
+async function driveRow(browser, o, row, hooks, onContext) {
+  const action = row.source === "plan" && row.expect === "dialog" ? "overlay" : String(row.action ?? "overlay").toLowerCase();
+  const destId = row.destinationId ?? null;
+  let opened;
+  try {
+    opened = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { onContext });
+  } catch (e) {
+    if (e instanceof StepError) return notRun(row, `the steps failed \u2014 ${e.message}`, { stepsFailed: e.message });
+    return notRun(row, `could not reach the screen \u2014 ${firstLine(e)}`);
+  }
+  const { context, page, loads } = opened;
+  const selector = `[data-dt-node="${row.nodeId.replace(/["\\]/g, "\\$&")}"]`;
+  try {
+    let st = await page.evaluate(openerState, { id: row.nodeId });
+    const base = { nodeId: row.nodeId, trigger: row.trigger, selector, selectorCount: st.count };
+    if (st.count !== 1 || st.path === null) return { ...base, ok: null, detail: `the opener ${selector} matched ${st.count} element(s) outside a closed dialog \u2014 not driven` };
+    if (st.disabled) return { ...base, ok: null, detail: "opener is disabled \u2014 not driven" };
+    if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
+    const submits = await page.locator(st.path).first().evaluate(submitGuard);
+    if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
+    let revealedBy;
+    if (!st.visible) {
+      if (st.hoverPath !== null) {
+        revealedBy = st.hoverDt !== null ? `[data-dt-node="${st.hoverDt}"]` : st.hoverPath;
+        await page.mouse.move(0, 0);
+        await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+        await raf2(page);
+        st = await page.evaluate(openerState, { id: row.nodeId });
+      }
+      if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
+    }
+    const openerPath = st.path;
+    const contract = [...DIALOG_CONTRACT];
+    await page.evaluate(armDetector, { destId, contract });
+    const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
+    const loadsBefore = loads();
+    let activation = "mouse", clickWhy = "";
+    try {
+      await page.locator(openerPath).first().click({ timeout: 2e3 });
+    } catch (e) {
+      const m = errMsg(e);
+      if (CLOSED.test(m)) throw e;
+      if (!NAVIGATED.test(m)) {
+        clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
+        activation = "synthetic";
+        await page.evaluate(syntheticClick, openerPath);
+      }
+    }
+    const t0 = Date.now();
+    let read = { lost: false, detectedBy: null, opened: null, dest: null };
+    let detectedAt = null;
+    for (; ; ) {
+      try {
+        read = await page.evaluate(pollDetector, { destId, contract });
+      } catch (e) {
+        if (CLOSED.test(errMsg(e))) throw e;
+        if (!NAVIGATED.test(errMsg(e))) throw e;
+        read = { lost: true, detectedBy: null, opened: null, dest: null };
+      }
+      if (read.lost) break;
+      if (read.detectedBy !== null && detectedAt === null) detectedAt = Date.now();
+      const destDone = destId === null || read.dest !== null && read.dest.inside;
+      if (read.opened && destDone) break;
+      if (detectedAt !== null && Date.now() - detectedAt >= 500) break;
+      if (Date.now() - t0 >= 2e3) break;
+      await sleep(100);
+    }
+    if (read.lost) await page.waitForLoadState("load", { timeout: 2e3 }).catch(() => void 0);
+    let tokenAfter = "";
+    try {
+      tokenAfter = String(await page.evaluate("window.__dtProbeDoc || ''"));
+    } catch {
+      tokenAfter = "";
+    }
+    const navEvents = Math.max(loads() - loadsBefore, tokenAfter !== tokenBefore || read.lost ? 1 : 0);
+    const { outcome, detectedBy } = read.lost ? { outcome: "none", detectedBy: void 0 } : classifyOutcome(action, read);
+    const ev = {
+      ...base,
+      outcome,
+      navEvents,
+      activation,
+      ...detectedBy !== void 0 ? { detectedBy } : {},
+      ...revealedBy !== void 0 ? { revealedBy } : {},
+      ...destId !== null ? { destination: { nodeId: destId, inside: !read.lost && !!read.dest && read.dest.inside, count: read.dest ? read.dest.count : 0 } } : {},
+      ...read.opened && !read.lost ? { opened: read.opened } : {}
+    };
+    const j = judge(action, ev);
+    const how = `${activation === "mouse" ? "clicked" : `synthetic click (${clickWhy})`}${revealedBy !== void 0 ? ` after hovering ${revealedBy}` : ""}`;
+    const saw = read.lost ? "the page loaded a new document" : detectedBy !== void 0 ? `${detectedBy === "destination-tag" ? "the destination tag appeared" : `${detectedBy} opened`}` : "nothing opened";
+    ev.ok = j.ok;
+    ev.detail = j.ok ? `${how}: ${saw}, destination ${destId} inside` : `${how}: ${saw} \u2014 ${j.missing.join("; ")}`;
+    if (hooks && hooks.afterOpen && read.opened && !read.lost) await hooks.afterOpen(page, row, read.opened);
+    return ev;
+  } finally {
+    await context.close().catch(() => void 0);
+  }
+}
+var CUT_SETTLE_MS = 5e3;
+async function driveInteractions(browser, o, hooks) {
+  const out = [];
+  const end = Date.now() + o.budgetMs;
+  for (const row of o.rows) {
+    const left = end - Date.now();
+    if (left <= 0) {
+      out.push(notRun(row, "time budget", { cut: "budget" }));
+      continue;
+    }
+    const held = {};
+    let timer;
+    const cut = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("cut"), left);
+    });
+    const work = driveRow(browser, o, row, hooks, (c) => {
+      held.ctx = c;
+    }).catch((e) => {
+      if (CLOSED.test(errMsg(e))) return notRun(row, `the browser closed while driving \u2014 ${firstLine(e)}`);
+      return { nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `driving failed: ${firstLine(e)}` };
+    });
+    const r = await Promise.race([work, cut]);
+    clearTimeout(timer);
+    if (r === "cut") {
+      if (held.ctx) await held.ctx.close().catch(() => void 0);
+      await Promise.race([work, sleep(CUT_SETTLE_MS, void 0, { ref: false })]);
+      out.push(notRun(row, "time budget", { cut: "budget" }));
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
@@ -1423,7 +1944,7 @@ function probeVersion() {
   }
   return null;
 }
-var selfSha256 = () => crypto2.createHash("sha256").update(fs4.readFileSync(SELF2)).digest("hex");
+var selfSha256 = () => crypto3.createHash("sha256").update(fs4.readFileSync(SELF2)).digest("hex");
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -1456,6 +1977,8 @@ function errorKind(message, pageClosed) {
 }
 var NavigatedError = class extends Error {
 };
+var StepStateLostError = class extends NavigatedError {
+};
 var BrowserGoneError = class extends Error {
 };
 var gone = (e) => new BrowserGoneError(`the browser closed or crashed during measurement (${errMsg(e).split("\n")[0]})`);
@@ -1463,58 +1986,244 @@ var KeptNavigatingError = class extends Error {
 };
 var UnreachableError = class extends Error {
 };
+var docUrl = (u) => {
+  const i = u.indexOf("#");
+  return i < 0 ? u : u.slice(0, i);
+};
+function isNavigationAway(requestUrl, pageUrl) {
+  return docUrl(requestUrl) !== docUrl(pageUrl);
+}
+async function docTokenOrNull(page) {
+  try {
+    const v = await page.evaluate("window.__dtProbeDoc || ''");
+    return String(v);
+  } catch (e) {
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (errorKind(errMsg(e), false) === "navigated") return null;
+    throw e;
+  }
+}
 async function settle(page, log, ready, timeout) {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   const deadline = Date.now() + cap;
   const navAtStart = log.navs;
-  const kept = () => new KeptNavigatingError(`the page kept navigating for ${Math.round(cap / 1e3)}s after load (${log.navs - navAtStart} navigation(s)) and never settled`);
+  let newDocs = 0;
+  let loadNote = null;
+  const moved = () => log.navs !== navAtStart || newDocs > 0;
+  const kept = () => new KeptNavigatingError(`the page kept navigating for ${Math.round(cap / 1e3)}s after load (${Math.max(log.navs - navAtStart, newDocs)} navigation(s)) and never settled`);
+  const stateLost = () => {
+    if (log.lost !== null) throw new StepStateLostError(log.lost);
+  };
+  stateLost();
+  let token = await docTokenOrNull(page);
+  const newDocument = async () => {
+    newDocs++;
+    await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) }).catch(() => void 0);
+    stateLost();
+    if (Date.now() >= deadline) throw kept();
+    token = await docTokenOrNull(page);
+  };
   for (; ; ) {
     try {
+      const known = token !== null ? log.loadTimedOut.get(token) : void 0;
+      if (known !== void 0) loadNote = known;
+      else {
+        const state = await page.evaluate("document.readyState");
+        if (state !== "complete") {
+          try {
+            await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) });
+          } catch (e) {
+            if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+            if (errorKind(errMsg(e), false) === "navigated") throw e;
+            loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
+            const now = await docTokenOrNull(page);
+            if (now !== null && (token === null || now === token)) {
+              token = now;
+              log.loadTimedOut.set(now, loadNote);
+            }
+          }
+          stateLost();
+        }
+      }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: log.navs === navAtStart ? timeout : Math.max(1, deadline - Date.now()) });
+      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, deadline - Date.now()) : timeout });
     } catch (e) {
+      if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-      if (log.navs !== navAtStart && Date.now() < deadline) {
-        await sleep(POLL_MS);
+      const now = await docTokenOrNull(page);
+      if (now !== null && token !== null && now !== token) {
+        await newDocument();
         continue;
       }
-      if (log.navs !== navAtStart) throw kept();
+      if (token === null && now !== null) token = now;
+      if (moved() && Date.now() < deadline) {
+        await sleep2(POLL_MS);
+        continue;
+      }
+      if (moved()) throw kept();
       if (errorKind(errMsg(e), false) === "navigated" && Date.now() < deadline) {
-        await sleep(POLL_MS);
+        await sleep2(POLL_MS);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
     }
-    const mark = log.navs;
+    let mark = log.navs;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep(POLL_MS);
-      if (log.navs !== mark) {
-        await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) }).catch(() => void 0);
-        if (Date.now() >= deadline) throw kept();
-        break;
-      }
-      let sig;
+      await sleep2(POLL_MS);
+      let tok, sig;
       try {
-        const v = await page.evaluate("[document.getElementsByTagName('*').length, (document.body && document.body.textContent || '').length].join(':')");
-        sig = String(v);
+        const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
+        if (!Array.isArray(v)) throw new Error("the page returned no settle signature");
+        tok = String(v[0]);
+        sig = String(v[1]);
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
         if (errorKind(errMsg(e), false) !== "navigated") throw e;
         if (Date.now() >= deadline) throw kept();
         continue;
       }
+      if (token === null) token = tok;
+      if (tok !== token || log.navs !== mark && tok === "") {
+        await newDocument();
+        break;
+      }
+      stateLost();
+      mark = log.navs;
       if (sig !== last) {
         last = sig;
         since = Date.now();
       }
-      if (Date.now() - since >= QUIET_MS) return null;
+      if (Date.now() - since >= QUIET_MS) return { note: loadNote, token: tok };
       if (Date.now() >= deadline) {
-        if (log.navs !== navAtStart) throw kept();
-        return `the DOM was still changing after ${Math.round(cap / 1e3)}s (no navigation) \u2014 measured anyway`;
+        if (moved()) throw kept();
+        return { note: loadNote ?? `the DOM was still changing after ${Math.round(cap / 1e3)}s (no navigation) \u2014 measured anyway`, token: tok };
       }
     }
   }
+}
+var STEP_WAIT_CAP_MS = 5e3;
+async function oneVisible(page, sel, wait, name, atLeastOne = false) {
+  const deadline = Date.now() + wait;
+  let last = { visible: 0, all: 0 };
+  for (; ; ) {
+    try {
+      const loc = page.locator(sel);
+      const all = await loc.count();
+      const vis = [];
+      for (let i = 0; i < all; i++) if (await loc.nth(i).isVisible()) vis.push(i);
+      const only = vis[0];
+      if (only !== void 0 && (vis.length === 1 || atLeastOne)) return only;
+      last = { visible: vis.length, all };
+    } catch (e) {
+      const kind = errorKind(errMsg(e), page.isClosed());
+      if (kind === "gone") throw gone(e);
+      if (kind === "other") throw new StepError(`${name}: ${errMsg(e).split("\n")[0]}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
+    }
+    await sleep2(POLL_MS);
+  }
+}
+async function runSteps(page, log, o) {
+  const steps = o.steps || [];
+  let origin = "";
+  try {
+    origin = new URL(o.url).origin;
+  } catch {
+  }
+  for (const [i, s] of steps.entries()) {
+    const name = describeStep(s, i);
+    const wait = Math.min(o.timeout, STEP_WAIT_CAP_MS);
+    if ("goto" in s) {
+      let target;
+      try {
+        target = new URL(s.goto, o.url);
+      } catch {
+        throw new StepError(`${name} is not a path`);
+      }
+      if (target.origin !== origin) throw new StepError(`${name} leaves the origin ${origin} \u2014 a goto step is a same-origin path`);
+      log.owner = { kind: "goto" };
+      try {
+        await page.goto(target.href, { waitUntil: "load", timeout: o.timeout });
+      } catch (e) {
+        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+        if (!/interrupted by another navigation/i.test(errMsg(e))) throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
+      } finally {
+        log.owner = null;
+      }
+      log.live = null;
+    } else {
+      const sel = "click" in s ? s.click : s.waitFor;
+      const idx = await oneVisible(page, sel, wait, name, "waitFor" in s);
+      if ("click" in s) {
+        const loc = page.locator(sel).nth(idx);
+        try {
+          await loc.scrollIntoViewIfNeeded({ timeout: wait }).catch(() => void 0);
+          const submits = await loc.evaluate(submitGuard, void 0, { timeout: wait });
+          if (submits !== null) throw new StepError(`${name} would submit a form (${submits}) \u2014 a step must navigate, never submit`);
+          log.owner = { kind: "click" };
+          log.live = name;
+          await loc.click({ timeout: wait });
+        } catch (e) {
+          if (e instanceof StepError) throw e;
+          const kind = errorKind(errMsg(e), page.isClosed());
+          if (kind === "gone") throw gone(e);
+          if (kind === "other") throw new StepError(`${name} could not be clicked: ${errMsg(e).split("\n")[0]}`);
+        }
+      }
+    }
+    await settle(page, log, void 0, o.timeout);
+    if (log.lost !== null) throw new StepStateLostError(log.lost);
+  }
+}
+async function reachPage(page, log, o) {
+  log.owner = null;
+  log.pendingOwned = false;
+  log.live = null;
+  log.lost = null;
+  log.gotos++;
+  try {
+    await page.goto(o.url, { waitUntil: "load", timeout: o.timeout });
+  } catch (e) {
+    if (!/interrupted by another navigation/i.test(errMsg(e))) throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
+  }
+  const steps = o.steps || [];
+  if (!steps.length) return settle(page, log, o.ready, o.timeout);
+  try {
+    const first = await settle(page, log, void 0, o.timeout);
+    await runSteps(page, log, o);
+    const last = await settle(page, log, o.ready, o.timeout);
+    if (log.lost !== null) throw new StepStateLostError(log.lost);
+    return { note: last.note ?? first.note, token: last.token };
+  } finally {
+    log.owner = null;
+  }
+}
+function attachNavLog(page) {
+  const log = { events: [], navs: 0, gotos: 0, t0: Date.now(), owner: null, pendingOwned: false, live: null, lost: null, loadTimedOut: /* @__PURE__ */ new Map() };
+  page.on("framenavigated", (f) => {
+    if (f === page.mainFrame()) log.events.push({ type: "framenavigated", url: f.url(), at: Date.now() - log.t0 });
+  });
+  page.on("request", (r) => {
+    try {
+      if (!r.isNavigationRequest() || r.frame() !== page.mainFrame() || r.redirectedFrom() !== null) return;
+      const o = log.owner;
+      log.pendingOwned = o !== null && (o.kind === "goto" || isNavigationAway(r.url(), page.url()));
+    } catch {
+    }
+  });
+  page.on("load", () => {
+    log.navs++;
+    const url = page.url();
+    if (log.pendingOwned) log.gotos++;
+    else if (log.live !== null && log.lost === null) log.lost = `the page reloaded (${docUrl(url)} again, not a navigation) after ${log.live} had changed it in place \u2014 the steps' state is gone`;
+    log.events.push({ type: "load", url, at: Date.now() - log.t0 });
+    log.pendingOwned = false;
+    log.live = null;
+  });
+  return log;
 }
 function foreignTags(tagged, expectedIds, frameIds) {
   const n = /* @__PURE__ */ new Map();
@@ -1525,7 +2234,7 @@ function foreignTags(tagged, expectedIds, frameIds) {
   const ids = [...n.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
   return { count: n.size, ids };
 }
-var raf2 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var raf22 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
   return String(v);
@@ -1536,15 +2245,11 @@ async function pass(page, log, o) {
   const specs = (exp.nodes || []).filter((s) => !hiddenIds.has(s.nodeId));
   const frameRows = (exp.frames && exp.frames.length ? exp.frames : [exp.frame || {}]).filter((f) => typeof f.nodeId === "string");
   const frameIn = frameRows.map((f) => ({ nodeId: String(f.nodeId), w: typeof f.w === "number" ? f.w : null, h: typeof f.h === "number" ? f.h : null }));
-  log.gotos++;
+  const reached = await reachPage(page, log, o);
+  const settleNote = reached.note;
   try {
-    await page.goto(o.url, { waitUntil: "load", timeout: o.timeout });
-  } catch (e) {
-    if (!/interrupted by another navigation/i.test(errMsg(e))) throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
-  }
-  const settleNote = await settle(page, log, o.ready, o.timeout);
-  try {
-    const token = await docToken(page);
+    const token = reached.token ?? await docToken(page);
+    const reachedUrl = page.url();
     const texts = [...new Set(specs.map(specText).filter((t) => t !== null).map((t) => t.text))];
     const collected = await page.evaluate(collectCandidates, { frames: frameIn, texts, positions: [] });
     const frames = /* @__PURE__ */ new Map();
@@ -1621,7 +2326,7 @@ async function pass(page, log, o) {
             continue;
           }
         }
-        await raf2(page);
+        await raf22(page);
         const [r] = await page.evaluate(measureElements, { frameRect: frameRectOf(spec), keys: STYLE_KEYS, items: [item(spec, m)] });
         if (r) {
           const shaped = shapeNode(spec, m, r, STYLE_KEYS);
@@ -1635,9 +2340,12 @@ async function pass(page, log, o) {
         else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
       }
     }
-    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf2(page);
+    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf22(page);
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
+    const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
+    const pageOverflow = { ...overflow, compatMode };
     if (await docToken(page) !== token) throw new NavigatedError("the page loaded a new document during measurement");
+    if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) \u2014 its layout and page overflow measure differently from a standards-mode build`);
     const components = [];
     for (const i of exp.instances || []) {
       if (hiddenIds.has(i.nodeId)) continue;
@@ -1651,10 +2359,12 @@ async function pass(page, log, o) {
       components,
       png,
       notes,
-      tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId)))
+      tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId))),
+      page: pageOverflow,
+      url: reachedUrl
     };
   } catch (e) {
-    if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError) throw e;
+    if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
     if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
     if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(errMsg(e).split("\n")[0]);
     throw e;
@@ -1668,6 +2378,18 @@ function hoverTarget(c, byTag) {
   }
   return null;
 }
+var BODY_WAIT_MS = 2e3;
+async function bodiesRead(reads, served) {
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep2(BODY_WAIT_MS, void 0, { ref: false })]);
+  const missed = /* @__PURE__ */ new Map();
+  for (const r of reads) {
+    if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
+    missed.set(r.path, r.state === "failed" ? "the request failed" : `not received within ${BODY_WAIT_MS / 1e3} s \u2014 a load cut short by another navigation`);
+  }
+  if (!missed.size) return null;
+  const list = [...missed].slice(0, 5).map(([p, why]) => `${p} (${why})`).join(", ");
+  return `build identity: ${missed.size} same-origin response body(ies) not hashed \u2014 ${list}${missed.size > 5 ? ", \u2026" : ""}; measured.build.assetsSha256 leaves them out`;
+}
 async function runProbe(browser, o) {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
   const page = await context.newPage();
@@ -1679,7 +2401,7 @@ async function runProbe(browser, o) {
   } catch {
   }
   const served = /* @__PURE__ */ new Map();
-  const bodies = [];
+  let bodies = [];
   let gen = 0, viteClient = false;
   page.on("response", (res) => {
     if (!BUILD_TYPES.has(res.request().resourceType())) return;
@@ -1692,21 +2414,25 @@ async function runProbe(browser, o) {
     if (u.origin !== origin) return;
     if (u.pathname === "/@vite/client") viteClient = true;
     const g = gen;
-    bodies.push(res.body().then((b) => {
+    const read = { path: u.pathname, state: "pending", done: Promise.resolve() };
+    const body = res.body().then((b) => {
       if (g === gen) served.set(u.pathname, sha256Of(b));
-    }, () => void 0));
+      read.state = "hashed";
+    }, () => {
+      read.state = "no body";
+    });
+    const failed = res.finished().then((err) => {
+      if (!err) return body;
+      read.state = "failed";
+      return void 0;
+    }, () => {
+      read.state = "failed";
+    });
+    read.done = Promise.race([body, failed]);
+    bodies.push(read);
   });
-  const log = { events: [], navs: 0, gotos: 0, t0: Date.now() };
+  const log = attachNavLog(page);
   const consoleErrors = [];
-  page.on("framenavigated", (f) => {
-    if (f === page.mainFrame()) {
-      log.navs++;
-      log.events.push({ type: "framenavigated", url: f.url(), at: Date.now() - log.t0 });
-    }
-  });
-  page.on("load", () => {
-    log.events.push({ type: "load", url: page.url(), at: Date.now() - log.t0 });
-  });
   page.on("console", (msg) => {
     if (msg.type() === "error" && consoleErrors.length < 20) consoleErrors.push(msg.text());
   });
@@ -1721,14 +2447,21 @@ async function runProbe(browser, o) {
         gen++;
         served.clear();
         viteClient = false;
+        bodies = [];
         const result = await pass(page, log, o);
-        await Promise.allSettled(bodies);
+        const unread = await bodiesRead(bodies, served);
+        if (unread !== null) result.notes.push(unread);
+        if (reruns && o.steps && o.steps.length) result.notes.push("the re-run replayed the steps in the same browser context (session and local storage from the first pass kept)");
         return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient) };
       } catch (e) {
         if (e instanceof BrowserGoneError) return { kind: "browser-gone", why: e.message, navigation: nav(reruns) };
         if (e instanceof KeptNavigatingError) return { kind: "navigation", why: e.message, navigation: nav(reruns) };
+        if (e instanceof StepError) return { kind: "steps", why: e.message, navigation: nav(reruns) };
         if (!(e instanceof NavigatedError)) throw e;
-        if (reruns >= 1) return { kind: "navigation", why: `the page reloaded during measurement twice (${e.message})`, navigation: nav(reruns) };
+        if (reruns >= 1) {
+          if (e instanceof StepStateLostError) return { kind: "step-state", why: e.message, navigation: nav(reruns) };
+          return { kind: "navigation", why: `the page reloaded during measurement twice (${e.message})`, navigation: nav(reruns) };
+        }
         reruns++;
       }
     }
@@ -1739,6 +2472,7 @@ async function runProbe(browser, o) {
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
       [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
+      [--steps <steps.json | plan.json>]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
       --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
@@ -1746,10 +2480,19 @@ var USAGE = `usage:
       node_modules/.cache/designtwin-verify/<Screen>.status.json \u2014 never the project tree a dev server watches) \u2014 \`measuring\`
       before the browser starts, \`measured\` (+ the measured file's sha256) after it is closed; an exit 3/4 bumps its rev.
       --max-time bounds the whole run (default 180000 ms): past it the browser is closed and nothing is written (exit 4).
+      --steps: a JSON list of steps (or a plan whose \`navigate\` holds them) replayed after every page load, before --ready,
+      to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
+      {"goto": "/same-origin/path"}. A click's selector must match exactly one visible element (a waitFor's at least one);
+      a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a
+      click changed the page in place re-runs the pass once (twice: exit 4). A step that fails while measuring is exit 4
+      (nothing written). Recorded as measured.reach.
+      After measuring, the expectation's overlay interactions (on_click/on_press overlay/swap, plan expect:"dialog") are
+      driven, each on a fresh page: measured.interactions (evidence; ok:true or ok:null, never false).
   ${scriptCmd("verify-probe")} --check [--project <dir>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
-      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time (nothing written).`;
+      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step
+      failed (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 var CLOSE_CAP_MS = 1e4;
 async function main(argv) {
@@ -1773,7 +2516,8 @@ async function main(argv) {
     check: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     run: { type: "string" },
-    "max-time": { type: "string" }
+    "max-time": { type: "string" },
+    steps: { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
   const project = path3.resolve(f.project ?? ".");
@@ -1800,6 +2544,27 @@ ${USAGE}`);
 ${USAGE}`);
       return 2;
     }
+  } else if (f.steps !== void 0) {
+    console.error(`verify-probe: --steps does not apply to --check
+${USAGE}`);
+    return 2;
+  }
+  let steps = [];
+  let stepsSource = null;
+  if (f.steps !== void 0) {
+    const r2 = readJson(f.steps, anyJson);
+    if ("error" in r2) {
+      console.error(`verify-probe: --steps '${f.steps}' ${r2.error}`);
+      return 2;
+    }
+    const parsed = parseSteps(r2.doc);
+    if ("error" in parsed) {
+      console.error(`verify-probe: --steps '${f.steps}' ${parsed.error}
+${USAGE}`);
+      return 2;
+    }
+    steps = parsed.steps;
+    stepsSource = `--steps ${(path3.relative(process.cwd(), path3.resolve(f.steps)) || f.steps).split(path3.sep).join("/")}`;
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -1850,6 +2615,7 @@ ${USAGE}`);
   if (measuringRecorded) console.error(`status ${shellArg(liveStatusFile(statusBase))}`);
   const held = {};
   let timer;
+  const runDeadline = Date.now() + maxTime;
   const watchdog = new Promise((resolve) => {
     timer = setTimeout(() => resolve("timeout"), maxTime);
   });
@@ -1865,8 +2631,9 @@ ${USAGE}`);
       return 0;
     }
     let run2;
+    const probeOpts = { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout, ...steps.length ? { steps } : {} };
     try {
-      run2 = await runProbe(browser, { expectation, url: f.url, ...f.ready !== void 0 ? { ready: f.ready } : {}, viewport, position: !!f.position, timeout });
+      run2 = await runProbe(browser, probeOpts);
     } catch (e) {
       await browser.close().catch(() => void 0);
       if (e instanceof UnreachableError) {
@@ -1878,6 +2645,24 @@ ${USAGE}`);
         return 4;
       }
       throw e;
+    }
+    let driven2 = null, driveNote2 = null;
+    const rows = run2.kind === "ok" ? drivable(expectation) : [];
+    if (rows.length) {
+      try {
+        driven2 = await driveInteractions(browser, {
+          rows,
+          viewport,
+          timeout,
+          initScript: INIT_SCRIPT,
+          budgetMs: driveBudget(Date.now(), runDeadline),
+          reach: async (page) => {
+            await reachPage(page, attachNavLog(page), probeOpts);
+          }
+        });
+      } catch (e) {
+        driveNote2 = `driving the interactions failed (${errMsg(e).split("\n")[0]}) \u2014 none recorded`;
+      }
     }
     await browser.close().catch(() => void 0);
     if (held.timedOut) return 4;
@@ -1892,7 +2677,24 @@ ${USAGE}`);
 ` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
       return 4;
     }
-    return { run: run2, identity: identity2 };
+    if (run2.kind === "step-state") {
+      console.error(`verify-probe: ${run2.why}, on the first pass and again on the re-run (the steps replayed) \u2014 nothing written.
+  a reload brings the page back without what the click built in place, so the --steps (${stepsSource ?? "?"}) cannot hold the screen: ${steps.map((s, i) => describeStep(s, i)).join(" \u2192 ")}
+  if that click reloads the page itself (location.reload(), or a navigation to the URL the page is already on), it is not a
+  navigation step: reach the screen by its own URL (--url, or a {"goto": "/path"} step) or by a click that navigates to
+  another URL. A click whose navigation goes to another URL is the step's own, however late it starts.
+  navigation log:
+` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
+      return 4;
+    }
+    if (run2.kind === "steps") {
+      console.error(`verify-probe: ${run2.why} \u2014 nothing written.
+  the --steps (${stepsSource ?? "?"}) did not reach the screen: ${steps.map((s, i) => describeStep(s, i)).join(" \u2192 ")}
+  navigation log:
+` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
+      return 4;
+    }
+    return { run: run2, identity: identity2, driven: driven2, driveNote: driveNote2 };
   })();
   const first = await Promise.race([work, watchdog]);
   clearTimeout(timer);
@@ -1901,7 +2703,7 @@ ${USAGE}`);
     work.catch(() => void 0);
     const b = held.browser;
     if (b) {
-      const cap = () => sleep(CLOSE_CAP_MS, void 0, { ref: false });
+      const cap = () => sleep2(CLOSE_CAP_MS, void 0, { ref: false });
       await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
       await Promise.race([b.close().catch(() => void 0), cap()]);
     }
@@ -1910,7 +2712,7 @@ ${USAGE}`);
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
-  const { run, identity } = first;
+  const { run, identity, driven, driveNote } = first;
   if (!expectation || !expBytes || !f.expected || !f.url) return 2;
   const png = outBase + ".png";
   const r = run.result;
@@ -1933,9 +2735,12 @@ ${USAGE}`);
     tagsNotInExpectation: r.tagsNotInExpectation,
     ...run.consoleErrors.length ? { consoleErrors: run.consoleErrors } : {},
     ...f.run !== void 0 ? { runId: f.run } : {},
-    build: { ...run.build, ...gitState(project) }
+    build: { ...run.build, ...gitState(project) },
+    ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
+    page: r.page,
+    ...driven ? { interactions: driven } : {}
   };
-  const allNotes = [...notes, ...r.notes];
+  const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
   const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
   writeFileAtomic(png, r.png);
   writeFileAtomic(outBase + ".measured.json", measuredText);
@@ -1952,6 +2757,10 @@ ${USAGE}`);
   console.error(`measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s) \u2014 tag ${c.tag} \xB7 shared path ${c.sharedPath} \xB7 alias ${c.tagAlias} \xB7 text ${c.text} \xB7 ordinal ${c.textOrdinal} \xB7 position ${c.position} \xB7 frame ${c.frame} \xB7 not measured ${c.notMeasured} \xB7 frame root via ${firstFrame ? firstFrame.via : "none"} \xB7 navigations after load ${run.navigation.afterInitialLoad}, re-runs ${run.navigation.reruns}`);
   const tn = r.tagsNotInExpectation;
   if (tn.count) console.error(`note  ${tn.count} data-dt-node value(s) on visible elements are not in the expectation (e.g. ${tn.ids.slice(0, 5).map((x) => x.id).join(", ")}) \u2014 --compare classifies them`);
+  if (stepsSource !== null) console.error(`reach ${steps.length} step(s) from ${stepsSource} (sha ${stepsSha256(steps).slice(0, 12)}\u2026) \u2192 ${r.url}`);
+  const pg = r.page;
+  console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? pg.scrollable ? ` \u2014 scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " \u2014 overflows but clipped" : ""}`);
+  for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} \u2192 ${ev.ok === true ? "ok" : "ok:null"} \xB7 ${ev.detail ?? ""}`);
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}`);
   if (statusRefused && runId !== void 0) {
@@ -1971,11 +2780,13 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
+  BODY_WAIT_MS,
   PLAYWRIGHT_PACKAGES,
   buildFrom,
   errorKind,
   foreignTags,
   installHint,
+  isNavigationAway,
   isPlaywrightModule,
   main,
   resolvePlaywright,

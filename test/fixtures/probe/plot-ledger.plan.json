@@ -1,0 +1,25 @@
+{
+  "schema": "designtwin/plan@2",
+  "screen": "Beds__70_1",
+  "screenName": "Beds",
+  "nodeId": "70:1",
+  "route": "/ (Beds section, sidebar)",
+  "file": "design/export/pages/Plots/Beds__70_1.json",
+  "navigate": [
+    {
+      "click": "[data-dt-node=\"70:30\"]"
+    },
+    {
+      "waitFor": "[data-dt-node=\"70:1\"]"
+    }
+  ],
+  "interactions": [
+    {
+      "nodeId": "70:50",
+      "trigger": "on_click",
+      "expect": "dialog",
+      "destinationId": "70:60",
+      "name": "Add Bed"
+    }
+  ]
+}

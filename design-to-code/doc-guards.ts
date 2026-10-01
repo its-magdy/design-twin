@@ -14,9 +14,10 @@ import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
   AuditOverridesDoc, AuditReport, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
-  PlanDescope, PlanWaiver, ProbeFrame, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
+import { isPlanExpect } from "./probe-steps.ts";
 
 /** A type guard that can say, in words, what it expects (read-json.ts prints it on a mismatch). */
 export type DocGuard<T> = ((x: unknown) => x is T) & { expected?: string };
@@ -145,6 +146,18 @@ const isNavigation = (x: unknown): boolean => isObj(x) && Array.isArray(x.events
 const isTagsNotInExpectation = (x: unknown): boolean => isObj(x) && typeof x.count === "number" && Array.isArray(x.ids)
   && x.ids.every((r) => isObj(r) && typeof r.id === "string" && typeof r.elements === "number");
 const isReasonMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "string");
+const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
+/** measured.reach (L-1): the steps the probe replayed. */
+export function isProbeReach(x: unknown): x is ProbeReach {
+  return isObj(x) && Array.isArray(x.steps) && x.steps.every(isObj) && typeof x.sha256 === "string" && typeof x.source === "string" && typeof x.url === "string";
+}
+/** measured.page (D43): the document's horizontal overflow at the measured viewport. */
+export function isPageOverflow(x: unknown): x is PageOverflow {
+  return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth)
+    && typeof x.overflowX === "string" && typeof x.scrollable === "boolean"
+    && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right))
+    && optStr(x.compatMode);
+}
 // The group-7 extras of a measured.json: optional, and a hand-written file may carry its own thing under
 // the same name (`probe: "handmade"`, `notMeasured: {}`). readableMeasured() drops a malformed one with a
 // note rather than refusing a file whose measurements are perfectly readable.
@@ -160,6 +173,10 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} — read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
+  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
+  ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} — page overflow not measured"],
+  ["behaviour", isObj, "an object (behaviour checks)"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {
@@ -250,6 +267,8 @@ function planProblem(x: unknown): string | null {
   if (x.tagging !== undefined && x.tagging !== null && !(isObj(x.tagging) && (x.tagging.off === undefined || typeof x.tagging.off === "boolean") && optStr(x.tagging.reason))) return "is not a valid plan: `tagging` must be {\"off\": true, \"reason\": \"…\"}";
   if (Array.isArray(x.tokens) && !x.tokens.every((t) => isObj(t) && optStr(t.acknowledged))) return "is not a valid plan: a `tokens` row's `acknowledged` must be a string (the reason)";
   if (isObj(x.verification) && x.verification.hook !== undefined && !isObj(x.verification.hook)) return "is not a valid plan: `verification.hook` must be an object";
+  // group 12a: only the lists' kind — rows are validated where used (probe-steps.ts parseSteps; --expect drops a bad interaction row with why)
+  for (const k of ["navigate", "interactions"] as const) if (x[k] !== undefined && !Array.isArray(x[k])) return `is not a valid plan: \`${k}\` must be an array`;
   return null;
 }
 /** A plan: every field planProblem names is the right kind of value; the rest of Plan is optional. */
@@ -276,6 +295,13 @@ export function isPlanDescope(x: unknown): x is PlanDescope {
   return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && optStr(x.destinationId) && reqStr(x.exportContentSha256) && reqStr(x.reason) && reqStr(x.decidedBy) && reqStr(x.decidedAt);
 }
 isPlanDescope.expected = "a plan descope {nodeId, trigger, destinationId?, exportContentSha256, reason, decidedBy, decidedAt}";
+
+/** One plan.interactions[] row --expect can merge (F-95): nodeId, trigger, a known `expect`, optional destinationId/name.
+ *  (dialog without a destinationId, an unknown nodeId or a duplicate of an export row are refused by --expect, with why.) */
+export function isPlanInteraction(x: unknown): x is PlanInteraction {
+  return isObj(x) && reqStr(x.nodeId) && reqStr(x.trigger) && isPlanExpect(x.expect) && (x.destinationId === undefined || reqStr(x.destinationId)) && optStr(x.name);
+}
+isPlanInteraction.expected = "a plan interaction {nodeId, trigger, expect: dialog | url | selector:<css>, destinationId?, name?}";
 
 /** A JSON object whose every value is a string (an asset-hash sidecar: path -> hash). */
 export function isStringRecord(x: unknown): x is Record<string, string> {

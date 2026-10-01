@@ -14,8 +14,9 @@ export function isPassingVerdict(v: unknown): v is PassingVerdict {
   return typeof v === "string" && (PASSING_VERDICTS as readonly string[]).includes(v);
 }
 
-// JSON with object keys sorted at every depth (array order kept) — the canonical form hashed below.
-function canonical(v: unknown): string {
+/** JSON with object keys sorted at every depth (array order kept) — the canonical form hashed below (and by
+ *  probe-steps.ts stepsSha256). */
+export function canonical(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
   if (v && typeof v === "object") {
     const entries = Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
@@ -29,4 +30,11 @@ export function waiversHash(plan: Plan | null | undefined): string {
   const waivers = Array.isArray(plan?.waivers) ? plan.waivers : [];
   const descopes = Array.isArray(plan?.descopes) ? plan.descopes : [];
   return crypto.createHash("sha256").update(canonical({ descopes, waivers })).digest("hex");
+}
+
+/** F-95 (D40(7)): sha256 (hex) of the canonical JSON of plan.interactions — the only part of a plan that binds an
+ *  expectation; absent or non-array hashes as `[]`. */
+export function planInteractionsSha256(plan: Plan | null | undefined): string {
+  const rows = Array.isArray(plan?.interactions) ? plan.interactions : [];
+  return crypto.createHash("sha256").update(canonical(rows)).digest("hex");
 }

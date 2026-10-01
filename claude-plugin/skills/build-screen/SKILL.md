@@ -285,7 +285,8 @@ Copy this checklist into your notes and keep it updated:
    from there and from `design/codeconnect.local.json`, never from an attribute you place in markup);
    `anchors{}` — every visible node id; `hidden[]` — what is not built. **You fill only the
    decisions:** `codeToken`/`verdict`/`decision` per token, `mapModule`/`verdict` per component,
-   `mapModule` on anchors (step 3), `route`, `target`, `architecture`, `files[]` (step 3),
+   `mapModule` on anchors (step 3), `route` (advisory free text — it never reaches a screen), `navigate` and
+   `interactions` when the screen needs them (below), `target`, `architecture`, `files[]` (step 3),
    `deviations[]` as `{nodeId, field, designed, built, reason}`, `allowedLiterals[]` when needed, and
    `verification` (step 5). Re-running it merges; filled fields survive. The `Stop` hook checks the
    built code against this file, so it must exist before step 3. **On a large export, filling in
@@ -454,6 +455,22 @@ Copy this checklist into your notes and keep it updated:
      the stack's modal/sheet; transitions use the given duration (seconds → ms) and easing. The export
      hands over the whole interaction graph keyed by node id, and step 5 drives every edge of it — so
      a button wired to nothing now fails verification instead of passing as a nice-looking mockup.
+   - **Tag a dialog or overlay's root element with its destination frame id.** The shipped probe clicks the
+     opener and accepts the dialog only when the destination frame's `data-dt-node` is on or inside the element that
+     opened (`:modal`, `dialog[open]`, `[role=dialog]`, `[role=alertdialog]`, `[aria-modal="true"]`,
+     `:popover-open`), or on an ancestor of it that became visible with it (never one visible before the click): put `data-dt-node="<destination frame id>"` on the root of the modal/sheet (the one that
+     carries the dialog role or `showModal()`), not only on its inner content — an untagged dialog is `not-probed`,
+     never a pass. A native `<dialog>` needs no role for this.
+   - **A screen that is a section of the app (picked by state, not URL)** gets `plan.navigate`: a short list of
+     `{"click": "<selector>"}` / `{"waitFor": "<selector>"}` / `{"goto": "/same-origin/path"}` steps that take a fresh
+     page to it (each `click` selector matches exactly one visible element, a `waitFor` at least one; no typing, no submitting — the probe replays
+     them many times; a `click` changes the page in place or navigates to another URL, never reloads the one it is on). **An interaction the export cannot express** (a dialog opened by a row action with no
+     prototype reaction) goes in `plan.interactions` as `{nodeId, trigger, expect: "dialog" | "url" |
+     "selector:<css>", destinationId}` (`destinationId` required for `dialog`, and a `dialog` row's trigger is
+     `on_click` or `on_press` — the probe opens it by clicking an enabled, non-submitting opener); `--expect` merges them (`--plan
+     <plan.json>`, or the one plan that describes the frame — of several, the one listing `files[]`) and drops, with the reason, any row it cannot grade.
+     Change `plan.interactions` afterwards and `--compare` is `incomplete` until `--expect` is re-run. `--compare`
+     checks the plan file `--expect` merged from while it exists (if that file moved, pass its new path as `--plan`).
    - **Carry the node id into the markup** on every element that implements a node one-to-one:
      `data-dt-node="4210:1873"` on web, `accessibilityIdentifier` on SwiftUI, `testTag` on Compose,
      `Semantics(identifier:)` on Flutter — so step 5 measures the right element instead of guessing
@@ -506,12 +523,17 @@ Copy this checklist into your notes and keep it updated:
      ```
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --expect <screen json> --out design/verify/<Screen>
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-probe.js" --expected design/verify/<Screen>.expected.json \
-       --url <url> --out design/verify/<Screen>   # web: renders, measures every node, writes <Screen>.measured.json + .png
+       --url <url> --out design/verify/<Screen> [--steps design/plan/<screen>.json --ready '[data-dt-node="<frame id>"]']   # web: renders, measures every node, writes <Screen>.measured.json + .png
      node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare \
        design/verify/<Screen>.expected.json design/verify/<Screen>.measured.json --out design/verify/<Screen>
      ```
 
-     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one.
+     Web measurements come from the shipped probe (`verify-probe.js`), never a hand-written one. Pass the plan as
+     `--steps` whenever it has `navigate`, with `--ready` on the screen root's tag (a step's click can land on another
+     page — a login bounce — and only the root check tells). The probe also drives the overlay/swap `on_click`/`on_press` interactions
+     and the plan's `expect: "dialog"` rows itself (evidence only: `ok: true` or `ok: null`, never `ok: false`);
+     the verifier does not re-drive those. A page that scrolls sideways at the design width is a high waivable
+     delta (`overflowX`) on the root frame.
 
      `--expect` emits the spec as data — font family/weight/size/line-height/colour, background,
      radius, padding, gap, size, and the literal text — one row per node, read straight off the

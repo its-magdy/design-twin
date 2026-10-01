@@ -86,6 +86,10 @@
   if (mode === "busy") addEventListener("load", () => setTimeout(() => { for (;;) { /* never yields */ } }, 50));
   // DT-81: a dev server's client module, as Vite serves it
   if (mode === "vite") { const s = document.createElement("script"); s.type = "module"; s.src = "/@vite/client"; document.head.appendChild(s); }
+  // H-1: once loaded, the page navigates to a document the server never finishes (/held-page.html), which moves on by
+  // itself 300 ms later (back here, ?mode=held-doc-done) — that cuts the held document's load short (its response body
+  // never settles in Playwright), in the same pass the probe measures
+  if (mode === "held-doc") addEventListener("load", () => setTimeout(() => { location.href = "/held-page.html"; }, 50));
   if (mode === "reload-on-first-hover" || mode === "reload-on-every-hover") {
     document.querySelector(".row").addEventListener("mouseenter", () => {
       if (mode === "reload-on-every-hover" || !sessionStorage.getItem("hovered")) { sessionStorage.setItem("hovered", "1"); location.reload(); }

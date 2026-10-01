@@ -1,0 +1,189 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Plot Ledger edge cases (probe fixture)</title>
+<style>
+  html, body { margin: 0; font-family: Arial, sans-serif; }
+  .app { position: relative; width: 1024px; min-height: 300px; background: #f5f5f0; }
+  h1 { margin: 0; font: 600 20px/28px Arial, sans-serif; color: #1d1d1f; }
+  button { width: 96px; height: 28px; margin: 4px; }
+  [role=dialog] { width: 300px; height: 100px; background: #ffffff; }
+</style>
+</head>
+<body>
+<script>
+  // Every case is one ?mode= (the probe e2e serves this file and /plot-ledger-slow.js, which it answers 2.5 s late).
+  const q = new URLSearchParams(location.search);
+  const mode = q.get("mode");
+  const beds = '<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>';
+  const post = (what) => fetch("/mutate?" + what, { method: "POST", keepalive: true });
+
+  if (mode === "reload-settle") {
+    // H1 (D19): the first document shows the screen, then reloads 300 ms after it started; the reloaded document stays
+    // half-loaded (its load event held by a script answered 2.5 s late) and only that script draws the screen
+    if (!sessionStorage.getItem("reloaded")) {
+      sessionStorage.setItem("reloaded", "1");
+      document.write(beds);
+      setTimeout(() => location.reload(), 300);
+    } else {
+      const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s);
+    }
+  } else if (mode === "reload-step") {
+    // H1 (steps): clicking the sidebar button picks the Beds section in place (no load), and — once — the page then
+    // reloads by itself 300 ms later (a dev-server restart): a load the step did not start
+    const draw = () => {
+      const on = sessionStorage.getItem("section") === "beds";
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        sessionStorage.setItem("section", "beds");
+        draw();
+        if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 300); }
+      };
+    };
+    draw();
+  } else if (mode === "reload-after-goto") {
+    // H1 (steps): after a goto step, the loaded page reloads once by itself 300 ms later — the goto's load is the
+    // step's own, the reload is not
+    if (q.get("after") === "goto" && !sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 300); }
+    document.write(beds);
+  } else if (mode === "reload-late") {
+    // H1 (steps): a reload 1 s after a step's in-place click — after the step has settled, while the probe waits for
+    // --ready; the reloaded document is back on the default section (the click's state is gone)
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        draw(true);
+        if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), 1000); }
+      };
+    };
+    draw(false);
+  } else if (mode === "link-step") {
+    // a step whose click follows a real link: that load is the step's own (not after the initial load)
+    const on = q.get("section") === "beds";
+    document.write('<nav><a data-dt-node="70:30" href="/plot-ledger-edge.html?mode=link-step&section=beds">Beds</a></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+  } else if (mode === "slow-reach") {
+    // M1: the server answers this URL at once the first time and holds every later request (the driving pages' reach)
+    document.write(beds);
+  } else if (mode === "ancestor") {
+    // M2: a destination-tagged wrapper already on screen around the opener; an unrelated dialog opening inside it is
+    // NOT the destination. A destination wrapper that appears with its dialog is. B3: disabled openers (aria-disabled on
+    // it or an ancestor, [disabled]) are never clicked — their handlers record a write. L3: a typeless <button> in a
+    // <form> is never clicked (it would submit).
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:60" id="wrap" style="padding:8px">
+        <button data-dt-node="70:47" id="archive">Archive</button>
+        <div id="unrelated" role="dialog" hidden>Unrelated confirm</div>
+      </div>
+      <button data-dt-node="70:44" aria-disabled="true" id="edit">Edit</button>
+      <div aria-disabled="true"><button data-dt-node="70:45" id="split">Split</button></div>
+      <button data-dt-node="70:46" disabled id="rename">Rename</button>
+      <form id="f"><button data-dt-node="70:48">Refresh</button></form>
+      <button data-dt-node="70:49" id="move">Move</button>
+      <div data-dt-node="70:60" id="fresh" hidden><div role="dialog">Move bed</div></div>
+    </div>`);
+    document.getElementById("archive").onclick = () => { document.getElementById("unrelated").hidden = false; };
+    document.getElementById("edit").onclick = () => post("aria-disabled");
+    document.getElementById("split").onclick = () => post("ancestor-disabled");
+    document.getElementById("rename").onclick = () => post("disabled");
+    document.getElementById("f").onsubmit = (e) => { e.preventDefault(); post("submit"); };
+    document.getElementById("move").onclick = () => { document.getElementById("fresh").hidden = false; };
+  } else if (mode === "slow-nav") {
+    // H-a: the sidebar button navigates to another URL only ?delay= ms after the click (an app that awaits a request first)
+    const on = q.get("section") === "beds";
+    document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+    const d = Number(q.get("delay") || 400);
+    document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=slow-nav&delay=" + d + "&section=beds"; }, d); };
+  } else if (mode === "clicknav-slow") {
+    // M-a: the click navigates at once; the new document stays half-loaded (no screen yet) until a script answered 2.5 s late
+    if (q.get("section") === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s); }
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=clicknav-slow&section=beds"; }, 0); };
+    }
+  } else if (mode === "click-reloads") {
+    // H-a: the click picks the section in place, then reloads the SAME URL 400 ms later — every time (the click itself reloads).
+    // M-2: &delay=sync reloads inside the click handler, &delay=100 100 ms after it (both while the click still runs or just
+    // after — never the click's own navigation: the same URL); &once=1 reloads on the first click of the session only
+    const delay = q.get("delay") || "400", once = q.get("once") === "1";
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => {
+        draw(true);
+        if (once && sessionStorage.getItem("reloaded")) return;
+        sessionStorage.setItem("reloaded", "1");
+        if (delay === "sync") location.reload(); else setTimeout(() => location.reload(), Number(delay));
+      };
+    };
+    draw(false);
+  } else if (mode === "hang-img") {
+    // M-1: the click navigates at once to a page whose image never loads (the server holds /plot-ledger-hang.png): that
+    // document never reaches readyState "complete" — each later settle (the waitFor step's, the --ready one) must not wait
+    // for its load again
+    if (q.get("section") === "beds") document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=hang-img&section=beds"; };
+    }
+  } else if (mode === "tall-wrapper") {
+    // L-2: a tagged wrapper taller than the viewport; Playwright clicks the middle of its part ON SCREEN — a form's typeless
+    // button sits there (the middle of the whole box, far below, is empty): as a step (70:30) the click would submit
+    document.write(`<div data-dt-node="70:30" style="position:relative;height:4000px;width:300px">
+      <form class="f" style="position:absolute;top:300px;left:0;margin:0"><button style="width:300px;height:200px;margin:0">Beds</button></form></div>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>`);
+    for (const f of document.querySelectorAll(".f")) f.onsubmit = (e) => { e.preventDefault(); post("tall-wrapper"); };
+  } else if (mode === "token-switch") {
+    // L-a: stands in for a document replaced right after the probe saw the page quiet: once (per session) the per-document
+    // token changes at the first read that is not one of the settle polls, after ≥ 3 of them — the probe must compare
+    // against the token it saw quiet. L-4: told apart without stack columns: a settle poll reads the token and then, in the
+    // same expression, calls document.getElementsByTagName (counted as a poll); polls are ≥ 100 ms apart with nothing of
+    // the probe running in the page between them, so a read < 60 ms after the last poll, or after the probe measured
+    // something (getComputedStyle), is not a poll
+    const orig = window.__dtProbeDoc;
+    let val = orig, polls = 0, lastPoll = 0, busy = false, inRead = false;
+    const byTag = Document.prototype.getElementsByTagName;
+    Document.prototype.getElementsByTagName = function (...a) { if (inRead) { polls++; lastPoll = performance.now(); busy = false; } return byTag.apply(this, a); };
+    const styleOf = window.getComputedStyle;
+    window.getComputedStyle = function (...a) { busy = true; return styleOf.apply(this, a); };
+    Object.defineProperty(window, "__dtProbeDoc", { configurable: true, get() {
+      inRead = true;
+      queueMicrotask(() => { inRead = false; });
+      if (polls >= 3 && !sessionStorage.getItem("switched") && (busy || performance.now() - lastPoll < 60)) { sessionStorage.setItem("switched", "1"); val = orig + "-replaced"; }
+      return val;
+    } });
+    document.write(beds);
+  } else if (mode === "wrapper-submit") {
+    // L-c: tagged wrappers whose click point is a typeless <button> inside a <form>: a step's (70:30) and an opener (70:47)
+    document.write(`<nav><span data-dt-node="70:30" style="display:inline-block"><form class="f"><button>Beds</button></form></span></nav>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:47" style="display:inline-block"><form class="f"><button>Archive</button></form></div></div>`);
+    for (const f of document.querySelectorAll(".f")) f.onsubmit = (e) => { e.preventDefault(); post("wrapper-submit"); };
+  } else if (mode === "remount") {
+    // L-b: a destination-tagged wrapper already on screen that the app RE-MOUNTS in place (a new element, same position)
+    // when an unrelated dialog opens inside it — still not the destination
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div data-dt-node="70:60" id="wrap" style="padding:8px"><button data-dt-node="70:47" id="archive">Archive</button></div></div>`);
+    document.getElementById("archive").onclick = () => {
+      const w = document.getElementById("wrap"), n = w.cloneNode(true);
+      n.insertAdjacentHTML("beforeend", '<div role="dialog">Unrelated confirm</div>');
+      w.replaceWith(n);
+    };
+  } else if (mode === "cb-creators") {
+    // L-d: a position:fixed strip under a transformed ancestor scrolls with the page (it widens it: named); an absolute one
+    // under a static filtered overflow:hidden wrapper, or a static contain:layout one, is held there (not named)
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="transform:translateX(0);height:20px"><div data-dt-node="70:57" style="position:fixed;left:1300px;top:40px;width:400px;height:10px;background:#dddddd"></div></div>
+      <div style="filter:blur(0);overflow:hidden;height:20px;width:100px"><div data-dt-node="70:58" style="position:absolute;left:1200px;top:0;width:900px;height:10px;background:#cccccc"></div></div>
+      <div style="contain:layout;height:20px;width:100px"><div data-dt-node="70:59" style="position:absolute;left:1100px;top:0;width:900px;height:10px;background:#bbbbbb"></div></div>
+    </div>`);
+  } else if (mode === "abs-escape") {
+    // L7: an absolutely positioned strip inside a static overflow:hidden wrapper is not clipped by it (its containing
+    // block is the page) — it widens the page; one inside a positioned overflow:hidden wrapper is clipped
+    document.write(`<div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1>
+      <div style="overflow:hidden;height:20px;width:200px"><div data-dt-node="70:57" style="position:absolute;left:900px;top:200px;width:600px;height:20px;background:#dddddd"></div></div>
+      <div style="position:relative;overflow:hidden;height:20px;width:100px"><div data-dt-node="70:58" style="position:absolute;left:1200px;top:0;width:900px;height:10px;background:#cccccc"></div></div>
+    </div>`);
+  }
+</script>
+</body>
+</html>
