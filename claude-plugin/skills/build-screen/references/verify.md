@@ -34,7 +34,7 @@ A screen that is a section of the app (chosen by component state, not the URL) i
 (the plan's `navigate`: `click` / `waitFor` / `goto <same-origin path>` — closed, navigation-only, exactly one visible
 match per `click` (a `waitFor` needs at least one), a click never submits; replayed on every page load, a failing step while measuring is exit 4 with
 nothing written; a click either changes the page in place or navigates to ANOTHER URL — a click that reloads the same URL
-loses what it built, one re-run, then exit 4 naming the step; always pass `--ready` with the screen root's tag, or end the
+loses what it built, one re-run, then exit 4 naming the step (a link to the URL already shown counts as a `goto` for the load the click starts); always pass `--ready` with the screen root's tag, or end the
 steps with a `waitFor` of it — a click that lands on another page, a login bounce, is still the step's own). The plan's `route` is advisory. After measuring, the probe drives the overlay/swap `on_click` /
 `on_press` interactions and plan `expect: "dialog"` rows (`on_click` / `on_press` only) itself — skipping a disabled
 opener (`:disabled` / `[disabled]` / `aria-disabled`, on it or an ancestor) and one that would submit a form (`ok: null`), revealing a hover-hidden opener, clicking with the real

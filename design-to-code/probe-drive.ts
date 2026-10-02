@@ -50,7 +50,7 @@ interface DElement {
 }
 interface DDocument {
   body: DElement | null;
-  documentElement: DElement & { scrollWidth: number; clientWidth: number };
+  documentElement: DElement & { scrollWidth: number; clientWidth: number; clientHeight: number };
   compatMode: string;
   elementFromPoint(x: number, y: number): DElement | null;
   querySelector(selector: string): DElement | null;
@@ -306,9 +306,13 @@ export function syntheticClick(path: string): boolean {
  *  never submit (D40(7)): a [type=submit] / input[type=image] control, or a typeless <button> that belongs to a
  *  form (its `form` property — the closest <form>, or the one its form attribute names). L-c: the click lands on the
  *  element at its click point, which can be a submitting control INSIDE a tagged wrapper — that one is checked too.
- *  L-2: Playwright's click point is the centre of the box CLIPPED to the viewport after scrolling it into view (the caller
- *  runs scrollIntoViewIfNeeded first), so an oversized wrapper is clicked at the middle of what shows, not of its whole
- *  box: elementFromPoint there; when nothing of it is on screen, the visible controls whose box holds the full centre.
+ *  L-2: Playwright's click point (its _clickablePoint) is the middle of the element's FIRST content quad (one per box /
+ *  line fragment — getClientRects) whose part inside the viewport has an area (> 0.99 px²), clipped to the viewport, after
+ *  scrolling it into view (the caller runs scrollIntoViewIfNeeded first) — so an oversized wrapper is clicked at the middle
+ *  of what shows, and an inline element wrapping over lines on its first line, never at the middle of its bounding box
+ *  (fix 4): elementFromPoint there; when nothing of it is on screen, the visible controls whose box holds the full centre.
+ *  (Playwright uses the true transformed quad; for a rotated/skewed element partly off screen this axis-aligned rect's
+ *  centre can differ slightly.)
  *  SELF-CONTAINED. */
 export function submitGuard(el: DElement): string | null {
   const why = (target: DElement): string | null => {
@@ -324,9 +328,16 @@ export function submitGuard(el: DElement): string | null {
   if (own !== null) return own;
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
-  const x0 = Math.max(r.x, 0), x1 = Math.min(r.right, innerWidth), y0 = Math.max(r.y, 0), y1 = Math.min(r.bottom, innerHeight);
-  const onScreen = x1 > x0 && y1 > y0;
-  const cx = onScreen ? (x0 + x1) / 2 : r.x + r.width / 2, cy = onScreen ? (y0 + y1) / 2 : r.y + r.height / 2;
+  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+  // fix 5: Playwright clips to the layout viewport — without the scrollbars (documentElement.clientWidth/Height); fix 6: never
+  // more than the window (in quirks mode documentElement.clientHeight is the PAGE's height)
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  for (const q of Array.from(el.getClientRects())) {
+    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
+    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
+    if ((x1 - x0) * (y1 - y0) > 0.99) { onScreen = true; cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; break; }
+  }
   const at: DElement[] = [];
   const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
   if (hit && hit !== el && el.contains(hit)) at.push(hit);

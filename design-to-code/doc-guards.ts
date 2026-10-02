@@ -138,7 +138,7 @@ export function isProbeIdentity(x: unknown): x is ProbeIdentity {
 /** measured.build — what the probe was served (DT-81). */
 export function isBuildIdentity(x: unknown): x is BuildIdentity {
   return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number"
-    && typeof x.assetsSha256 === "string" && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+    && typeof x.assetsSha256 === "string" && (x.unhashed === undefined || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
 }
 const isProbeFrame = (x: unknown): x is ProbeFrame => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 const isCountMap = (x: unknown): boolean => isObj(x) && Object.values(x).every((v) => typeof v === "number");

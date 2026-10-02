@@ -216,6 +216,13 @@ const code = (h: string): CodeInputs => ({ plan: "design/plan/garden.json", file
   safe("same build, same code → no warning", () => same.against?.sameBuild === true && !/SAME BUILD/.test(same.headline));
   const rebuilt = run(measure({}, { build: build("b2") }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(prev) } });
   safe("a new build for new code → sameBuild false, no warning", () => rebuilt.against?.sameBuild === false && !/SAME BUILD/.test(rebuilt.headline));
+  // fix 4 LOW a: a partial hash on either side (bodies left out of assetsSha256) → sameBuild unknown, never SAME BUILD SERVED
+  const partialPrev = run(measure({}, { build: { ...build("b1"), unhashed: 2 } }), { code: code("h1") });
+  const afterPartial = run(measure({}, { build: build("b1") }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(partialPrev) } });
+  safe("[fix4 LOW a] the earlier round's build hash was partial (unhashed 2) → sameBuild null, no SAME BUILD SERVED", () => afterPartial.against?.sameBuild === null && !/SAME BUILD/.test(afterPartial.headline));
+  const partialNow = run(measure({}, { build: { ...build("b1"), unhashed: 1 } }), { code: code("h2"), against: { file: "prev.report.json", report: prevReport(prev) } });
+  safe("[fix4 LOW a] this round's build hash is partial (unhashed 1) → sameBuild null, no SAME BUILD SERVED; the md says partial", () => partialNow.against?.sameBuild === null && !/SAME BUILD/.test(partialNow.headline)
+    && /partial: 1 body\(ies\) not hashed/.test(reportToMarkdown(partialNow)));
   const bad: JsonObject = { measuredAt: "2026-09-30T01:00:00Z", nodes: [], build: { url: 1 } };
   const rd = readableMeasured(bad);
   safe("a malformed measured.build is dropped with a note (the file still compares)", () => rd !== null && rd.doc.build === undefined && rd.notes.some((n) => /measured\.build is not a build identity/.test(n)));

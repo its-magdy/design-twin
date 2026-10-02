@@ -16,7 +16,13 @@
 // a step's navigation into a half-loaded document (M-a), a document replaced right after settling (L-a), tagged wrappers
 // around a submitting button (L-c), a re-mounted destination wrapper (L-b), containing-block creators (L-d); and review 3's:
 // a click that reloads the same URL at once or 100 ms later (M-2), a step's navigation into a document that never finishes
-// loading (M-1), a tagged wrapper taller than the viewport (L-2).
+// loading (M-1), a tagged wrapper taller than the viewport (L-2); and review 4's (fix 4): a link to the URL the page shows
+// (a refresh step), late / first / goto navigations into documents that never finish loading or load late, a reload into
+// one after an in-place click, a load note gone stale, documents without a token, an inline wrapper's first-line click point.
+// Review 5's (fix 5): a DOM that never goes quiet, a late / never --ready, a slow image (the probe's own load waited for up
+// to --timeout), the measured-anyway document's own late load, same-URL links handled in place (+ a reload / a late
+// navigation away), a target=_top refresh link, the real "kept navigating" duration.
+// Review 6's (fix 6): a page going on to a server that never answers before its load, a client redirect's late own load.
 //
 // D3: needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
@@ -66,6 +72,12 @@ stepFile("steps-waitfor-many.json", [STEPS[0], { waitFor: ".actions button" }]);
 stepFile("steps-goto-reload.json", [{ goto: "/plot-ledger-edge.html?mode=reload-after-goto&after=goto" }, { waitFor: "[data-dt-node=\"70:1\"]" }]);
 stepFile("steps-click-only.json", [{ click: "[data-dt-node=\"70:30\"]" }]);
 stepFile("steps-reload-step.json", [{ click: "[data-dt-node=\"70:30\"]" }, { waitFor: "[data-dt-node=\"70:1\"]" }]);
+stepFile("steps-goto-hang.json", [{ goto: "/plot-ledger-edge.html?mode=hang-first" }, { click: "[data-dt-node=\"70:30\"]" }]);
+stepFile("steps-late.json", [{ click: "[data-dt-node=\"70:30\"]" }, { waitFor: "#late" }]);
+stepFile("steps-slow-stay.json", [{ click: "[data-dt-node=\"70:30\"]" }, { waitFor: "#later" }]);
+stepFile("steps-redir-slow.json", [{ waitFor: "#go" }, { click: "#go" }]);
+stepFile("steps-goto-churn.json", [{ goto: "/plot-ledger-edge.html?mode=churn-dom&via=goto" }]);
+stepFile("steps-no-token.json", [{ click: "[data-dt-node=\"70:30\"]" }, { waitFor: "#next" }, { click: "#next" }]);
 const READY = "[data-dt-node=\"70:1\"]";
 // the steps' sha: canonical JSON (sorted keys) — for one-key string steps that is JSON.stringify of the list
 const stepsSha = crypto.createHash("sha256").update(JSON.stringify(STEPS)).digest("hex");
@@ -80,9 +92,11 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url || "/", "http://x");
   const name = path.basename(u.pathname);
   if (req.method === "POST" && name === "mutate") { mutations.push(u.search.slice(1)); res.writeHead(204); res.end(); return; }
-  if (name === "plot-ledger-hang.png") return; // M-1: an image that never loads (held until finish())
+  if (name === "plot-ledger-hang.png" || name === "plot-ledger-hangdoc") return; // M-1: an image that never loads (held until finish())
+  if (name === "plot-ledger-slow.png") { setTimeout(() => { res.writeHead(404); res.end(); }, Number(u.searchParams.get("d") || 2500)).unref(); return; } // fix 5
+  if (name === "plot-ledger-late.png") { setTimeout(() => { res.writeHead(404); res.end(); }, 12_000).unref(); return; } // fix 4 LOW b
   if (name === "plot-ledger-slow.js") {
-    setTimeout(() => { res.writeHead(200, { "content-type": "text/javascript" }); res.end(SLOW_JS); }, 2500).unref();
+    setTimeout(() => { res.writeHead(200, { "content-type": "text/javascript" }); res.end(SLOW_JS); }, Number(u.searchParams.get("d") || 2500)).unref();
     return;
   }
   const file = path.join(FIX, name);
@@ -422,6 +436,165 @@ const bT = out("TallWrapper");
 const rT = await probe(["--expected", QUIET, "--url", edge("tall-wrapper"), "--out", bT, "--steps", "steps-click-only.json", "--max-time", "60000"]);
 check(`[L-2] a step clicking a wrapper taller than the viewport whose on-screen middle is a form's typeless button → exit 4 'never submit' (at its click point), nothing written, nothing submitted (server saw: ${mutations.join(", ") || "nothing"})`,
   rT.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rT.stderr) && !written(bT) && mutations.length === 0);
+
+// ---- fix 4 (review 4 of 12a)
+const loadNote = (m: VerifyMeasured | null): boolean => (m?.notes || []).some((n) => /the document had not finished loading after 10s/.test(n));
+const loadNoteAfter = (m: VerifyMeasured | null, sec: number): boolean => (m?.notes || []).some((n) => n.includes(`the page had not finished loading when the goto gave up after ${sec}s`));
+// MED 1: a click on a link to the URL the page already shows (here a URL tab, the tag on a span inside the <a>) is a refresh
+// step — its load is the step's own (was: never the click's → the state "lost", re-run, exit 4 "changed it in place")
+const bSL = out("SameLink");
+const rSL = await probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds`, "--out", bSL, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const mSL = read(bSL);
+if (rSL.status !== 0) console.log(rSL.stderr);
+check("[fix4 MED 1] a step clicking a link to the URL the page shows (a URL tab) → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (was: exit 4 'changed it in place')",
+  rSL.status === 0 && mSL?.navigation?.afterInitialLoad === 0 && mSL.navigation.reruns === 0 && mSL.frame?.via === "tag" && mSL.frame.nodeId === "70:1");
+// MED 2: a late click navigation into a document that never finishes loading → its own 10 s, then measured with the note
+const bHL = out("HangLate");
+const tHL = Date.now();
+const rHL = await probe(["--expected", QUIET, "--url", edge("hang-late"), "--out", bHL, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const sHL = Date.now() - tHL;
+const mHL = read(bHL);
+if (rHL.status !== 0) console.log(rHL.stderr);
+check(`[fix4 MED 2] a click navigating 400 ms later into a document that never finishes loading → exit 0 in ${Math.round(sHL / 1000)} s, the root by tag, the 'had not finished loading' note (was: exit 4 'kept navigating' + the dev-server hint)`,
+  rHL.status === 0 && mHL?.frame?.via === "tag" && mHL.frame.nodeId === "70:1" && loadNote(mHL) && mHL.navigation?.afterInitialLoad === 0);
+// MED 2: a document a late navigation brings in gets its own 10 s for its load (per document), not the rest of the settle's
+const bLS = out("LateSlow");
+const rLS = await probe(["--expected", QUIET, "--url", edge("late-slow"), "--out", bLS, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const mLS = read(bLS);
+if (rLS.status !== 0) console.log(rLS.stderr);
+check("[fix4 MED 2] a click navigating 7 s later into a document that loads 5 s after (--ready its root) → settled on, not 'kept navigating': exit 0, the root by tag, its heading measured, a quiet window of its own (no load / still-changing note)",
+  rLS.status === 0 && mLS?.frame?.via === "tag" && mLS.frame.nodeId === "70:1" && (mLS.nodes || []).some((n) => n.nodeId === "70:2")
+  && !(mLS.notes || []).some((n) => /had not finished loading|still changing/.test(n)));
+// MED 2 guard: no load wait decides a lost state any more — a reload after an in-place click into a document that never
+// finishes loading still loses the steps' state (at its commit): one re-run, then the step-specific exit 4
+const bRH = out("ReloadHang");
+const rRH = await probe(["--expected", QUIET, "--url", edge("reload-hang"), "--out", bRH, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+if (!stepLost(rRH)) console.log(rRH.stderr);
+check("[fix4 MED 2] a reload after the click's in-place change into a document that never finishes loading, every time → exit 4 naming the step, nothing written (was: 'kept navigating' + the dev-server hint)",
+  stepLost(rRH) && !written(bRH));
+// MED 2 + fix 5 (decision 1): the probe's own load (--url, a goto step) of a document that never finishes loading is waited for up
+// to --timeout, then (it committed) measured with the note — not "could not load"
+const bHF = out("HangFirst");
+const rHF = await probe(["--expected", QUIET, "--url", edge("hang-first"), "--out", bHF, "--steps", "steps-click-only.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"]);
+const mHF = read(bHF);
+if (rHF.status !== 0) console.log(rHF.stderr);
+check("[fix4 MED 2 / fix5 HIGH 1] --url a document that never finishes loading (--timeout 15 s) → its load waited for up to --timeout, then exit 0, the root by tag, the note 'after 15s' (f63e818: 'could not load'; fix 4: after 10 s)",
+  rHF.status === 0 && mHF?.frame?.via === "tag" && mHF.frame.nodeId === "70:1" && loadNoteAfter(mHF, 15));
+const bGH = out("GotoHang");
+const rGH = await probe(["--expected", QUIET, "--url", edge("link-step"), "--out", bGH, "--steps", "steps-goto-hang.json", "--ready", READY, "--timeout", "15000", "--max-time", "60000"]);
+const mGH = read(bGH);
+if (rGH.status !== 0) console.log(rGH.stderr);
+check("[fix4 MED 2 / fix5 HIGH 1] a goto step to a document that never finishes loading → waited for up to --timeout, then exit 0, afterInitialLoad 0, the root by tag, the note 'after 15s'",
+  rGH.status === 0 && mGH?.navigation?.afterInitialLoad === 0 && mGH.frame?.via === "tag" && mGH.frame.nodeId === "70:1" && loadNoteAfter(mGH, 15));
+// LOW b: a document whose load timed out in one settle and completed before a later one carries no stale note
+const bLL = out("LateLoad");
+const rLL = await probe(["--expected", QUIET, "--url", edge("late-load"), "--out", bLL, "--steps", "steps-late.json", "--ready", READY, "--max-time", "60000"]);
+const mLL = read(bLL);
+if (rLL.status !== 0) console.log(rLL.stderr);
+check("[fix4 LOW b] a document whose load timed out in the click's settle and completed before the next ones → exit 0, the root by tag, no 'had not finished loading' note",
+  rLL.status === 0 && mLL?.frame?.via === "tag" && mLL !== null && !loadNote(mLL));
+// LOW c: with no per-document token ("" on every document) a timed-out document's note is never shared with the next one
+const bNT = out("NoToken");
+const rNT = await probe(["--expected", QUIET, "--url", edge("no-token"), "--out", bNT, "--steps", "steps-no-token.json", "--max-time", "60000"]);
+const mNT = read(bNT);
+if (rNT.status !== 0) console.log(rNT.stderr);
+check("[fix4 LOW c] no token on any document: after one document's load timed out, the next step's half-loaded document is still waited for (not skipped as that known timed-out one) → exit 0, the root by tag, its heading measured",
+  rNT.status === 0 && mNT?.frame?.via === "tag" && mNT.frame.nodeId === "70:1" && (mNT.nodes || []).some((n) => n.nodeId === "70:2"));
+// LOW d: Playwright clicks the middle of the FIRST content quad (a wrapping inline element's first line), not of its box
+mutations.length = 0;
+const bIW = out("InlineWrap");
+const rIW = await probe(["--expected", QUIET, "--url", edge("inline-wrap"), "--out", bIW, "--steps", "steps-click-only.json", "--max-time", "60000"]);
+check(`[fix4 LOW d] a step clicking an inline span whose first line is a form's typeless button (its box's middle is not) → exit 4 'never submit' at its click point, nothing written, nothing submitted (server saw: ${mutations.join(", ") || "nothing"})`,
+  rIW.status === 4 && /would submit a form \(a <button> without a type inside a <form> \(it submits\) at its click point\)/.test(rIW.stderr) && !written(bIW) && mutations.length === 0);
+
+// ---- fix 5 (review 5 of 12a)
+const notes = (m: VerifyMeasured | null): string[] => m?.notes || [];
+// HIGH 1: the probe's own load never reads as "moved" — a DOM that never goes quiet is measured with the no-navigation note
+const bCD = out("ChurnDom");
+const rCD = await probe(["--expected", QUIET, "--url", edge("churn-dom"), "--out", bCD, "--max-time", "60000"]);
+const mCD = read(bCD);
+if (rCD.status !== 0) console.log(rCD.stderr);
+check("[fix5 HIGH 1] a DOM that never goes quiet on the --url page (no navigation) → exit 0, the root by tag, 'the DOM was still changing after 10s (no navigation)' (fix 4: exit 4 'kept navigating')",
+  rCD.status === 0 && mCD?.frame?.via === "tag" && notes(mCD).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
+const bCG = out("ChurnDomGoto");
+const rCG = await probe(["--expected", QUIET, "--url", edge("link-step"), "--out", bCG, "--steps", "steps-goto-churn.json", "--max-time", "60000"]);
+const mCG = read(bCG);
+if (rCG.status !== 0) console.log(rCG.stderr);
+check("[fix5 HIGH 1] the same after a goto step → exit 0, afterInitialLoad 0, the still-changing note (fix 4: exit 4 'kept navigating')",
+  rCG.status === 0 && mCG?.navigation?.afterInitialLoad === 0 && notes(mCG).some((n) => /the DOM was still changing after 10s \(no navigation\)/.test(n)));
+// HIGH 1: --ready on the --url page keeps the full --timeout (the screen appears at 12 s)
+const bLR = out("LateReady");
+const rLR = await probe(["--expected", QUIET, "--url", edge("late-ready"), "--out", bLR, "--ready", READY, "--timeout", "30000", "--max-time", "60000"]);
+const mLR = read(bLR);
+if (rLR.status !== 0) console.log(rLR.stderr);
+check("[fix5 HIGH 1] --ready that appears 12 s after load with --timeout 30000 → exit 0, the root by tag (fix 4: exit 4 'kept navigating' at 10 s)",
+  rLR.status === 0 && mLR?.frame?.via === "tag" && mLR.frame.nodeId === "70:1");
+const bRN = out("ReadyNever");
+const rRN = await probe(["--expected", QUIET, "--url", `${edge("late-ready")}&d=99999999`, "--out", bRN, "--ready", READY, "--timeout", "12000", "--max-time", "60000"]);
+check("[fix5 HIGH 1] a --ready that never appears → exit 4 \"--ready … never became visible\" at --timeout, not 'kept navigating', nothing written",
+  rRN.status === 4 && /--ready '\[data-dt-node="70:1"\]' never became visible/.test(rRN.stderr) && !/kept navigating/.test(rRN.stderr) && !written(bRN));
+// MED 5: a slow-but-finishing page (an image answered at 13 s, --timeout 30000) is measured fully loaded, with no note
+const bSI = out("SlowImg");
+const rSI = await probe(["--expected", QUIET, "--url", `${edge("slow-img")}&d=13000`, "--out", bSI, "--timeout", "30000", "--max-time", "60000"]);
+const mSI = read(bSI);
+if (rSI.status !== 0) console.log(rSI.stderr);
+check("[fix5 MED 5] an image finishing 13 s after the --url load (--timeout 30000) → its load waited for: exit 0, no 'had not finished loading' note (fix 4: measured half-loaded at 10 s)",
+  rSI.status === 0 && mSI?.frame?.via === "tag" && !notes(mSI).some((n) => /had not finished loading/.test(n)));
+// HIGH 2: the measured-anyway --url document's own late load (after a click changed it in place) is no reload
+const bSS = out("SlowStay");
+const rSS = await probe(["--expected", QUIET, "--url", `${edge("slow-stay")}&d=7000`, "--out", bSS, "--steps", "steps-slow-stay.json", "--ready", READY, "--timeout", "5000", "--max-time", "60000"]);
+const mSS = read(bSS);
+if (rSS.status !== 0) console.log(rSS.stderr);
+check("[fix5 HIGH 2] the --url document taken after --timeout 5 s (its load given up) loads at 7 s, after the click changed it in place (while a waitFor step waits) → its own late load: exit 0, re-runs 0, the root by tag (fix 4: 'the page reloaded … after step 1', exit 4)",
+  rSS.status === 0 && mSS?.navigation?.reruns === 0 && mSS.frame?.via === "tag" && mSS.frame.nodeId === "70:1");
+// MED 3: a link to the current URL that the app handles in place, then a reload 300 ms later — a genuine reload (D19 re-run)
+for (const [mode, label] of [["link-inplace-reload", "a link to the URL"], ["link-empty-reload", "an <a href=\"\">"]] as const) {
+  const b = out(mode === "link-inplace-reload" ? "LinkInplaceReload" : "LinkEmptyReload");
+  const r = await probe(["--expected", QUIET, "--url", `${edge(mode)}&d=300`, "--out", b, "--steps", "steps-click-only.json", "--max-time", "60000"]);
+  const m = read(b);
+  if (r.status !== 0) console.log(r.stderr);
+  check(`[fix5 MED 3] ${label} handled in place, the page reloading 300 ms later (once) → not the link's load: afterInitialLoad 1, re-runs 1, the root by tag (fix 4: swallowed, the other section measured)`,
+    r.status === 0 && m?.navigation?.afterInitialLoad === 1 && m.navigation.reruns === 1 && m.frame?.via === "tag" && m.frame.nodeId === "70:1");
+}
+// MED 4: a same-URL link handled in place whose app navigates AWAY 1.2 s later — still the step's own navigation
+const bLA = out("LinkLateAway");
+const rLA = await probe(["--expected", QUIET, "--url", edge("link-inplace-late-away"), "--out", bLA, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const mLA = read(bLA);
+if (rLA.status !== 0) console.log(rLA.stderr);
+check("[fix5 MED 4] a same-URL link handled in place, then a navigation to another URL 1.2 s later → the step's own: exit 0, afterInitialLoad 0, re-runs 0, the root by tag (fix 4: exit 4 'reloaded … again')",
+  rLA.status === 0 && mLA?.navigation?.afterInitialLoad === 0 && mLA.navigation.reruns === 0 && mLA.frame?.via === "tag");
+// LOW 6: target=_top is the same tab — a refresh link
+const bTT = out("SameLinkTop");
+const rTT = await probe(["--expected", QUIET, "--url", `${edge("same-link")}&section=beds&target=_top`, "--out", bTT, "--steps", "steps-click-only.json", "--ready", READY, "--max-time", "60000"]);
+const mTT = read(bTT);
+if (rTT.status !== 0) console.log(rTT.stderr);
+check("[fix5 LOW 6] a refresh link with target=_top → its load is the step's own: exit 0, afterInitialLoad 0, re-runs 0 (fix 4: exit 4 'changed it in place')",
+  rTT.status === 0 && mTT?.navigation?.afterInitialLoad === 0 && mTT.navigation.reruns === 0 && mTT.frame?.via === "tag");
+// LOW 7: "kept navigating for Ns" states the real duration (a first new document at 8 s has its own window; the next one ends it)
+const bKN = out("SlowChurn");
+// (--ready on an element that never comes keeps the settle on the page while it navigates)
+const rKN = await probe(["--expected", QUIET, "--url", edge("slow-churn"), "--out", bKN, "--ready", "#never-drawn", "--timeout", "12000", "--max-time", "60000"]);
+if (!/kept navigating/.test(rKN.stderr)) console.log(rKN.stderr);
+const kn = /kept navigating for (\d+)s/.exec(rKN.stderr);
+check(`[fix5 LOW 7] a reload at 8 s into a never-loading document that reloads again 6 s later → exit 4 'kept navigating for ${kn?.[1] ?? "?"}s' (the real duration, > 10 s; fix 4 always said 10s)`,
+  rKN.status === 4 && kn !== null && Number(kn[1]) > 11 && !written(bKN));
+
+// ---- fix 6 (review 6 of 12a)
+// MED 1: a page that arrives and goes on (before its load) to a server that never answers → "could not load" at --timeout
+const bBH = out("BounceHang");
+const tBH = Date.now();
+const rBH = await probe(["--expected", QUIET, "--url", edge("bounce-hang"), "--out", bBH, "--timeout", "12000", "--max-time", "40000"]);
+const sBH = Date.now() - tBH;
+if (!/could not load/.test(rBH.stderr)) console.log(rBH.stderr);
+check(`[fix6 MED 1] the --url page goes on, before its load, to a server that never answers → exit 4 'could not load' at --timeout (${Math.round(sBH / 1000)} s < 30 s), nothing written (fix 5: a hang until --max-time)`,
+  rBH.status === 4 && /could not load/.test(rBH.stderr) && sBH < 30_000 && !written(bBH));
+// MED 2: a document the page redirected to itself, measured "anyway" at 10 s, whose load comes after an in-place click
+const bRS = out("RedirSlow");
+const rRS = await probe(["--expected", QUIET, "--url", edge("redir-slow"), "--out", bRS, "--steps", "steps-redir-slow.json", "--ready", READY, "--timeout", "30000", "--max-time", "90000"]);
+const mRS = read(bRS);
+if (rRS.status !== 0) console.log(rRS.stderr);
+check("[fix6 MED 2] a client redirect to a document whose load comes at 11 s (past the 10 s cap), after a click changed it in place → its own late load: exit 0, re-runs 0, the root by tag (fix 5: 'the page reloaded … after step 2', exit 4)",
+  rRS.status === 0 && mRS?.navigation?.reruns === 0 && mRS.frame?.via === "tag" && mRS.frame.nodeId === "70:1");
 
 // what --compare wrote reads as a report at all (guards against a half-written run)
 check("the bound compare wrote a v2 report", rep2 !== null && isJsonObject(rep2.inputs));

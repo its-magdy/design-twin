@@ -177,9 +177,14 @@ or LATER (until the next `click` / `goto` step or the end of the steps): `await 
 location.href = "/other"` after any delay is the step's own navigation. A step's own load is never counted in
 `afterInitialLoad`, and every settle first waits for the document to finish loading (`document.readyState`
 `"complete"`; at most 10 s per document, then it measures anyway, with the note "the document had not finished loading",
-and no later settle waits for that document again). A new document at
+and no later settle waits for that document again; the probe's own loads — the first `--url` load and a `goto` — wait for
+the load event up to `--timeout` instead, so a slow page is measured fully loaded, and one whose document arrived but
+never finishes loading is then measured with the note "the page had not finished loading when the goto gave up"; a server
+that never answers — or a page that goes on to one before its load — is still "could not load"). A new document at
 the SAME URL (`location.reload()`, a dev-server reload, `location.href = location.href`) is never a step's own — not even
-one the click's handler starts at once (`draw(); location.reload()`). After a
+one the click's handler starts at once (`draw(); location.reload()`) — except a `click` on a link (the element or its
+closest `a[href]`, same tab) to the URL the page already shows (a "refresh" link, the URL tab already open): that load
+is the step's own, like a `goto`'s (only the load the click itself starts; a later same-URL load is a reload). After a
 click that changed the page IN PLACE (no navigation), such a reload wipes what the click built: the pass is re-run once
 with the steps replayed (D19); the same again is exit 4 "the page reloaded (<url> again, not a navigation) after step N
 … had changed it in place". That is a step problem, not a dev-server one: reach the screen by its own URL (`--url` or a

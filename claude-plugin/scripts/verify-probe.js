@@ -923,7 +923,7 @@ function isProbeIdentity(x) {
   return isObj(x) && typeof x.name === "string" && (x.version === null || typeof x.version === "string") && typeof x.sha256 === "string" && isNameVersion(x.playwright) && isNameVersion(x.browser);
 }
 function isBuildIdentity(x) {
-  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
+  return isObj(x) && typeof x.url === "string" && (x.mode === "vite-dev" || x.mode === "static" || x.mode === "unknown") && typeof x.assets === "number" && typeof x.assetsSha256 === "string" && (x.unhashed === void 0 || typeof x.unhashed === "number") && (x.gitHead === null || typeof x.gitHead === "string") && (x.gitDirty === null || typeof x.gitDirty === "boolean");
 }
 var isProbeFrame = (x) => isObj(x) && typeof x.nodeId === "string" && typeof x.selector === "string" && typeof x.via === "string" && isObj(x.rect);
 var isCountMap = (x) => isObj(x) && Object.values(x).every((v) => typeof v === "number");
@@ -1650,9 +1650,19 @@ function submitGuard(el) {
   if (own !== null) return own;
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
-  const x0 = Math.max(r.x, 0), x1 = Math.min(r.right, innerWidth), y0 = Math.max(r.y, 0), y1 = Math.min(r.bottom, innerHeight);
-  const onScreen = x1 > x0 && y1 > y0;
-  const cx = onScreen ? (x0 + x1) / 2 : r.x + r.width / 2, cy = onScreen ? (y0 + y1) / 2 : r.y + r.height / 2;
+  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  for (const q of Array.from(el.getClientRects())) {
+    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
+    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
+    if ((x1 - x0) * (y1 - y0) > 0.99) {
+      onScreen = true;
+      cx = (x0 + x1) / 2;
+      cy = (y0 + y1) / 2;
+      break;
+    }
+  }
   const at = [];
   const hit = onScreen ? document.elementFromPoint(cx, cy) : null;
   if (hit && hit !== el && el.contains(hit)) at.push(hit);
@@ -1946,9 +1956,9 @@ function probeVersion() {
 }
 var selfSha256 = () => crypto3.createHash("sha256").update(fs4.readFileSync(SELF2)).digest("hex");
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
-function buildFrom(url, served, viteClient) {
+function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
-  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")) };
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")), ...unhashed > 0 ? { unhashed } : {} };
 }
 function gitState(dir) {
   const head = gitHead(dir);
@@ -2006,11 +2016,13 @@ async function docTokenOrNull(page) {
 async function settle(page, log, ready, timeout) {
   const cap = Math.min(QUIET_CAP_MS, timeout);
   const deadline = Date.now() + cap;
-  const navAtStart = log.navs;
+  let docDeadline = deadline;
+  const started = Date.now();
+  const navAtStart = log.docLoads;
   let newDocs = 0;
   let loadNote = null;
-  const moved = () => log.navs !== navAtStart || newDocs > 0;
-  const kept = () => new KeptNavigatingError(`the page kept navigating for ${Math.round(cap / 1e3)}s after load (${Math.max(log.navs - navAtStart, newDocs)} navigation(s)) and never settled`);
+  const moved = () => log.docLoads !== navAtStart || newDocs > 0;
+  const kept = () => new KeptNavigatingError(`the page kept navigating for ${Math.round((Date.now() - started) / 1e3)}s${log.navs > 0 ? " after load" : ""} (${Math.max(log.docLoads - navAtStart, newDocs)} navigation(s)) and never settled`);
   const stateLost = () => {
     if (log.lost !== null) throw new StepStateLostError(log.lost);
   };
@@ -2018,35 +2030,51 @@ async function settle(page, log, ready, timeout) {
   let token = await docTokenOrNull(page);
   const newDocument = async () => {
     newDocs++;
-    await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) }).catch(() => void 0);
+    if (log.live !== null && !log.pendingOwned && log.lost === null) log.lost = lostState(page.url(), log.live);
     stateLost();
-    if (Date.now() >= deadline) throw kept();
+    if (Date.now() >= deadline && newDocs > 1) throw kept();
+    docDeadline = Date.now() + cap;
+    loadNote = null;
     token = await docTokenOrNull(page);
+  };
+  const noteNow = async (tok) => {
+    if (loadNote === null) return null;
+    let state = null;
+    try {
+      state = await page.evaluate("document.readyState");
+    } catch (e) {
+      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      return loadNote;
+    }
+    if (state !== "complete") return loadNote;
+    if (tok !== "") log.loadTimedOut.delete(tok);
+    return null;
   };
   for (; ; ) {
     try {
-      const known = token !== null ? log.loadTimedOut.get(token) : void 0;
-      if (known !== void 0) loadNote = known;
+      const known = token !== null && token !== "" ? log.loadTimedOut.get(token) : void 0;
+      const state = await page.evaluate("document.readyState");
+      if (state === "complete") {
+        if (known !== void 0 && token !== null) log.loadTimedOut.delete(token);
+      } else if (known !== void 0) loadNote = known;
       else {
-        const state = await page.evaluate("document.readyState");
-        if (state !== "complete") {
-          try {
-            await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) });
-          } catch (e) {
-            if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-            if (errorKind(errMsg(e), false) === "navigated") throw e;
-            loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
-            const now = await docTokenOrNull(page);
-            if (now !== null && (token === null || now === token)) {
-              token = now;
-              log.loadTimedOut.set(now, loadNote);
-            }
+        try {
+          await page.waitForLoadState("load", { timeout: Math.max(1, docDeadline - Date.now()) });
+        } catch (e) {
+          if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+          if (errorKind(errMsg(e), false) === "navigated") throw e;
+          loadNote = `the document had not finished loading after ${Math.round(cap / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
+          const now = await docTokenOrNull(page);
+          if (now !== null && now !== "" && (token === null || now === token)) {
+            token = now;
+            log.loadTimedOut.set(now, loadNote);
+            log.requested = false;
           }
-          stateLost();
         }
+        stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
-      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, deadline - Date.now()) : timeout });
+      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
@@ -2056,18 +2084,18 @@ async function settle(page, log, ready, timeout) {
         continue;
       }
       if (token === null && now !== null) token = now;
-      if (moved() && Date.now() < deadline) {
+      if (moved() && Date.now() < docDeadline) {
         await sleep2(POLL_MS);
         continue;
       }
       if (moved()) throw kept();
-      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < deadline) {
+      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) {
         await sleep2(POLL_MS);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
     }
-    let mark = log.navs;
+    let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
       await sleep2(POLL_MS);
@@ -2080,24 +2108,24 @@ async function settle(page, log, ready, timeout) {
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
         if (errorKind(errMsg(e), false) !== "navigated") throw e;
-        if (Date.now() >= deadline) throw kept();
+        if (Date.now() >= docDeadline) throw kept();
         continue;
       }
       if (token === null) token = tok;
-      if (tok !== token || log.navs !== mark && tok === "") {
+      if (tok !== token || log.docLoads !== mark && tok === "") {
         await newDocument();
         break;
       }
       stateLost();
-      mark = log.navs;
+      mark = log.docLoads;
       if (sig !== last) {
         last = sig;
         since = Date.now();
       }
-      if (Date.now() - since >= QUIET_MS) return { note: loadNote, token: tok };
-      if (Date.now() >= deadline) {
-        if (moved()) throw kept();
-        return { note: loadNote ?? `the DOM was still changing after ${Math.round(cap / 1e3)}s (no navigation) \u2014 measured anyway`, token: tok };
+      if (Date.now() - since >= QUIET_MS) return { note: await noteNow(tok), token: tok };
+      if (Date.now() >= docDeadline) {
+        if (moved() && newDocs === 0) throw kept();
+        return { note: await noteNow(tok) ?? `the DOM was still changing after ${Math.round(cap / 1e3)}s${newDocs ? " on the document a navigation loaded" : " (no navigation)"} \u2014 measured anyway`, token: tok };
       }
     }
   }
@@ -2126,6 +2154,52 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     await sleep2(POLL_MS);
   }
 }
+function linkHref(el) {
+  const a = el.closest("a[href], area[href]");
+  if (a === null || typeof a.href !== "string" || a.hasAttribute("download")) return null;
+  const own = typeof a.target === "string" ? a.target : "";
+  const base = el.ownerDocument.querySelector("base[target]");
+  const target = (own || (base ? base.getAttribute("target") || "" : "")).toLowerCase();
+  if (target !== "" && target !== "_self" && target !== "_top" && target !== "_parent") return null;
+  return a.href;
+}
+async function ownGoto(page, log, url, timeout) {
+  let committed = false;
+  const onResponse = (r) => {
+    try {
+      const st = r.status();
+      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame() && (st < 300 || st >= 400)) committed = true;
+    } catch {
+    }
+  };
+  const onRequest = (r) => {
+    try {
+      if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.redirectedFrom() === null) committed = false;
+    } catch {
+    }
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  try {
+    await page.goto(url, { waitUntil: "load", timeout });
+  } catch (e) {
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (/interrupted by another navigation/i.test(errMsg(e))) return;
+    if (!committed || !/Timeout \d+ms exceeded/i.test(errMsg(e))) throw e;
+    let state = "unknown";
+    try {
+      state = await page.evaluate("document.readyState");
+    } catch {
+    }
+    const note = `the page had not finished loading when the goto gave up after ${Math.round(timeout / 1e3)}s (document.readyState "${String(state)}") \u2014 measured anyway`;
+    const tok = await docTokenOrNull(page);
+    if (tok !== null && tok !== "") log.loadTimedOut.set(tok, note);
+    log.requested = false;
+  } finally {
+    page.off("response", onResponse);
+    page.off("request", onRequest);
+  }
+}
 async function runSteps(page, log, o) {
   const steps = o.steps || [];
   let origin = "";
@@ -2146,10 +2220,10 @@ async function runSteps(page, log, o) {
       if (target.origin !== origin) throw new StepError(`${name} leaves the origin ${origin} \u2014 a goto step is a same-origin path`);
       log.owner = { kind: "goto" };
       try {
-        await page.goto(target.href, { waitUntil: "load", timeout: o.timeout });
+        await ownGoto(page, log, target.href, o.timeout);
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-        if (!/interrupted by another navigation/i.test(errMsg(e))) throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
+        if (e instanceof BrowserGoneError) throw e;
+        throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
       } finally {
         log.owner = null;
       }
@@ -2163,9 +2237,15 @@ async function runSteps(page, log, o) {
           await loc.scrollIntoViewIfNeeded({ timeout: wait }).catch(() => void 0);
           const submits = await loc.evaluate(submitGuard, void 0, { timeout: wait });
           if (submits !== null) throw new StepError(`${name} would submit a form (${submits}) \u2014 a step must navigate, never submit`);
-          log.owner = { kind: "click" };
+          const href = await loc.evaluate(linkHref, void 0, { timeout: wait });
+          const refresh = href !== null && !href.includes("#") && docUrl(href) === docUrl(page.url());
+          log.owner = { kind: refresh ? "reload" : "click" };
           log.live = name;
-          await loc.click({ timeout: wait });
+          try {
+            await loc.click({ timeout: wait });
+          } finally {
+            log.owner = { kind: "click" };
+          }
         } catch (e) {
           if (e instanceof StepError) throw e;
           const kind = errorKind(errMsg(e), page.isClosed());
@@ -2185,24 +2265,26 @@ async function reachPage(page, log, o) {
   log.lost = null;
   log.gotos++;
   try {
-    await page.goto(o.url, { waitUntil: "load", timeout: o.timeout });
+    await ownGoto(page, log, o.url, o.timeout);
   } catch (e) {
-    if (!/interrupted by another navigation/i.test(errMsg(e))) throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
+    if (e instanceof BrowserGoneError) throw e;
+    throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
   }
   const steps = o.steps || [];
   if (!steps.length) return settle(page, log, o.ready, o.timeout);
   try {
-    const first = await settle(page, log, void 0, o.timeout);
+    await settle(page, log, void 0, o.timeout);
     await runSteps(page, log, o);
     const last = await settle(page, log, o.ready, o.timeout);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
-    return { note: last.note ?? first.note, token: last.token };
+    return { note: last.note, token: last.token };
   } finally {
     log.owner = null;
   }
 }
+var lostState = (url, live) => `the page reloaded (${docUrl(url)} again, not a navigation) after ${live} had changed it in place \u2014 the steps' state is gone`;
 function attachNavLog(page) {
-  const log = { events: [], navs: 0, gotos: 0, t0: Date.now(), owner: null, pendingOwned: false, live: null, lost: null, loadTimedOut: /* @__PURE__ */ new Map() };
+  const log = { events: [], navs: 0, gotos: 0, t0: Date.now(), owner: null, pendingOwned: false, live: null, lost: null, loadTimedOut: /* @__PURE__ */ new Map(), requested: false, docLoads: 0 };
   page.on("framenavigated", (f) => {
     if (f === page.mainFrame()) log.events.push({ type: "framenavigated", url: f.url(), at: Date.now() - log.t0 });
   });
@@ -2210,18 +2292,22 @@ function attachNavLog(page) {
     try {
       if (!r.isNavigationRequest() || r.frame() !== page.mainFrame() || r.redirectedFrom() !== null) return;
       const o = log.owner;
-      log.pendingOwned = o !== null && (o.kind === "goto" || isNavigationAway(r.url(), page.url()));
+      log.requested = true;
+      log.pendingOwned = o !== null && (o.kind !== "click" || isNavigationAway(r.url(), page.url()));
     } catch {
     }
   });
   page.on("load", () => {
     log.navs++;
     const url = page.url();
+    const fresh = log.requested;
+    log.requested = false;
+    if (fresh) log.docLoads++;
     if (log.pendingOwned) log.gotos++;
-    else if (log.live !== null && log.lost === null) log.lost = `the page reloaded (${docUrl(url)} again, not a navigation) after ${log.live} had changed it in place \u2014 the steps' state is gone`;
+    else if (fresh && log.live !== null && log.lost === null) log.lost = lostState(url, log.live);
     log.events.push({ type: "load", url, at: Date.now() - log.t0 });
     log.pendingOwned = false;
-    log.live = null;
+    if (fresh) log.live = null;
   });
   return log;
 }
@@ -2249,6 +2335,7 @@ async function pass(page, log, o) {
   const settleNote = reached.note;
   try {
     const token = reached.token ?? await docToken(page);
+    const navsAtReach = log.docLoads;
     const reachedUrl = page.url();
     const texts = [...new Set(specs.map(specText).filter((t) => t !== null).map((t) => t.text))];
     const collected = await page.evaluate(collectCandidates, { frames: frameIn, texts, positions: [] });
@@ -2344,7 +2431,8 @@ async function pass(page, log, o) {
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow = { ...overflow, compatMode };
-    if (await docToken(page) !== token) throw new NavigatedError("the page loaded a new document during measurement");
+    const tokenNow = await docToken(page);
+    if (tokenNow !== token || token === "" && log.docLoads !== navsAtReach) throw new NavigatedError("the page loaded a new document during measurement");
     if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) \u2014 its layout and page overflow measure differently from a standards-mode build`);
     const components = [];
     for (const i of exp.instances || []) {
@@ -2388,7 +2476,7 @@ async function bodiesRead(reads, served) {
   }
   if (!missed.size) return null;
   const list = [...missed].slice(0, 5).map(([p, why]) => `${p} (${why})`).join(", ");
-  return `build identity: ${missed.size} same-origin response body(ies) not hashed \u2014 ${list}${missed.size > 5 ? ", \u2026" : ""}; measured.build.assetsSha256 leaves them out`;
+  return { note: `build identity: ${missed.size} same-origin response body(ies) not hashed \u2014 ${list}${missed.size > 5 ? ", \u2026" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`, unhashed: missed.size };
 }
 async function runProbe(browser, o) {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
@@ -2450,9 +2538,9 @@ async function runProbe(browser, o) {
         bodies = [];
         const result = await pass(page, log, o);
         const unread = await bodiesRead(bodies, served);
-        if (unread !== null) result.notes.push(unread);
+        if (unread !== null) result.notes.push(unread.note);
         if (reruns && o.steps && o.steps.length) result.notes.push("the re-run replayed the steps in the same browser context (session and local storage from the first pass kept)");
-        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient) };
+        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient, unread !== null ? unread.unhashed : 0) };
       } catch (e) {
         if (e instanceof BrowserGoneError) return { kind: "browser-gone", why: e.message, navigation: nav(reruns) };
         if (e instanceof KeptNavigatingError) return { kind: "navigation", why: e.message, navigation: nav(reruns) };
@@ -2484,7 +2572,8 @@ var USAGE = `usage:
       to reach a screen that is a section of the app (not a URL): {"click": "<selector>"} | {"waitFor": "<selector>"} |
       {"goto": "/same-origin/path"}. A click's selector must match exactly one visible element (a waitFor's at least one);
       a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a
-      click changed the page in place re-runs the pass once (twice: exit 4). A step that fails while measuring is exit 4
+      click changed the page in place re-runs the pass once (twice: exit 4); a click on a link to the URL the page shows is
+      a refresh (its load is the step's own). A step that fails while measuring is exit 4
       (nothing written). Recorded as measured.reach.
       After measuring, the expectation's overlay interactions (on_click/on_press overlay/swap, plan expect:"dialog") are
       driven, each on a fresh page: measured.interactions (evidence; ok:true or ok:null, never false).
@@ -2788,6 +2877,7 @@ export {
   installHint,
   isNavigationAway,
   isPlaywrightModule,
+  linkHref,
   main,
   resolvePlaywright,
   runProbe

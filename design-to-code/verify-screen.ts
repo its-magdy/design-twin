@@ -2361,7 +2361,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
       expectationChanged: prevExp && opts.expectationSha256 ? prevExp !== opts.expectationSha256 : null,
       ...(Array.isArray(prev.deltas) ? { deltas: deltaChanges(prev.deltas, deltas, { notMeasured, fieldsNotMeasured, unverifiable, notComparable: expectation.notComparable || [], specIds: new Set(specs.map((sp) => String(sp.nodeId))), absent: absentGaps, placementGaps, pageOverflow,
         sameMeasured: !!(opts.measuredSha256 && prev.inputs && prev.inputs.measuredSha256 === opts.measuredSha256) }) } : {}),
-      sameBuild: prevBuild && buildNow ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null,
+      // LOW a: unknown when either side's hash is partial (bodies left out) — never "the same build" on a partial hash
+      sameBuild: prevBuild && buildNow && !prevBuild.unhashed && !buildNow.unhashed ? prevBuild.assetsSha256 === buildNow.assetsSha256 : null,
     };
   }
   // DT-81: the same build served although the code changed → the preview/dist was not rebuilt (never the verdict)
@@ -2473,7 +2474,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   // DT-81: which build was served (a stale preview measures old code)
   const b = r.inputs && r.inputs.build;
   L.push(b && b !== "unknown"
-    ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}… · git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
+    ? `Build served: ${b.mode} ${b.url} · ${b.assets} asset(s), sha256 ${b.assetsSha256.slice(0, 12)}…${b.unhashed ? ` (partial: ${b.unhashed} body(ies) not hashed)` : ""} · git ${b.gitHead ? b.gitHead.slice(0, 12) : "none"}${b.gitDirty ? " (uncommitted changes)" : ""}`
     : "Build served: build identity unknown (the measured file records none — measured by a hand-written or older probe).", "");
   if (r.why.length) {
     L.push("Why this is not a pass:", "");

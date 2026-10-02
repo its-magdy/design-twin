@@ -787,6 +787,48 @@ block("[12a] probe-drive:", () => {
   t("[H-a] isNavigationAway(): another path or query is a navigation; the same URL (a fragment aside) is a reload", () => !!away
     && away("http://h/a?s=beds", "http://h/a") && away("http://h/b", "http://h/a#x")
     && !away("http://h/a", "http://h/a") && !away("http://h/a#y", "http://h/a#x") && !away("http://h/pushed", "http://h/pushed"));
+  // fix 4 LOW a: a partial hash (bodies left out) is recorded, so verify-screen never calls it the same build
+  const served = new Map([["/assets/app.js", "a".repeat(64)]]);
+  t("[fix4 LOW a] buildFrom(): unhashed bodies recorded as build.unhashed (none → no field)", () => {
+    const partial: { unhashed?: unknown } = VP.buildFrom("http://h/", served, false, 2), whole: { unhashed?: unknown } = VP.buildFrom("http://h/", served, false);
+    return partial.unhashed === 2 && !("unhashed" in whole);
+  });
+  // fix 5 LOW 6: which links are followed in the main frame (the page function, against stand-ins)
+  const vpNs: Record<string, unknown> = { ...VP };
+  type LinkFn = (el: { closest(sel: string): { href?: unknown; target?: unknown; hasAttribute(n: string): boolean } | null; ownerDocument: { querySelector(sel: string): { getAttribute(n: string): string | null } | null } }) => string | null;
+  const isLinkFn = (f: unknown): f is LinkFn => typeof f === "function";
+  const lh = vpNs.linkHref;
+  const link = (target: string, opts: { base?: string; download?: boolean } = {}): string | null => !isLinkFn(lh) ? "no linkHref" : lh({
+    closest: () => ({ href: "http://h/a?tab=beds", target, hasAttribute: (n: string) => n === "download" && opts.download === true }),
+    ownerDocument: { querySelector: () => (opts.base !== undefined ? { getAttribute: () => opts.base ?? null } : null) },
+  });
+  t("[fix5 LOW 6] linkHref(): _self/_top/_parent/none are the main frame; _blank, a <base target=_blank>, a download are not", () => isLinkFn(lh)
+    && link("") === "http://h/a?tab=beds" && link("_top") === "http://h/a?tab=beds" && link("_parent") === "http://h/a?tab=beds" && link("_self") === "http://h/a?tab=beds"
+    && link("_blank") === null && link("", { base: "_blank" }) === null && link("_self", { base: "_blank" }) === "http://h/a?tab=beds" && link("", { download: true }) === null);
+  // fix 5 LOW 8: the submit guard clips the first quad to the layout viewport WITHOUT the scrollbar (documentElement.clientWidth)
+  t("[fix5 LOW 8] submitGuard(): a wide wrapper's click point is the middle of its part inside clientWidth (1009), not innerWidth (1024)", () => {
+    const sg = PD.submitGuard;
+    if (!sg) return false;
+    const rect = { x: 0, y: 0, width: 2000, height: 20, right: 2000, bottom: 20 };
+    const btn = { tagName: "BUTTON", form: {}, getAttribute: () => null, hasAttribute: () => false, closest: (): unknown => btn };
+    const el = { tagName: "SPAN", getAttribute: () => null, hasAttribute: () => false, closest: () => null, getBoundingClientRect: () => rect, getClientRects: () => [rect],
+      contains: (o: unknown) => o === btn, querySelectorAll: () => [] };
+    Object.assign(globalThis, { innerWidth: 1024, innerHeight: 700, document: { documentElement: { clientWidth: 1009, clientHeight: 700 }, elementFromPoint: (x: number) => (x < 508 ? btn : el) } });
+    const r: unknown = Reflect.apply(sg, undefined, [el]);
+    return typeof r === "string" && /at its click point/.test(r);
+  });
+  // fix 6 MED 3: in quirks mode documentElement.clientHeight is the PAGE's height (3016), not the viewport's (640)
+  t("[fix6 MED 3] submitGuard() in quirks mode: a 2000-px wrapper's click point is the middle of its part in the 640-px window (a button there), not of 0..2000", () => {
+    const sg = PD.submitGuard;
+    if (!sg) return false;
+    const rect = { x: 0, y: 0, width: 1024, height: 2000, right: 1024, bottom: 2000 };
+    const btn = { tagName: "BUTTON", form: {}, getAttribute: () => null, hasAttribute: () => false, closest: (): unknown => btn };
+    const el = { tagName: "DIV", getAttribute: () => null, hasAttribute: () => false, closest: () => null, getBoundingClientRect: () => rect, getClientRects: () => [rect],
+      contains: (o: unknown) => o === btn, querySelectorAll: () => [] };
+    Object.assign(globalThis, { innerWidth: 1024, innerHeight: 640, document: { compatMode: "BackCompat", documentElement: { clientWidth: 1024, clientHeight: 3016 }, elementFromPoint: (_x: number, y: number) => (y > 300 && y < 340 ? btn : el) } });
+    const r: unknown = Reflect.apply(sg, undefined, [el]);
+    return typeof r === "string" && /at its click point/.test(r);
+  });
   t("[F-70] the dialog contract, in detection order", () => JSON.stringify(PD.DIALOG_CONTRACT) === JSON.stringify([":modal", "dialog[open]", "[role=dialog]", "[role=alertdialog]", "[aria-modal=\"true\"]", ":popover-open"]));
 });
 
