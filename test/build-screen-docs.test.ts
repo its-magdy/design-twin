@@ -323,7 +323,14 @@ console.log("build-screen docs (group 12a review 3):");
     /never a step's own — not even\s+one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifier)
     && /is never a step's own, not even one the click's handler starts at once \(`draw\(\); location\.reload\(\)`\)/.test(verifySkill));
   check("[12a r3 M-1] the 10 s load wait is per document: no later settle waits for that document again (verifier, verify skill)",
-    /at most 10 s per document[^)]*and no later settle waits for that document again\)/.test(verifier) && /at most 10 s per document[^)]*and no later settle waits for that document again\)/.test(verifySkill));
+    /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifier) && /at most 10 s per document[^)]*and no later settle waits for that document again[;)]/.test(verifySkill));
+  check("[12a fix4/fix5] a link click to the URL already shown owns the load it starts (like a goto; a later same-URL load is a reload); the probe's own loads (--url, goto) wait up to --timeout, then a committed document is measured with the note (verifier, verify skill, references)",
+    [verifier, verifySkill].every((t) => /a `click` on a link \(the element or its\s+closest `a\[href\]`, same tab\) to the URL the page already shows/.test(t)
+      && /like a `goto`'s \(only the load the click itself starts; a later same-URL load is a reload\)/.test(t)
+      && /the probe's own loads — the first `--url` load and a `goto` — wait for\s+the load event up to `--timeout` instead/.test(t)
+      && /never finishes loading is then measured with the note "the page had not finished loading when the goto gave up"/.test(t)
+      && /a server\s+that never answers — or a page that goes on to one before its load — is still "could not load"/.test(t) && !/measured after 10 s with that note/.test(t))
+    && /a link to the URL already shown counts as a `goto` for the load the click starts/.test(verifyRef));
   check("[12a r3 L-1] with steps, always pass --ready on the screen root (or end with a waitFor of it): a click that lands elsewhere is still the step's own (verifier, verify skill, references, build-screen ×2)",
     /With steps, always pass `--ready '\[data-dt-node="<frame id>"\]'` \(or end the steps with a\s+`waitFor` of the screen root\)/.test(verifier) && /an expired session bouncing to a login page/.test(verifier)
     && /With steps, always pass `--ready '\[data-dt-node="<frame id>"\]'` \(or end the steps with a `waitFor` of the screen root\)/.test(verifySkill) && /an expired session bouncing to a login page/.test(verifySkill)

@@ -775,6 +775,9 @@ export interface BuildIdentity {
   assets: number;
   /** sha256 over the sorted "<path> <sha256 of body>" lines */
   assetsSha256: string;
+  /** same-origin bodies the probe could not hash (unread, failed) — present when > 0: assetsSha256 is partial, never
+   *  "the same build" as another (verify-screen's sameBuild is null then) */
+  unhashed?: number;
   gitHead: string | null;
   gitDirty: boolean | null;
 }

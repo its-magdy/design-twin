@@ -125,6 +125,129 @@
       document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
       document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=hang-img&section=beds"; };
     }
+  } else if (mode === "same-link") {
+    // fix 4 (MED 1): a URL-tab link to the tab the URL already shows — the click reloads the same URL (a refresh step, its
+    // load the step's own); the tag is on a <span> inside the <a> (the link is its closest a[href])
+    const on = q.get("section") === "beds";
+    // fix 5 (LOW 6): &target=_top on the link (the main frame: the same tab)
+    const tg = q.get("target");
+    document.write('<nav><a href="/plot-ledger-edge.html?mode=same-link&section=beds' + (tg ? "&target=" + tg : "") + '"' + (tg ? ' target="' + tg + '"' : "") + '><span data-dt-node="70:30">Beds</span></a></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>'));
+  } else if (mode === "churn-dom") {
+    // fix 5 (HIGH 1): a live ticker — the DOM never goes quiet (no navigation)
+    document.write(beds + '<p id="t"></p>');
+    let n = 0;
+    setInterval(() => { document.getElementById("t").textContent = "x".repeat(1 + (n++ % 7)); }, 150);
+  } else if (mode === "late-ready") {
+    // fix 5 (HIGH 1): the screen appears ?d= ms (default 12 s) after load (a slow API)
+    setTimeout(() => { document.body.insertAdjacentHTML("beforeend", beds); }, Number(q.get("d") || 12000));
+  } else if (mode === "slow-img") {
+    // fix 5 (MED 5): an image answered ?d= ms late keeps the document loading; the screen is there at once
+    document.write(beds + '<img src="/plot-ledger-slow.png?d=' + Number(q.get("d") || 13000) + '" width="1" height="1" alt="">');
+  } else if (mode === "slow-stay") {
+    // fix 5 (HIGH 2): the first document's image answers ?d= ms late; the click picks the section in place
+    document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div><img src="/plot-ledger-slow.png?d=' + Number(q.get("d") || 7000) + '" width="1" height="1" alt="">');
+    document.getElementById("go").onclick = () => {
+      document.getElementById("sec").innerHTML = beds;
+      setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<p id="later">loaded</p>'), 2500); // the waitFor step's
+    };
+  } else if (mode === "link-inplace-reload" || mode === "link-empty-reload") {
+    // fix 5 (MED 3): a link to the current URL (or href="") that the app handles in place; the page reloads ?d= ms later,
+    // once per session (a dev-server reload) — the reloaded page is back on the default section
+    const href = mode === "link-empty-reload" ? "" : location.pathname + location.search;
+    document.write('<nav><a id="go" data-dt-node="70:30" href="' + href + '">Beds</a></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div>');
+    document.getElementById("go").onclick = (e) => {
+      e.preventDefault();
+      document.getElementById("sec").innerHTML = beds;
+      if (!sessionStorage.getItem("reloaded")) { sessionStorage.setItem("reloaded", "1"); setTimeout(() => location.reload(), Number(q.get("d") || 300)); }
+    };
+  } else if (mode === "link-inplace-late-away") {
+    // fix 5 (MED 4): a link to the current URL handled in place; the app navigates to ANOTHER URL 1.2 s later
+    document.write('<nav><a id="go" data-dt-node="70:30" href="' + location.pathname + location.search + '">Beds</a></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+    document.getElementById("go").onclick = (e) => {
+      e.preventDefault();
+      setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=link-step&section=beds"; }, 1200);
+    };
+  } else if (mode === "slow-churn") {
+    // fix 5 (LOW 7): the loaded page reloads 8 s later into a document that never finishes loading and reloads again 6 s
+    // later, and so on (the counter is per session)
+    const n = Number(sessionStorage.getItem("churn") || 0);
+    sessionStorage.setItem("churn", String(n + 1));
+    if (n === 0) { document.write(beds); setTimeout(() => location.reload(), 8000); }
+    else { document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">'); setTimeout(() => location.reload(), 6000); }
+  } else if (mode === "bounce-hang") {
+    // fix 6 (MED 1): the page arrives, then — before its load (an image answered 2 s late) — goes on to a URL whose server
+    // never answers (an auth bounce to a host that is down)
+    document.write(beds + '<img src="/plot-ledger-slow.png?d=2000" width="1" height="1" alt="">');
+    setTimeout(() => { location.href = "/plot-ledger-hangdoc"; }, 300);
+  } else if (mode === "redir-slow") {
+    // fix 6 (MED 2): the landing URL redirects client-side 200 ms later to the app, whose image answers 11 s late (its load
+    // past the 10 s cap); the button changes the app in place
+    if (q.get("section") !== "app") {
+      document.write('<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=redir-slow&section=app"; }, 200);
+    } else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div id="sec"><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div></div><img src="/plot-ledger-slow.png?d=11000" width="1" height="1" alt="">');
+      document.getElementById("go").onclick = () => { document.getElementById("sec").innerHTML = beds; };
+    }
+  } else if (mode === "hang-late") {
+    // fix 4 (MED 2): the click navigates to another URL 400 ms later; that document's image never loads
+    if (q.get("section") === "beds") document.write(beds + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=hang-late&section=beds"; }, 400); };
+    }
+  } else if (mode === "late-slow") {
+    // fix 4 (MED 2): the click navigates 7 s later (late in the click's settle) to a document held half-loaded 5 s (a script
+    // answered late draws the screen): that document gets its own 10 s for its load, not what is left of the settle's
+    if (q.get("section") === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js?d=5000"; document.head.appendChild(s); }
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { setTimeout(() => { location.href = "/plot-ledger-edge.html?mode=late-slow&section=beds"; }, 7000); };
+    }
+  } else if (mode === "reload-hang") {
+    // fix 4 (MED 2 guard): the click picks the section in place, then reloads the same URL 300 ms later — into a document
+    // that never finishes loading (a reload-type navigation holds an image that never answers): the state is lost all the same
+    const reloaded = (performance.getEntriesByType("navigation")[0] || {}).type === "reload";
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>') + (reloaded ? '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">' : "");
+      document.getElementById("go").onclick = () => { draw(true); setTimeout(() => location.reload(), 300); };
+    };
+    draw(false);
+  } else if (mode === "hang-first") {
+    // fix 4 (MED 2): the first document never finishes loading (its image never answers); the click picks the section in place
+    const draw = (on) => {
+      document.body.innerHTML = '<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav>' + (on ? beds : '<div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>') + '<img src="/plot-ledger-hang.png" width="1" height="1" alt="">';
+      document.getElementById("go").onclick = () => draw(true);
+    };
+    draw(false);
+  } else if (mode === "late-load") {
+    // fix 4 (LOW b): the click navigates at once to a document whose image answers only after 12 s (its load times out in
+    // the click's settle, then completes); #late appears 13 s in (the waitFor step's) — the note must not outlive the load
+    if (q.get("section") === "beds") {
+      document.write(beds + '<img src="/plot-ledger-late.png" width="1" height="1" alt="">');
+      setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<p id="late">ready</p>'), 13000);
+    } else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=late-load&section=beds"; };
+    }
+  } else if (mode === "no-token") {
+    // fix 4 (LOW c): the per-document token is gone (as when the init script could not define it) — "" on every document.
+    // The click goes to a document that never finishes loading (its load times out in the waitFor step's settle); its #next
+    // link goes to one held half-loaded 2.5 s (the slow script draws the screen): that one's load must still be waited for
+    delete window.__dtProbeDoc;
+    const sec = q.get("section");
+    if (sec === "beds") { const s = document.createElement("script"); s.src = "/plot-ledger-slow.js"; document.head.appendChild(s); }
+    else if (sec === "hang") document.write('<nav><a id="next" href="/plot-ledger-edge.html?mode=no-token&section=beds">Beds</a></nav><img src="/plot-ledger-hang.png" width="1" height="1" alt="">');
+    else {
+      document.write('<nav><button type="button" data-dt-node="70:30" id="go">Beds</button></nav><div class="app" data-dt-node="71:1"><h1>Harvest Log</h1></div>');
+      document.getElementById("go").onclick = () => { location.href = "/plot-ledger-edge.html?mode=no-token&section=hang"; };
+    }
+  } else if (mode === "inline-wrap") {
+    // fix 4 (LOW d): a tagged inline <span> over two lines — its first line is a typeless button of a form (form=), the middle
+    // of its whole box is an empty inline-block: Playwright clicks the middle of the FIRST line box (it would submit)
+    document.write(`<form id="f"></form><div style="width:200px;font:16px Arial"><span data-dt-node="70:30"><button form="f" style="width:190px;height:40px;margin:0;vertical-align:top">Beds</button> <i style="display:inline-block;width:190px;height:400px"></i></span></div>
+      <div class="app" data-dt-node="70:1"><h1 data-dt-node="70:2">Beds</h1></div>`);
+    document.getElementById("f").onsubmit = (e) => { e.preventDefault(); post("inline-wrap"); };
   } else if (mode === "tall-wrapper") {
     // L-2: a tagged wrapper taller than the viewport; Playwright clicks the middle of its part ON SCREEN — a form's typeless
     // button sits there (the middle of the whole box, far below, is empty): as a step (70:30) the click would submit

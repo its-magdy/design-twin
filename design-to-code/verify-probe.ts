@@ -38,7 +38,8 @@
 // link) — never a `framenavigated`, which also fires for same-document history changes (pushState, a hash). Loads the
 // probe causes itself (the goto, a step that loads a page) are not "after the initial load". A click step owns the
 // navigation it causes however late it starts, as long as it goes to ANOTHER URL (a reload of the same URL is never a
-// step's); a reload after a click changed the page in place loses that state — the pass is re-run once (D19).
+// step's — except the load of a click on a link to the URL the page already shows: a refresh step, owned like a goto's);
+// a reload after a click changed the page in place loses that state — the pass is re-run once (D19).
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -46,7 +47,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Browser, BrowserType, Page } from "playwright";
+import type { Browser, BrowserType, Page, Request, Response } from "playwright";
 import { spawnSync } from "node:child_process";
 import { collectCandidates, focusablePath, focusInfo, measureElements } from "./probe-page.ts";
 import type { Candidate, CollectOutput, MeasureItem, Rect } from "./probe-page.ts";
@@ -146,9 +147,11 @@ const selfSha256 = (): string => crypto.createHash("sha256").update(fs.readFileS
 // `vite preview` of a stale dist carry the same assetsSha256 whatever the source tree says.
 type ServedBuild = Omit<BuildIdentity, "gitHead" | "gitDirty">;
 const BUILD_TYPES = new Set(["document", "script", "stylesheet"]);
-export function buildFrom(url: string, served: ReadonlyMap<string, string>, viteClient: boolean): ServedBuild {
+/** `unhashed` (LOW a): same-origin bodies left out of assetsSha256 (unread or failed) — recorded when > 0: a partial hash,
+ *  which verify-screen never calls the same build as another. */
+export function buildFrom(url: string, served: ReadonlyMap<string, string>, viteClient: boolean, unhashed = 0): ServedBuild {
   const lines = [...served].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, h]) => `${p} ${h}`);
-  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")) };
+  return { url, mode: viteClient ? "vite-dev" : served.size ? "static" : "unknown", assets: served.size, assetsSha256: sha256Of(lines.join("\n")), ...(unhashed > 0 ? { unhashed } : {}) };
 }
 /** The project's git state — null when it is not a git work tree. Changes under design/ (the verifier's own files) do not count. */
 function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | null } {
@@ -210,8 +213,18 @@ interface NavLog {
   t0: number;
   /** the step that owns main-frame navigations right now: a goto step while it loads (any URL: its load is the step's);
    *  a click step from its click until the next goto/click step or the end of the steps — only a navigation that leaves
-   *  the page's URL (M-2: a same-URL request is a reload, never the click's, even while the click runs) */
-  owner: { kind: "goto" | "click" } | null;
+   *  the page's URL (M-2: a same-URL request is a reload, never the click's, even while the click runs); "reload": a click on
+   *  a link to the URL the page already shows (fix 4) — while that click runs (Playwright issues the link's own request
+   *  before click() resolves) it owns any main-frame navigation request, like a goto step; then it is a "click" again (fix 5:
+   *  a later same-URL load is a reload, a later navigation away still the step's) */
+  owner: { kind: "goto" | "click" | "reload" } | null;
+  /** fix 5: a main-frame navigation request was issued since the last load (or since the probe's own goto gave up waiting
+   *  for its committed document's load) — a load without one is the CURRENT document's own late load: never a new document,
+   *  never a reload that loses the steps' state */
+  requested: boolean;
+  /** fix 5: loads a navigation request brought in (navs minus the current documents' own late loads) — what settle() and
+   *  the measurement count as "the page navigated" */
+  docLoads: number;
   /** the newest main-frame navigation request was a step's own: its load is the probe's, not "after the initial load" */
   pendingOwned: boolean;
   /** the document may hold state a click built in place: the step that clicked (set from the click on; null: a fresh
@@ -249,60 +262,91 @@ interface Settled { note: string | null; token: string | null }
  */
 async function settle(page: Page, log: NavLog, ready: string | undefined, timeout: number): Promise<Settled> {
   const cap = Math.min(QUIET_CAP_MS, timeout);
+  /** the settle-wide bound on navigation churn: a NEW document after it is "kept navigating" */
   const deadline = Date.now() + cap;
-  const navAtStart = log.navs;
+  /** fix 4: the current document's own bound — at most `cap` per document (its load, --ready, the quiet window), then it
+   *  is measured anyway with a note; a new document gets a fresh one */
+  let docDeadline = deadline;
+  const started = Date.now();
+  const navAtStart = log.docLoads;
   let newDocs = 0;
   let loadNote: string | null = null;
-  const moved = (): boolean => log.navs !== navAtStart || newDocs > 0;
-  const kept = (): KeptNavigatingError => new KeptNavigatingError(`the page kept navigating for ${Math.round(cap / 1000)}s after load (${Math.max(log.navs - navAtStart, newDocs)} navigation(s)) and never settled`);
+  const moved = (): boolean => log.docLoads !== navAtStart || newDocs > 0;
+  const kept = (): KeptNavigatingError => new KeptNavigatingError(`the page kept navigating for ${Math.round((Date.now() - started) / 1000)}s${log.navs > 0 ? " after load" : ""} (${Math.max(log.docLoads - navAtStart, newDocs)} navigation(s)) and never settled`);
   const stateLost = (): void => { if (log.lost !== null) throw new StepStateLostError(log.lost); };
   stateLost();
   let token = await docTokenOrNull(page);
-  /** a new document replaced the one settling began on: wait for its load, then start over (or end the pass: lost state) */
+  /** a new document replaced the one settling began on: start over on it with its own per-document bound (its load is
+   *  waited for at the top of the loop, ≤ the cap, then measured with the note — fix 4) — or end the pass: lost state, or
+   *  ANOTHER new document seen after the settle-wide bound (the page keeps navigating; the first one is seen whenever the
+   *  --ready wait ends, which can be after the bound for a navigation made well within it) */
   const newDocument = async (): Promise<void> => {
     newDocs++;
-    await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) }).catch(() => undefined);
+    // fix 4: a document no step's request made replaced one a click changed in place — lost already at its commit (its load
+    // may never come: no load wait decides it any more)
+    if (log.live !== null && !log.pendingOwned && log.lost === null) log.lost = lostState(page.url(), log.live);
     stateLost();
-    if (Date.now() >= deadline) throw kept();
+    if (Date.now() >= deadline && newDocs > 1) throw kept();
+    docDeadline = Date.now() + cap;
+    loadNote = null; // the previous document's
     token = await docTokenOrNull(page);
+  };
+  /** LOW b: the load note only while the document is still not complete (one that finished since is not "measured anyway") */
+  const noteNow = async (tok: string): Promise<string | null> => {
+    if (loadNote === null) return null;
+    let state: unknown = null;
+    try { state = await page.evaluate("document.readyState"); } catch (e) {
+      if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+      return loadNote;
+    }
+    if (state !== "complete") return loadNote;
+    if (tok !== "") log.loadTimedOut.delete(tok);
+    return null;
   };
   for (;;) {
     try {
       // M-a: its load first (a document whose load is still pending can be quiet and half drawn)
       // M-1: a document whose load already timed out (in this settle or an earlier one) is not waited for again
-      const known = token !== null ? log.loadTimedOut.get(token) : undefined;
-      if (known !== undefined) loadNote = known;
+      // LOW c: an empty token (INIT_SCRIPT could not define one) is never a known document
+      const known = token !== null && token !== "" ? log.loadTimedOut.get(token) : undefined;
+      // LOW b: a remembered note is attached only while that document is still loading
+      const state: unknown = await page.evaluate("document.readyState");
+      if (state === "complete") { if (known !== undefined && token !== null) log.loadTimedOut.delete(token); }
+      else if (known !== undefined) loadNote = known;
       else {
-        const state: unknown = await page.evaluate("document.readyState");
-        if (state !== "complete") {
-          try {
-            await page.waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) });
-          } catch (e) {
-            if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-            if (errorKind(errMsg(e), false) === "navigated") throw e;
-            loadNote = `the document had not finished loading after ${Math.round(cap / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
-            // remembered for THIS document (the token it has now): no later settle waits for its load again
-            const now = await docTokenOrNull(page);
-            if (now !== null && (token === null || now === token)) { token = now; log.loadTimedOut.set(now, loadNote); }
+        try {
+          await page.waitForLoadState("load", { timeout: Math.max(1, docDeadline - Date.now()) });
+        } catch (e) {
+          if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+          if (errorKind(errMsg(e), false) === "navigated") throw e;
+          loadNote = `the document had not finished loading after ${Math.round(cap / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
+          // remembered for THIS document (the token it has now): no later settle waits for its load again
+          const now = await docTokenOrNull(page);
+          if (now !== null && now !== "" && (token === null || now === token)) {
+            token = now;
+            log.loadTimedOut.set(now, loadNote);
+            // fix 6: this document (measured anyway) is the current one — its late load is its own, never a reload (a request
+            // still pending now brings a new document, caught by the token change in newDocument)
+            log.requested = false;
           }
-          stateLost();
         }
+        stateLost();
       }
       await page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
       // the full --timeout for a page that has not navigated since load; what is left of the quiet cap otherwise
-      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, deadline - Date.now()) : timeout });
+      if (ready) await page.locator(ready).first().waitFor({ state: "visible", timeout: moved() ? Math.max(1, docDeadline - Date.now()) : timeout });
     } catch (e) {
       if (e instanceof StepStateLostError || e instanceof BrowserGoneError) throw e;
       if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
       const now = await docTokenOrNull(page);
       if (now !== null && token !== null && now !== token) { await newDocument(); continue; }
       if (token === null && now !== null) token = now;
-      if (moved() && Date.now() < deadline) { await sleep(POLL_MS); continue; }
+      if (moved() && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
       if (moved()) throw kept();
-      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < deadline) { await sleep(POLL_MS); continue; }
+      if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) { await sleep(POLL_MS); continue; }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
     }
-    let mark = log.navs;
+    let mark = log.docLoads;
     let last = "", since = Date.now();
     for (;;) {
       await sleep(POLL_MS);
@@ -314,19 +358,20 @@ async function settle(page: Page, log: NavLog, ready: string | undefined, timeou
       } catch (e) {
         if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
         if (errorKind(errMsg(e), false) !== "navigated") throw e;
-        if (Date.now() >= deadline) throw kept();
+        if (Date.now() >= docDeadline) throw kept();
         continue;
       }
       if (token === null) token = tok;
       // a load with the token unchanged is this document's own late load event (no token to tell by: count it as new)
-      if (tok !== token || (log.navs !== mark && tok === "")) { await newDocument(); break; } // restart: load, fonts, --ready, a fresh quiet window
+      if (tok !== token || (log.docLoads !== mark && tok === "")) { await newDocument(); break; } // restart: load, fonts, --ready, a fresh quiet window
       stateLost();
-      mark = log.navs;
+      mark = log.docLoads;
       if (sig !== last) { last = sig; since = Date.now(); }
-      if (Date.now() - since >= QUIET_MS) return { note: loadNote, token: tok };
-      if (Date.now() >= deadline) {
-        if (moved()) throw kept();
-        return { note: loadNote ?? `the DOM was still changing after ${Math.round(cap / 1000)}s (no navigation) — measured anyway`, token: tok };
+      if (Date.now() - since >= QUIET_MS) return { note: await noteNow(tok), token: tok };
+      if (Date.now() >= docDeadline) {
+        // a new document had its own full window (fix 4: per document); a navigation that never made one never settled
+        if (moved() && newDocs === 0) throw kept();
+        return { note: (await noteNow(tok)) ?? `the DOM was still changing after ${Math.round(cap / 1000)}s${newDocs ? " on the document a navigation loaded" : " (no navigation)"} — measured anyway`, token: tok };
       }
     }
   }
@@ -373,6 +418,62 @@ async function oneVisible(page: Page, sel: string, wait: number, name: string, a
   }
 }
 
+/** In the page (Locator.evaluate): the absolute URL a click on this element follows in the main frame — its own href or
+ *  its closest a[href]'s — or null: another tab/window (its target, or the document's <base target>), a download, an SVG
+ *  <a> (its href is not a string). _top / _parent are the main frame here (steps run in it). SELF-CONTAINED. */
+export interface LinkElement {
+  closest(selector: string): { href?: unknown; target?: unknown; hasAttribute(name: string): boolean } | null;
+  ownerDocument: { querySelector(selector: string): { getAttribute(name: string): string | null } | null };
+}
+export function linkHref(el: LinkElement): string | null {
+  const a = el.closest("a[href], area[href]");
+  if (a === null || typeof a.href !== "string" || a.hasAttribute("download")) return null;
+  const own = typeof a.target === "string" ? a.target : "";
+  const base = el.ownerDocument.querySelector("base[target]");
+  const target = (own || (base ? base.getAttribute("target") || "" : "")).toLowerCase();
+  if (target !== "" && target !== "_self" && target !== "_top" && target !== "_parent") return null;
+  return a.href;
+}
+
+/** fix 5: the probe's OWN load (the --url goto, a goto step): waited for up to --timeout, as at f63e818. Past it a document
+ *  that committed (its response arrived) is measured anyway — the "had not finished loading" note, remembered for that
+ *  document (log.loadTimedOut: no settle waits for it again) and its load, when it comes, is its own late load; one that
+ *  never answered rethrows (the caller's "could not load"). An interrupting navigation is left to the settle. */
+async function ownGoto(page: Page, log: NavLog, url: string, timeout: number): Promise<void> {
+  let committed = false;
+  const onResponse = (r: Response): void => {
+    try {
+      const st = r.status();
+      if (r.request().isNavigationRequest() && r.frame() === page.mainFrame() && (st < 300 || st >= 400)) committed = true;
+    } catch { /* a service worker's response has no frame */ }
+  };
+  // fix 6: committed = the NEWEST main-frame navigation was answered — a page that arrives, then (before its load) goes on
+  // to a server that never answers is "could not load", not measured (its evaluates would wait on that request for good)
+  const onRequest = (r: Request): void => {
+    try { if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.redirectedFrom() === null) committed = false; } catch { /* no frame */ }
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
+  try {
+    await page.goto(url, { waitUntil: "load", timeout });
+  } catch (e) {
+    if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
+    if (/interrupted by another navigation/i.test(errMsg(e))) return;
+    if (!committed || !/Timeout \d+ms exceeded/i.test(errMsg(e))) throw e;
+    let state: unknown = "unknown";
+    try { state = await page.evaluate("document.readyState"); } catch { /* the settle reads it again */ }
+    // fix 6 (LOW 4): what happened — the goto stopped waiting (the document measured may have arrived later in a chain); the
+    // note is dropped again by the settle once that document is complete (it was then measured fully loaded)
+    const note = `the page had not finished loading when the goto gave up after ${Math.round(timeout / 1000)}s (document.readyState "${String(state)}") — measured anyway`;
+    const tok = await docTokenOrNull(page);
+    if (tok !== null && tok !== "") log.loadTimedOut.set(tok, note);
+    log.requested = false; // its committed document is the current one: its late load is its own
+  } finally {
+    page.off("response", onResponse);
+    page.off("request", onRequest);
+  }
+}
+
 /** Replay the steps (each settles after it). Which loads are the steps' own (added to log.gotos, never "after the initial
  *  load") is judged per navigation request (attachNavLog): a goto step's load; a click step's navigation — one that goes
  *  to another URL than the page shows, issued while the click runs or LATER (H-a: an app that awaits a request, then sets
@@ -393,10 +494,11 @@ async function runSteps(page: Page, log: NavLog, o: ProbeOptions): Promise<void>
       if (target.origin !== origin) throw new StepError(`${name} leaves the origin ${origin} — a goto step is a same-origin path`);
       log.owner = { kind: "goto" }; // the goto's load is the step's own (even at the URL the page is on)
       try {
-        await page.goto(target.href, { waitUntil: "load", timeout: o.timeout });
+        // fix 5: its load up to --timeout; a committed document that never finishes loading is measured with the note
+        await ownGoto(page, log, target.href, o.timeout);
       } catch (e) {
-        if (errorKind(errMsg(e), page.isClosed()) === "gone") throw gone(e);
-        if (!/interrupted by another navigation/i.test(errMsg(e))) throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
+        if (e instanceof BrowserGoneError) throw e;
+        throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
       } finally {
         log.owner = null; // a goto ends the previous click's ownership too
       }
@@ -411,12 +513,22 @@ async function runSteps(page: Page, log: NavLog, o: ProbeOptions): Promise<void>
           await loc.scrollIntoViewIfNeeded({ timeout: wait }).catch(() => undefined);
           const submits = await loc.evaluate(submitGuard, undefined, { timeout: wait });
           if (submits !== null) throw new StepError(`${name} would submit a form (${submits}) — a step must navigate, never submit`);
+          // fix 4: a link (the element or its closest a[href]) to the document the page already shows is a refresh step — its
+          // load is the step's own, like a goto's (a URL-tab link to the tab --url shows): it owns the navigation requests
+          // issued while the click runs (fix 5: only then)
+          const href = await loc.evaluate(linkHref, undefined, { timeout: wait });
+          const refresh = href !== null && !href.includes("#") && docUrl(href) === docUrl(page.url());
           // its navigations to ANOTHER URL are its own from here on, however late (H-a); M-2: from the click on the document
           // may hold what the click builds in place, so a reload (a same-URL load, never the click's — even one its handler
-          // starts at once: `draw(); location.reload()`) loses that state; the click's own navigation clears it on load
-          log.owner = { kind: "click" };
+          // starts at once: `draw(); location.reload()`) loses that state; the click's own navigation clears it on load (a
+          // refresh link's too; one an app intercepts in place keeps it)
+          log.owner = { kind: refresh ? "reload" : "click" };
           log.live = name;
-          await loc.click({ timeout: wait });
+          try {
+            await loc.click({ timeout: wait });
+          } finally {
+            log.owner = { kind: "click" }; // fix 5: a later same-URL load is a reload; a later navigation away the step's
+          }
         } catch (e) {
           if (e instanceof StepError) throw e;
           const kind = errorKind(errMsg(e), page.isClosed());
@@ -438,45 +550,58 @@ async function reachPage(page: Page, log: NavLog, o: ProbeOptions): Promise<Sett
   log.owner = null; log.pendingOwned = false; log.live = null; log.lost = null;
   log.gotos++;
   try {
-    await page.goto(o.url, { waitUntil: "load", timeout: o.timeout });
+    // fix 5: its load up to --timeout (the settles then start on a loaded document: its own load never reads as "moved");
+    // a committed document that never finishes loading is measured with the note, not "could not load"
+    await ownGoto(page, log, o.url, o.timeout);
   } catch (e) {
-    if (!/interrupted by another navigation/i.test(errMsg(e))) throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
+    if (e instanceof BrowserGoneError) throw e;
+    throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
   }
   const steps = o.steps || [];
   if (!steps.length) return settle(page, log, o.ready, o.timeout);
   try {
-    const first = await settle(page, log, undefined, o.timeout);
+    await settle(page, log, undefined, o.timeout);
     await runSteps(page, log, o);
     // the last click still owns its late navigation while --ready is waited for
     const last = await settle(page, log, o.ready, o.timeout);
     if (log.lost !== null) throw new StepStateLostError(log.lost);
-    return { note: last.note ?? first.note, token: last.token };
+    // LOW b: the last settle's note only — the first one's may be about a document the steps replaced, or one that has
+    // finished loading since (the last settle re-checks that document's readyState)
+    return { note: last.note, token: last.token };
   } finally {
     log.owner = null; // measuring: no load is the steps' own from here
   }
 }
 
+const lostState = (url: string, live: string): string => `the page reloaded (${docUrl(url)} again, not a navigation) after ${live} had changed it in place — the steps' state is gone`;
+
 /** The navigation log of a page: main-frame document loads (facts-12a §1); framenavigated is logged, never counted;
  *  each main-frame navigation request is judged as it is issued — a step's own (NavLog.owner) or not — and its load
  *  credited accordingly; a load no step owned that replaces a document a click changed in place sets `lost`. */
 function attachNavLog(page: Page): NavLog {
-  const log: NavLog = { events: [], navs: 0, gotos: 0, t0: Date.now(), owner: null, pendingOwned: false, live: null, lost: null, loadTimedOut: new Map() };
+  const log: NavLog = { events: [], navs: 0, gotos: 0, t0: Date.now(), owner: null, pendingOwned: false, live: null, lost: null, loadTimedOut: new Map(), requested: false, docLoads: 0 };
   page.on("framenavigated", (f) => { if (f === page.mainFrame()) log.events.push({ type: "framenavigated", url: f.url(), at: Date.now() - log.t0 }); });
   page.on("request", (r) => {
     try {
       if (!r.isNavigationRequest() || r.frame() !== page.mainFrame() || r.redirectedFrom() !== null) return;
       const o = log.owner;
-      log.pendingOwned = o !== null && (o.kind === "goto" || isNavigationAway(r.url(), page.url()));
+      log.requested = true;
+      log.pendingOwned = o !== null && (o.kind !== "click" || isNavigationAway(r.url(), page.url()));
     } catch { /* a service worker's request has no frame */ }
   });
   page.on("load", () => {
     log.navs++;
     const url = page.url();
+    // fix 5: no navigation request since the last load — the current document's own late load (measured "anyway" before
+    // it): no new document, nothing the steps built is lost
+    const fresh = log.requested;
+    log.requested = false;
+    if (fresh) log.docLoads++;
     if (log.pendingOwned) log.gotos++;
-    else if (log.live !== null && log.lost === null) log.lost = `the page reloaded (${docUrl(url)} again, not a navigation) after ${log.live} had changed it in place — the steps' state is gone`;
+    else if (fresh && log.live !== null && log.lost === null) log.lost = lostState(url, log.live);
     log.events.push({ type: "load", url, at: Date.now() - log.t0 });
     log.pendingOwned = false;
-    log.live = null; // a fresh document
+    if (fresh) log.live = null; // a fresh document
   });
   return log;
 }
@@ -523,6 +648,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     // L-a: the document settle saw quiet (after the steps: a step's own load is not a reload during measurement) —
     // one that replaced it since is caught by the check after the screenshot, never measured as the settled one
     const token = reached.token ?? await docToken(page);
+    // LOW c: an empty token ("" — the init script defined none) is shared by every document: a load decides then
+    const navsAtReach = log.docLoads;
     const reachedUrl = page.url();
     const texts = [...new Set(specs.map(specText).filter((t) => t !== null).map((t) => t.text))];
     const collected: CollectOutput = await page.evaluate(collectCandidates, { frames: frameIn, texts, positions: [] });
@@ -609,7 +736,8 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     // D43: the page's sideways overflow at this viewport — before the token check, so a reload re-runs it too
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow: PageOverflow = { ...overflow, compatMode };
-    if ((await docToken(page)) !== token) throw new NavigatedError("the page loaded a new document during measurement");
+    const tokenNow = await docToken(page);
+    if (tokenNow !== token || (token === "" && log.docLoads !== navsAtReach)) throw new NavigatedError("the page loaded a new document during measurement");
     if (compatMode !== "CSS1Compat") stateNotes.add(`the page renders in quirks mode (document.compatMode ${compatMode}: no <!doctype html>) — its layout and page overflow measure differently from a standards-mode build`);
 
     const components: MeasuredComponent[] = [];
@@ -662,7 +790,7 @@ interface BodyRead { path: string; state: "pending" | "hashed" | "no body" | "fa
 export const BODY_WAIT_MS = 2_000;
 /** Wait ≤ BODY_WAIT_MS for this pass's bodies; a note naming the paths left out of assetsSha256 (unread or failed, and
  *  not hashed from another response of the same path), or null. */
-async function bodiesRead(reads: readonly BodyRead[], served: ReadonlyMap<string, string>): Promise<string | null> {
+async function bodiesRead(reads: readonly BodyRead[], served: ReadonlyMap<string, string>): Promise<{ note: string; unhashed: number } | null> {
   await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep(BODY_WAIT_MS, undefined, { ref: false })]);
   const missed = new Map<string, string>();
   for (const r of reads) {
@@ -671,7 +799,7 @@ async function bodiesRead(reads: readonly BodyRead[], served: ReadonlyMap<string
   }
   if (!missed.size) return null;
   const list = [...missed].slice(0, 5).map(([p, why]) => `${p} (${why})`).join(", ");
-  return `build identity: ${missed.size} same-origin response body(ies) not hashed — ${list}${missed.size > 5 ? ", …" : ""}; measured.build.assetsSha256 leaves them out`;
+  return { note: `build identity: ${missed.size} same-origin response body(ies) not hashed — ${list}${missed.size > 5 ? ", …" : ""}; measured.build.assetsSha256 leaves them out (build.unhashed)`, unhashed: missed.size };
 }
 
 /** Measure with one automatic full re-run after a reload; a second one is D19's exit 4. */
@@ -717,10 +845,10 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
         gen++; served.clear(); viteClient = false; bodies = [];
         const result = await pass(page, log, o);
         const unread = await bodiesRead(bodies, served);
-        if (unread !== null) result.notes.push(unread);
+        if (unread !== null) result.notes.push(unread.note);
         // facts-12a §9: the re-run reloads in the SAME context — session/local storage set by the first pass stays
         if (reruns && o.steps && o.steps.length) result.notes.push("the re-run replayed the steps in the same browser context (session and local storage from the first pass kept)");
-        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient) };
+        return { kind: "ok", result, navigation: nav(reruns), consoleErrors, build: buildFrom(o.url, served, viteClient, unread !== null ? unread.unhashed : 0) };
       } catch (e) {
         if (e instanceof BrowserGoneError) return { kind: "browser-gone", why: e.message, navigation: nav(reruns) };
         if (e instanceof KeptNavigatingError) return { kind: "navigation", why: e.message, navigation: nav(reruns) };
@@ -755,7 +883,8 @@ const USAGE =
   "      to reach a screen that is a section of the app (not a URL): {\"click\": \"<selector>\"} | {\"waitFor\": \"<selector>\"} |\n" +
   "      {\"goto\": \"/same-origin/path\"}. A click's selector must match exactly one visible element (a waitFor's at least one);\n" +
   "      a click never submits a form. A click's navigation to another URL is the step's own, however late; a reload after a\n" +
-  "      click changed the page in place re-runs the pass once (twice: exit 4). A step that fails while measuring is exit 4\n" +
+  "      click changed the page in place re-runs the pass once (twice: exit 4); a click on a link to the URL the page shows is\n" +
+  "      a refresh (its load is the step's own). A step that fails while measuring is exit 4\n" +
   "      (nothing written). Recorded as measured.reach.\n" +
   "      After measuring, the expectation's overlay interactions (on_click/on_press overlay/swap, plan expect:\"dialog\") are\n" +
   "      driven, each on a fresh page: measured.interactions (evidence; ok:true or ok:null, never false).\n" +
