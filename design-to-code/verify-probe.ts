@@ -41,6 +41,14 @@
 // the fidelity verdict (D4) and never an exit 4: a failure is {ran:false, why}. `--behaviour off` skips them (D45). The
 // browser is closed capped (CDP Browser.close, then close): the units run arbitrary page code.
 //
+// Group 12c: between the drive and the behaviour checks, the built frame is captured ONCE more on a fresh page at the
+// reference's scale (expectation.referenceImage, written by --expect; probe-visual.ts) within min(30 s, what --max-time leaves
+// less the behaviour reserve); after the browser is closed it is diffed against the Figma reference in Node (pixelmatch-style
+// YIQ + anti-aliasing + a shift tolerance, visual-diff.ts) and <out>.diff.png is drawn. measured.visual — informational, never
+// the fidelity verdict (D40(3)), never an exit 4, never in measured.artifacts; a failure is {ran:false, why}. Not skipped by
+// --behaviour off (it is no behaviour check); a reference-less expectation skips it at once. The reference PNG is read from the
+// project that owns the expectation (the directory above design/verify/ of --expected, else --project — F-2, a monorepo).
+//
 // Navigation accounting (D19, facts-12a §1): a navigation is a main-frame document LOAD (a reload, a cross-document
 // link) — never a `framenavigated`, which also fires for same-document history changes (pushState, a hash). Loads the
 // probe causes itself (the goto, a step that loads a page) are not "after the initial load". A click step owns the
@@ -65,10 +73,12 @@ import { isVerifyExpectation } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
-import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
+import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredVisual, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { StepError, drivable, driveBudget, driveInteractions, readPageOverflow, submitGuard } from "./probe-drive.ts";
 import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
+import { captureVisual, finishVisual, prepareVisual, referenceRoot, visualBudget, visualLine } from "./probe-visual.ts";
+import type { VisualCapture, VisualPrep } from "./probe-visual.ts";
 import { gitHead } from "./content-hash.ts";
 import { RunCacheUnwritable, liveStatusFile, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
 import type { StatusWrite } from "./verify-run.ts";
@@ -944,6 +954,10 @@ const USAGE =
   "      20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,\n" +
   "      1024/320 px widths, and the keyboard/scroll battery on modal overlays — measured.behaviour (+ <out>.forced-colors.png),\n" +
   "      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).\n" +
+  "      Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the\n" +
+  "      reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png\n" +
+  "      (informational — never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/… PNG is read\n" +
+  "      from the project that owns the expectation (the folder above design/verify/), else from --project.\n" +
   `  ${scriptCmd("verify-probe")} --check [--project <dir>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
@@ -1066,7 +1080,7 @@ export async function main(argv: string[]): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const runDeadline = Date.now() + maxTime;
   const watchdog = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), maxTime); });
-  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour; forcedPng: Buffer | null }> => {
+  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour; forcedPng: Buffer | null; prep: VisualPrep; visualCap: VisualCapture | { why: string }; captureMs: number }> => {
     const launched = await launch(res, project);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
@@ -1113,6 +1127,30 @@ export async function main(argv: string[]): Promise<number> {
         driveNote = `driving the interactions failed (${errMsg(e).split("\n")[0]}) — none recorded`;
       }
     }
+    // 12c: the visual capture — after the drive (it can never cut verdict-affecting rows, D41/D24), before behaviour (one capped
+    // load: behaviour's budget is computed afterwards from what is left). No reference → skipped at once. Never exit 4.
+    // the reference is read from the project that owns the expectation (F-2); prepareVisual never throws, and the try keeps it
+    // so (F-1: a throw here once left the browser open and the process hanging)
+    let prep: VisualPrep = { ok: false, why: "not measured" };
+    if (run.kind === "ok") {
+      try { prep = prepareVisual(expectation, referenceRoot(f.expected, project)); } catch (e) { prep = { ok: false, why: `the reference could not be read (${errMsg(e).split("\n")[0]})` }; }
+    }
+    const visualAt = Date.now();
+    let visualCap: VisualCapture | { why: string } = { why: prep.ok ? "not captured" : prep.why };
+    if (run.kind === "ok" && prep.ok) {
+      const fr0 = run.result.frames[0];
+      if (wedged) visualCap = { why: "the browser stopped answering while the interactions were driven" };
+      else {
+        visualCap = await captureVisual(browser, {
+          ref: prep.ref, frame: fr0 ? { nodeId: fr0.nodeId, selector: fr0.selector, via: fr0.via, rect: fr0.rect } : null,
+          frameSize: prep.frameSize, nodes: run.result.nodes, viewport, timeout, initScript: INIT_SCRIPT,
+          reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); },
+          budgetMs: visualBudget(Date.now(), runDeadline),
+        });
+      }
+    }
+    // the capture's own time — the behaviour battery runs between it and finishVisual, so it is not counted
+    const captureMs = Date.now() - visualAt;
     // 12b: the behaviour/a11y checks — after the measurement pass and the drive, each unit on a fresh page, within
     // min(90 s, what --max-time leaves less 20 s). Never exit 4, never blocks the measured file: a failure is {ran:false, why}.
     let behaviour: MeasuredBehaviour = { version: 1, ran: false, why: "--behaviour off" };
@@ -1169,10 +1207,15 @@ export async function main(argv: string[]): Promise<number> {
         "  navigation log:\n" + run.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
       return 4;
     }
-    return { run, identity, driven, driveNote, behaviour, forcedPng };
-  })();
-  const first = await Promise.race([work, watchdog]);
-  clearTimeout(timer);
+    return { run, identity, driven, driveNote, behaviour, forcedPng, prep, visualCap, captureMs };
+  })().catch(async (e: unknown): Promise<never> => {
+    // F-1: every throw after the launch closes the browser first (a connected browser keeps the process alive forever)
+    const b = held.browser;
+    if (b && !held.timedOut) await closeCapped(b);
+    throw e;
+  });
+  // the watchdog's timer is cleared however the race ends (a rejected work must not keep the process up to --max-time)
+  const first = await Promise.race([work, watchdog]).finally(() => clearTimeout(timer));
   if (first === "timeout") {
     held.timedOut = true;
     work.catch(() => undefined); // it rejects once its browser is gone
@@ -1183,7 +1226,7 @@ export async function main(argv: string[]): Promise<number> {
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
-  const { run, identity, driven, driveNote, behaviour, forcedPng } = first;
+  const { run, identity, driven, driveNote, behaviour, forcedPng, prep, visualCap, captureMs } = first;
   if (!expectation || !expBytes || !f.expected || !f.url) return 2; // (--check returned above)
 
   // Everything below runs after browser.close(): nothing is written while the page is live (a write into the
@@ -1192,6 +1235,20 @@ export async function main(argv: string[]): Promise<number> {
   const r = run.result;
   const frameOut = (fr: ResolvedFrame): ProbeFrame => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
   const firstFrame = r.frames[0];
+  // 12c: decode, diff and draw in Node (the browser is closed). The diff image is written BEFORE the measured text is built: a
+  // failed write leaves visual.diff null (the measured file never names a missing file). A run that drew none removes an earlier
+  // run's (12b L4). Never in measured.artifacts (compare's artifact check stays verdict-neutral).
+  const diffPath = outBase + ".diff.png";
+  let visual: MeasuredVisual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
+  let diffPng: Buffer | null = null;
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path.sep).join("/"), captureMs }));
+  try {
+    if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
+    else if (fs.existsSync(diffPath)) fs.rmSync(diffPath, { force: true });
+  } catch (e) {
+    console.error(`warning  ${diffPath}: ${errMsg(e).split("\n")[0]} — the visual diff image is not written`);
+    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${errMsg(e).split("\n")[0]})`] };
+  }
   const measured: VerifyMeasured = {
     measuredAt: new Date().toISOString(),
     renderer: "playwright-chromium",
@@ -1214,6 +1271,7 @@ export async function main(argv: string[]): Promise<number> {
     page: r.page,
     ...(driven ? { interactions: driven } : {}),
     behaviour,
+    visual,
   };
   const allNotes = [...notes, ...r.notes, ...(driveNote !== null ? [driveNote] : [])];
   // F-72: atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
@@ -1242,6 +1300,7 @@ export async function main(argv: string[]): Promise<number> {
   console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " — overflows but clipped") : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} → ${ev.ok === true ? "ok" : "ok:null"} · ${ev.detail ?? ""}`);
   console.error(behaviourLine(behaviour));
+  console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}`);
   if (statusRefused && runId !== undefined) {

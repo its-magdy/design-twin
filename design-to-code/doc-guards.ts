@@ -14,7 +14,7 @@ import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
   AuditOverridesDoc, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
-  PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, MeasuredVisual, Rect4, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReferenceImage, VerifyReferenceUnusable, VerifyReport, VisualRegion,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { isPlanExpect } from "./probe-steps.ts";
@@ -171,6 +171,27 @@ export function isMeasuredBehaviour(x: unknown): x is MeasuredBehaviour {
   return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
     && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
+// 12c: the visual diff. measured.visual is lenient like measured.behaviour (D4: it never reaches the verdict): version 1
+// and a boolean `ran`; ran:false names why; ran:true carries the two percentages and a regions list. Every other field is
+// read one by one by verify-screen (visualReport), so an older/newer probe still reports what it can.
+const isRect4 = (x: unknown): x is Rect4 => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
+/** measured.visual (12c): {version: 1, ran: false, why} or {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …}. */
+export function isMeasuredVisual(x: unknown): x is MeasuredVisual {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
+    && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+/** One measured.visual.regions[] row as report.visual copies it (a malformed row is left out, with a note). */
+export function isVisualRegion(x: unknown): x is VisualRegion {
+  return isObj(x) && isRect4(x.rect) && isNum(x.pixels) && isNum(x.pct) && isStringArray(x.built) && isStringArray(x.designed);
+}
+/** expectation.referenceImage (12c, --expect): usable with its geometry, or unusable with why. */
+export function isVerifyReferenceImage(x: unknown): x is VerifyReferenceImage | VerifyReferenceUnusable {
+  if (!isObj(x)) return false;
+  if (x.usable === false) return (x.path === null || typeof x.path === "string") && typeof x.why === "string";
+  return x.usable === true && typeof x.path === "string" && typeof x.sha256 === "string" && isObj(x.png) && isNum(x.png.w) && isNum(x.png.h)
+    && isNum(x.scale) && x.scale > 0 && isObj(x.offset) && isNum(x.offset.x) && isNum(x.offset.y) && (x.from === "index" || x.from === "export")
+    && isRect4(x.crop) && optStr(x.colorProfile);
+}
 /** report.behaviour (12b), as verify-build reads it: ran, the status counts, and the check rows. */
 export function isReportBehaviour(x: unknown): x is ReportBehaviour {
   return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary)
@@ -197,6 +218,8 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} — page overflow not measured"],
   ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], …} or {version: 1, ran: false, why} — behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: […], …} or {version: 1, ran: false, why} — the visual diff not reported"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {

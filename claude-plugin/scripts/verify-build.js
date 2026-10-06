@@ -253,6 +253,9 @@ function isBehaviourCheck(x) {
 function isMeasuredBehaviour(x) {
   return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
 function isReportBehaviour(x) {
   return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary) && ["pass", "fail", "warn", "notRun", "unsupported"].every((k) => isObj(x.summary) && isNum(x.summary[k])) && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
 }
@@ -271,7 +274,9 @@ var MEASURED_EXTRAS = [
   // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"]
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);

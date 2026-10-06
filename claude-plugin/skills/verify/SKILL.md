@@ -406,6 +406,38 @@ as if nothing was written), an opener inside a closed menu or `<details>` is `no
 ("Close", "Dismiss", "Cancel", …), and only dialogs the design or the plan names get the battery. Never pass
 `--behaviour off` — it exists for the probe's own tests, and a run without the battery is not a verification.
 
+**Visual diff** is a third, informational result. After the overlay drive and before the behaviour battery the probe captures the screen once more at the
+reference's own scale (the expectation's `referenceImage`: path, sha256, scale, offset, from `index` or `export`) and
+diffs it against the Figma reference — pixelmatch-style YIQ colour distance (threshold 0.2) with anti-aliasing
+detection and a shift tolerance of about one CSS px — over the design-size window at the build frame's top-left. The result is
+`report.visual` (percentage, hot `regions` with the `built` and `designed` nodeIds, `grid`), the
+`VISUAL (informational — never the verdict)` line and a "Visual diff" section of the markdown report; the drawn diff is
+`<S>.diff.png` beside the measured file. It is never the verdict and never a `verify-build` or Stop-hook warning; state
+the line after the behaviour one and open the PNG: start at the hot regions, then still compare the whole reference and
+build side by side — 1-px lines, light greys and tints below the 0.2 threshold, and text-only changes rarely become regions.
+The reference is read from the project that owns the expectation (the folder above `design/verify/`, so a monorepo whose
+`design/` is at the root works with `--project <app dir>`), and must stay inside its `design/export/`. A not-run diff says why: a discovery thumbnail
+(F-08) is no reference — re-pull the screen; the reference PNG changed since `--expect`; an expectation older than 12c
+has no `referenceImage` — re-run `--expect` after upgrading (the expectation sha changes once); no time left within
+`--max-time`; a reference PNG whose size is not the frame's render bounds at the reference's scale (refused at `--expect`), or
+a capture whose shape differs from the reference's — re-pull, then re-run `--expect`. A `colorProfile` note (a Display P3 document, or an iCCP profile in the reference) means colours are
+compared without colour management and colour differences are unreliable. Limits: text-edge rasteriser noise of about
+1–3 % is normal, which is why the number is never judged; no masking (animated or random content shows as a region);
+only the first frame at rest — no hover, dialog or overlay diffs; `grid "1x"` (capture and reference crop differ by
+more than 2 px) is resampled and can hide a difference; the 0.2 threshold is blind to luminance steps under about a fifth
+(light borders, background tints, disabled greys) and anti-aliasing detection absorbs much of a thin line's difference, so
+a clean diff does not clear lines or tints; a reference whose render bounds lie inside the frame box is placed at the frame's
+top-left with a note (alignment unverified); the decode and diff run after the browser closes, outside `--max-time` (bounded
+by a 4096×4096 decode cap); the capture runs before the battery, takes from its time and replays `--steps` once more;
+region attribution uses the expectation's x/y, which for some nodes are render-bounds origins (a few px off); a build frame taller or shorter than the design is compared
+only within the design window, with a note; the capture is a separate render after the drive, so subpixel layout can
+differ from the DPR-1 measurement and server state the drive changed shows; attribution needs the measurement's
+selectors (unmatched areas name only `designed` ids, TEXT without `y` has no designed rect); diffs from different
+headless channels are not comparable; at a fractional scale the outermost device-px ring is not counted for regions
+(a wrong 1-px border on the frame itself shows in the percentage but never as a region); the hot-region total includes
+rasteriser-noise fragments — read the listed regions (the largest first), not the count; the metric is not perceptual
+(no SSIM).
+
 If the agent could not render (`mode: "static-only"`), say "not rendered — reviewed statically",
 never "matches". Don't soften or drop deltas, and don't fix them here. Never write `"status":
 "verified"` into a plan — status is computed, never stored (see build-screen).

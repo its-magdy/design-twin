@@ -1325,6 +1325,13 @@ check("bundles are self-contained — no require() that leaves the plugin direct
   }
   check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
 }
+// 12c: the visual diff ports pixelmatch v6.0.0 (ISC) — its licence notice must ship with the code: visual-diff.ts carries it
+// as a `/*! … */` legal comment, which esbuild keeps (moved to the end of the file, legalComments "eof" when bundling)
+{
+  const text = fs.readFileSync(path.join(SCRIPTS, "verify-probe.js"), "utf8");
+  check("verify-probe.js carries pixelmatch's ISC licence notice and the Mapbox copyright (the visual diff's port)",
+    /ISC License/.test(text) && /Copyright \(c\) 2024, Mapbox/.test(text) && /Permission to use, copy, modify, and\/or distribute this software/.test(text));
+}
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the
 // gate step (shipped once: drift-lint.js and tokens.js). Every invocation must carry its arguments.

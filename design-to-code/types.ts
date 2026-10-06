@@ -659,6 +659,8 @@ export interface VerifyExpectation {
   hidden?: { roots: Array<{ nodeId: string; name: string; path?: string }>; ids: string[] };
   /** F-95: the plan whose interactions[] were merged (D40(7): only their hash binds — a change makes --compare incomplete) */
   planInteractions?: PlanInteractionsInput;
+  /** 12c: the reference PNG's geometry over the first frame (absent: an expectation older than 12c, or no reference) */
+  referenceImage?: VerifyReferenceImage | VerifyReferenceUnusable;
 }
 /** expectation.planInteractions: which plan, the hash of its interactions[] (plan-waivers.ts planInteractionsSha256),
  *  how many rows were merged and the ones dropped with why. */
@@ -824,6 +826,70 @@ export interface ReportBehaviour {
   /** L-6: measured.behaviour.writeBlock, copied (the write block's scope in one line) */
   writeBlock?: string;
 }
+// ---------------------------------------------------------------- 12c visual diff (D40(3) informational, D40(4) reference DPR, D48, D49)
+// Never read for the verdict (D4): compare copies it into report.visual, nothing else reads it.
+export interface Rect4 { x: number; y: number; w: number; h: number }
+/** expectation.referenceImage — the export reference PNG and how it sits over the first frame (--expect, 12c). */
+export interface VerifyReferenceImage {
+  usable: true;
+  /** project-relative posix path: "design/export/" + expectation.reference */
+  path: string; sha256: string;
+  png: { w: number; h: number };
+  /** PNG px per design px (4 decimals, as the index) */
+  scale: number;
+  /** design px: the PNG's top-left relative to the frame box's top-left (renderBox − box; ≤ 0 usually) */
+  offset: { x: number; y: number };
+  from: "index" | "export";
+  /** the frame box inside the PNG, device px, clamped */
+  crop: Rect4;
+  /** "display_p3" (design-system stamp) and/or "iCCP:<name>" — colours not colour-managed */
+  colorProfile?: string;
+}
+/** expectation.referenceImage when the reference cannot be diffed (missing, not a PNG, a discovery thumbnail — F-08) */
+export interface VerifyReferenceUnusable { usable: false; path: string | null; why: string }
+export interface VisualRegion {
+  /** frame-relative CSS px */
+  rect: Rect4;
+  /** shift-tolerant differing px on the compared grid */
+  pixels: number;
+  /** pixels / region area · 100 (1 decimal) */
+  pct: number;
+  /** measured nodeIds overlapping, smallest first, ≤5 */
+  built: string[];
+  /** expectation nodeIds overlapping by design geometry, smallest first, ≤5 */
+  designed: string[];
+}
+/** measured.visual — written by the shipped probe after measuring and driving (never exit 4, never blocks the file). */
+export type MeasuredVisual =
+  | { version: 1; ran: true;
+      reference: { path: string; sha256: string; scale: number; offset: { x: number; y: number }; from: "index" | "export"; crop: Rect4; colorProfile?: string };
+      capture: { dsf: number; clip: Rect4; frame: { nodeId: string; via: string; selector: string | null }; size: { w: number; h: number } };
+      grid: "reference" | "1x"; resampled: "none" | "build" | "both";
+      /** device px; k = device px per CSS px */
+      compared: { w: number; h: number; k: number };
+      notCompared?: { pct: number; why: string };
+      /** a cell (cellPx², device px) is hot at ≥ max(hotMinPx, hotFraction · cellPx²) shift-tolerant differing px (D59: 0.08
+       *  and 4; hotMinPx absent = a file written before that rule, when a cell was hot above 0.25 of it) */
+      threshold: number; shiftPx: number; cellPx: number; hotFraction: number; hotMinPx?: number;
+      /** YIQ + AA excluded (pixelmatch ≤7.2 count) */
+      differingPct: number;
+      shiftTolerantPct: number; aaPct: number;
+      regions: VisualRegion[]; regionsTotal: number;
+      diff: string | null; elapsedMs: number; notes: string[] }
+  | { version: 1; ran: false; why: string };
+/** report.visual — always written by --compare (ran:false + why when the measured file has no visual block). */
+export interface ReportVisual {
+  ran: boolean; why?: string; headline: string;
+  differingPct?: number; shiftTolerantPct?: number; grid?: "reference" | "1x"; scale?: number;
+  /** sha256: the reference PNG's (measured.visual.reference.sha256) — the next round's `against` needs the same one */
+  reference?: { path: string; from: "index" | "export"; colorProfile?: string; sha256?: string };
+  regions: VisualRegion[]; regionsTotal?: number;
+  diff?: { path: string; exists: boolean };
+  notes: string[];
+  /** the previous round's shiftTolerantPct beside this one's — only when both rounds diffed the same reference (sha256)
+   *  on the same grid; never verdict-changing (D18) */
+  against?: { report: string; before: number; after: number };
+}
 /** measured.build (DT-81): what the probe was served — so a stale preview/dist is visible. */
 export interface BuildIdentity {
   url: string;
@@ -884,6 +950,8 @@ export interface VerifyMeasured {
   page?: PageOverflow;
   /** 12b: behaviour/a11y checks (D4: never read for the verdict) */
   behaviour?: MeasuredBehaviour;
+  /** 12c: the visual diff against the reference PNG (D4: never read for the verdict) */
+  visual?: MeasuredVisual;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -957,6 +1025,8 @@ export interface VerifyReport {
   headline?: string;
   /** 12b: the behaviour/a11y section — a second headline, never the verdict (D4) */
   behaviour?: ReportBehaviour;
+  /** 12c: the visual diff — a third headline, informational, never the verdict (D4, D40(3)) */
+  visual?: ReportVisual;
   why?: string[];
   /** L-1: the why[] entries that say the run itself is unverified (D26) — what --accept refuses on. Absent in reports
    *  written before it was recorded (--accept then matches why[] by wording). */
@@ -1059,6 +1129,8 @@ export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   headline: string;
   /** 12b: always written (ran:false + why when the measured file has none) — never the verdict (D4) */
   behaviour: ReportBehaviour;
+  /** 12c: always written (ran:false + why when the measured file has none) — never the verdict (D4) */
+  visual: ReportVisual;
   why: string[];
   integrity: string[];
   coverage: VerifyCoverageV2;

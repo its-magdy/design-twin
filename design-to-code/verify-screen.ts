@@ -35,7 +35,7 @@ import crypto from "node:crypto";
 import { walkWithHidden } from "./hidden.ts";
 import { exportContentSha256, fileHashes, gitHead } from "./content-hash.ts";
 import { readDocFile, readJsonFile } from "./catalog-input.ts";
-import { isBuildIdentity, isInteractionEvidenceList, isMeasuredBehaviour, isMeasuredComponentList, isPageIndex, isPageOverflow, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
+import { isBuildIdentity, isInteractionEvidenceList, isMeasuredBehaviour, isMeasuredComponentList, isMeasuredVisual, isVisualRegion, isPageIndex, isPageOverflow, isPagesRootIndex, isPlan, isPlanDescope, isPlanWaiver, isProbeIdentity, isProbeReach, isVerifyExpectation, isVerifyMeasured, isVerifyReport, readableMeasured } from "./doc-guards.ts";
 import { isPassingVerdict, planInteractionsSha256, waiversHash } from "./plan-waivers.ts";
 import { actionForExpect, isPlanExpect, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { MEASURED_PHASES, STATUS_PHASES, readStatusAt, statusFile, statusMain, waitMain, writeFileAtomic } from "./verify-run.ts";
@@ -50,8 +50,8 @@ import { CANONICAL_MATCHED_BY } from "./probe-match.ts";
 import type { MatchedBy } from "./probe-match.ts";
 import type {
   Action, ArtifactCheck, BehaviourCheck, BehaviourStatus, BehaviourSummary, Box, CodeInputs, DeltaSeverity, DrawnState, IndexRow, InteractionEvidence, IrNode, JsonValue, LayoutSpec, MeasuredComponent, MeasuredNode, MeasuredStyles,
-  NotComparable, PageOverflowCoverage, Paint, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ReportBehaviour, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
-  VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
+  NotComparable, PageOverflowCoverage, Paint, Plan, PlanAnchor, PlanDescope, PlanWaiver, ProbeFrame, Reaction, ReactionTrigger, ReportBehaviour, ReportVisual, ScreenDoc, SolidPaint, VerifyDelta, VerifyCoverageV2, VerifyExpectation, VerifyInstance, VerifyInteraction,
+  VerifyInteractionResult, VerifyMeasured, VerifyFrame, VerifyReferenceImage, VerifyReferenceUnusable, VerifyAgainst, VerifyReport, VerifyReportV2, VerifyRootFrame, VerifySpec, VerifyVerdict,
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { getOrInit } from "./map-util.ts";
@@ -580,7 +580,12 @@ export interface ExpectOptions { index?: { layers: IndexRow[] } | null;
   readSibling?: ((file: string) => ScreenDoc | null | undefined) | null;
   /** F-95: the plan for this screen — its interactions[] rows are merged (source "plan") when valid, the rest dropped
    *  with why; recorded as expectation.planInteractions (only when the plan has an interactions list) */
-  plan?: { file: string; plan: Plan } | null }
+  plan?: { file: string; plan: Plan } | null;
+  /** 12c: reads the reference PNG by its export pointer (`assets/<file>`, relative to design/export/); null = not on
+   *  disk. Absent = no expectation.referenceImage is written (an in-memory caller with no export on disk). */
+  readReference?: ((pointer: string) => Uint8Array | null) | null;
+  /** 12c: design/export/design-system.json's `colorProfile` stamp (bridge doc-types DesignSystemStamp), when read */
+  colorProfile?: string | null }
 
 // D32: the OUTERMOST instances (no INSTANCE ancestor) of a screen's visible tree, by main component key, each indexed
 // by the visible NAME PATH from the instance root ("" = the root itself) → node id. A path that repeats inside the
@@ -980,6 +985,15 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
   }
 
   const f0: Partial<VerifyFrame> = frames[0] || {};
+  // 12c: the reference PNG's geometry over the first frame (D40(4), D48) — only when the caller can read the PNG
+  const readReference = opts && opts.readReference;
+  let referenceImage: VerifyReferenceImage | VerifyReferenceUnusable | undefined;
+  if (readReference) {
+    const first = roots[0];
+    const firstFile = first ? [...rootNodesByFile].find(([, rs]) => rs.includes(first))?.[0] : undefined;
+    referenceImage = referenceImageFor({ reference, root: first, sourceFile: firstFile || undefined, rows: index ? index.layers : [],
+      readReference, colorProfile: opts && typeof opts.colorProfile === "string" ? opts.colorProfile : null });
+  }
   // expectation.frame / frames[] row: the frame's id, name, size and clip (no x/y)
   const rootFrame = (f: Partial<VerifyFrame>): Partial<VerifyRootFrame> => ({ ...ifDefined("nodeId", f.nodeId), ...ifDefined("name", f.name), ...ifDefined("w", f.w), ...ifDefined("h", f.h), ...ifDefined("clip", f.clip), ...ifDefined("scroll", f.scroll) });
   return {
@@ -1011,6 +1025,103 @@ function buildExpectation(docs: ExpectInput[], opts?: ExpectOptions | null): Bui
     notComparable,
     hidden: { roots: hidden.roots, ids: hidden.ids },
     ...ifDefined("planInteractions", planInteractions),
+    ...ifDefined("referenceImage", referenceImage),
+  };
+}
+
+// ---------------------------------------------------------------- 12c: the reference image (--expect, D40(4), D48)
+// Where the export's reference PNG sits over the first frame, so the probe can render the build at the reference's own
+// scale and crop the frame box out of it. Index first (the row write-out.ts wrote for THIS png), else recomputed from
+// the export root exactly as the bridge does. A png whose scale is not the one Figma renders a reference at is a
+// discovery thumbnail (F-08) — never diffed at its own scale.
+/** PNG facts the visual diff needs (IHDR + the colour chunks before IDAT) — null when the bytes are not a PNG. A tiny
+ *  local reader: design-to-code's png.ts is the probe's decoder (verify-screen stays independent of it). */
+export function pngHeader(b: Uint8Array): { w: number; h: number; colorType: number; bitDepth: number; interlace: number; iccp: string | null } | null {
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (b.length < 33 || SIG.some((v, i) => b[i] !== v)) return null;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const name = (at: number): string => String.fromCharCode(b[at] ?? 0, b[at + 1] ?? 0, b[at + 2] ?? 0, b[at + 3] ?? 0);
+  if (dv.getUint32(8) !== 13 || name(12) !== "IHDR") return null;
+  let iccp: string | null = null;
+  // chunks: length(4) type(4) data(length) crc(4); iCCP's data starts with its NUL-terminated profile name
+  for (let at = 33; at + 8 <= b.length;) {
+    const len = dv.getUint32(at), type = name(at + 4);
+    if (type === "IDAT" || type === "IEND") break;
+    if (type === "iCCP") {
+      const start = at + 8, end = Math.min(start + len, start + 80, b.length);
+      let nameEnd = start;
+      while (nameEnd < end && b[nameEnd] !== 0) nameEnd++;
+      iccp = String.fromCharCode(...b.subarray(start, nameEnd)) || "unnamed";
+    }
+    at += 12 + len;
+  }
+  return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24] ?? 0, colorType: b[25] ?? 0, interlace: b[28] ?? 0, iccp };
+}
+const round4 = (n: number): number => Math.round(n * 10000) / 10000;
+/** `base` joined with a "/"-separated relative path, resolved, when it lies strictly inside `within` (default `base`) — else
+ *  null (F-7: a pointer or a referenceImage.path with `..` segments never reads a file outside design/export). Lexical only:
+ *  no file is touched. Shared by --expect and the probe (probe-visual.ts). */
+export function resolveInside(base: string, rel: string, within: string = base): string | null {
+  const root = path.resolve(within), file = path.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path.sep) ? file : null;
+}
+/** The scale Figma renders a root's reference at (figma-plugin/src/assets.ts collectReference: no explicit scale). */
+export const figmaReferenceScale = (w: number, h: number): number => Math.min(2, 2048 / (Math.max(w, h) || 1));
+const REFERENCE_SCALE_SLACK = 0.02;
+interface ReferenceInput {
+  reference: string | null; root: IrNode | undefined; sourceFile: string | undefined; rows: readonly IndexRow[];
+  readReference: (pointer: string) => Uint8Array | null; colorProfile: string | null;
+}
+/** expectation.referenceImage for the first frame (see the section comment). */
+export function referenceImageFor(o: ReferenceInput): VerifyReferenceImage | VerifyReferenceUnusable {
+  const { reference, root } = o;
+  const unusable = (p: string | null, why: string): VerifyReferenceUnusable => ({ usable: false, path: p, why });
+  if (!reference) return unusable(null, "the export has no reference PNG for this screen — re-pull it with its reference");
+  const p = "design/export/" + reference;
+  // F-7: confined to design/export (lexically — the root used here is any absolute one)
+  if (resolveInside(path.resolve("design", "export"), reference) === null) return unusable(p, `the reference pointer ${reference} leads outside design/export — re-pull the screen`);
+  if (!root || root.reference !== reference) return unusable(p, "the reference PNG belongs to another frame than the first one — only the first frame is diffed");
+  const box = root.box;
+  if (!box || !(num(box.w) && box.w > 0) || !(num(box.h) && box.h > 0)) return unusable(p, "the frame has no size in the export (box.w/h) — the reference cannot be placed");
+  const bytes = o.readReference(reference);
+  if (!bytes) return unusable(p, `the reference PNG ${p} is missing on disk — re-pull the screen`);
+  const png = pngHeader(bytes);
+  if (!png) return unusable(p, `the reference ${p} is not a PNG`);
+  if (png.bitDepth !== 8 || (png.colorType !== 2 && png.colorType !== 6) || png.interlace !== 0)
+    return unusable(p, `the reference ${p} is a PNG of colour type ${png.colorType} / depth ${png.bitDepth}${png.interlace ? " / interlaced" : ""} — the visual diff reads 8-bit RGB/RGBA, non-interlaced`);
+  if (!png.w || !png.h) return unusable(p, `the reference ${p} is an empty PNG`);
+  // index first: the row write-out.ts wrote for THIS png (same id, same file when both are stamped, same pointer)
+  const row = o.rows.find((r) => r.id === root.id && (!r.sourceFile || !o.sourceFile || r.sourceFile === o.sourceFile) && r.reference === reference
+    && num(r.referenceScale) && r.referenceScale > 0);
+  // The export fallback is bridge/src/write-out.ts writeScreen's formula (F-118), duplicated here — design-to-code never
+  // imports bridge runtime code; keep the two in step: refBox = renderBox || box; scale = round4(png.w / refBox.w);
+  // offset = renderBox ? renderBox − box : {0, 0}.
+  const rb = root.renderBox && num(root.renderBox.w) && root.renderBox.w > 0 ? root.renderBox : undefined;
+  const exportOffset = !rb ? { x: 0, y: 0 } : num(rb.x) && num(rb.y) && num(box.x) && num(box.y) ? { x: rb.x - box.x, y: rb.y - box.y } : null;
+  const rowOffset = row && row.referenceOffset && num(row.referenceOffset.x) && num(row.referenceOffset.y) ? { x: row.referenceOffset.x, y: row.referenceOffset.y } : null;
+  const scale = row && num(row.referenceScale) ? row.referenceScale : round4(png.w / (rb ? rb.w : box.w));
+  const offset = rowOffset ?? exportOffset;
+  if (!offset) return unusable(p, "the export root has render bounds but no position (box.x/y) — where the reference sits over the frame is unknown");
+  // F-08: a discovery thumbnail (360 px for a 1440 frame) is no export reference — Figma renders roots at s0
+  // (the PNG on disk is checked too, not only the index's number: a thumbnail written over the pointer after the pull)
+  const s0 = figmaReferenceScale(box.w, box.h), onDisk = png.w / (rb ? rb.w : box.w);
+  if (![scale, onDisk].every((v) => Math.abs(v - s0) <= REFERENCE_SCALE_SLACK * s0))
+    return unusable(p, `the reference is a ${png.w} px image, not the export reference (a discovery thumbnail, F-08) — re-pull the screen`);
+  // F-3: the PNG must be the render bounds at that scale on BOTH axes (±2 px; on the height also the scale's own rounding — it
+  // comes from png.w, up to 1 px off the true width, + round4 — so a tall narrow frame's round(h · scale) can be h/w px off:
+  // 0 extra for 1440×720, 12 for 400×5000). A PNG of another height is a stale or
+  // foreign image under the pointer — and an absurd one (150 000 px tall) would be decoded in full by the probe.
+  const refW = rb ? rb.w : box.w, refH = rb && num(rb.h) && rb.h > 0 ? rb.h : box.h;
+  const ew = Math.round(refW * scale), eh = Math.round(refH * scale), tolH = 2 + Math.floor(refH * (1 / refW + 0.00005));
+  if (Math.abs(png.w - ew) > 2 || Math.abs(png.h - eh) > tolH)
+    return unusable(p, `the reference ${p} is ${png.w}×${png.h} px, but the frame's render bounds at ${scale}x are ${ew}×${eh} — a stale or foreign PNG under the pointer; re-pull the screen, then re-run --expect`);
+  // the frame box inside the PNG, device px, clamped to the image
+  const x = Math.min(Math.max(0, Math.round(-offset.x * scale)), png.w), y = Math.min(Math.max(0, Math.round(-offset.y * scale)), png.h);
+  const crop = { x, y, w: Math.max(0, Math.min(Math.round(box.w * scale), png.w - x)), h: Math.max(0, Math.min(Math.round(box.h * scale), png.h - y)) };
+  const profiles = [o.colorProfile === "display_p3" ? "display_p3" : null, png.iccp !== null ? `iCCP:${png.iccp}` : null].filter((v): v is string => v !== null);
+  return {
+    usable: true, path: p, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), png: { w: png.w, h: png.h },
+    scale, offset, from: row ? "index" : "export", crop, ...(profiles.length ? { colorProfile: profiles.join(" + ") } : {}),
   };
 }
 
@@ -1196,6 +1307,10 @@ export interface CompareOptions {
   inputNotes?: string[] | null;
   /** L3: readableMeasured() dropped a malformed measured.behaviour — report.behaviour says so (not "no block") */
   behaviourMalformed?: boolean;
+  /** 12c: readableMeasured() dropped a malformed measured.visual — report.visual says so (not "no block") */
+  visualMalformed?: boolean;
+  /** 12c: where measured.visual.diff is now (the CLI resolves it beside the measured file when the recorded path is gone) */
+  visualDiff?: { path: string; exists: boolean } | null;
   /** D5: the plan's waivers[] — a matching delta is accepted (still listed, out of the counts) */
   waivers?: PlanWaiver[] | null;
   /** D20: the plan's descopes[] — a matching interaction is removed from the graded set */
@@ -1370,7 +1485,7 @@ const MEASURED_TOP_KEYS = {
   measuredAt: true, renderer: true, viewport: true, theme: true, artifacts: true, expectationSha256: true, mode: true, reason: true,
   nodes: true, components: true, interactions: true, consoleErrors: true, notMeasured: true, componentsMissing: true, probe: true,
   frame: true, frames: true, navigation: true, matchedByCensus: true, notes: true, runId: true, build: true,
-  tagsNotInExpectation: true, reach: true, page: true, behaviour: true,
+  tagsNotInExpectation: true, reach: true, page: true, behaviour: true, visual: true,
 } as const satisfies Record<keyof VerifyMeasured, true>;
 // (a hand-written probe's top-level `navEvents` object is its page-wide navigation log — the canonical key is
 // `navigation`; the per-interaction count F-102 reads lives on each interactions[] row, never up here)
@@ -2413,6 +2528,8 @@ function compare(expectation: Expectation, measured: VerifyMeasured | null | und
     headline,
     // 12b (D4): copied and counted, read by nothing above
     behaviour: behaviourReport(measured.behaviour, opts.behaviourMalformed === true),
+    // 12c (D4, D40(3)): copied, read by nothing above
+    visual: visualReport(measured.visual, opts.visualMalformed === true, { diff: opts.visualDiff ?? null, against: opts.against ?? null, noProbe: !isProbeIdentity(measured.probe) }),
     why: reasons,
     integrity,
     coverage,
@@ -2464,6 +2581,99 @@ function probeLine(r: Pick<VerifyReport, "inputs" | "coverage">): string {
     ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}…) · ${p.playwright.package} ${p.playwright.version} · ${p.browser.name} ${p.browser.version}`
     : "probe unknown (hand-written — not comparable round to round)";
   return `${who} · matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
+}
+
+// ---------------------------------------------------------------- 12c: visual diff (D4, D40(3) — never the verdict)
+// compare() copies measured.visual into report.visual; nothing else in compare reads it, so the verdict, why[],
+// integrity, summary, coverage, deltas and the fidelity headline are the same with or without it (D4).
+export const VISUAL_NO_BLOCK = "the measured file carries no visual diff (hand-written, or a probe older than 12c)";
+/** F-12: a measured file with no probe block (hand-written, a non-web stack) — the visual diff is a web-probe step */
+export const VISUAL_NOT_APPLICABLE = "not applicable (no web probe)";
+export const VISUAL_MALFORMED = "the measured file's visual block is malformed — ignored (see the input notes)";
+const VISUAL_PREFIX = "VISUAL (informational — never the verdict) — ";
+/** A percentage for a headline: 1 decimal, "<0.1" for a non-zero value that rounds to 0 (the probe's stderr line uses it too). */
+export const pctText = (n: number): string => (n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1));
+/** The third headline: `VISUAL (informational — never the verdict) — 0.9% of pixels differ (2.4% before 1-px shift
+ *  tolerance) · 4 hot regions · at the reference's 1.4222x (index) · design/verify/S.diff.png`, or `… — not run (<why>)`. */
+export function visualHeadline(r: Omit<ReportVisual, "headline">, shiftPx?: number, notComparedPct?: number): string {
+  if (!r.ran) return r.why === VISUAL_NOT_APPLICABLE ? VISUAL_PREFIX + VISUAL_NOT_APPLICABLE : `${VISUAL_PREFIX}not run (${r.why || "no reason recorded"})`;
+  const n = r.regionsTotal ?? r.regions.length;
+  const parts = [`${pctText(r.shiftTolerantPct ?? 0)}% of pixels differ (${pctText(r.differingPct ?? 0)}% before ${shiftPx ?? 1}-px shift tolerance)`,
+    `${n} hot region${n === 1 ? "" : "s"}`];
+  const at = r.reference ? ` (${r.reference.from})` : "";
+  parts.push(r.grid === "1x" ? `resampled to 1x (reference ${r.scale ?? "?"}x${at}) — resampling can hide a difference` : `at the reference's ${r.scale ?? "?"}x${at}`);
+  if (notComparedPct) parts.push(`${pctText(notComparedPct)}% of the design window not compared`);
+  if (r.reference && r.reference.colorProfile) parts.push(`${r.reference.colorProfile}: colours not colour-managed`);
+  if (r.diff) parts.push(r.diff.exists ? r.diff.path : `${r.diff.path} (missing)`);
+  return VISUAL_PREFIX + parts.join(" · ");
+}
+/** report.visual from measured.visual (absent → ran:false with why; malformed → ran:false, ignored). The block's fields
+ *  are read one by one (the guard is lenient). `diff` = where the diff PNG is now (the CLI resolves it beside the measured
+ *  file); absent = the recorded path, checked as-is. `against` = the previous round's report (D18). */
+export function visualReport(v: unknown, malformed = false, o?: { diff?: { path: string; exists: boolean } | null; against?: { file: string; report: VerifyReport } | null; noProbe?: boolean }): ReportVisual {
+  const none = (why: string): ReportVisual => {
+    const r = { ran: false, why, regions: [], notes: [] };
+    return { ...r, headline: visualHeadline(r) };
+  };
+  if (v === undefined) return none(malformed ? VISUAL_MALFORMED : o && o.noProbe ? VISUAL_NOT_APPLICABLE : VISUAL_NO_BLOCK);
+  if (!isMeasuredVisual(v)) return none(VISUAL_MALFORMED);
+  if (!v.ran) return none(v.why);
+  const notes: string[] = [];
+  const raw: unknown[] = v.regions;
+  const regions = raw.filter(isVisualRegion);
+  if (regions.length < raw.length) notes.push(`${raw.length - regions.length} malformed region row(s) left out`);
+  const rt: unknown = v.regionsTotal, ref: unknown = v.reference, grid: unknown = v.grid, cap: unknown = v.capture, nc: unknown = v.notCompared, sp: unknown = v.shiftPx, dp: unknown = v.diff;
+  const from: "index" | "export" | null = isJsonObject(ref) ? ref.from === "index" ? "index" : ref.from === "export" ? "export" : null : null;
+  const reference: ReportVisual["reference"] = isJsonObject(ref) && typeof ref.path === "string" && from
+    ? { path: ref.path, from, ...ifDefined("colorProfile", typeof ref.colorProfile === "string" ? ref.colorProfile : undefined), ...ifDefined("sha256", typeof ref.sha256 === "string" ? ref.sha256 : undefined) }
+    : undefined;
+  const refScale = isJsonObject(ref) && num(ref.scale) ? ref.scale : undefined;
+  const scale = refScale ?? (isJsonObject(cap) && num(cap.dsf) ? cap.dsf : undefined);
+  const g: "reference" | "1x" | undefined = grid === "reference" ? "reference" : grid === "1x" ? "1x" : undefined;
+  const notCompared = isJsonObject(nc) && num(nc.pct) ? { pct: nc.pct, why: typeof nc.why === "string" ? nc.why : "" } : undefined;
+  if (notCompared && notCompared.pct > 0) notes.push(`${pctText(notCompared.pct)}% of the design window not compared${notCompared.why ? ` (${notCompared.why})` : ""}`);
+  const own: unknown[] = Array.isArray(v.notes) ? v.notes : [];
+  notes.unshift(...own.filter((n): n is string => typeof n === "string"));
+  const diff = typeof dp === "string" && dp ? o && o.diff ? o.diff : { path: dp, exists: fs.existsSync(dp) } : undefined;
+  // D18-style: the previous round's percentage, only when it diffed the same reference on the same grid
+  let against: ReportVisual["against"];
+  const pv: unknown = o && o.against ? o.against.report.visual : undefined;
+  if (o && o.against && isJsonObject(pv) && pv.ran === true && num(pv.shiftTolerantPct) && pv.grid === g && reference && reference.sha256
+    && isJsonObject(pv.reference) && pv.reference.sha256 === reference.sha256) against = { report: o.against.file, before: pv.shiftTolerantPct, after: v.shiftTolerantPct };
+  const r: Omit<ReportVisual, "headline"> = {
+    ran: true, differingPct: v.differingPct, shiftTolerantPct: v.shiftTolerantPct, ...ifDefined("grid", g), ...ifDefined("scale", scale), ...ifDefined("reference", reference),
+    regions, regionsTotal: num(rt) ? rt : regions.length, ...ifDefined("diff", diff), notes, ...ifDefined("against", against),
+  };
+  return { ...r, headline: visualHeadline(r, num(sp) ? sp : undefined, notCompared ? notCompared.pct : undefined) };
+}
+const VISUAL_MD_ROWS = 10;
+/** The md section "Visual diff — informational, not part of the verdict". */
+function visualMarkdown(v: ReportVisual): string[] {
+  const L: string[] = ["## Visual diff — informational, not part of the verdict", ""];
+  L.push("*The pixel diff never changes the fidelity verdict above (D4, D40(3)). Font rasterisation alone differs 1–3% on text-heavy screens (Figma's renderer vs Chromium), so read the regions, not the percentage.*", "");
+  if (!v.ran) {
+    L.push(v.why === VISUAL_NOT_APPLICABLE ? "Not applicable (no web probe)." : `Not run (${mdText(v.why) || "no reason recorded"}).`, "");
+    return L;
+  }
+  L.push(`${pctText(v.shiftTolerantPct ?? 0)}% of the compared pixels differ after the shift tolerance (${pctText(v.differingPct ?? 0)}% before it; anti-aliased edge pixels excluded) · ${v.regionsTotal ?? v.regions.length} hot region(s).`, "");
+  if (v.reference) L.push(`Reference: ${mdText(v.reference.path)} at ${v.scale ?? "?"}x (geometry from the ${v.reference.from === "index" ? "export index" : "export root, recomputed"}).`, "");
+  if (v.grid === "1x") L.push("Grid: **resampled to 1x** — the capture and the reference crop differ by more than 2 px, so both were resampled to the design size (up or down); resampling can hide a difference.", "");
+  else if (v.grid) L.push("Grid: the reference's own pixel grid (the build rendered at the reference's scale).", "");
+  if (v.reference && v.reference.colorProfile) L.push(`Colour profile: ${mdText(v.reference.colorProfile)} — colours are compared without colour management, so colour differences are unreliable.`, "");
+  if (v.regions.length) {
+    L.push("| Region (x, y) | Size | Differ | Built nodes | Designed nodes |", "|---|---|---|---|---|");
+    for (const g of v.regions.slice(0, VISUAL_MD_ROWS)) {
+      L.push(`| ${Math.round(g.rect.x)}, ${Math.round(g.rect.y)} | ${Math.round(g.rect.w)}×${Math.round(g.rect.h)} | ${pctText(g.pct)}% (${g.pixels} px) | ${g.built.map(mdText).join(", ")} | ${g.designed.map(mdText).join(", ")} |`);
+    }
+    const total = v.regionsTotal ?? v.regions.length;
+    if (total > Math.min(v.regions.length, VISUAL_MD_ROWS)) L.push(`| …and ${total - Math.min(v.regions.length, VISUAL_MD_ROWS)} more (the largest are listed) | | | | |`);
+    L.push("");
+  }
+  if (v.diff) L.push(`Diff image: ${mdText(v.diff.path)}${v.diff.exists ? "" : " (missing on disk)"}`, "");
+  if (v.against) L.push(`Against the previous round (${mdText(v.against.report)}): visual: ${pctText(v.against.before)} % → ${pctText(v.against.after)} % (same reference, same grid; never the verdict).`, "");
+  for (const n of v.notes) L.push(`- ${mdText(n)}`);
+  if (v.notes.length) L.push("");
+  return L;
 }
 
 // ---------------------------------------------------------------- 12b: behaviour / a11y (D4 — never the verdict)
@@ -2578,6 +2788,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   L.push(`# Verify — ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
   L.push(`**${mdText(r.behaviour.headline)}**`, "");
+  L.push(mdText(r.visual.headline), "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} · measured ${r.measuredAt}` +
     (r.inputs && r.inputs.expectationSha256 ? ` · against expectation ${r.inputs.expectationSha256.slice(0, 12)}…` : "") + (r.inputs && r.inputs.runId ? ` · run ${r.inputs.runId}` : ""), "");
   // L-1: how the probe reached the screen (never the verdict)
@@ -2612,6 +2823,7 @@ function reportToMarkdown(r: VerifyReportV2): string {
   if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
   L.push("");
   L.push(...behaviourMarkdown(r.behaviour));
+  L.push(...visualMarkdown(r.visual));
   if (r.against) {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} → ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} → ${a.nodesExpected.after}` +
@@ -2979,7 +3191,15 @@ function main(argv: string[]): number | Promise<number> {
       console.error(planForExpect ? `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — using ${planForExpect.file}, the only one listing files[] (--compare picks the same); pass --plan <plan.json> to choose another`
         : `note  ${chosen.all.length} plans in design/plan/ describe this frame (${chosen.all.map((h) => h.file).join(", ")}) — no plan interactions merged; pass --plan <plan.json> (here and at --compare)`);
     }
-    const expOpts: ExpectOptions = { ...("doc" in idx || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}) };
+    // 12c: the reference PNG (pointer relative to design/export/) and the document's colour profile stamp
+    const readReference = (pointer: string): Uint8Array | null => {
+      const file = resolveInside(exportRoot, pointer);
+      if (file === null) return null; // (referenceImageFor refuses such a pointer before reading)
+      try { return fs.readFileSync(file); } catch { return null; }
+    };
+    const ds = readJsonOrNull(path.join(exportRoot, "design-system.json"), isJsonObject);
+    const colorProfile = ds && typeof ds.colorProfile === "string" ? ds.colorProfile : null;
+    const expOpts: ExpectOptions = { ...("doc" in idx || layers.length ? { index: { layers }, readSibling } : {}), ...(planForExpect ? { plan: planForExpect } : {}), readReference, colorProfile };
     const exp = buildExpectation(docs, Object.keys(expOpts).length ? expOpts : null);
     const pi = exp.planInteractions;
     if (pi) {
@@ -3028,6 +3248,9 @@ function main(argv: string[]): number | Promise<number> {
     console.error(`${exp.counts.nodes} node spec(s), ${exp.counts.instances} instance(s), ${exp.counts.interactions} designed interaction(s) — visible layers only; ` +
       `skipped ${hc.layers} hidden layer(s) (${hc.specsSkipped} spec(s), ${hc.instancesSkipped} instance(s), ${hc.interactionsSkipped} interaction(s)); ` +
       `${exp.counts.notComparable} design value(s) excluded by method (listed in notComparable) · expectation sha256 ${h.slice(0, 12)}…`);
+    const ri = exp.referenceImage;
+    if (ri) console.error(ri.usable ? `reference ${ri.path} ${ri.png.w}×${ri.png.h} at ${ri.scale}x (${ri.from})${ri.offset.x || ri.offset.y ? `, offset ${ri.offset.x},${ri.offset.y}` : ""}${ri.colorProfile ? ` — ${ri.colorProfile}: colours are compared without colour management` : ""}`
+      : `note  no visual diff for this screen: ${ri.why}`);
     if (!exp.counts.interactions) console.error("note  this export declares no `reactions` on visible layers — interaction coverage cannot be checked, and the report will say so rather than passing.");
     return 0;
   }
@@ -3140,12 +3363,20 @@ function main(argv: string[]): number | Promise<number> {
   // (status: null = looked and found none — a measured file naming its run then has nothing recording it, M-1)
   const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path.basename(found.file) : `${path.basename(found.file)} (live, ${found.file})`, status: found.status } }
     : measuredBase !== null ? { status: null } : {};
-  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
+  // 12c: the diff PNG the probe recorded — as recorded, else the same name beside the measured file (a published stage)
+  const vd: unknown = measured.visual && measured.visual.ran ? measured.visual.diff : undefined;
+  let visualDiff: { path: string; exists: boolean } | null = null;
+  if (typeof vd === "string" && vd) {
+    const beside = path.join(path.dirname(measuredFile), path.basename(vd));
+    visualDiff = fs.existsSync(vd) ? { path: vd, exists: true } : fs.existsSync(beside) ? { path: beside.split(path.sep).join("/"), exists: true } : { path: vd, exists: false };
+  }
+  const rep = compare(expectation, measured, { ...statusOpt, ...(readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}), ...(readable.dropped.includes("visual") ? { visualMalformed: true } : {}), ...(visualDiff ? { visualDiff } : {}), ...(readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}), ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...(planHit ? { plan: planHit } : {}) });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
   console.error(probeLine(rep));
   console.error(rep.behaviour.headline);
+  console.error(rep.visual.headline);
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) — measured against another screen or an older expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);

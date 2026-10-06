@@ -16,6 +16,7 @@ export in layers (structure → numbers → pixels), fix the largest gap first, 
 Most false diffs come from the render, not the code:
 - Size = the root `box.w × box.h` of the exported frame (points/dp = Figma px at 1x). Match the
   reference's scale: the `.png` is usually exported at 2x — compare at the same scale or downsample.
+  The web probe renders at the reference's scale itself (`referenceImage` in the expectation) — nothing to set up there.
 - Fonts loaded before capture (web: `await document.fonts.ready`; mobile: bundled fonts registered).
   A missing font makes every text box differ — fix that first.
 - Animations and transitions off; carets hidden; images decoded; deterministic sample data equal to the
@@ -79,7 +80,11 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    and `padding`, `font.size`/line height/letter spacing (after unit conversion), `radius`, stroke
    width, colors (resolve the token; compare hex). Feed back concrete deltas — "title line box 34→28pt",
    "card gap 12→16" — not "spacing looks off".
-3. **Pixels.** Side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
+3. **Pixels.** Web: the probe diffs its render against the reference — read `report.visual` and open
+   `<S>.diff.png`; start at the hot regions, then still compare the whole reference and build side by side
+   (1-px lines, light greys/tints and text-only changes rarely become regions). The diff is pixelmatch-style
+   YIQ with anti-aliasing detection and shift tolerance; informational, never the verdict; a 1–3 % text-edge
+   floor is normal. Other stacks: side-by-side or overlay against `design/<screen>.png` (or a fresh `--screenshot <id>`
    for one component). Look first for clipped or overlapping text and missing elements, then
    alignment and spacing, then color and effects. When a pixel-diff tool is available, align the images
    before diffing so a 1px global offset doesn't drown real differences; prefer a perceptual/SSIM
