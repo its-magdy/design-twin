@@ -442,7 +442,9 @@ Copy this checklist into your notes and keep it updated:
        has `stroke="#D4D4D4"` baked in and cannot serve a Light theme. Do not edit the asset (the
        producer owns that file and a re-pull overwrites it) and do not redraw it: swap `fill`/`stroke`
        for `currentColor` **at render time** in one shared icon wrapper, and let the colour come from
-       the token on the parent. A glyph NOT in that list — a red trash, a green tick, a brand mark —
+       the token on the parent. A tint drawn as a CSS mask (`background: currentColor` plus `mask-image`) vanishes
+       under forced colours: add `forced-color-adjust: none`, or `background-color: CanvasText` under
+       `@media (forced-colors: active)`; an inline SVG with `fill="currentColor"` needs nothing. A glyph NOT in that list — a red trash, a green tick, a brand mark —
        carries meaning in its colour, so leave it alone and give the wrapper an opt-out for it.
      - **`duplicates`** — byte-identical files under different names. Import one.
    - **Instances** — before writing anything for an instance's sublayer, check `propRefs`,
@@ -574,7 +576,7 @@ Copy this checklist into your notes and keep it updated:
      "not rendered — reviewed statically", never as a verified match.
    - **Record the evidence in the plan** under `verification`. After a render: `{mode:"rendered",
      renderer, artifacts:[<paths on disk>], deltas:[<residual differences, [] if none>],
-     coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations}?}` — never an `a11y`
+     coverage:{rendered:[…], notChecked:[{what, why}]}, a11y:{tool, violations, warnings, report}?}` (copied from `report.behaviour.summary`) — never an `a11y`
      result beside an a11y entry in `notChecked` (the hook flags a block that contradicts itself).
      Nothing can render: `{mode:"static-only", reason:<what you checked for and didn't find>}`.
    - **The `Stop` hook** (`verify-build.js`, as your turn ends) checks the plans your session wrote

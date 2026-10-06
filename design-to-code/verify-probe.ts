@@ -12,7 +12,7 @@
 //
 //   verify-probe.js --expected design/verify/<S>.expected.json --url <url> [--out design/verify/<S>]
 //                   [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]
-//                   [--run <id>] [--max-time <ms>] [--steps <steps.json | plan.json>]
+//                   [--run <id>] [--max-time <ms>] [--steps <steps.json | plan.json>] [--behaviour on|off]
 //   verify-probe.js --check [--project <dir>]
 //
 // Playwright is the PROJECT's (D2): resolved with createRequire(<project>/package.json) — playwright, then
@@ -33,6 +33,13 @@
 // load (L-1); a step that fails in the measurement pass is exit 4 with nothing written. The measurement pass also
 // reads the page's horizontal overflow (measured.page, D43). After it, the overlay interactions are DRIVEN, each on a
 // fresh page (probe-drive.ts, F-70/F-95/F-117) — evidence only, never a reason to exit 4 (measured.interactions).
+//
+// Group 12b: after the drive, the behaviour/accessibility checks run (probe-behaviour.ts) — landmarks, the PROJECT's
+// axe-core when it has one (resolved through the same project require as Playwright, injected with page.evaluate, never
+// bundled), a Tab walk, forced colours, 1024/320 px widths and a keyboard/scroll battery on modal overlays — each unit on a
+// fresh page within min(90 s, what --max-time leaves less 20 s). They are measured.behaviour (+ <out>.forced-colors.png), never
+// the fidelity verdict (D4) and never an exit 4: a failure is {ran:false, why}. `--behaviour off` skips them (D45). The
+// browser is closed capped (CDP Browser.close, then close): the units run arbitrary page code.
 //
 // Navigation accounting (D19, facts-12a §1): a navigation is a main-frame document LOAD (a reload, a cross-document
 // link) — never a `framenavigated`, which also fires for same-document history changes (pushState, a hash). Loads the
@@ -58,9 +65,10 @@ import { isVerifyExpectation } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { cliParse, scriptCmd, shellArg } from "./cli-args.ts";
 import { isJsonObject } from "./types.ts";
-import type { BuildIdentity, InteractionEvidence, MeasuredComponent, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
+import type { BuildIdentity, InteractionEvidence, MeasuredBehaviour, MeasuredComponent, MeasuredNode, PageOverflow, ProbeFrame, ProbeIdentity, ProbeNavigation, ProbeNotMeasured, ProbeStep, VerifyMeasured, VerifySpec } from "./types.ts";
 import { describeStep, parseSteps, stepsSha256 } from "./probe-steps.ts";
 import { StepError, drivable, driveBudget, driveInteractions, readPageOverflow, submitGuard } from "./probe-drive.ts";
+import { CLOSE_STEP_CAP_MS, CUT_SETTLE_MS, PS_CAP_MS, WRITE_MARGIN_MS, behaviourBudget, runBehaviour } from "./probe-behaviour.ts";
 import { gitHead } from "./content-hash.ts";
 import { RunCacheUnwritable, liveStatusFile, sha256Of, stageDirOf, writeFileAtomic, writeStatus } from "./verify-run.ts";
 import type { StatusWrite } from "./verify-run.ts";
@@ -98,9 +106,15 @@ function browserHint(dir: string): string {
   return "npx playwright install chromium";
 }
 
+/** The project's require (D2, D40(5)): the ONE createRequire call site — Playwright and axe-core both resolve through it,
+ *  never from this script's own location (the bundle test allows exactly one). */
+export function projectRequire(dir: string): ReturnType<typeof createRequire> {
+  return createRequire(path.join(path.resolve(dir), "package.json"));
+}
+
 export function resolvePlaywright(dir: string): Resolution {
   const abs = path.resolve(dir);
-  const req = createRequire(path.join(abs, "package.json"));
+  const req = projectRequire(abs);
   const tried: string[] = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
     let file: string;
@@ -114,6 +128,20 @@ export function resolvePlaywright(dir: string): Resolution {
   }
   const pnp = fs.existsSync(path.join(abs, ".pnp.cjs")) ? " — this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> …`" : "";
   return { ok: false, reason: `no playwright package resolvable from ${path.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+}
+
+/** 12b (D40(5)): the PROJECT's axe-core — never bundled, never installed; absent → the a11y.axe check is not-run. */
+export type AxeResolution = { ok: true; source: string; version: string; file: string } | { ok: false; why: string };
+export function resolveAxe(dir: string): AxeResolution {
+  const req = projectRequire(dir);
+  let file: string;
+  try { file = req.resolve("axe-core"); } catch { return { ok: false, why: "axe-core not installed in the project (optional)" }; }
+  let mod: unknown;
+  try { mod = req("axe-core"); } catch (e) { return { ok: false, why: `axe-core failed to load (${errMsg(e).split("\n")[0]})` }; }
+  if (typeof mod !== "object" || mod === null || !("source" in mod) || typeof mod.source !== "string") return { ok: false, why: "axe-core resolved, but it exports no source" };
+  let version = "version" in mod && typeof mod.version === "string" ? mod.version : "unknown";
+  try { const pj: unknown = req("axe-core/package.json"); if (isJsonObject(pj) && typeof pj.version === "string") version = pj.version; } catch { /* exports without ./package.json */ }
+  return { ok: true, source: mod.source, version, file };
 }
 
 function rendererUnavailable(reason: string, hint: string): number {
@@ -165,13 +193,24 @@ function gitState(dir: string): { gitHead: string | null; gitDirty: boolean | nu
 
 // ---------------------------------------------------------------- readiness + navigation (DT-39, D19)
 // Injected before any page script, on every navigation: no transitions, no animations, no caret — so what
-// is measured and screenshotted is the resting state — plus a per-document token, which is how a reload
-// (a NEW document) is told apart from a same-document history change.
-const INIT_SCRIPT = `(() => {
+// is measured and screenshotted is the resting state — and no smooth scrolling (review 6 H-4, D4: a scroll-behavior:smooth
+// box animates every scroll the probe or Playwright makes — scrollTop, scrollTo, scrollIntoView without a behavior; MDN
+// scroll-behavior — so a rect read after one would depend on timing; scroll-behavior changes no layout), plus a per-document
+// token, which is how a reload (a NEW document) is told apart from a same-document history change.
+// 12b review 8 L-1: the CSS goes in twice — as a <style> (what a page without a CSP sees, as before) and as a constructed sheet in
+// document.adoptedStyleSheets from the document's start (a page whose CSP style-src has no 'unsafe-inline' blocks the injected
+// <style>; by experiment, Chromium does not block a constructed sheet — CSP3 §6.1.13 gates CSSOM's insertRule / cssText on
+// 'unsafe-eval', and MDN notes no browser enforces that). Put back at DOMContentLoaded and load when the page replaced the
+// array by then; a page replacing it later drops it (and under such a CSP then has its own transitions).
+export const INIT_SCRIPT = `(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
-  const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important}";
-  const add = () => { const s = document.createElement("style"); s.setAttribute("data-dt-probe", ""); s.textContent = css; (document.head || document.documentElement).appendChild(s); };
+  const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
+  let sheet = null;
+  const adopt = () => { try { if (!sheet) { sheet = new CSSStyleSheet(); sheet.replaceSync(css); } if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]; } catch (e) {} };
+  adopt();
+  const add = () => { adopt(); const s = document.createElement("style"); s.setAttribute("data-dt-probe", ""); s.textContent = css; (document.head || document.documentElement).appendChild(s); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add, { once: true }); else add();
+  addEventListener("load", adopt, { once: true });
 })();`;
 const QUIET_MS = 500, QUIET_CAP_MS = 10_000, POLL_MS = 100;
 /** Playwright errors that mean the document went away under an evaluate/locator call. */
@@ -617,6 +656,9 @@ interface PassResult {
   page: PageOverflow;
   /** where the page was when it was measured (after the steps) */
   url: string;
+  /** 12b H-2 (D50): the data-dt-node ids on a visible element with a box at rest (outside closed dialogs) — the fingerprint the
+   *  behaviour units' pages are compared with; never written to the measured file */
+  visibleTags: string[];
 }
 
 /** DT-47: every data-dt-node on a VISIBLE element that names no expected spec/instance/hidden id and no frame —
@@ -756,6 +798,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
       tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId))),
       page: pageOverflow,
       url: reachedUrl,
+      visibleTags: [...new Set(collected.tagged.flatMap((c) => (c.dt !== null && c.flags.box && c.flags.visible && !c.flags.inClosedDialog ? [c.dt] : [])))],
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
@@ -866,12 +909,21 @@ export async function runProbe(browser: Browser, o: ProbeOptions): Promise<Probe
   }
 }
 
+/** The probe's one-line behaviour summary (stderr) — never the verdict (D4). */
+export function behaviourLine(b: MeasuredBehaviour): string {
+  if (!b.ran) return `behaviour not run (${b.why})`;
+  const n = (st: string): number => b.checks.filter((c) => c.status === st).length;
+  return `behaviour (not the fidelity verdict) ${n("fail")} fail · ${n("warn")} warn · ${n("pass")} pass · ${n("not-run")} not run${n("unsupported") ? ` · ${n("unsupported")} unsupported` : ""}` +
+    ` · axe ${b.axe.ran ? `axe-core ${b.axe.version}` : `not run (${b.axe.why})`} · ${Math.round(b.elapsedMs / 1000)}s of ${Math.round(b.budgetMs / 1000)}s${b.cut ? " — CUT by the time budget" : ""}` +
+    (b.artifacts.length ? ` · ${b.artifacts.join(", ")}` : "");
+}
+
 // ---------------------------------------------------------------- CLI
 const USAGE =
   "usage:\n" +
   `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
   "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
-  "      [--steps <steps.json | plan.json>]\n" +
+  "      [--steps <steps.json | plan.json>] [--behaviour on|off]\n" +
   "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path → alias →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
   "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
@@ -888,13 +940,47 @@ const USAGE =
   "      (nothing written). Recorded as measured.reach.\n" +
   "      After measuring, the expectation's overlay interactions (on_click/on_press overlay/swap, plan expect:\"dialog\") are\n" +
   "      driven, each on a fresh page: measured.interactions (evidence; ok:true or ok:null, never false).\n" +
+  "      Then the behaviour/accessibility checks run, each unit on a fresh page within min(90 s, what --max-time leaves less\n" +
+  "      20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,\n" +
+  "      1024/320 px widths, and the keyboard/scroll battery on modal overlays — measured.behaviour (+ <out>.forced-colors.png),\n" +
+  "      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).\n" +
   `  ${scriptCmd("verify-probe")} --check [--project <dir>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
   "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step\n" +
   "      failed (nothing written).";
 
-const MAX_TIME_DEFAULT = 180_000, CLOSE_CAP_MS = 10_000;
+const MAX_TIME_DEFAULT = 180_000;
+
+/** Close the browser even when a page never yields: browser.close() closes each page first, and a page whose script never
+ *  yields does not close — so ask the browser PROCESS to quit (CDP Browser.close, Chromium), then close the handle; each
+ *  step capped at CLOSE_STEP_CAP_MS (unref'd caps: a pending cap must not keep the process alive once the browser is gone).
+ *  M7 + O-1: then whatever browser child of this process is still running is SIGKILLed — a wedged one (it answers nothing,
+ *  still connected), and one that is merely slow to go: after Browser.close the handle is disconnected at once, but under
+ *  load the process can take seconds to minutes to exit, and this process waits on its pipes past --max-time. The probe
+ *  launched it and the browser was told to quit, so no page can be live after that and measured.json may be written. With
+ *  no child left it kills nothing (one `ps`, capped at PS_CAP_MS — inside the behaviour reserve). */
+export async function closeCapped(b: Pick<Browser, "newBrowserCDPSession" | "close">, capMs = CLOSE_STEP_CAP_MS): Promise<void> {
+  const cap = (): Promise<void> => sleep(capMs, undefined, { ref: false });
+  await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => undefined), cap()]);
+  await Promise.race([b.close().catch(() => undefined), cap()]);
+  killBrowserChildren();
+}
+/** SIGKILL this process's browser children (chromium / headless_shell) — the last step of closeCapped. A POSIX-only, best-effort
+ *  fallback: on Windows, or where `ps -A -o pid=,ppid=,command=` is missing or fails (BusyBox), it does nothing and never throws
+ *  (the wedged browser is then left as before). Only DIRECT children of this process whose command names chrom/headless are
+ *  killed — never the user's own browser. Its `ps` is capped at PS_CAP_MS, which the behaviour reserve includes. */
+function killBrowserChildren(): void {
+  if (process.platform === "win32") return;
+  try {
+    const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", timeout: PS_CAP_MS });
+    for (const line of String(r.stdout || "").split("\n")) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (!m || Number(m[2]) !== process.pid || !/chrom|headless/i.test(m[3] ?? "")) continue;
+      try { process.kill(Number(m[1]), "SIGKILL"); } catch { /* gone already */ }
+    }
+  } catch { /* no ps: nothing more to do */ }
+}
 
 export async function main(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
@@ -902,7 +988,7 @@ export async function main(argv: string[]): Promise<number> {
   const OPTIONS = {
     expected: { type: "string" }, url: { type: "string" }, out: { type: "string" }, ready: { type: "string" }, viewport: { type: "string" },
     project: { type: "string" }, position: { type: "boolean" }, timeout: { type: "string" }, check: { type: "boolean" }, help: { type: "boolean", short: "h" },
-    run: { type: "string" }, "max-time": { type: "string" }, steps: { type: "string" },
+    run: { type: "string" }, "max-time": { type: "string" }, steps: { type: "string" }, behaviour: { type: "string" },
   } as const;
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: false }));
   const project = path.resolve(f.project ?? ".");
@@ -910,6 +996,10 @@ export async function main(argv: string[]): Promise<number> {
   if (!Number.isFinite(timeout) || timeout <= 0) { console.error(`verify-probe: --timeout must be a positive number of milliseconds\n${USAGE}`); return 2; }
   const maxTime = f["max-time"] === undefined ? MAX_TIME_DEFAULT : Number(f["max-time"]);
   if (!Number.isFinite(maxTime) || maxTime <= 0) { console.error(`verify-probe: --max-time must be a positive number of milliseconds\n${USAGE}`); return 2; }
+  // D45: a visible switch (never used by the skills) — the measured file then says behaviour did not run and why
+  if (f.behaviour !== undefined && f.behaviour !== "on" && f.behaviour !== "off") { console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'\n${USAGE}`); return 2; }
+  if (f.behaviour !== undefined && f.check) { console.error(`verify-probe: --behaviour does not apply to --check\n${USAGE}`); return 2; }
+  const behaviourOn = f.behaviour !== "off";
   if (f.run !== undefined && (f.check || !/^[\w.:-]+$/.test(f.run))) { console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}\n${USAGE}`); return 2; }
 
   if (!f.check) {
@@ -976,7 +1066,7 @@ export async function main(argv: string[]): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const runDeadline = Date.now() + maxTime;
   const watchdog = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), maxTime); });
-  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null }> => {
+  const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour; forcedPng: Buffer | null }> => {
     const launched = await launch(res, project);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
@@ -1002,18 +1092,54 @@ export async function main(argv: string[]): Promise<number> {
     // F-70/F-95: drive the overlay interactions, each on a fresh page, after the measurement pass and before the
     // browser closes — within min(60 s, what --max-time leaves less 15 s). Never blocks the measured file, never exit 4.
     let driven: InteractionEvidence[] | null = null, driveNote: string | null = null;
+    /** the browser stopped answering while driving: no behaviour, and it is killed at once (no capped close steps to wait for) */
+    let wedged = false;
     const rows = run.kind === "ok" ? drivable(expectation) : [];
     if (rows.length) {
       try {
-        driven = await driveInteractions(browser, {
-          rows, viewport, timeout, initScript: INIT_SCRIPT, budgetMs: driveBudget(Date.now(), runDeadline),
+        // 12a's own budget (D4, M-1: its evidence never depends on 12b). A drive that has not returned by its budget + a cut row's
+        // settle + 1 s — or by what the deadline leaves for killing a wedged browser and writing — means the browser stopped
+        // answering: the finished measurement is still written (exit 0), with no interaction evidence and a note
+        const driveMs = driveBudget(Date.now(), runDeadline);
+        const hung = Symbol("drive hung");
+        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS + 1000, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
+        const r = await Promise.race([driveInteractions(browser, {
+          rows, viewport, timeout, initScript: INIT_SCRIPT, budgetMs: driveMs,
           reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); },
-        });
+        }), sleep(hungAt, hung, { ref: false })]);
+        if (r === hung) { wedged = true; driveNote = "driving the interactions did not finish within its budget (the browser stopped answering) — none recorded"; }
+        else driven = r;
       } catch (e) {
         driveNote = `driving the interactions failed (${errMsg(e).split("\n")[0]}) — none recorded`;
       }
     }
-    await browser.close().catch(() => undefined);
+    // 12b: the behaviour/a11y checks — after the measurement pass and the drive, each unit on a fresh page, within
+    // min(90 s, what --max-time leaves less 20 s). Never exit 4, never blocks the measured file: a failure is {ran:false, why}.
+    let behaviour: MeasuredBehaviour = { version: 1, ran: false, why: "--behaviour off" };
+    let forcedPng: Buffer | null = null;
+    if (wedged && behaviourOn) behaviour = { version: 1, ran: false, why: "the browser stopped answering while the interactions were driven" };
+    else if (run.kind === "ok" && behaviourOn) {
+      const budgetMs = behaviourBudget(Date.now(), runDeadline);
+      if (budgetMs <= 0) behaviour = { version: 1, ran: false, why: "no time left within --max-time after measuring and driving" };
+      else {
+        try {
+          const axe = resolveAxe(project);
+          const r = await runBehaviour(browser, {
+            expectation, driven, viewport, timeout, initScript: INIT_SCRIPT, budgetMs, measuredTags: run.result.visibleTags,
+            reach: async (page) => { await reachPage(page, attachNavLog(page), probeOpts); },
+            axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
+            forcedPng: (outBase + ".forced-colors.png").split(path.sep).join("/"),
+          });
+          behaviour = r.behaviour;
+          forcedPng = r.forcedPng;
+        } catch (e) {
+          behaviour = { version: 1, ran: false, why: `the behaviour checks failed (${errMsg(e).split("\n")[0]})` };
+        }
+      }
+    }
+    // capped (a page that never yields does not close): the 12b units run arbitrary page code
+    if (wedged) { killBrowserChildren(); await Promise.race([browser.close().catch(() => undefined), sleep(1000, undefined, { ref: false })]); }
+    else await closeCapped(browser);
 
     if (held.timedOut) return 4; // the watchdog closed it — its own message says so
     if (run.kind === "browser-gone") {
@@ -1043,7 +1169,7 @@ export async function main(argv: string[]): Promise<number> {
         "  navigation log:\n" + run.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
       return 4;
     }
-    return { run, identity, driven, driveNote };
+    return { run, identity, driven, driveNote, behaviour, forcedPng };
   })();
   const first = await Promise.race([work, watchdog]);
   clearTimeout(timer);
@@ -1051,20 +1177,13 @@ export async function main(argv: string[]): Promise<number> {
     held.timedOut = true;
     work.catch(() => undefined); // it rejects once its browser is gone
     const b = held.browser;
-    // browser.close() closes each page first, and a page whose script never yields does not close — so ask the
-    // browser PROCESS to quit (CDP Browser.close, Chromium), then close the handle; each step capped
-    if (b) {
-      // (unref'd caps: a pending cap must not keep the process alive once the browser is gone)
-      const cap = (): Promise<void> => sleep(CLOSE_CAP_MS, undefined, { ref: false });
-      await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => undefined), cap()]);
-      await Promise.race([b.close().catch(() => undefined), cap()]);
-    }
+    if (b) await closeCapped(b);
     console.error(`verify-probe: timed out after ${maxTime / 1000}s (--max-time) — the browser was closed, nothing written.\n` +
       "  a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).");
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
-  const { run, identity, driven, driveNote } = first;
+  const { run, identity, driven, driveNote, behaviour, forcedPng } = first;
   if (!expectation || !expBytes || !f.expected || !f.url) return 2; // (--check returned above)
 
   // Everything below runs after browser.close(): nothing is written while the page is live (a write into the
@@ -1094,11 +1213,20 @@ export async function main(argv: string[]): Promise<number> {
     ...(stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {}),
     page: r.page,
     ...(driven ? { interactions: driven } : {}),
+    behaviour,
   };
   const allNotes = [...notes, ...r.notes, ...(driveNote !== null ? [driveNote] : [])];
   // F-72: atomic, the picture first — a reader that sees measured.json sees the screenshot it lists
   const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
   writeFileAtomic(png, r.png);
+  // 12b: listed in behaviour.artifacts only (never measured.artifacts: compare's artifact check stays verdict-neutral). L4: a run
+  // that takes none removes an earlier run's (that exact path) — it would sit unlisted next to a measured file that never saw
+  // it. Never a reason to lose measured.json (D4): a failure here is a note on stderr.
+  const forcedPath = outBase + ".forced-colors.png";
+  try {
+    if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
+    else if (fs.existsSync(forcedPath)) fs.rmSync(forcedPath, { force: true });
+  } catch (e) { console.error(`warning  ${forcedPath}: ${errMsg(e).split("\n")[0]} — the behaviour screenshot is not written`); }
   writeFileAtomic(outBase + ".measured.json", measuredText);
   // the measured file stays when this write is refused: the run's status still says measuring, so say what records it
   const statusRefused = runId !== undefined && !status({ runId, phase: "measured", by: "verify-probe", detail: `measured ${r.nodes.length} of ${r.nodes.length + r.notMeasured.length} spec(s)`,
@@ -1113,6 +1241,7 @@ export async function main(argv: string[]): Promise<number> {
   const pg = r.page;
   console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? (pg.scrollable ? ` — scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " — overflows but clipped") : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} → ${ev.ok === true ? "ok" : "ok:null"} · ${ev.detail ?? ""}`);
+  console.error(behaviourLine(behaviour));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}`);
   if (statusRefused && runId !== undefined) {

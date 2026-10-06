@@ -23,6 +23,14 @@
 // to --timeout), the measured-anyway document's own late load, same-URL links handled in place (+ a reload / a late
 // navigation away), a target=_top refresh link, the real "kept navigating" duration.
 // Review 6's (fix 6): a page going on to a server that never answers before its load, a client redirect's late own load.
+// 12b review 6's (fix 7): own content the D51 check missed (a reveal-on-scroll label, escaping positioned labels, an empty
+// ::before logo or status dot, a mask icon, a swatch, a label 8000 elements deep), cell chrome it must not count (a hover tint,
+// a filled wrapper, an off-document sr-only label), controls under a focusable glyph, <object> / <embed>, a smooth app shell.
+// 12b review 7's (fix 8, owner D52: own content by pixels): hover-revealed Deletes, dots / swatches / bands / tiles / form widgets
+// drawn by pseudos, borders, shadows and fills, an out-of-flow reveal, overflow-clip-margin, a selection stripe, a tall card in a
+// scrolled app shell, the D47 cells that stay driven, and a page that reads the scroll it painted (&painted=1).
+// 12b review 8's (fix 9, owner D53): clip-path / background-clip fills, a shadow host's dot, the container's own marker, a hug
+// wrapper's shadow ring, a layered !important, a control mounted on hover, a foreign ticker, transition:all under a strict CSP.
 //
 // D3: needs the repo's devDependency `playwright` + chromium. Locally an unavailable renderer prints SKIPPED; in CI
 // (CI=true) that is a failure.  Run with:  node test/verify-probe-drive-e2e.test.ts
@@ -104,7 +112,8 @@ const server = http.createServer((req, res) => {
   const n = (seen.get(req.url || "") ?? 0) + 1;
   seen.set(req.url || "", n);
   if (u.searchParams.get("mode") === "slow-reach" && n > 1) return; // held until the probe gives up (closed by finish())
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  // fix 8: &csp=1 → a strict style CSP (an injected <style> without the page's nonce is blocked)
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...(u.searchParams.get("csp") ? { "content-security-policy": "style-src 'nonce-dtcsp'" } : {}) });
   res.end(fs.readFileSync(file));
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -122,7 +131,9 @@ const run = (script: string, args: string[]): Promise<Run> => new Promise((resol
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
   p.on("close", (status) => resolve({ status, stdout, stderr }));
 });
-const probe = (args: string[]): Promise<Run> => run(PROBE, [...args, "--project", ROOT]);
+// 12b (D45): these runs check reaching, measuring and driving — `--behaviour off` keeps them fast, except where a run says
+// `--behaviour on` (test/verify-probe-behaviour-e2e.test.ts runs the behaviour checks themselves)
+const probe = (args: string[]): Promise<Run> => run(PROBE, [...args, ...(args.includes("--check") || args.includes("--behaviour") ? [] : ["--behaviour", "off"]), "--project", ROOT]);
 const vs = (args: string[]): Promise<Run> => run(VS, args);
 const finish = (): void => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); };
 const out = (name: string): string => path.join("design", "verify", name);
@@ -207,6 +218,16 @@ check("[D41] 15 run-bound (--run, done, compare without --interactions) → the 
 check("[D43] 14 --compare at the design width: pageOverflow ok, no overflowX delta", rep2?.coverage?.pageOverflow === "ok" && !(rep2.deltas || []).some((d) => d.field === "overflowX"));
 check("[L-1] --compare: inputs.reach (2 steps, matches the plan's navigate)", rep2?.inputs?.reach?.steps === 2 && rep2.inputs.reach.matchesPlan === true);
 
+// D4 (12b): the behaviour battery runs AFTER the drive, in its own pages — the same run with behaviour on records the same
+// interaction evidence (hover-revealed, role=dialog, untagged, dead, reloading, covered, plan-only, panel openers)
+const bOn = out("BedsOn");
+const rOn = await probe(["--expected", EXPECTED, "--url", url(), "--steps", "steps.json", "--ready", READY, "--out", bOn, "--behaviour", "on"]);
+const mOn = read(bOn);
+if (rOn.status !== 0) console.log(rOn.stderr);
+check("[D4] 13 --behaviour on: exit 0, measured.behaviour ran, and measured.interactions identical to the --behaviour off run's",
+  rOn.status === 0 && mOn?.behaviour?.ran === true && (m2?.interactions || []).length === 8 && JSON.stringify(mOn.interactions) === JSON.stringify(m2?.interactions)
+  && m2?.behaviour?.ran === false);
+
 // a step that loads a page (goto) is the probe's own navigation; a small --max-time leaves no driving budget
 const b3 = out("GotoSteps");
 const r3 = await probe(["--expected", EXPECTED, "--url", url(), "--out", b3, "--steps", "steps-goto.json", "--ready", READY, "--max-time", "25000"]);
@@ -216,6 +237,16 @@ check("[L-1] 2b a goto step (a document load) → exit 0, reach 3 steps, afterIn
 const cut3 = (m3?.interactions || []).filter((i) => i.cut === "budget");
 check("[D41] budget: --max-time 25 s leaves ≤ 10 s of driving → rows cut: ok:null, cut budget, 'not-run: time budget'; the measured file still written",
   cut3.length > 0 && cut3.every((i) => i.ok === null && i.detail === "not-run: time budget"));
+// M-1 (12b fix 2, D4): the drive keeps 12a's own budget (min(60 s, --max-time left − 15 s)) whatever 12b reserves after it — at a
+// small --max-time the first rows are still driven as on af80061 (--behaviour off: no 12b work at all)
+for (const [mt, ids] of [["25000", ["70:44"]], ["30000", ["70:44", "70:45"]]] as const) {
+  const bm = out(`Budget${mt}`);
+  const rm = await probe(["--expected", EXPECTED, "--url", url(), "--out", bm, "--steps", "steps.json", "--ready", READY, "--max-time", mt]);
+  const mm = read(bm);
+  if (rm.status !== 0) console.log(rm.stderr);
+  check(`[M-1/D4] --max-time ${Number(mt) / 1000} s, --behaviour off: ${ids.join(" and ")} driven ok:true as 12a drives them (the drive's budget never shrinks for 12b)`,
+    rm.status === 0 && ids.every((id) => ix(mm, id)?.ok === true && ix(mm, id)?.cut === undefined));
+}
 
 // facts-12a §1: a same-document URL rewrite after load (replaceState) is no navigation — only a document load is
 const b9 = out("Replace");
@@ -331,6 +362,219 @@ check("[B3] disabled openers (aria-disabled on it / on an ancestor, [disabled]) 
 check("[L3] a typeless <button> in a <form> as the opener → ok:null 'opener would submit a form', not clicked",
   ix(m15, "70:48")?.ok === null && /^opener would submit a form/.test(ix(m15, "70:48")?.detail || "") && ix(m15, "70:48")?.activation === undefined);
 check(`[B3/L3] no opener's handler ran a write (server saw: ${mutations.join(", ") || "nothing"})`, r15.status === 0 && mutations.length === 0);
+
+// 12b review 3 L-2: the drive's click point (the opener's centre) is another control inside the opener → never clicked
+const bCC = out("CardCentre");
+mutations.length = 0;
+const rCC = await probe(["--expected", EXPECTED, "--url", edge("card-centre"), "--out", bCC, "--max-time", "90000"]);
+const mCC = read(bCC);
+if (rCC.status !== 0) console.log(rCC.stderr);
+check("[L-2] a card opener whose centre is its own Delete button (a 2nd control beside it) → not driven: ok:null 'the opener's click point is another control inside it (<button aria-label=\"Delete bed\">) — tag that control or the opener's own clickable element', no activation",
+  ix(mCC, "70:47")?.ok === null && /^the opener's click point is another control inside it \(<button aria-label="Delete bed">\) — tag that control or the opener's own clickable element/.test(ix(mCC, "70:47")?.detail || "") && ix(mCC, "70:47")?.activation === undefined);
+check("[L-2/D47] a cell whose ONLY focusable is its centred icon button → that button is the opener: driven, ok:true", ix(mCC, "70:49")?.ok === true && ix(mCC, "70:49")?.activation === "mouse");
+const refused = (id: string): boolean => ix(mCC, id)?.ok === null && /^the opener's click point is another control inside it \(<button aria-label="Delete bed">\) — tag that control or the opener's own clickable element/.test(ix(mCC, id)?.detail || "") && ix(mCC, id)?.activation === undefined;
+check("[D51] a card with its own label whose ONLY control is its centred Delete → not the card's own control: not driven, ok:null naming <button aria-label=\"Delete bed\">, no activation", refused("70:45"));
+check("[D51] a cell whose only other content is an sr-only label → its centred button is the opener: driven, ok:true", ix(mCC, "70:53")?.ok === true && ix(mCC, "70:53")?.activation === "mouse");
+check("[review 4 H-1] a FOCUSABLE card (role=button tabindex=0) and an <a href> card, each with a centred Delete → not driven, ok:null naming the Delete, no activation", refused("70:46") && refused("70:48"));
+check(`[L-2] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rCC.status === 0 && mutations.length === 0);
+
+// review 5 H-1: what the centre click would press beyond a plain focusable inside the card — a label's checkbox, a role=button
+// span without tabindex, a shadow-DOM button (also through slotted text), an iframe — never clicked; D47's cell still driven
+const notDrivenFor = (m: VerifyMeasured | null, id: string, ctl: string): boolean => ix(m, id)?.ok === null && ix(m, id)?.activation === undefined
+  && (ix(m, id)?.detail || "").startsWith(`the opener's click point is another control inside it (${ctl}) — tag that control or the opener's own clickable element`);
+const bCH = out("ClickHidden");
+mutations.length = 0;
+const rCH = await probe(["--expected", EXPECTED, "--url", edge("click-hidden"), "--out", bCH, "--max-time", "90000"]);
+const mCH = read(bCH);
+if (rCH.status !== 0) console.log(rCH.stderr);
+check("[review 5 H-1] a <label for> its checkbox at the card's centre (70:44) and a label wrapping its checkbox (70:45) → not driven, ok:null naming the checkbox (the label's control)",
+  notDrivenFor(mCH, "70:44", "<input type=\"checkbox\" aria-label=\"Packed\">") && notDrivenFor(mCH, "70:45", "<input type=\"checkbox\" aria-label=\"Done\">"));
+check("[review 5 H-1] a centred span role=button WITHOUT tabindex (70:46) → not driven, ok:null naming it", notDrivenFor(mCH, "70:46", "<span role=\"button\" aria-label=\"Delete bed\">"));
+check("[review 5 H-1] a web component's shadow <button> at the centre (70:47), and text slotted into a shadow <button> (70:50) → not driven, ok:null naming the shadow button",
+  notDrivenFor(mCH, "70:47", "<button aria-label=\"Delete\">") && notDrivenFor(mCH, "70:50", "<button aria-label=\"Remove\">"));
+check("[review 5 H-1] an iframe at the card's centre (70:48) → not driven, ok:null naming <iframe>", notDrivenFor(mCH, "70:48", "<iframe>"));
+check("[review 5 H-1/D47] a cell whose ONLY focusable is its centred icon button (70:49) → still driven, ok:true, mouse", ix(mCH, "70:49")?.ok === true && ix(mCH, "70:49")?.activation === "mouse");
+check(`[review 5 H-1] the drive toggled no checkbox and pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rCH.status === 0 && mutations.length === 0);
+
+// review 5 H-2 / H-3 (D51): a card's own content the check used to miss (display:contents text, shadow text, a ::before label, a
+// background-image logo) → its centred Delete is never clicked; a cell's text that shows nothing (an opacity-0 tooltip, a
+// clip-path-only sr-only label, an opacity-0 wrapper, an aria-hidden scale(0) tooltip) → its button is the opener's: driven
+const bOC = out("OwnContent");
+mutations.length = 0;
+const rOC = await probe(["--expected", EXPECTED, "--url", edge("own-content"), "--out", bOC, "--max-time", "90000"]);
+const mOC = read(bOC);
+if (rOC.status !== 0) console.log(rOC.stderr);
+check("[review 5 H-2/D51] cards whose own label is text in display:contents wrappers (70:44), a shadow-root title (70:45), a ::before label (70:46) or a background-image logo (70:47) → not driven, ok:null naming the centred Delete",
+  ["70:44", "70:45", "70:46", "70:47"].every((id) => notDrivenFor(mOC, id, "<button aria-label=\"Delete bed\">")));
+check("[review 5 H-3/D51] cells whose sole centred button sits beside an opacity-0 tooltip (70:48), a clip-path-only sr-only label (70:49), an opacity-0 wrapper's tooltip (70:50) or an aria-hidden scale(0) tooltip (70:53) → driven, ok:true, mouse (was: refused)",
+  ["70:48", "70:49", "70:50", "70:53"].every((id) => ix(mOC, id)?.ok === true && ix(mOC, id)?.activation === "mouse"));
+check(`[review 5 H-2] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rOC.status === 0 && mutations.length === 0);
+
+// review 5 M-1: a covered opener's synthetic click starts from the drive's own scroll — its evidence never depends on how many
+// Playwright click retries (each scrolling with another alignment) fitted into the 2 s
+const bCT = out("CoveredTall");
+const rCT = await probe(["--expected", EXPECTED, "--url", edge("covered-tall"), "--out", bCT, "--max-time", "60000"]);
+const eCT = ix(read(bCT), "70:49");
+if (rCT.status !== 0) console.log(rCT.stderr);
+check(`[review 5 M-1] a covered opener in view on a tall page → synthetic click from the drive's scroll: opened.scrollY 0 (saw ${String(eCT?.opened?.scrollY)}), the dialog detected`,
+  rCT.status === 0 && eCT?.activation === "synthetic" && eCT.opened?.scrollY === 0 && eCT.detectedBy === "[role=dialog]");
+
+// review 6 H-1 / H-3 (D51): own content the check missed or misread — an in-flow opacity-0 label fading in once scrolled into
+// view, labels escaping a 1 × 1 overflow:hidden wrapper (absolute, fixed), an empty ::before logo on a background-image, a CSS-mask
+// icon, a colour swatch → the centred Delete is never clicked; a hover tint over a whole cell and a filled wrapper around its sole
+// button are the cell's own chrome → driven
+const bO2 = out("OwnContent2");
+mutations.length = 0;
+const rO2 = await probe(["--expected", EXPECTED, "--url", edge("own-content-2"), "--out", bO2, "--max-time", "90000"]);
+const mO2 = read(bO2);
+if (rO2.status !== 0) console.log(rO2.stderr);
+check("[review 6 H-1/D51] a card below the fold whose label is opacity 0 in flow until it is scrolled into view (reveal-on-scroll, 70:44) → not driven, ok:null naming the centred Delete (was: pressed)",
+  notDrivenFor(mO2, "70:44", "<button aria-label=\"Delete bed\">"));
+check("[review 6 H-3/D51] a label absolutely (70:45) or fixed (70:46) positioned inside a 1 × 1 overflow:hidden static wrapper → not driven, ok:null naming the centred Delete",
+  notDrivenFor(mO2, "70:45", "<button aria-label=\"Delete bed\">") && notDrivenFor(mO2, "70:46", "<button aria-label=\"Delete bed\">"));
+check("[review 6 H-3/D51] an empty ::before logo on a background-image (70:47), a CSS-mask icon (70:48), a colour swatch (70:49) → not driven, ok:null naming the centred Delete",
+  ["70:47", "70:48", "70:49"].every((id) => notDrivenFor(mO2, id, "<button aria-label=\"Delete bed\">")));
+check("[review 6 H-3/D47] a cell under a pointer-events:none hover tint over the whole cell (70:50), a cell whose sole button sits in a filled wrapper (70:53) → driven, ok:true, mouse",
+  ["70:50", "70:53"].every((id) => ix(mO2, id)?.ok === true && ix(mO2, id)?.activation === "mouse"));
+check(`[review 6 H-1/H-3] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rO2.status === 0 && mO2 !== null && mutations.length === 0);
+
+// review 6 L-2 / H-3 / L-1: an sr-only label off the document's start edge shows nothing; an empty ::before status dot on a
+// background colour is content, an empty ::after tint over the whole cell and an out-of-flow opacity-0 ::after tooltip are not;
+// a label 8000 elements deep is found without a stack overflow
+const bO3 = out("OwnContent3");
+mutations.length = 0;
+const rO3 = await probe(["--expected", EXPECTED, "--url", edge("own-content-3"), "--out", bO3, "--max-time", "90000"]);
+const mO3 = read(bO3);
+if (rO3.status !== 0) console.log(rO3.stderr);
+check("[review 6 L-2/D47] a cell whose sr-only label is at left:-9999px (off the document's start edge) → driven, ok:true, mouse (was: refused)",
+  ix(mO3, "70:44")?.ok === true && ix(mO3, "70:44")?.activation === "mouse");
+check("[review 6 H-3/D51] a card's status dot drawn by an empty ::before on a background colour beside its centred Delete (70:45) → not driven, ok:null naming the Delete",
+  notDrivenFor(mO3, "70:45", "<button aria-label=\"Delete bed\">"));
+check("[review 6 H-3/D47] a cell with an out-of-flow opacity-0 ::after tooltip (70:47), the plain cell (70:49) → driven, ok:true, mouse",
+  ["70:47", "70:49"].every((id) => ix(mO3, id)?.ok === true && ix(mO3, id)?.activation === "mouse"));
+// fix 8 (owner D52): the container's OWN ::before / ::after are hidden in the all-content shot — a tint the cell paints with its
+// own ::after over the whole cell is a painted pseudo of its own: its sole button is no longer taken for the opener's (was: driven)
+check("[fix8 D52] a cell painting a tint with its own empty ::after over the whole cell (70:46) → not driven by D52's pixels, ok:null naming its button",
+  notDrivenFor(mO3, "70:46", "<button aria-label=\"Open bed\">") && /D52/.test(ix(mO3, "70:46")?.detail ?? ""));
+check(`[review 6 L-1] a card whose label is 8000 elements deep (70:48) → a clean refusal naming the Delete, no 'driving failed' (saw: ${ix(mO3, "70:48")?.detail ?? "no row"})`,
+  notDrivenFor(mO3, "70:48", "<button aria-label=\"Delete bed\">"));
+check(`[review 6 H-3/L-1] the drive pressed no Delete (server saw: ${mutations.join(", ") || "nothing"})`, rO3.status === 0 && mO3 !== null && mutations.length === 0);
+
+// review 6 H-2: an activating control anywhere on the click point's path wins over a merely focusable element below it; an
+// <object> / <embed> is a nested browsing context → never clicked
+const bR6c = out("ClickHidden2");
+mutations.length = 0;
+const rR6c = await probe(["--expected", EXPECTED, "--url", edge("click-hidden-2"), "--out", bR6c, "--max-time", "90000"]);
+const mR6c = read(bR6c);
+if (rR6c.status !== 0) console.log(rR6c.stderr);
+check("[review 6 H-2] a centred <button> Delete whose glyph is a tabindex=-1 span (70:44) → not driven, ok:null naming the button (was: pressed)",
+  notDrivenFor(mR6c, "70:44", "<button aria-label=\"Delete bed\">"));
+check("[review 6 H-2] a span role=button Delete with a tabindex=-1 glyph (70:45) or a contenteditable label (70:46) → not driven, ok:null naming the span role=button",
+  notDrivenFor(mR6c, "70:45", "<span role=\"button\" aria-label=\"Delete bed\">") && notDrivenFor(mR6c, "70:46", "<span role=\"button\" aria-label=\"Delete bed\">"));
+check("[review 6 H-2] an <object> (70:47) and an <embed> (70:48) at the card's centre showing a page whose Delete fills them → not driven, ok:null naming <object> / <embed>",
+  notDrivenFor(mR6c, "70:47", "<object type=\"text/html\">") && notDrivenFor(mR6c, "70:48", "<embed type=\"text/html\">"));
+check("[review 6 H-2/D47] the plain D47 cell (70:49) → still driven, ok:true, mouse", ix(mR6c, "70:49")?.ok === true && ix(mR6c, "70:49")?.activation === "mouse");
+check(`[review 6 H-2] the drive pressed no Delete inside the openers (server saw: ${mutations.join(", ") || "nothing"})`, rR6c.status === 0 && mR6c !== null && mutations.length === 0);
+
+// review 6 H-4 (D4): a covered opener in a scroll-behavior:smooth app-shell scroller — the drive's scroll is restored at once,
+// so the synthetic click lands on the shell as the drive had it; nothing the page itself scrolls animates either (the probe's
+// init CSS); with the page's own !important ID rule beating the init CSS, the restore is still instant
+const bR6s = out("SmoothShell");
+const rR6s = await probe(["--expected", EXPECTED, "--url", edge("smooth-shell"), "--out", bR6s, "--max-time", "60000"]);
+const mR6s = read(bR6s), eR6s = ix(mR6s, "70:49"), jR6s = ix(mR6s, "70:50");
+if (rR6s.status !== 0) console.log(rR6s.stderr);
+check(`[review 6 H-4] a covered opener in a smooth-scrolling app shell → synthetic click with the shell back at its scroll: the popover anchored at click time is at y 100 (saw ${String(eR6s?.opened?.rect.y)}), the dialog detected`,
+  rR6s.status === 0 && eR6s?.activation === "synthetic" && eR6s.opened?.rect.y === 100 && eR6s.detectedBy === "[role=dialog]");
+check(`[review 6 H-4] the page's own scroll in a smooth shell (scrollTo 300 on click, 70:50) is instant under the probe: its popover is at y 400 (saw ${String(jR6s?.opened?.rect.y)})`,
+  jR6s?.activation === "mouse" && jR6s.opened?.rect.y === 400);
+const bR6i = out("SmoothShellImportant");
+const rR6i = await probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1`, "--out", bR6i, "--max-time", "60000"]);
+const eR6i = ix(read(bR6i), "70:49");
+if (rR6i.status !== 0) console.log(rR6i.stderr);
+check(`[review 6 H-4] the same shell forced smooth by the page's !important ID rule → the drive's restore is still instant: y 100 (saw ${String(eR6i?.opened?.rect.y)})`,
+  rR6i.status === 0 && eR6i?.activation === "synthetic" && eR6i.opened?.rect.y === 100);
+
+// fix 8 (review 6 H-4 follow-up, D4): the same !important-smooth shell, where the page reads the scroll in requestAnimationFrame —
+// its popover is anchored at the shell's scroll in the last frame PAINTED before the click: 100 only when the drive's restore held
+// for frames before its synthetic click (restore, two frames, look again — twice in a row), deterministic under any load (was:
+// the click came right after one restore; under load a smooth scroll Playwright's retry started could still move the shell)
+const bR6p = out("SmoothShellPainted");
+const rR6p = await probe(["--expected", EXPECTED, "--url", `${edge("smooth-shell")}&important=1&painted=1`, "--out", bR6p, "--max-time", "60000"]);
+const eR6p = ix(read(bR6p), "70:49");
+if (rR6p.status !== 0) console.log(rR6p.stderr);
+check(`[fix8 review 6 H-4] the !important-smooth shell, popover anchored at the last painted frame's scroll → the restored scroll held before the synthetic click: y 100 (saw ${String(eR6p?.opened?.rect.y)})`,
+  rR6p.status === 0 && eR6p?.activation === "synthetic" && eR6p.opened?.rect.y === 100);
+
+// 12b review 7 (fix 8, owner D52): a container's sole centred control is its own only when the container paints nothing of its
+// own beside it — decided by pixels (only that control hidden vs all its content hidden), as a union with the DOM check; the
+// opener is hovered first, so a hover-revealed Delete is at the click point (H-1). Every Delete here writes; none may be pressed
+const ownPx = async (mode: string): Promise<{ m: VerifyMeasured | null; status: number | null; writes: string[] }> => {
+  const b = out(`OwnPixels-${mode.replace(/[^\w-]/g, "_")}`);
+  mutations.length = 0;
+  const r = await probe(["--expected", EXPECTED, "--url", edge(mode), "--out", b, "--max-time", "90000"]);
+  if (r.status !== 0) console.log(r.stderr);
+  return { m: read(b), status: r.status, writes: [...mutations] };
+};
+const DEL = "<button aria-label=\"Delete bed\">";
+const byPixels = (m: VerifyMeasured | null, id: string): boolean => notDrivenFor(m, id, DEL) && /D52/.test(ix(m, id)?.detail ?? "");
+const drivenOk = (m: VerifyMeasured | null, ids: string[]): boolean => ids.every((id) => ix(m, id)?.ok === true && ix(m, id)?.activation === "mouse");
+const p1 = await ownPx("own-pixels-1");
+check("[review 7 H-1] a labelled card whose centred Delete shows only on :hover — by visibility (70:44), display (70:45), opacity + pointer-events (70:46) → not driven, ok:null naming the Delete (was: pressed)",
+  ["70:44", "70:45", "70:46"].every((id) => notDrivenFor(p1.m, id, DEL)));
+check("[review 7 H-2a/D52] a status dot drawn by the card's own empty ::before (70:47), by an empty ::before of a wrapper holding the Delete (70:48), a swatch drawn by the card's own ::after (70:49) → not driven by the pixels, naming the Delete (was: pressed)",
+  ["70:47", "70:48", "70:49"].every((id) => byPixels(p1.m, id)));
+check("[D47/D52] a cell under a hover tint over the whole cell (70:53), a cell whose sole button sits in a filled wrapper (70:50) → still driven, ok:true, mouse",
+  drivenOk(p1.m, ["70:53", "70:50"]));
+check(`[review 7 H-1/H-2a] the drive pressed no Delete (server saw: ${p1.writes.join(", ") || "nothing"})`, p1.status === 0 && p1.m !== null && p1.writes.length === 0);
+const p2 = await ownPx("own-pixels-2");
+check("[review 7 H-2b–d/D52] a dot drawn by a border (70:46), a swatch drawn by a box-shadow (70:47), a band across the centre (70:48), a colour tile holding the Delete (70:49) → not driven by the pixels, naming the Delete (was: pressed)",
+  ["70:46", "70:47", "70:48", "70:49"].every((id) => byPixels(p2.m, id)));
+check("[review 7 H-2b/review 8 H-1] a <progress> (70:44), a <meter> (70:45) → not driven, naming the Delete — now by the DOM's media rule, before the pixels (was: pressed)",
+  ["70:44", "70:45"].every((id) => notDrivenFor(p2.m, id, DEL) && !/D52/.test(ix(p2.m, id)?.detail ?? "")));
+check("[D47/D52] a cell with a Tailwind sr-only label (70:53), a cell with a transform:scale(0) aria-hidden tooltip (70:50) → still driven, ok:true, mouse",
+  drivenOk(p2.m, ["70:53", "70:50"]));
+check(`[review 7 H-2b–d] the drive pressed no Delete (server saw: ${p2.writes.join(", ") || "nothing"})`, p2.status === 0 && p2.m !== null && p2.writes.length === 0);
+const p3 = await ownPx("own-pixels-3");
+check("[review 7 H-2e] a card below the fold whose out-of-flow label fades in once scrolled into view (70:44) → not driven, naming the Delete (was: pressed)",
+  notDrivenFor(p3.m, "70:44", DEL));
+check("[review 7 L-2] a label painted past its 1 × 1 overflow:clip box by overflow-clip-margin (70:45) → not driven, naming the Delete (was: pressed)",
+  notDrivenFor(p3.m, "70:45", DEL));
+check("[review 7 L-3/D52] a cell with a 3-px selection stripe beside its icon button (70:46) → not driven, naming the button: a painted stripe is the cell's own content (owner D52)",
+  notDrivenFor(p3.m, "70:46", "<button aria-label=\"Open bed\">"));
+check("[D47/D52] a cell with an icon inside its button (70:47), a clip-path sr-only label (70:48), an opacity-0 tooltip (70:49), a left:-9999px sr-only label (70:53), the plain cell (70:50) → still driven, ok:true, mouse",
+  drivenOk(p3.m, ["70:47", "70:48", "70:49", "70:53", "70:50"]));
+check(`[review 7 H-2e/L-2] the drive pressed no Delete (server saw: ${p3.writes.join(", ") || "nothing"})`, p3.status === 0 && p3.m !== null && p3.writes.length === 0);
+// D52 under a strict style CSP: the probe hides by its own constructed sheet (CSSOM), which a CSP never blocks
+const pC = await ownPx("own-pixels-csp&csp=1");
+check("[fix8 D52/CSP] under style-src 'nonce-…' a card's own ::before status dot beside its sole centred Delete (70:44) → not driven by the pixels, naming the Delete; the plain D47 cell (70:53) → driven",
+  byPixels(pC.m, "70:44") && drivenOk(pC.m, ["70:53"]));
+check("[review 8 L-1] under the same CSP a D47 cell whose button has transition:all (70:50) → driven, ok:true, mouse (was: refused 'could not hide its control' — the init CSS <style> was blocked)",
+  drivenOk(pC.m, ["70:50"]));
+check(`[fix8 D52/CSP] the drive pressed no Delete (server saw: ${pC.writes.join(", ") || "nothing"})`, pC.status === 0 && pC.m !== null && pC.writes.length === 0);
+// 12b review 8 (fix 9, owner D53): the boxes kept as decoration only when their pixels are plain, a shadow host's own content,
+// the container's own ::marker, a layered !important, everything outside the container hidden in both shots (a foreign ticker),
+// a control unmounted when the pointer leaves
+const p4 = await ownPx("own-pixels-4");
+const isD53 = (m: VerifyMeasured | null, id: string, re: RegExp): boolean => notDrivenFor(m, id, DEL) && re.test(ix(m, id)?.detail ?? "");
+check("[review 8 H-1/D53] an inset:0 fill clipped to a corner flag by clip-path (70:44), one painted only in a 4-px content box by background-clip (70:45) → never kept as decoration: not driven by the pixels, naming the Delete (was: pressed)",
+  byPixels(p4.m, "70:44") && byPixels(p4.m, "70:45"));
+check("[review 8 H-2/D53] a web-component card whose shadow root holds a status dot beside its slotted sole Delete (70:46) → not driven by the pixels, naming the Delete (was: pressed)",
+  byPixels(p4.m, "70:46"));
+check("[review 8 M-3] a card that is a list item with its own '1.' marker (70:47) → not driven, naming the Delete (was: pressed)", notDrivenFor(p4.m, "70:47", DEL));
+check("[review 8 L-3/D53] a wrapper hugging the Delete whose box-shadow paints a ring (70:48) → not a plain fill: not driven, naming the Delete (was: pressed)",
+  isD53(p4.m, "70:48", /not a plain fill/));
+check("[review 8 L-2] a status dot forced visible by an !important inside a cascade layer (70:49) → the probe's rule did not take: not driven, naming the Delete (was: pressed)",
+  isD53(p4.m, "70:49", /kept <span> inside the opener showing/));
+check("[review 8 M-1/M-2] a D47 cell whose button is mounted on hover and unmounted when the pointer leaves (70:53), a D47 cell under a foreign ticker repainting every 10 ms (70:50) → driven, ok:true, mouse",
+  drivenOk(p4.m, ["70:53", "70:50"]));
+check(`[review 8] the drive pressed no Delete (server saw: ${p4.writes.join(", ") || "nothing"})`, p4.status === 0 && p4.m !== null && p4.writes.length === 0);
+// review 7 L-1: in an app shell scrolled so a tall card's label lies above the shell's top, the label is still the card's own
+// (scrolling the shell reaches it): its Delete is never clicked; a D47 cell in the same shell is driven
+const pT = await ownPx("tall-shell");
+check("[review 7 L-1] a 900-px card in a scrolled app shell, its label above the shell's top, its Delete under the click point (70:44) → not driven, naming the Delete (was: pressed)",
+  notDrivenFor(pT.m, "70:44", DEL));
+check("[review 7 L-1/D47] a D47 cell in the same shell (70:53) → driven, ok:true, mouse", drivenOk(pT.m, ["70:53"]));
+check(`[review 7 L-1] the drive pressed no Delete (server saw: ${pT.writes.join(", ") || "nothing"})`, pT.status === 0 && pT.m !== null && pT.writes.length === 0);
 
 // L7: an absolute strip escaping a static overflow:hidden wrapper widens the page and is named; a clipped one is not
 const b16 = out("AbsEscape");

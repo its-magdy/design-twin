@@ -303,6 +303,14 @@ function isProbeReach(x) {
 function isPageOverflow(x) {
   return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
 }
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -315,10 +323,10 @@ var MEASURED_EXTRAS = [
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isObj, "an object (behaviour checks)"]
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -330,23 +338,25 @@ function readableMeasured(x) {
   if (!isMeasuredCore(x)) return null;
   const copy = { ...x };
   const notes = [];
+  const dropped = [];
   for (const [k, ok, what] of MEASURED_EXTRAS) {
     if (copy[k] !== void 0 && !ok(copy[k])) {
       notes.push(`measured.${k} is not ${what}; ignored`);
+      dropped.push(k);
       delete copy[k];
     }
   }
   if (Array.isArray(copy.nodes)) {
-    let dropped = 0;
+    let dropped2 = 0;
     copy.nodes = copy.nodes.map((n) => {
       if (!isObj(n) || n.unmeasured === void 0 || isReasonMap(n.unmeasured)) return n;
-      dropped++;
+      dropped2++;
       const { unmeasured: _drop, ...rest } = n;
       return rest;
     });
-    if (dropped) notes.push(`${dropped} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
+    if (dropped2) notes.push(`${dropped2} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
   }
-  return isVerifyMeasured(copy) ? { doc: copy, notes } : null;
+  return isVerifyMeasured(copy) ? { doc: copy, notes, dropped } : null;
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 function isEvidence(x) {
@@ -3054,6 +3064,8 @@ function compare(expectation, measured, opts) {
     inputs,
     verdict,
     headline,
+    // 12b (D4): copied and counted, read by nothing above
+    behaviour: behaviourReport(measured.behaviour, opts.behaviourMalformed === true),
     why: reasons,
     integrity,
     coverage,
@@ -3109,10 +3121,99 @@ function probeLine(r) {
   const who = p && p !== "unknown" ? `probe ${p.name} ${p.version ?? "(no version)"} (sha ${p.sha256.slice(0, 12)}\u2026) \xB7 ${p.playwright.package} ${p.playwright.version} \xB7 ${p.browser.name} ${p.browser.version}` : "probe unknown (hand-written \u2014 not comparable round to round)";
   return `${who} \xB7 matched: ${matchedLine(r.coverage && r.coverage.matchedBy)}`;
 }
+var BEHAVIOUR_ORDER = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
+var BEHAVIOUR_NO_BLOCK = "the measured file carries no behaviour checks (hand-written, or a probe older than 12b)";
+var BEHAVIOUR_MALFORMED = "the measured file's behaviour block is malformed \u2014 ignored (see the input notes)";
+var NAMES_LABEL = "names computed by Playwright (Chromium), not screen-reader verified";
+var BEHAVIOUR_PREFIX = "BEHAVIOUR/A11Y (not the fidelity verdict) \u2014 ";
+function moreCount(c) {
+  const ev = c.evidence;
+  const n = ev ? ev.count : void 0;
+  if (!ev || c.status === "pass" || typeof n !== "number" || !Number.isInteger(n) || n <= 0) return null;
+  if (ev.more === true) return n;
+  return ev.more === void 0 && c.detail.startsWith(`+${n} more `) ? n : null;
+}
+function behaviourSummary(checks) {
+  const s = { pass: 0, fail: 0, warn: 0, notRun: 0, unsupported: 0 };
+  for (const c of checks) {
+    const n = moreCount(c) ?? 1;
+    if (c.status === "not-run") s.notRun += n;
+    else s[c.status] += n;
+  }
+  return s;
+}
+function behaviourHeadline(summary, o) {
+  if (!o.ran) return `${BEHAVIOUR_PREFIX}not run (${o.why || "no reason recorded"})`;
+  const parts = [`${summary.fail} fail`, `${summary.warn} warn`, `${summary.pass} pass`, `${summary.notRun} not run`];
+  if (summary.unsupported) parts.push(`${summary.unsupported} unsupported`);
+  if (o.cut) parts.push("cut by the time budget");
+  if (o.axe) parts.push("version" in o.axe ? `axe-core ${o.axe.version}` : "axe-core not run");
+  parts.push(NAMES_LABEL);
+  return BEHAVIOUR_PREFIX + parts.join(" \xB7 ");
+}
+function behaviourReport(b, malformed = false) {
+  const none = (why) => {
+    const summary2 = behaviourSummary([]);
+    return { ran: false, why, summary: summary2, headline: behaviourHeadline(summary2, { ran: false, why }), checks: [] };
+  };
+  if (b === void 0) return none(malformed ? BEHAVIOUR_MALFORMED : BEHAVIOUR_NO_BLOCK);
+  if (!isMeasuredBehaviour(b)) return none(BEHAVIOUR_MALFORMED);
+  if (!b.ran) return none(b.why);
+  const checks = b.checks.map((c, i) => ({ c, i })).sort((x, y) => BEHAVIOUR_ORDER[x.c.status] - BEHAVIOUR_ORDER[y.c.status] || x.i - y.i).map((x) => x.c);
+  const summary = behaviourSummary(checks);
+  const ax = b.axe;
+  const axe = !isJsonObject(ax) ? void 0 : ax.ran === true && typeof ax.version === "string" ? { version: ax.version } : ax.ran === false ? { notRun: typeof ax.why === "string" ? ax.why : "no reason recorded" } : void 0;
+  const artifacts = b.artifacts;
+  const arts = Array.isArray(artifacts) ? artifacts.filter((a) => typeof a === "string") : [];
+  const names = b.namesComputedBy;
+  const cut = b.cut;
+  const block = b.writeBlock;
+  return {
+    ran: true,
+    summary,
+    headline: behaviourHeadline(summary, { ran: true, axe, cut: cut === true }),
+    ...ifDefined("namesComputedBy", typeof names === "string" ? names : void 0),
+    ...ifDefined("axe", axe),
+    checks,
+    ...arts.length ? { artifacts: arts } : {},
+    ...ifDefined("writeBlock", typeof block === "string" ? block : void 0)
+  };
+}
+var mdText = (x) => (x ?? "").replace(/\r?\n|\r/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\|/g, "\\|").replace(/`/g, "\\`");
+var behaviourWhere = (c) => [c.nodeId ? mdText(c.nodeId) : "", c.trigger ? `(${mdText(c.trigger)})` : "", c.target ? mdText(c.target) : ""].filter(Boolean).join(" ");
+var BEHAVIOUR_MD_ROWS = 80;
+function behaviourMarkdown(b) {
+  const L = ["## Behaviour and accessibility \u2014 not part of the verdict", ""];
+  L.push("*These checks never change the fidelity verdict above (D4). A failed check is still a measurable accessibility failure: fix it or raise a designer question.*", "");
+  if (!b.ran) {
+    L.push(`Not run (${mdText(b.why) || "no reason recorded"}).`, "");
+    return L;
+  }
+  const s = b.summary;
+  L.push(`${s.fail} fail \xB7 ${s.warn} warn \xB7 ${s.pass} pass \xB7 ${s.notRun} not run${s.unsupported ? ` \xB7 ${s.unsupported} unsupported` : ""}`, "");
+  const fails = b.checks.filter((c) => c.status === "fail");
+  if (fails.length) {
+    L.push(`### Failed (${fails.length})`, "");
+    for (const c of fails) L.push(`- **${mdText(c.id)}**${behaviourWhere(c) ? ` ${behaviourWhere(c)}` : ""}${c.variant ? ` [${mdText(c.variant)}]` : ""} \u2014 ${mdText(c.detail)}`);
+    L.push("");
+  }
+  if (b.checks.length) {
+    L.push("| Status | Check | Node/target | Variant | Detail |", "|---|---|---|---|---|");
+    for (const c of b.checks.slice(0, BEHAVIOUR_MD_ROWS)) L.push(`| ${c.status} | ${mdText(c.id)} | ${behaviourWhere(c)} | ${mdText(c.variant)} | ${mdText(c.detail)}${c.synthetic ? " *(synthetic (headless), not a real-browser observation)*" : ""} |`);
+    if (b.checks.length > BEHAVIOUR_MD_ROWS) L.push(`| \u2026and ${b.checks.length - BEHAVIOUR_MD_ROWS} more (report.json lists all) | | | | |`);
+    L.push("");
+  }
+  L.push(`Accessible names: ${NAMES_LABEL}${b.namesComputedBy ? ` (${mdText(b.namesComputedBy)})` : ""}.`, "");
+  if (b.axe) L.push("version" in b.axe ? `axe-core ${mdText(b.axe.version)} ran on the main frame (iframes not scanned): critical/serious violations fail, moderate/minor warn.` : `axe-core: not run \u2014 ${mdText(b.axe.notRun)}.`, "");
+  if (b.artifacts && b.artifacts.length) L.push(`Behaviour artifacts: ${b.artifacts.map(mdText).join(", ")}`, "");
+  if (b.writeBlock) L.push(`Write block: ${mdText(b.writeBlock)}`, "");
+  return L;
+}
 function reportToMarkdown(r) {
   const L = [];
   L.push(`# Verify \u2014 ${r.screen}`, "");
   L.push(`**${r.headline || r.verdict.toUpperCase()}**`, "");
+  L.push(`**${mdText(r.behaviour.headline)}**`, "");
   L.push(`renderer ${r.renderer}${r.viewport ? ` at ${typeof r.viewport === "object" ? JSON.stringify(r.viewport) : r.viewport}` : ""} \xB7 measured ${r.measuredAt}` + (r.inputs && r.inputs.expectationSha256 ? ` \xB7 against expectation ${r.inputs.expectationSha256.slice(0, 12)}\u2026` : "") + (r.inputs && r.inputs.runId ? ` \xB7 run ${r.inputs.runId}` : ""), "");
   const rc = r.inputs && r.inputs.reach;
   if (rc) L.push(`Reached by ${rc.steps} step(s) (sha ${rc.sha256.slice(0, 12)}\u2026, ${rc.source})${rc.matchesPlan === true ? " \u2014 the plan's navigate" : rc.matchesPlan === false ? " \u2014 **not the plan's navigate**" : ""}.`, "");
@@ -3139,6 +3240,7 @@ function reportToMarkdown(r) {
   if (c.pageOverflow !== void 0) L.push(`| page overflow at the design width (overflowX) | ${c.pageOverflow} |`);
   if (c.deltasAccepted) L.push(`| value mismatches accepted by a plan waiver (listed, out of the counts) | ${c.deltasAccepted} |`);
   L.push("");
+  L.push(...behaviourMarkdown(r.behaviour));
   if (r.against) {
     const a = r.against;
     L.push(`Against the previous round (${a.report}): nodes measured ${a.nodesMeasured.before ?? "?"} \u2192 ${a.nodesMeasured.after}, expected ${a.nodesExpected.before ?? "?"} \u2192 ${a.nodesExpected.after}${a.probeChanged === true ? " \xB7 **the probe changed**" : a.probeChanged === null ? " \xB7 probe identity unknown on both rounds" : ""}${a.expectationChanged ? " \xB7 the expectation changed" : ""}. This never changes the verdict.`, "");
@@ -3669,11 +3771,12 @@ exit (--status): 0 wrote \xB7 1 refused \xB7 2 usage \xB7 6 the run cache is not
   const probeBase = measuredBase !== null && typeof measured.runId === "string" && measured.runId ? path4.join(path4.dirname(expFile), path4.basename(measuredBase)) : null;
   const found = measuredBase === null ? null : readStatusAt(measuredBase) ?? (probeBase !== null && path4.resolve(probeBase) !== path4.resolve(measuredBase) ? readStatusAt(probeBase) : null);
   const statusOpt = found ? { status: { file: [measuredBase, probeBase].some((b) => b !== null && found.file === statusFile(b)) ? path4.basename(found.file) : `${path4.basename(found.file)} (live, ${found.file})`, status: found.status } } : measuredBase !== null ? { status: null } : {};
-  const rep = compare(expectation, measured, { ...statusOpt, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
+  const rep = compare(expectation, measured, { ...statusOpt, ...readable.dropped.includes("behaviour") ? { behaviourMalformed: true } : {}, ...readable.notes.length || compareNotes.length ? { inputNotes: [...readable.notes, ...compareNotes] } : {}, ...ifDefined("recordedPlanGone", recordedPlanGone), ...ifDefined("interactions", extra), ...ifDefined("components", extraComponents), expectationSha256: sha(expFile), measuredSha256: sha(measuredFile), artifactCheck, ...ifDefined("code", code), ...ifDefined("against", against), ...planInputs, ...planHit ? { plan: planHit } : {} });
   const md = reportToMarkdown(rep);
   write(compareBase, rep, md);
   console.error(rep.headline);
   console.error(probeLine(rep));
+  console.error(rep.behaviour.headline);
   const nie = rep.probe.measuredIdsNotInExpectation || 0;
   if (nie) console.error(`note  ${nie} measured node id(s) are not in the expectation (e.g. ${(rep.probe.measuredIdsNotInExpectationSample || []).join(", ")}) \u2014 measured against another screen or an older expectation?`);
   for (const w of rep.waivers.reopened) console.error(`warn  waiver REOPENED ${w.nodeId} (${w.field}): ${w.why}`);
@@ -3768,19 +3871,26 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
   });
 }
 export {
+  BEHAVIOUR_MALFORMED,
+  BEHAVIOUR_NO_BLOCK,
   EXPECTATION_SCHEMA,
   FIELDS,
   INTERACTION_OUTCOMES,
   MEASURED_KEYS_DOC,
+  NAMES_LABEL,
   OUTCOMES_FOR_ACTION,
   REPORT_SCHEMA,
   STYLE_KEYS,
   TOLERANCE,
+  behaviourHeadline,
+  behaviourReport,
+  behaviourSummary,
   buildExpectation,
   compare,
   expectNode,
   findExistingExpectedFor,
   lineHeightPx,
+  mdText,
   normColor,
   normFamily,
   normWeight,

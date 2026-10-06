@@ -13,8 +13,8 @@ import { isJsonObject } from "./types.ts";
 import type { JsonObject } from "./types.ts";
 import { isStringArray } from "../bridge/src/json-util.ts";
 import type {
-  AuditOverridesDoc, AuditReport, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
-  PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
+  AuditOverridesDoc, AuditReport, BehaviourCheck, BehaviourStatus, BuildIdentity, CatalogComponent, ComponentDetailFile, ComponentProposal, ComponentsCatalog, InteractionEvidence, MeasuredComponent, PageIndex, PagesRootIndex, Plan,
+  PageOverflow, PlanDescope, PlanInteraction, PlanWaiver, ProbeFrame, ProbeReach, ProbeIdentity, MeasuredBehaviour, ReportBehaviour, ScreenAssetsDoc, TextStylesDoc, TokensDoc, Variable, VariableCollection, VerifyMeasured, VerifyReport,
 } from "./types.ts";
 import type { Expectation } from "./verify-screen.ts";
 import { isPlanExpect } from "./probe-steps.ts";
@@ -158,6 +158,26 @@ export function isPageOverflow(x: unknown): x is PageOverflow {
     && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right))
     && optStr(x.compatMode);
 }
+// 12b: measured.behaviour — lenient (D4: it never reaches the verdict, so a reader keeps what it can show): version 1 and a
+// boolean `ran`; ran:false names why; ran:true has checks[] rows {id, status, detail} — an id this reader does not know is
+// kept (an older or newer probe). Everything else in the block is read field by field by verify-screen (behaviourReport).
+const BEHAVIOUR_STATUSES: readonly BehaviourStatus[] = ["pass", "fail", "warn", "not-run", "unsupported"];
+export const isBehaviourStatus = (x: unknown): x is BehaviourStatus => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+export function isBehaviourCheck(x: unknown): x is BehaviourCheck {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+/** measured.behaviour (12b): {version: 1, ran: false, why} or {version: 1, ran: true, checks: [{id, status, detail}, …], …}. */
+export function isMeasuredBehaviour(x: unknown): x is MeasuredBehaviour {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean"
+    && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+/** report.behaviour (12b), as verify-build reads it: ran, the status counts, and the check rows. */
+export function isReportBehaviour(x: unknown): x is ReportBehaviour {
+  return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary)
+    && (["pass", "fail", "warn", "notRun", "unsupported"] as const).every((k) => isObj(x.summary) && isNum(x.summary[k]))
+    && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
+}
+
 // The group-7 extras of a measured.json: optional, and a hand-written file may carry its own thing under
 // the same name (`probe: "handmade"`, `notMeasured: {}`). readableMeasured() drops a malformed one with a
 // note rather than refusing a file whose measurements are perfectly readable.
@@ -173,10 +193,10 @@ const MEASURED_EXTRAS: ReadonlyArray<readonly [key: string, ok: (x: unknown) => 
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} — read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} — page overflow not measured"],
-  ["behaviour", isObj, "an object (behaviour checks)"],
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], …} or {version: 1, ran: false, why} — behaviour/a11y not reported"],
 ];
 /** What a compare cannot do without: nodes (each with a nodeId), and list-shaped components/interactions/artifacts. */
 function isMeasuredCore(x: unknown): x is JsonObject {
@@ -197,12 +217,13 @@ export function isVerifyMeasured(x: unknown): x is VerifyMeasured {
  * nodes without ids, lists that are not lists); otherwise the document with every MALFORMED optional extra
  * dropped, and one note per drop — so a hand-written file with its own `probe` or `notMeasured` still compares.
  */
-export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: string[] } | null {
+export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: string[]; dropped: string[] } | null {
   if (!isMeasuredCore(x)) return null;
   const copy: JsonObject = { ...x };
   const notes: string[] = [];
+  const dropped: string[] = [];
   for (const [k, ok, what] of MEASURED_EXTRAS) {
-    if (copy[k] !== undefined && !ok(copy[k])) { notes.push(`measured.${k} is not ${what}; ignored`); delete copy[k]; }
+    if (copy[k] !== undefined && !ok(copy[k])) { notes.push(`measured.${k} is not ${what}; ignored`); dropped.push(k); delete copy[k]; }
   }
   if (Array.isArray(copy.nodes)) {
     let dropped = 0;
@@ -214,7 +235,7 @@ export function readableMeasured(x: unknown): { doc: VerifyMeasured; notes: stri
     });
     if (dropped) notes.push(`${dropped} node(s) carry an \`unmeasured\` that is not a {key: reason} map; ignored (their nulls read as 'reported null')`);
   }
-  return isVerifyMeasured(copy) ? { doc: copy, notes } : null;
+  return isVerifyMeasured(copy) ? { doc: copy, notes, dropped } : null;
 }
 isVerifyMeasured.expected = "probe measurements: an object whose `nodes` (each {nodeId, styles}), `components`, `interactions` and `artifacts`, when present, are arrays";
 

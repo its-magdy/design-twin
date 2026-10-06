@@ -204,7 +204,8 @@ loads; always set explicit width+height on the container (see the base skill's a
 **Interaction states** — look up the component in `design/export/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `focus-visible:` style even if the Figma design only shows a hover state — it's the most commonly
-missed a11y requirement. `hover:` only matters on pointer devices (`@media (hover:hover)` — Tailwind v4's
+missed a11y requirement. v4's `outline-hidden` sets `outline-style: none`, so `focus-visible:outline-2` on top
+draws nothing: add `focus-visible:outline-solid`. `hover:` only matters on pointer devices (`@media (hover:hover)` — Tailwind v4's
 default); also `active:`, `disabled:`/`aria-disabled:`.
 - v4 buttons default to `cursor: default` (why every button showed an arrow on the field run). Once, in the CSS
   entry, unless the app already sets it: `@layer base { button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; } }`.
@@ -213,7 +214,7 @@ default); also `active:`, `disabled:`/`aria-disabled:`.
 - A control wired to nothing (no reaction, no handler) must not look live: no hover/pointer affordance; mark it
   `disabled`/`aria-disabled` or ask.
 - Hover-revealed controls: `opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100`
-  (touch has no hover; `pointer-coarse:` is v4.1+, on v4.0/v3 use `[@media(pointer:coarse)]:opacity-100`); never `invisible`/`hidden`, which drop the control from the tab order.
+  (touch has no hover; `pointer-coarse:` is v4.1+, on v4.0/v3 use `[@media(pointer:coarse)]:opacity-100`); never `invisible`/`hidden`, which drop the control from the tab order (and a `visibility: hidden` opener cannot take focus back when its dialog closes).
 
 **Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
 target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).

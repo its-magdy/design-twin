@@ -228,10 +228,17 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
 - **The rest of the designed interactions, and components you judge genuinely absent, are yours.** Drive navigate,
   `change_to`, hover and pressed rows (every row the probe does not drive) as before. The probe measures hover
   and focus states only (focus is recorded only when the element really took it; programmatic focus may not
-  match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence); pressed and every designed interaction you drive yourself, recording results as in
+  match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence; whether
+  a Tab stop shows a ring at all is the probe's `keyboard.focus-visible`); pressed and every designed interaction you drive yourself, recording results as in
   "Also collect" below into `<Screen>.evidence.json` (staged, §2) — an object
   `{"interactions": [...], "components": [{"setName", "present": false, "detail"}]}` that the caller passes as
   `--interactions`. Do not add them to `measured.json`.
+- **Behaviour is the probe's too.** The probe runs the dialog, keyboard, landmark, name, forced-colours and
+  overflow battery (and axe when the project has it) after the measurement; read `report.behaviour`
+  once the caller has compared, and do not re-drive the battery the probe ran. Never accept "the tool cannot
+  emulate forced colours" — the probe emulates it (DT-77); a `not-run` or `unsupported` row is the only reason
+  to look by hand. By hand, and only when asked: delete-confirm focus, disabled-while-focused and route changes.
+  Never pass `--behaviour off`.
 
 **Native stacks: match and read the keys yourself.** For each row in `expected.json`, find the element and
 read its computed style. Two ways to find it, in this order:
@@ -385,7 +392,8 @@ Anything you could not prove goes in a separate list labelled "unproven leads", 
 Return the object you wrote (on web: the probe's summary line plus the evidence file), plus a short prose summary of what you looked at
 and anything under `notes`. **Do not return a verdict** — the caller runs
 `node "${CLAUDE_PLUGIN_ROOT}/scripts/verify-screen.js" --compare` and the report file decides. If you believe the screen is fine, the way
-to say that is a complete measurement with nothing in `notMeasured`.
+to say that is a complete measurement with nothing in `notMeasured`. Include the behaviour headline (the
+`BEHAVIOUR/A11Y (not the fidelity verdict)` line the probe prints) verbatim, labelled as not the verdict.
 
 Never list an artifact you did not write: `--compare` checks every path in `artifacts` on disk and
 records its sha256. And never write a plan's `status` — status is computed, never stored (see

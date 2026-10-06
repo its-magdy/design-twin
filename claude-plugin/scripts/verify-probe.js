@@ -8,7 +8,7 @@ import crypto3 from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep2 } from "node:timers/promises";
+import { setTimeout as sleep3 } from "node:timers/promises";
 import { spawnSync as spawnSync2 } from "node:child_process";
 
 // design-to-code/probe-page.ts
@@ -308,7 +308,7 @@ function measureElements(input) {
         styles.strokeAlign = st.align;
       } else if (sides((s) => `border-${s}-width`).some((w) => w !== null && w > 0)) styles.strokeFrom = "border";
     };
-    const fill = () => {
+    const fill2 = () => {
       if (!item.isPaint) return { v: null, why: "not a vector/SVG node \u2014 its colour is backgroundColor" };
       if (tag === "img" || tag === "canvas" || tag === "picture") return { v: null, why: `an <${tag}>: its paint is pixels, not a CSS property`, source: "img" };
       const shapes = [...el.matches(SHAPES) ? [el] : [], ...Array.from(el.querySelectorAll(SHAPES))];
@@ -361,7 +361,7 @@ function measureElements(input) {
           put(k, rgba(cs.getPropertyValue("background-color")), "no computed background-color");
           break;
         case "fill": {
-          const f = fill();
+          const f = fill2();
           if (f.source) res.fillSource = f.source;
           put(k, f.v, f.why);
           break;
@@ -937,6 +937,14 @@ function isProbeReach(x) {
 function isPageOverflow(x) {
   return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
 }
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -949,10 +957,10 @@ var MEASURED_EXTRAS = [
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isObj, "an object (behaviour checks)"]
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -1426,6 +1434,7 @@ if (false) {
 
 // design-to-code/probe-drive.ts
 import { setTimeout as sleep } from "node:timers/promises";
+import { inflateSync } from "node:zlib";
 function readPageOverflow(_arg) {
   const de = document.documentElement, body = document.body;
   const hs = getComputedStyle(de);
@@ -1563,7 +1572,8 @@ function armDetector(arg) {
     }
   }
   const destBefore = arg.destId === null ? [] : Array.from(document.querySelectorAll(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`)).filter(seen);
-  window.__dtDrive = { before, destBefore, destPaths: destBefore.map(pathOf) };
+  const roots = Array.from(document.querySelectorAll('dialog[open], [aria-modal="true" i]')).filter((el) => el.getClientRects().length > 0);
+  window.__dtDrive = { before, destBefore, destPaths: destBefore.map(pathOf), roots };
   return true;
 }
 function pollDetector(arg) {
@@ -1630,6 +1640,268 @@ function pollDetector(arg) {
     }
   };
 }
+function saveScroll(el) {
+  const boxes = [];
+  for (let p = el.parentElement; p; p = p.parentElement) boxes.push({ el: p, left: p.scrollLeft, top: p.scrollTop });
+  window.__dtDriveScroll = { x: scrollX, y: scrollY, boxes };
+}
+function restoreScroll() {
+  const s = window.__dtDriveScroll;
+  if (!s) return;
+  for (const b of s.boxes) if (b.el.scrollLeft !== b.left || b.el.scrollTop !== b.top) b.el.scrollTo({ left: b.left, top: b.top, behavior: "instant" });
+  scrollTo({ left: s.x, top: s.y, behavior: "instant" });
+}
+function scrollHeld() {
+  const s = window.__dtDriveScroll;
+  if (!s) return true;
+  const near = (a, b) => Math.abs(a - b) < 1;
+  return near(scrollX, s.x) && near(scrollY, s.y) && s.boxes.every((b) => near(b.el.scrollLeft, b.left) && near(b.el.scrollTop, b.top));
+}
+function ownMark(_arg) {
+  const o = window.__dtOwn;
+  if (!o || !o.box.isConnected || !o.ctl.isConnected) return null;
+  const { box, ctl } = o;
+  if ((box.getRootNode?.()?.host ?? null) !== null) return { ctl: "its sole control", keep: 0, why: "the opener lies inside a shadow root, where its pixels cannot be compared", scrolled: false };
+  const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const active = document.activeElement;
+  if (active && active !== document.body) o.focus = active;
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const r0 = box.getBoundingClientRect();
+  if (r0.x < 0 || r0.y < 0 || r0.right > vw || r0.bottom > vh) {
+    const boxes = [];
+    for (let p = box.parentElement; p; p = p.parentElement) boxes.push({ el: p, left: p.scrollLeft, top: p.scrollTop });
+    o.saved = { x: scrollX, y: scrollY, boxes };
+    box.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+  }
+  const css = (e, prop) => getComputedStyle(e).getPropertyValue(prop).trim();
+  const px = (v) => parseFloat(v) || 0;
+  const b = box.getBoundingClientRect(), c = ctl.getBoundingClientRect();
+  const x0 = b.x + px(css(box, "border-left-width")), y0 = b.y + px(css(box, "border-top-width"));
+  const x1 = b.right - px(css(box, "border-right-width")), y1 = b.bottom - px(css(box, "border-bottom-width"));
+  const plainBox = (e) => !/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|FRAME|FENCEDFRAME|PROGRESS|METER|INPUT|SELECT|TEXTAREA)$/.test(e.tagName.toUpperCase()) && (css(e, "clip-path") === "" || css(e, "clip-path") === "none") && css(e, "background-clip").split(",").every((v) => /^(border-box|padding-box)$/.test(v.trim())) && !/list-item/.test(css(e, "display")) && !e.shadowRoot;
+  const plainFill = (e) => ["background-image", "mask-image", "box-shadow", "filter", "backdrop-filter"].every((k) => {
+    const v = css(e, k);
+    return v === "" || v === "none";
+  }) && ["top", "right", "bottom", "left"].every((side) => px(css(e, `border-${side}-width`)) === 0 || css(e, `border-${side}-style`) === "none") && (px(css(e, "outline-width")) === 0 || css(e, "outline-style") === "none");
+  box.setAttribute("data-dt-own", "");
+  ctl.setAttribute("data-dt-own-ctl", "");
+  for (let p = up(box); p; p = up(p)) p.setAttribute("data-dt-own-up", "");
+  if (active && active !== document.body && !box.contains(active)) active.setAttribute("data-dt-own-foc", "");
+  const roots = [];
+  const els = [];
+  const todo = [{ e: box, inCtl: false }];
+  for (let t = todo.pop(); t; t = todo.pop()) {
+    if (els.length >= 2e4) {
+      o.roots = roots;
+      return { ctl: "", keep: 0, why: "more than 20000 boxes to hide", scrolled: !!o.saved };
+    }
+    const inCtl = t.inCtl || t.e === ctl;
+    if (t.e !== box) els.push({ e: t.e, inCtl });
+    const sr = t.e.shadowRoot;
+    if (sr) {
+      roots.push({ root: sr, inCtl });
+      for (const k of Array.from(sr.children)) todo.push({ e: k, inCtl });
+    }
+    for (const k of Array.from(t.e.children)) todo.push({ e: k, inCtl });
+  }
+  o.roots = roots;
+  o.els = els;
+  const all = Array.from(box.querySelectorAll("*"));
+  let keep = 0;
+  for (let i = 0; i < all.length && i < 2e3; i++) {
+    const e = all[i];
+    if (!e || e === ctl || ctl.contains(e) || css(e, "visibility") !== "visible" || !plainBox(e)) continue;
+    const r = e.getBoundingClientRect();
+    const hugs = e.contains(ctl) && r.x >= c.x - 8 && r.y >= c.y - 8 && r.right <= c.right + 8 && r.bottom <= c.bottom + 8;
+    const covers = r.x <= x0 + 1 && r.y <= y0 + 1 && r.right >= x1 - 1 && r.bottom >= y1 - 1 && plainFill(e);
+    if (hugs || covers) {
+      e.setAttribute("data-dt-own-keep", "");
+      keep++;
+    }
+  }
+  const label = ctl.getAttribute("aria-label");
+  return { ctl: `<${ctl.tagName.toLowerCase()}${ctl.getAttribute("type") ? ` type="${ctl.getAttribute("type") ?? ""}"` : ""}${ctl.getAttribute("role") ? ` role="${ctl.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`, keep, why: null, scrolled: !!o.saved };
+}
+function ownShot(arg) {
+  const o = window.__dtOwn;
+  const no = (why) => ({ clip: null, why, keep: [] });
+  if (!o) return no("the probe lost the opener it compares");
+  const hi = "#dt-own-0#dt-own-0#dt-own-0";
+  const lift = (sel) => `:is(${sel}, ${hi})`;
+  const H = "{ visibility: hidden !important; transition: none !important; }";
+  const pseudos = (sel) => [sel, `${sel}::before`, `${sel}::after`].join(", ");
+  const EXTRA_PSEUDOS = ["::placeholder", "::file-selector-button", "::details-content", "::scroll-button(*)", "::scroll-marker", "::scroll-marker-group"];
+  const extra = (sel) => EXTRA_PSEUDOS.map((ps) => `${sel}${ps} { visibility: hidden !important; transition: none !important;${ps === "::placeholder" ? " color: transparent !important;" : ""} }`).join("\n");
+  if (arg.shot !== "A" && Array.from(o.box.querySelectorAll(":not([data-dt-own-in])")).some((e) => !o.ctl.contains(e))) return no("the opener's content changed while it was compared (an element mounted in it during the screenshots)");
+  for (const e of Array.from(o.box.querySelectorAll("*"))) if (!e.hasAttribute("data-dt-own-in")) e.setAttribute("data-dt-own-in", "");
+  for (const e of Array.from(o.ctl.querySelectorAll("*"))) if (!e.hasAttribute("data-dt-own-cin")) e.setAttribute("data-dt-own-cin", "");
+  const notOwn = lift(":not([data-dt-own], [data-dt-own-in], [data-dt-own-foc])");
+  const own = lift("[data-dt-own]");
+  const inner = lift("[data-dt-own-in]");
+  const foc = lift("[data-dt-own-foc]");
+  const SHOW = "{ visibility: visible !important; transition: none !important; }";
+  const outside = [
+    `${pseudos(notOwn)} ${H}`,
+    `${foc} ${SHOW}`,
+    `${foc}::before, ${foc}::after ${H}`,
+    extra(foc),
+    `${lift("[data-dt-own-up]")} { background: none !important; }`
+  ].join("\n");
+  const shown = `${own} ${SHOW}`;
+  const content = [`${[inner, `${own}::before`, `${own}::after`, `${inner}::before`, `${inner}::after`].join(", ")} ${H}`, extra(inner), extra(own)].join("\n");
+  const kept = `:is([data-dt-own-keep], ${hi}#dt-own-0) { visibility: visible !important; transition: none !important; }`;
+  const flat = `${lift(":is([data-dt-own-up], [data-dt-own])")} { filter: none !important; clip-path: none !important; mask: none !important; backdrop-filter: none !important; }`;
+  const ctl = lift("[data-dt-own-ctl]"), ctlIn = lift("[data-dt-own-cin]");
+  const text = arg.shot === "A" ? `${outside}
+${shown}
+${[ctl, ctlIn].map(pseudos).join(", ")} ${H}
+${extra(ctl)}
+${extra(ctlIn)}` : arg.shot === "B" ? `${outside}
+${shown}
+${content}
+${own}::marker { color: transparent !important; }
+${kept}` : arg.shot === "K" ? `${outside}
+${content}
+${own} ${H}
+${kept}
+${flat}` : `${outside}
+${content}
+${own} ${H}
+${flat}`;
+  if (!o.sheet) {
+    o.sheet = new CSSStyleSheet();
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, o.sheet];
+  }
+  o.sheet.replaceSync(text);
+  const roots = o.roots ?? [];
+  if (roots.length && !o.rootSheet) {
+    o.rootSheet = new CSSStyleSheet();
+    o.rootSheet.replaceSync(`${pseudos(lift("*"))} ${H}`);
+  }
+  const rootSheet = o.rootSheet;
+  for (const { root, inCtl } of roots) {
+    if (!rootSheet) break;
+    const rest = root.adoptedStyleSheets.filter((x) => x !== rootSheet);
+    root.adoptedStyleSheets = arg.shot !== "A" || inCtl ? [...rest, rootSheet] : rest;
+  }
+  const vis = (e, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue("visibility");
+  const name = (e) => `<${e.tagName.toLowerCase()}>`;
+  const beat = "against the probe's hiding rule (an inline or cascade-layer !important)";
+  if (o.ctl.isConnected && o.ctl.getClientRects().length > 0 && vis(o.ctl) !== "hidden") return no(`the page kept its control showing ${beat}`);
+  if (arg.shot !== "A" && vis(o.box, "::before") !== "hidden") return no(`the page kept the opener's own ::before showing ${beat}`);
+  if (arg.shot !== "A" && vis(o.box, "::after") !== "hidden") return no(`the page kept the opener's own ::after showing ${beat}`);
+  if ((arg.shot === "K" || arg.shot === "N") && vis(o.box) !== "hidden") return no(`the page kept the opener showing ${beat}`);
+  const st = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+  const generated = (e, ps) => !/^(none|normal)?$/.test(st(e, "content", ps));
+  const others = (e) => ["::first-letter", ...EXTRA_PSEUDOS].filter((ps) => ps === "::first-letter" ? Array.from(e.childNodes).some((t) => t.nodeType === 3 && /\S/.test(t.nodeValue ?? "")) : ps === "::placeholder" ? /^(INPUT|TEXTAREA)$/.test(e.tagName.toUpperCase()) && e.hasAttribute("placeholder") : ps === "::file-selector-button" ? e.tagName.toUpperCase() === "INPUT" && (e.getAttribute("type") ?? "").toLowerCase() === "file" : ps === "::details-content" ? e.tagName.toUpperCase() === "DETAILS" : ps === "::scroll-marker-group" ? !/^(none)?$/.test(st(e, "scroll-marker-group")) : generated(e, ps));
+  if (arg.shot !== "A") {
+    for (const ps of others(o.box)) if (vis(o.box, ps) !== "hidden") return no(`the page kept the opener's own ${ps} showing ${beat}`);
+  }
+  for (const { e, inCtl } of o.els ?? []) {
+    if (!e.isConnected || arg.shot === "A" && !inCtl || arg.shot !== "A" && arg.shot !== "N" && e.hasAttribute("data-dt-own-keep")) continue;
+    if (vis(e) !== "hidden") return no(`the page kept ${name(e)} inside the opener showing ${beat}`);
+    for (const ps of ["::before", "::after"]) {
+      const c = getComputedStyle(e, ps).getPropertyValue("content");
+      if (c !== "none" && c !== "normal" && vis(e, ps) !== "hidden") return no(`the page kept a ${ps} inside the opener showing ${beat}`);
+    }
+    for (const ps of others(e)) if (vis(e, ps) !== "hidden") return no(`the page kept a ${ps} inside the opener showing ${beat}`);
+  }
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const r = o.box.getBoundingClientRect();
+  const cx0 = Math.max(0, Math.floor(r.x)), cy0 = Math.max(0, Math.floor(r.y)), cx1 = Math.min(vw, Math.ceil(r.right)), cy1 = Math.min(vh, Math.ceil(r.bottom));
+  if (cx1 - cx0 < 1 || cy1 - cy0 < 1) return no("nothing of the opener is on screen to compare");
+  const keep = [];
+  if (arg.shot === "K") {
+    const len = (t, size) => t.endsWith("%") ? (parseFloat(t) || 0) / 100 * size : parseFloat(t) || 0;
+    const shape = (p, inner2) => {
+      const pr = p.getBoundingClientRect();
+      const w = pr.width, h = pr.height;
+      const r2 = [];
+      for (const k of ["top-left", "top-right", "bottom-right", "bottom-left"]) {
+        const v = st(p, `border-${k}-radius`).split(/\s+/);
+        r2.push(len(v[0] ?? "0", w), len(v[1] ?? v[0] ?? "0", h));
+      }
+      const f = Math.min(1, ...[[0, 2, w], [6, 4, w], [1, 7, h], [3, 5, h]].map(([i = 0, j = 0, side = 0]) => {
+        const sum = (r2[i] ?? 0) + (r2[j] ?? 0);
+        return sum > 0 ? side / sum : 1;
+      }));
+      const sc = r2.map((v) => v * f);
+      if (!inner2) return { x: pr.x, y: pr.y, right: pr.right, bottom: pr.bottom, r: sc };
+      const bt = parseFloat(st(p, "border-top-width")) || 0, brw = parseFloat(st(p, "border-right-width")) || 0, bb = parseFloat(st(p, "border-bottom-width")) || 0, bl = parseFloat(st(p, "border-left-width")) || 0;
+      const cut = [bl, bt, brw, bt, brw, bb, bl, bb];
+      return { x: pr.x + bl, y: pr.y + bt, right: pr.right - brw, bottom: pr.bottom - bb, r: sc.map((v, i) => Math.max(0, v - (cut[i] ?? 0))) };
+    };
+    for (const e of Array.from(document.querySelectorAll("[data-dt-own-keep]"))) {
+      const q = e.getBoundingClientRect();
+      const shapes = [shape(e, false)];
+      for (let p = e === o.box ? null : e.parentElement; p; p = p === o.box ? null : p.parentElement) {
+        if (st(p, "overflow-x") !== "visible" || st(p, "overflow-y") !== "visible") shapes.push(shape(p, true));
+      }
+      const bg = st(e, "background-color");
+      const filled = !(bg === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(bg));
+      keep.push({ x: q.x, y: q.y, right: q.right, bottom: q.bottom, filled, shapes });
+    }
+  }
+  return { clip: { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 }, why: null, keep };
+}
+function ownWhy(_arg) {
+  return window.__dtOwnWhy ?? null;
+}
+function tipPreMark(_arg) {
+  if (window.__dtTipPre) return false;
+  const pre = /* @__PURE__ */ new WeakSet();
+  const vis = (e) => e.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  const todo = [document.documentElement];
+  let n = 0;
+  for (let e = todo.pop(); e; e = todo.pop()) {
+    if (++n > 5e5) {
+      window.__dtTipPre = null;
+      return false;
+    }
+    for (const k of Array.from(e.children)) todo.push(k);
+    const sr = e.shadowRoot;
+    if (sr) for (const k of Array.from(sr.children)) todo.push(k);
+    if ((e.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() !== "tooltip" && !e.getAttribute("id")) continue;
+    if (!e.checkVisibility({ opacityProperty: true })) continue;
+    if (vis(e)) {
+      pre.add(e);
+      continue;
+    }
+    const d = e.querySelectorAll("*");
+    if (d.length > 2e3 || Array.from(d).some(vis)) pre.add(e);
+  }
+  window.__dtTipPre = pre;
+  return true;
+}
+function ownClear(_arg) {
+  const o = window.__dtOwn;
+  if (o && o.sheet) {
+    const sheet = o.sheet;
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((x) => x !== sheet);
+  }
+  if (o && o.rootSheet && o.roots) {
+    const sheet = o.rootSheet;
+    for (const { root } of o.roots) root.adoptedStyleSheets = root.adoptedStyleSheets.filter((x) => x !== sheet);
+  }
+  for (const e of Array.from(document.querySelectorAll("[data-dt-own], [data-dt-own-ctl], [data-dt-own-keep], [data-dt-own-up], [data-dt-own-foc], [data-dt-own-in], [data-dt-own-cin]"))) {
+    e.removeAttribute("data-dt-own-foc");
+    e.removeAttribute("data-dt-own-in");
+    e.removeAttribute("data-dt-own-cin");
+    e.removeAttribute("data-dt-own");
+    e.removeAttribute("data-dt-own-ctl");
+    e.removeAttribute("data-dt-own-keep");
+    e.removeAttribute("data-dt-own-up");
+  }
+  if (o && o.saved) {
+    for (const b of o.saved.boxes) if (b.el.scrollLeft !== b.left || b.el.scrollTop !== b.top) b.el.scrollTo({ left: b.left, top: b.top, behavior: "instant" });
+    scrollTo({ left: o.saved.x, top: o.saved.y, behavior: "instant" });
+  }
+  if (o && o.focus && o.focus.isConnected && document.activeElement !== o.focus) o.focus.focus({ preventScroll: true });
+  window.__dtOwn = null;
+  return true;
+}
 function syntheticClick(path4) {
   const el = document.querySelector(path4);
   if (!el) return false;
@@ -1677,6 +1949,362 @@ function submitGuard(el) {
     if (w !== null) return `${w} at its click point`;
   }
   return null;
+}
+function clickPointControl(el, arg) {
+  const mark = !!arg && arg.mark;
+  if (mark) {
+    window.__dtOwn = null;
+    window.__dtOwnWhy = null;
+  }
+  const FOC = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
+  const BTN = "button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]";
+  const ACT = `${BTN}, [role=checkbox i], [role=switch i], [role=radio i], [role=option i], [role=menuitemcheckbox i], [role=menuitemradio i], input[type=checkbox i], input[type=radio i], input[type=submit i], input[type=button i], input[type=image i], input[type=reset i], input[type=file i]`;
+  const self = el.matches(FOC);
+  const ownContent = (box, ctl) => {
+    const up2 = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+    const css = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+    const set = (e, prop, pseudo = null) => {
+      const v = css(e, prop, pseudo);
+      return v !== "" && v !== "none";
+    };
+    const chain = (test) => {
+      const memo = /* @__PURE__ */ new Map();
+      return (e) => {
+        const seen = [];
+        let hit = false;
+        for (let p = e; p && p !== box; p = up2(p)) {
+          const m = memo.get(p);
+          if (m !== void 0) {
+            hit = m;
+            break;
+          }
+          seen.push(p);
+          if (test(p)) {
+            hit = true;
+            break;
+          }
+        }
+        for (const s of seen) memo.set(s, hit);
+        return hit;
+      };
+    };
+    let work = 0;
+    const OWN_WORK_CAP = 2e4;
+    const tick = () => ++work > OWN_WORK_CAP;
+    const inCtl = chain((p) => p === ctl);
+    const outOfFlow = (e, pseudo = null) => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
+    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
+    const boxed = (e) => {
+      let p = e;
+      while (p && css(p, "display") === "contents") p = up2(p);
+      return p;
+    };
+    const shown = (e) => {
+      const b = boxed(e);
+      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
+    };
+    const holdsFixed = (p) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k)) || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change")) || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
+    const de2 = document.documentElement;
+    const horizontal = !/^(vertical|sideways)/.test(css(de2, "writing-mode"));
+    let sx = scrollX, sy = scrollY;
+    for (let p = box; p && p !== de2; p = up2(p)) {
+      sx += Math.abs(p.scrollLeft || 0);
+      sy += Math.abs(p.scrollTop || 0);
+    }
+    const startX = horizontal && css(de2, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
+    const clipped = (e, q) => {
+      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
+      let flow = "in";
+      for (let p = e; p; p = p === box ? null : up2(p)) {
+        if (tick()) return null;
+        if (css(p, "display") === "contents") continue;
+        const pr = p.getBoundingClientRect();
+        const pos = css(p, "position");
+        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
+        if (!skip) {
+          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
+          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
+          if (ox !== "visible") {
+            x0 = Math.max(x0, pr.x - cm);
+            x1 = Math.min(x1, pr.right + cm);
+          }
+          if (oy !== "visible") {
+            y0 = Math.max(y0, pr.y - cm);
+            y1 = Math.min(y1, pr.bottom + cm);
+          }
+          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
+        }
+        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
+        if (ins) {
+          const [t = "0", r2 = t, b = t, l = r2] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
+          const len = (s, size) => s.endsWith("%") ? parseFloat(s) / 100 * size : parseFloat(s);
+          const T = len(t, pr.height), R = len(r2, pr.width), B = len(b, pr.height), L = len(l, pr.width);
+          if (![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.right - R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.bottom - B);
+          }
+        }
+        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
+        if (rc && /^(absolute|fixed)$/.test(pos)) {
+          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
+          const at2 = (s, auto) => s === void 0 || s === "auto" ? auto : parseFloat(s);
+          const T = at2(v[0], 0), R = at2(v[1], pr.width), B = at2(v[2], pr.height), L = at2(v[3], 0);
+          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.x + R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.y + B);
+          }
+        }
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const area = (e, q) => {
+      const c = clipped(e, q);
+      return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity;
+    };
+    const els = [];
+    const texts = [];
+    const todo = [box];
+    for (let e = todo.pop(); e; e = todo.pop()) {
+      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
+      els.push(e);
+      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+      const sr = e.shadowRoot;
+      let kids = Array.from(e.children);
+      if (sr) {
+        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+        kids = Array.from(sr.children).concat(kids);
+      }
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const k = kids[i];
+        if (k) todo.push(k);
+      }
+    }
+    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
+    const chrome = (e) => {
+      if (e.contains(ctl)) return true;
+      const r2 = e.getBoundingClientRect();
+      return mx >= r2.x && mx <= r2.right && my >= r2.y && my <= r2.bottom;
+    };
+    const clear = (v) => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
+    for (const e of els) {
+      if (inCtl(e) || !shown(e)) continue;
+      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
+      const host = boxed(e) ?? e;
+      for (const ps of ["::before", "::after"]) {
+        const c = css(e, "content", ps);
+        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str ? str[1] ?? "" : null;
+        const fill2 = !clear(css(e, "background-color", ps));
+        const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
+        if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
+      }
+      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker"))) && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
+      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
+      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
+      if (e === box) {
+        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
+        if (set(e, "border-image-source")) return "its own border image";
+        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
+        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
+        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
+        const ws = sides.map((d) => d.w > 0 && !clear(d.c) ? d.w : 0);
+        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
+        const layers = [];
+        let depth = 0, cur = "";
+        for (const ch of `${css(e, "box-shadow")},`) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          if (ch !== "," || depth > 0) {
+            cur += ch;
+            continue;
+          }
+          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
+          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
+          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
+          cur = "";
+        }
+        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
+        const ownBg = css(e, "background-color");
+        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
+        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
+        const paints2 = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
+        if (paints2 && set(e, "mask-image")) return "its own paint under a mask";
+        const cp = css(e, "clip-path");
+        if (paints2 && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
+        continue;
+      }
+      if (css(e, "display") === "contents") continue;
+      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
+      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
+      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
+    }
+    for (const { t, e } of texts) {
+      const text = (t.nodeValue || "").trim();
+      if (!text || inCtl(e) || !shown(e)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(t);
+      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
+    }
+    const br = box.getBoundingClientRect();
+    const anc = /* @__PURE__ */ new Set();
+    for (let p = up2(box); p; p = up2(p)) anc.add(p);
+    const bg = css(box, "background-color");
+    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
+    for (let p = box; p && opaque; p = up2(p)) {
+      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
+      if (op !== "" && parseFloat(op) < 1 || bm !== "" && bm !== "normal") opaque = false;
+    }
+    const meets = (q) => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
+    const over = (f, c, events) => {
+      if (!c) return true;
+      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
+      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
+      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
+      if (events === "none" || !opaque) return true;
+      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
+      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
+      return iF < 0 || iB < 0 || iF < iB;
+    };
+    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
+    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
+    const tipPre = window.__dtTipPre;
+    const tip = (f) => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
+    const gone2 = chain((p) => css(p, "opacity") === "0");
+    const FOREIGN_CAP = 5e5;
+    let walked = 0;
+    const moved = (f) => {
+      const s = getComputedStyle(f);
+      return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => {
+        const v = s.getPropertyValue(k);
+        return v !== "" && v !== "none";
+      });
+    };
+    const ftodo = [{ f: de2, near: true }];
+    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
+      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
+      const f = t.f;
+      if (f === box || tip(f)) continue;
+      const isAnc = anc.has(f);
+      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
+      const near = isAnc || fr !== null && meets(fr);
+      const sr = f.shadowRoot;
+      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
+      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
+      if (!fr || !near || pinned(f) || !shown(f) || gone2(f)) continue;
+      const events = css(f, "pointer-events");
+      for (const t2 of [...Array.from(f.childNodes), ...sr ? Array.from(sr.childNodes) : []]) {
+        const text = t2.nodeType === 3 ? (t2.nodeValue || "").trim() : "";
+        if (!text) continue;
+        const range = document.createRange();
+        range.selectNodeContents(t2);
+        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
+      }
+      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
+      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
+      for (const ps of ["::before", "::after"]) {
+        const c = css(f, "content", ps);
+        const pos = css(f, "position", ps);
+        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        let q = fr;
+        if (pos === "absolute") {
+          let cb = f;
+          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up2(cb);
+          const cr0 = cb ? cb.getBoundingClientRect() : null;
+          const n = (k) => parseFloat(css(f, k, ps)) || 0;
+          const x = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
+          const y = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
+          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
+          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
+          q = { x, y, width: w, height: h, right: x + w, bottom: y + h };
+        } else if (isAnc) continue;
+        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
+      }
+    }
+    return null;
+  };
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  let onScreen = false, cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  for (const q of Array.from(el.getClientRects())) {
+    const x0 = Math.min(Math.max(q.x, 0), vw), x1 = Math.min(Math.max(q.right, 0), vw);
+    const y0 = Math.min(Math.max(q.y, 0), vh), y1 = Math.min(Math.max(q.bottom, 0), vh);
+    if ((x1 - x0) * (y1 - y0) > 0.99) {
+      onScreen = true;
+      cx = (x0 + x1) / 2;
+      cy = (y0 + y1) / 2;
+      break;
+    }
+  }
+  const inner = Array.from(el.querySelectorAll(FOC));
+  const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+  const framed = (e) => /^(IFRAME|FRAME|OBJECT|EMBED|FENCEDFRAME)$/.test(e.tagName.toUpperCase());
+  const pick = (e) => e.tagName.toUpperCase() === "LABEL" ? e.control ?? null : e.matches(FOC) || e.matches(ACT) || framed(e) ? e : null;
+  const presses = (e) => !!e && (e.matches(ACT) || framed(e));
+  let at = null;
+  if (onScreen) {
+    let hit = document.elementFromPoint(cx, cy), from = hit;
+    for (let i = 0; hit && hit.shadowRoot && i < 32; i++) {
+      const host = hit, sr = hit.shadowRoot;
+      const deeper = sr.elementFromPoint ? sr.elementFromPoint(cx, cy) : null;
+      let under = false;
+      for (let p = deeper; p; p = up(p)) if (p === host) {
+        under = true;
+        break;
+      }
+      if (deeper && deeper !== host && under) {
+        hit = deeper;
+        from = deeper;
+        continue;
+      }
+      const slotted = Array.from(host.childNodes).find((t) => {
+        if (t.nodeType !== 3 || !t.assignedSlot) return false;
+        const rg = document.createRange();
+        rg.selectNodeContents(t);
+        return Array.from(rg.getClientRects()).some((q) => cx >= q.x && cx <= q.right && cy >= q.y && cy <= q.bottom);
+      });
+      from = slotted && slotted.assignedSlot ? slotted.assignedSlot : host;
+      break;
+    }
+    let found = null;
+    for (let p = from; p; p = up(p)) {
+      if (p === el) {
+        at = found;
+        break;
+      }
+      if (presses(found)) continue;
+      const k = pick(p);
+      if (k && (!found || presses(k))) found = k;
+    }
+  } else {
+    const holds = Array.from(el.querySelectorAll(`${FOC}, ${ACT}, label, frame, object, embed, fencedframe`)).filter((c) => {
+      const b = c.getBoundingClientRect();
+      return b.width > 0 && b.height > 0 && cx >= b.x && cx <= b.right && cy >= b.y && cy <= b.bottom;
+    });
+    for (const h of holds) {
+      const k = pick(h);
+      if (k && (!presses(at) || presses(k))) at = k;
+    }
+  }
+  if (!presses(at)) return null;
+  if (!self && inner.length === 1 && inner[0] === at && at.matches(BTN)) {
+    const own = ownContent(el, at);
+    if (own === null) {
+      if (mark) window.__dtOwn = { box: el, ctl: at };
+      return null;
+    }
+    if (mark) window.__dtOwnWhy = `its own content: ${own}`;
+  }
+  const label = at.getAttribute("aria-label");
+  return `<${at.tagName.toLowerCase()}${at.getAttribute("type") ? ` type="${at.getAttribute("type") ?? ""}"` : ""}${at.getAttribute("role") ? ` role="${at.getAttribute("role") ?? ""}"` : ""}${label ? ` aria-label="${label}"` : ""}>`;
 }
 var OVERLAY_ACTIONS = /* @__PURE__ */ new Set(["overlay", "swap"]);
 var CLICK_TRIGGERS = /* @__PURE__ */ new Set(["on_click", "on_press"]);
@@ -1728,6 +2356,161 @@ var CLOSED = /Target closed|Target page, context or browser has been closed|Brow
 var NAVIGATED = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
 var firstLine = (e) => errMsg(e).split("\n")[0] ?? "";
 var notRun = (row, detail, extra) => ({ nodeId: row.nodeId, trigger: row.trigger, ok: null, detail: `not-run: ${detail}`, ...extra });
+function decodePng(buf) {
+  let o = 8, w = 0, h = 0, ct = -1, depth = 0, interlace = 0;
+  const idat = [];
+  while (o + 8 <= buf.length) {
+    const len = buf.readUInt32BE(o), type = buf.toString("latin1", o + 4, o + 8), d = buf.subarray(o + 8, o + 8 + len);
+    if (type === "IHDR") {
+      w = d.readUInt32BE(0);
+      h = d.readUInt32BE(4);
+      depth = d[8] ?? 0;
+      ct = d[9] ?? -1;
+      interlace = d[12] ?? 0;
+    } else if (type === "IDAT") idat.push(d);
+    else if (type === "IEND") break;
+    o += 12 + len;
+  }
+  if (depth !== 8 || ct !== 2 && ct !== 6 || interlace !== 0) throw new Error(`unsupported PNG (colour type ${ct}, depth ${depth}${interlace ? ", interlaced" : ""})`);
+  const ch = ct === 6 ? 4 : 3, stride = w * ch;
+  const raw = inflateSync(Buffer.concat(idat));
+  if (raw.length < (stride + 1) * h) throw new Error("truncated PNG");
+  const px = new Uint8Array(stride * h);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)] ?? 0, s = y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
+    for (let i = 0; i < stride; i++) {
+      const x = raw[s + i] ?? 0, a = i >= ch ? px[dst + i - ch] ?? 0 : 0, b = y ? px[prev + i] ?? 0 : 0, c = y && i >= ch ? px[prev + i - ch] ?? 0 : 0;
+      let v;
+      if (f === 0) v = x;
+      else if (f === 1) v = x + a;
+      else if (f === 2) v = x + b;
+      else if (f === 3) v = x + (a + b >> 1);
+      else {
+        const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+      }
+      px[dst + i] = v & 255;
+    }
+  }
+  if (ch === 4) return { w, h, data: px };
+  const data = new Uint8Array(w * h * 4);
+  for (let i = 0, j = 0; i < px.length; i += 3, j += 4) {
+    data[j] = px[i] ?? 0;
+    data[j + 1] = px[i + 1] ?? 0;
+    data[j + 2] = px[i + 2] ?? 0;
+    data[j + 3] = 255;
+  }
+  return { w, h, data };
+}
+function shapeDistance(q, px, py) {
+  const hw = (q.right - q.x) / 2, hh = (q.bottom - q.y) / 2, dx = px - (q.x + hw), dy = py - (q.y + hh);
+  const i = dy < 0 ? dx < 0 ? 0 : 1 : dx < 0 ? 3 : 2;
+  const rx = q.r[2 * i] ?? 0, ry = q.r[2 * i + 1] ?? 0;
+  const ax = Math.abs(dx), ay = Math.abs(dy), qx = ax - (hw - rx), qy = ay - (hh - ry);
+  if (rx > 0 && ry > 0 && qx > 0 && qy > 0) {
+    const f = (qx / rx) ** 2 + (qy / ry) ** 2 - 1, g = 2 * Math.hypot(qx / (rx * rx), qy / (ry * ry));
+    return g > 0 ? f / g : -Math.min(rx, ry);
+  }
+  return Math.max(ax - hw, ay - hh);
+}
+var KEPT_EDGE_PX = 1.5;
+function plainKept(k, n, clip, keep) {
+  if (k.w !== n.w || k.h !== n.h) return "the two screenshots differ in size";
+  const filled = keep.filter((r) => r.filled).map((r) => ({
+    // pixel columns / rows, clip-relative, that can hold a part of it: [ox0, ox1) × [oy0, oy1)
+    ox0: Math.floor(r.x - clip.x) - 2,
+    ox1: Math.ceil(r.right - clip.x) + 2,
+    oy0: Math.floor(r.y - clip.y) - 2,
+    oy1: Math.ceil(r.bottom - clip.y) + 2,
+    shapes: r.shapes,
+    mx: Math.floor((r.x + r.right) / 2 - clip.x),
+    my: Math.floor((r.y + r.bottom) / 2 - clip.y)
+  }));
+  const at = (img, x, y, c) => img.data[(y * k.w + x) * 4 + c] ?? 0;
+  const near = (x, y, col, tol) => [0, 1, 2].every((c) => Math.abs(at(k, x, y, c) - (col[c] ?? 0)) <= tol);
+  const f0 = filled[0];
+  const C = f0 ? [0, 1, 2].map((c) => at(k, Math.min(k.w - 1, Math.max(0, f0.mx)), Math.min(k.h - 1, Math.max(0, f0.my)), c)) : [];
+  for (let y = 0; y < k.h; y++) {
+    for (let x = 0; x < k.w; x++) {
+      const N = [0, 1, 2].map((c) => at(n, x, y, c));
+      let zone = "out";
+      for (const f of filled) {
+        if (x < f.ox0 || x >= f.ox1 || y < f.oy0 || y >= f.oy1) continue;
+        const px = x + 0.5 + clip.x, py = y + 0.5 + clip.y;
+        let sd = -Infinity;
+        for (const q of f.shapes) sd = Math.max(sd, shapeDistance(q, px, py));
+        if (sd <= -KEPT_EDGE_PX) {
+          zone = "core";
+          break;
+        }
+        if (sd < KEPT_EDGE_PX) zone = "band";
+      }
+      if (zone === "out") {
+        if (!near(x, y, N, 1)) return `a kept box paints outside itself (at ${x}, ${y} of the opener)`;
+        continue;
+      }
+      if (zone === "core") {
+        if (!near(x, y, C, 1)) return `a kept box does not paint one plain colour (at ${x}, ${y} of the opener)`;
+        continue;
+      }
+      const d = [0, 1, 2].map((c) => (C[c] ?? 0) - (N[c] ?? 0));
+      const big = [0, 1, 2].reduce((m, c) => Math.abs(d[c] ?? 0) > Math.abs(d[m] ?? 0) ? c : m, 0);
+      const db = d[big] ?? 0;
+      if (Math.abs(db) <= 3) {
+        if (!near(x, y, N, 3)) return `a kept box's edge is not a blend of its colour (at ${x}, ${y} of the opener)`;
+        continue;
+      }
+      const t = (at(k, x, y, big) - (N[big] ?? 0)) / db;
+      if (t < -0.02 || t > 1.02 || ![0, 1, 2].every((c) => Math.abs((N[c] ?? 0) + t * (d[c] ?? 0) - at(k, x, y, c)) <= 3)) return `a kept box's edge is not a blend of its colour (at ${x}, ${y} of the opener)`;
+    }
+  }
+  return null;
+}
+var OWN_SHOT_MS = 5e3;
+async function ownPixels(page, o) {
+  let ctl = "its sole control";
+  try {
+    const m = await page.evaluate(ownMark, null);
+    if (m === null) return null;
+    if (m.why !== null) return { ctl, why: m.why };
+    ctl = m.ctl;
+    if (o.park) await page.mouse.move(0, 0);
+    const shot = async (s, want) => {
+      const arg = { shot: s };
+      const r = await page.evaluate(ownShot, arg);
+      if (r.clip === null) return r.why ?? "nothing of the opener is on screen to compare";
+      if (want && JSON.stringify(r.clip) !== JSON.stringify(want)) return "the opener moved between the screenshots";
+      if (s === "A" && (o.park || m.scrolled)) await raf2(page);
+      return { png: await page.screenshot({ clip: r.clip, animations: "disabled", caret: "hide", scale: "css", timeout: OWN_SHOT_MS }), clip: r.clip, keep: r.keep };
+    };
+    const a = await shot("A");
+    if (typeof a === "string") return { ctl, why: a };
+    const b = await shot("B", a.clip);
+    if (typeof b === "string") return { ctl, why: b };
+    if (!a.png.equals(b.png)) return { ctl, why: "the opener paints something of its own beside it (D52: its screenshot with only that control hidden differs from the one with all its content hidden)" };
+    if (m.keep === 0) return { ctl, why: null };
+    const k = await shot("K", a.clip);
+    if (typeof k === "string") return { ctl, why: k };
+    const n = await shot("N", a.clip);
+    if (typeof n === "string") return { ctl, why: n };
+    const plain = plainKept(decodePng(k.png), decodePng(n.png), k.clip, k.keep);
+    return { ctl, why: plain === null ? null : `a box kept as the opener's decoration is not a plain fill \u2014 ${plain} (D53: alone it must paint one uniform colour)` };
+  } catch (e) {
+    return { ctl, why: `its own content could not be compared by pixels (${firstLine(e)})` };
+  } finally {
+    await page.evaluate(ownClear, null).catch(() => void 0);
+  }
+}
+var RESTORE_CAP_MS = 3e3;
+async function restoreSettled(page) {
+  const t0 = Date.now();
+  let held = 0;
+  while (held < 2 && Date.now() - t0 < RESTORE_CAP_MS) {
+    await page.evaluate(restoreScroll);
+    await raf2(page);
+    held = await page.evaluate(scrollHeld) ? held + 1 : 0;
+  }
+}
 async function openReached(browser, o, extra) {
   const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: extra?.dsf ?? 1, reducedMotion: "reduce" });
   if (extra && extra.onContext) extra.onContext(context);
@@ -1766,6 +2549,7 @@ async function driveRow(browser, o, row, hooks, onContext) {
     if (st.visible) await page.locator(st.path).first().scrollIntoViewIfNeeded({ timeout: 2e3 }).catch(() => void 0);
     const submits = await page.locator(st.path).first().evaluate(submitGuard);
     if (submits !== null) return { ...base, ok: null, detail: `opener would submit a form (${submits}) \u2014 not driven` };
+    await page.evaluate(tipPreMark, null).catch(() => false);
     let revealedBy;
     if (!st.visible) {
       if (st.hoverPath !== null) {
@@ -1778,11 +2562,26 @@ async function driveRow(browser, o, row, hooks, onContext) {
       if (!st.visible || st.path === null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener not visible even on hover${revealedBy !== void 0 ? ` (hovered ${revealedBy})` : " (no visible ancestor to hover)"} \u2014 not driven` };
     }
     const openerPath = st.path;
+    await page.locator(openerPath).first().hover({ timeout: 2e3, force: true }).catch(() => void 0);
+    await raf2(page);
+    const submitsHovered = await page.locator(openerPath).first().evaluate(submitGuard);
+    if (submitsHovered !== null) return { ...base, ok: null, ...revealedBy !== void 0 ? { revealedBy } : {}, detail: `opener would submit a form (${submitsHovered}) \u2014 not driven` };
+    const notOwn = (ctl, why) => ({
+      ...base,
+      ok: null,
+      ...revealedBy !== void 0 ? { revealedBy } : {},
+      detail: `the opener's click point is another control inside it (${ctl}) \u2014 tag that control or the opener's own clickable element \u2014 not driven${why !== void 0 ? ` (${why})` : ""}`
+    });
+    const inner = await page.locator(openerPath).first().evaluate(clickPointControl, { mark: true });
+    if (inner !== null) return notOwn(inner, await page.evaluate(ownWhy, null).catch(() => null) ?? void 0);
+    const px = await ownPixels(page, { park: revealedBy === void 0 });
+    if (px !== null && px.why !== null) return notOwn(px.ctl, px.why);
     const contract = [...DIALOG_CONTRACT];
     await page.evaluate(armDetector, { destId, contract });
     const tokenBefore = String(await page.evaluate("window.__dtProbeDoc || ''"));
     const loadsBefore = loads();
     let activation = "mouse", clickWhy = "";
+    await page.locator(openerPath).first().evaluate(saveScroll);
     try {
       await page.locator(openerPath).first().click({ timeout: 2e3 });
     } catch (e) {
@@ -1791,6 +2590,7 @@ async function driveRow(browser, o, row, hooks, onContext) {
       if (!NAVIGATED.test(m)) {
         clickWhy = (/intercepts pointer events|not visible|not enabled|not stable|outside of the viewport/.exec(m) || [firstLine(e)])[0] ?? "";
         activation = "synthetic";
+        await restoreSettled(page);
         await page.evaluate(syntheticClick, openerPath);
       }
     }
@@ -1877,6 +2677,2287 @@ async function driveInteractions(browser, o, hooks) {
   return out;
 }
 
+// design-to-code/probe-behaviour.ts
+import { setTimeout as sleep2 } from "node:timers/promises";
+var CUT_SETTLE_MS2 = 5e3;
+var CLOSE_STEP_CAP_MS = 5e3;
+var PS_CAP_MS = 3e3;
+var WRITE_MARGIN_MS = 2e3;
+var BEHAVIOUR_CAP_MS = 9e4;
+var BEHAVIOUR_RESERVE_MS = CUT_SETTLE_MS2 + 2 * CLOSE_STEP_CAP_MS + PS_CAP_MS + WRITE_MARGIN_MS;
+function behaviourBudget(now, deadline, capMs = BEHAVIOUR_CAP_MS, reserveMs = BEHAVIOUR_RESERVE_MS) {
+  return Math.max(0, Math.min(capMs, deadline - now - reserveMs));
+}
+var UNIT_FLOOR_MS = 15e3;
+function unitCap(leftMs, unitsLeft, floorMs = UNIT_FLOOR_MS) {
+  return Math.max(0, Math.min(leftMs, Math.max(floorMs, leftMs / Math.max(1, unitsLeft))));
+}
+var WRITE_BLOCK_SCOPE = "per unit, from its first key press, click, scroll, hover or resize on, no request but GET/HEAD/OPTIONS leaves the browser (the page, its frames, workers, shared workers and service workers alike), no WebSocket message leaves the page and a WebSocket the page opens then never reaches the server \u2014 a blocked write makes every check of that unit from its first action on not-run; not blocked: the page's load and --steps (D50), a GET with a side effect, a WebSocket opened inside a worker, and the 12a drive of the interactions (no write block there: it never clicks an opener that would submit, nor one whose click point is another activating control (also under a focusable glyph or editable label inside it), a label's control or a nested page (an iframe, object or embed) \u2014 open shadow roots included \u2014 unless it is the sole button-like control of a container showing nothing of its own (no text, image, icon, CSS mask, generated content, filled block, progress bar, meter or list marker; a label at opacity 0 in flow counts, an out-of-flow tooltip at opacity 0 does not) by its DOM nor by its pixels (D52-D54: the container with only that control hidden against it with all its content hidden \u2014 the content of its open shadow roots, its own marker and its other pseudo-elements (a first letter, a placeholder, a file button, a details' content, scroll buttons and markers) too \u2014 everything outside it, its ancestors included, hidden in both, the opener hovered first so a control shown on hover is at its click point \u2014 any painted difference counts, a stripe or a 1-px divider too; decoration: its own background colour, a border in one colour (a 1-px divider on one side too) and its shadow, and a fill over all of it or a wrapper within 8 px of the control only when, alone (ancestor and own filters, clip-paths and masks off), they paint one plain colour (pixel-verified against their real rounded outline, a 1.5-px anti-aliased edge allowed; a progress ring, a wrapper with its own shadow or a frame in another colour is not plain, so refused); content too: its own background image (a gradient, a url), a border in two colours or a stripe, a scroll button, and a label, image or generated label laid at least half over it from outside its element (a sibling, an ancestor's ::after) unless fixed or sticky (a toast, a banner: ignored) or proven to lie under its opaque background; an ancestor's own paint (a row's gradient behind a transparent cell) is not its own; a page rule keeping something showing against the probe's (an inline or cascade-layer !important) refuses; not seen: the inside of an iframe, a closed shadow root, foreign content inside an ancestor's shadow root, a shadow root attached after the check starts, a part of the container still outside the viewport once scrolled in, content revealed after a delay, a generated label of an element lying elsewhere; the probe's init CSS is lost when a page replaces document.adoptedStyleSheets after load under a strict style CSP; an sr-only label at right:-9999px in a right-to-left page counts, so that cell is refused; the hover runs on every opener, so a mouseenter side effect also fires on one it then refuses); D55, the same exemption: content too \u2014 its own inset box-shadow offset 2 px or more or blurred (a stripe, a fill, a glow), sharp box-shadow ring layers in more than one colour (D56: not its border, not a layer in its own background colour where that cannot show \u2014 an outer one, a ring-offset, or, D57, an inset one over an opaque border-box / padding-box background) and its own paint under a mask or a clip-path other than a rounded inset(0); never foreign \u2014 a tooltip revealed by the probe's hover (D56: a [role=tooltip] element, or the control's aria-describedby target, not shown before the hover; one already on screen is its own label and refuses) and a label at effective opacity 0; under it only with no opacity below 1 or blend mode on it or above it; an element the page mounts in it during the screenshots refuses; refused by rule: a page of more than 500,000 elements, an opener whose content is re-created while it is compared (an empty spacer a framework re-creates, marks a morphdom-style patch strips, a placeholder mounted on mouseleave; it can differ between runs), an opener inside a shadow root, a role-less tooltip or other popover laid over it (with a show delay the result can differ between runs), a cell whose sole control has a tooltip pre-mounted but hidden by transform scale(0) or moved off-screen (D57: it counts as shown before the hover), a label under an oklch() / lab() / color() background (never proven opaque); not seen (D57: known misses, the drive can write): a sibling's relative ::before shifted over it from elsewhere, text overflowing a 0-height wrapper beside it, a display: contents [role=tooltip] or aria-describedby target laid over it, a label the page re-creates as a new element on the hover with tooltip semantics (role=tooltip, or the control's aria-describedby target), and a page that defines window.__dtTipPre itself first turns the record of what was shown before the hover off (an adversarial page); the focused element outside it stays shown in both shots; a refusal names its reason; it does not see a control in a closed shadow root or one that is only a click listener with no role (a bare svg onclick), and clicks those); not seen: a write the page defers past the unit's end (an undo window over about 1 s) \u2014 it never leaves (the unit's context is closed first), but the check that caused it is judged as if nothing was written and the scroll unit may press that key again";
+var WRITE_SETTLE_MS = 500;
+function taintedPhases(trace) {
+  const first = trace.actions[0];
+  const from = first ? first.seq : 0;
+  return [...new Set(trace.phases.filter((p) => p.seq >= from).flatMap((p) => p.keys))];
+}
+function fingerprintDiff(measured, unit, uses = []) {
+  const m = new Set(measured), u = new Set(unit);
+  if (!m.size) return null;
+  const missing = [...m].filter((x) => !u.has(x)), extra = [...u].filter((x) => !m.has(x));
+  const seen = (/* @__PURE__ */ new Set([...m, ...u])).size;
+  const list = (xs) => `${xs.slice(0, 5).join(", ")}${xs.length > 5 ? ` +${xs.length - 5} more` : ""}`;
+  if (missing.length < m.size && missing.length + extra.length <= Math.max(5, 0.2 * seen)) {
+    const gone2 = [...new Set(uses)].filter((x) => m.has(x) && !u.has(x));
+    return gone2.length ? `${list(gone2)} \u2014 used by this check, shown on the measured page \u2014 not shown` : null;
+  }
+  return `${missing.length} of ${m.size} measured tag(s) not shown${missing.length ? `: ${list(missing)}` : ""}${extra.length ? `; ${extra.length} not on the measured page: ${list(extra)}` : ""}`;
+}
+var NAMES_COMPUTED_BY = "Playwright (Chromium) \u2014 computed, not screen-reader verified";
+var LANDMARK_ROLES = /* @__PURE__ */ new Set(["banner", "main", "navigation", "complementary", "contentinfo", "region", "form", "search"]);
+var unescapeQuoted = (s) => s.replace(/\\(.)/g, "$1");
+function parseAriaLandmarkTree(yaml) {
+  if (typeof yaml !== "string") return null;
+  const lines = yaml.split("\n");
+  if (!lines.some((l) => /^\s*- /.test(l))) return yaml.trim() === "" ? { landmarks: [], parent: [] } : null;
+  const landmarks = [];
+  const parent = [];
+  const stack = [];
+  for (const line of lines) {
+    const item = /^(\s*)- /.exec(line);
+    if (!item) continue;
+    const depth = Math.floor((item[1] ?? "").length / 2);
+    for (let top = stack.at(-1); top !== void 0 && (landmarks[top]?.depth ?? -1) >= depth; top = stack.at(-1)) stack.pop();
+    const m = /^(\s*)- (banner|main|navigation|complementary|contentinfo|region|form|search)(?: "((?:[^"\\]|\\.)*)")?(?=$|[:\s[])/.exec(line);
+    if (!m || !LANDMARK_ROLES.has(m[2] ?? "")) continue;
+    const name = m[3] !== void 0 ? unescapeQuoted(m[3]) : null;
+    landmarks.push({ role: m[2] ?? "", name: name === "" ? null : name, depth });
+    parent.push(stack.at(-1) ?? null);
+    stack.push(landmarks.length - 1);
+  }
+  return { landmarks, parent };
+}
+var lmName = (l) => `${l.role}${l.name !== null ? ` "${l.name}"` : ""}`;
+function landmarkFindings(tree, unnamedRegions2 = []) {
+  const id = "a11y.landmarks";
+  if (tree === null) return [{ id, status: "not-run", detail: "the accessibility snapshot could not be parsed (Playwright's aria snapshot format is unversioned)" }];
+  const lms = tree.landmarks;
+  const rows = [];
+  const mains = lms.filter((l) => l.role === "main");
+  if (mains.length > 1) rows.push({ id, status: "fail", detail: `${mains.length} main landmarks \u2014 a page has one <main> (the others: section / div)`, evidence: { count: mains.length } });
+  if (mains.length === 0) rows.push({ id, status: "warn", detail: "no main landmark \u2014 wrap the screen's primary content in <main>" });
+  const regions = lms.filter((l) => l.role === "region");
+  if (regions.length > 6) rows.push({ id, status: "warn", detail: `${regions.length} region landmarks \u2014 named <section>s become landmarks; keep the few a screen-reader user jumps to`, evidence: { count: regions.length } });
+  lms.forEach((l, i) => {
+    if (l.role !== "region" || l.name === null) return;
+    let p = tree.parent[i] ?? null;
+    while (p !== null && lms[p]?.role !== "region") p = tree.parent[p] ?? null;
+    const pl = p !== null ? lms[p] : void 0;
+    if (pl && pl.name !== null && l.name.toLowerCase().startsWith(pl.name.toLowerCase())) {
+      rows.push({ id, status: "warn", target: lmName(l), detail: `region "${l.name}" sits inside region "${pl.name}" and repeats its name \u2014 one landmark is enough (drop the inner section's name or role)` });
+    }
+  });
+  const seen = /* @__PURE__ */ new Map();
+  for (const l of lms) {
+    if (l.role === "main" || l.role === "navigation" && l.name === null) continue;
+    const k = `${l.role}|${l.name ?? ""}`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  for (const [k, n] of seen) {
+    if (n < 2) continue;
+    const [role, name] = k.split("|");
+    rows.push({ id, status: "warn", target: `${role ?? ""}${name ? ` "${name}"` : ""}`, detail: `${n} ${role ?? ""} landmarks named ${name ? `"${name}"` : "nothing"} \u2014 give each a distinct name (aria-label)`, evidence: { count: n } });
+  }
+  const navs = lms.filter((l) => l.role === "navigation");
+  if (navs.length > 1 && navs.some((l) => l.name === null)) rows.push({ id, status: "warn", detail: `${navs.length} navigation landmarks, ${navs.filter((l) => l.name === null).length} unnamed \u2014 name each (aria-label) so they can be told apart` });
+  if (unnamedRegions2.length) rows.push({ id, status: "warn", target: unnamedRegions2[0] ?? "", detail: `${unnamedRegions2.length} element(s) with role="region" and no accessible name \u2014 a region needs a name (aria-label / aria-labelledby), or drop the role`, evidence: { count: unnamedRegions2.length, paths: unnamedRegions2.slice(0, 5) } });
+  if (!rows.length) rows.push({ id, status: "pass", detail: `${lms.length} landmark(s): ${lms.map(lmName).join(", ") || "none"}` });
+  return rows;
+}
+function parseAriaName(snapshot) {
+  const line = (typeof snapshot === "string" ? snapshot.split("\n")[0] : "") ?? "";
+  const m = /^- (\w+)(?: "((?:[^"\\]|\\.)*)")?/.exec(line);
+  if (!m || m[1] === "text") return { role: null, name: null };
+  const name = m[2] !== void 0 ? unescapeQuoted(m[2]) : null;
+  return { role: m[1] ?? null, name: name !== null && name.trim() !== "" ? name : null };
+}
+var NAME_REQUIRED = /* @__PURE__ */ new Set([
+  "button",
+  "link",
+  "textbox",
+  "searchbox",
+  "combobox",
+  "checkbox",
+  "radio",
+  "switch",
+  "slider",
+  "spinbutton",
+  "listbox",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "option",
+  "tab",
+  "treeitem",
+  "img",
+  "dialog",
+  "alertdialog",
+  "iframe",
+  "tree",
+  "grid",
+  "menu",
+  "tablist",
+  "radiogroup",
+  "scrollbar",
+  "meter",
+  "progressbar"
+]);
+function nameStatus(snapshot, stop) {
+  const n = parseAriaName(snapshot);
+  if (stop.tag === "iframe" || stop.tag === "frame") return { status: stop.domName ? "pass" : "fail", role: "iframe", name: stop.domName };
+  if (stop.tag === "summary" && (n.role === null || n.role === "summary")) return { status: stop.domName ? "pass" : "fail", role: "summary", name: stop.domName };
+  if (n.role === null) return { status: "warn", role: null, name: null };
+  if (n.name === null && NAME_REQUIRED.has(n.role)) return { status: "fail", role: n.role, name: null };
+  return { status: "pass", role: n.role, name: n.name };
+}
+function parseColor(s) {
+  if (typeof s !== "string") return null;
+  const t = s.trim().toLowerCase();
+  if (t === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  const hex = /^#([0-9a-f]{3,8})$/.exec(t);
+  if (hex) {
+    const h = hex[1] ?? "";
+    const full = h.length === 3 || h.length === 4 ? h.split("").map((c) => c + c).join("") : h;
+    if (full.length !== 6 && full.length !== 8) return null;
+    const at = (i) => parseInt(full.slice(i, i + 2), 16);
+    return { r: at(0), g: at(2), b: at(4), a: full.length === 8 ? at(6) / 255 : 1 };
+  }
+  const alpha = (x) => x === void 0 || x === "none" ? 1 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 : Number(x);
+  const fn = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?|none))?\s*\)$/.exec(t);
+  if (fn) return { r: Number(fn[1]), g: Number(fn[2]), b: Number(fn[3]), a: alpha(fn[4]) };
+  const num = "(-?[\\d.]+(?:e-?\\d+)?%?|none)";
+  const ok = new RegExp(`^(oklab|oklch)\\(\\s*${num}\\s+${num}\\s+${num}(?:\\s*/\\s*([\\d.]+%?|none))?\\s*\\)$`).exec(t);
+  if (ok) {
+    const v = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+    const L = v(ok[2], 1);
+    let a, b;
+    if (ok[1] === "oklab") {
+      a = v(ok[3], 0.4);
+      b = v(ok[4], 0.4);
+    } else {
+      const C = v(ok[3], 0.4), h = v(ok[4], 1) * Math.PI / 180;
+      a = C * Math.cos(h);
+      b = C * Math.sin(h);
+    }
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s3 = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const lin = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s3, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s3, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s3];
+    const [r, g, bb] = lin.map((c) => Math.round(255 * Math.min(1, Math.max(0, c <= 31308e-7 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055))));
+    return { r: r ?? 0, g: g ?? 0, b: bb ?? 0, a: alpha(ok[5]) };
+  }
+  const srgb = /^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+%?|none))?\s*\)$/.exec(t);
+  if (srgb) return { r: Math.round(Number(srgb[1]) * 255), g: Math.round(Number(srgb[2]) * 255), b: Math.round(Number(srgb[3]) * 255), a: alpha(srgb[4]) };
+  return null;
+}
+function scrimMatches(expected, actual) {
+  const e = expected === null ? null : parseColor(expected);
+  const a = actual === null ? null : parseColor(actual);
+  const none = (c) => c === null || c.a <= 0.05;
+  if (expected !== null && e === null) return false;
+  if (none(e)) return none(a);
+  if (none(a) || e === null || a === null) return false;
+  return Math.abs(e.r - a.r) <= 8 && Math.abs(e.g - a.g) <= 8 && Math.abs(e.b - a.b) <= 8 && Math.abs(e.a - a.a) <= 0.05;
+}
+function centredIn(rect, vp, tol = 1) {
+  const h = Math.abs(rect.x + rect.w / 2 - vp.w / 2) <= tol;
+  const v = rect.h >= vp.h - 2 ? null : Math.abs(rect.y + rect.h / 2 - vp.h / 2) <= tol;
+  return { h, v, centred: h && v !== false };
+}
+function overlayCentred(ov) {
+  return !!ov && (ov.from === "default" || String(ov.position).toLowerCase() === "center");
+}
+function safeCloseName(name, ariaLabel) {
+  if (/^(cancel|close|dismiss|no|not now|×|x|✕)$/i.test(name.trim())) return true;
+  const l = (ariaLabel ?? "").trim();
+  return /^(close|dismiss)$/i.test(l) || /^(close|dismiss)\b.*\b(dialog|modal|panel|popup|pop-up|window|drawer|sheet|overlay|form)$/i.test(l);
+}
+function axeStatus(violations) {
+  if (violations.some((v) => v.impact === "critical" || v.impact === "serious")) return "fail";
+  return violations.length ? "warn" : "pass";
+}
+function focusReturnStatus(r) {
+  if (!r.connected) {
+    return !r.activeIsBody && r.activeVisible ? { status: "pass", detail: `the opener left the document on close; focus went to ${r.activeDesc} (a visible element) \u2014 note: not the opener` } : { status: "fail", detail: `the opener left the document on close and focus fell to ${r.activeIsBody ? "<body>" : `${r.activeDesc} (not visible)`} \u2014 move focus to a sensible visible element` };
+  }
+  if (r.onOpener && r.openerVisible && !r.opacity0) return { status: "pass", detail: "focus returned to the opener" };
+  if (r.onOpener && r.openerVisible) return { status: "warn", detail: "focus returned to the opener, but it is invisible (opacity 0) while focused with the pointer away \u2014 reveal it on focus too (e.g. group-focus-within:opacity-100), never only on hover" };
+  if (r.onOpener) return { status: "fail", detail: "focus returned to the opener, but it is hidden (visibility/display) with the pointer away \u2014 a keyboard user sees no focus; reveal hover-only actions with opacity + :focus-within, never visibility:hidden" };
+  return { status: "fail", detail: `focus went to ${r.activeIsBody ? "<body>" : r.activeDesc}, not back to the opener${r.openerVisible ? "" : " (the opener is hidden with the pointer away \u2014 hover-only visibility:hidden; DT-60)"}` };
+}
+var STATUS_ORDER = { fail: 0, warn: 1, "not-run": 2, unsupported: 3, pass: 4 };
+var PER_ELEMENT_CAP = 20;
+function perElement(id, nonPass, passCount, total, what, variant) {
+  const sorted = [...nonPass].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
+  const rows = sorted.slice(0, PER_ELEMENT_CAP);
+  const rest = sorted.slice(PER_ELEMENT_CAP);
+  for (const st of ["fail", "warn", "not-run", "unsupported"]) {
+    const n = rest.filter((r) => r.status === st).length;
+    if (n) rows.push({ id, status: st, ...variant !== void 0 ? { variant } : {}, detail: `+${n} more ${st} \u2014 the first ${PER_ELEMENT_CAP} are listed`, evidence: { count: n, more: true } });
+  }
+  if (passCount > 0) rows.push({ id, status: "pass", ...variant !== void 0 ? { variant } : {}, detail: `${passCount} of ${total} ${what}`, evidence: { count: passCount, of: total } });
+  return rows;
+}
+function batteryRows(exp, driven) {
+  const battery = [], skipped = [];
+  for (const row of drivable(exp)) {
+    const ev = (driven || []).find((e) => e.nodeId === row.nodeId && e.trigger === row.trigger);
+    let why = null;
+    if (!ev) why = "the overlay was not driven (no 12a evidence)";
+    else if (ev.cut === "budget") why = "the 12a drive was cut by its time budget";
+    else if (ev.activation === "synthetic") why = "the opener opened only on a synthetic click (headless) \u2014 never used for the battery";
+    else if (!ev.opened) why = `the 12a drive opened nothing (${(ev.detail ?? "").replace(/^not-run: /, "") || "no detail"})`;
+    else if ((ev.navEvents ?? 0) !== 0) why = "the 12a drive saw a document load";
+    else if (ev.detectedBy === ":popover-open") why = `the 12a drive opened a popover, not a modal dialog \u2014 ${NOT_MODAL}`;
+    if (why === null) battery.push(row);
+    else skipped.push({ row, why });
+  }
+  return { battery, skipped };
+}
+var NOT_MODAL = "the battery runs only on a modal dialog (:modal / dialog[open] / aria-modal=true, D40(1))";
+var DIALOG_IDS = ["dialog.focus-on-open", "dialog.focus-trap", "dialog.escape-closes", "dialog.focus-return", "dialog.nested-escape", "dialog.scroll-open", "dialog.scrim", "dialog.click-outside"];
+function sentinelInsert(_arg) {
+  const prev = window.__dtBeh;
+  const st = prev ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
+  window.__dtBeh = st;
+  st.stops = [];
+  st.stopVisible = [];
+  if (st.sentinel && st.sentinel.isConnected) st.sentinel.remove();
+  const body = document.body;
+  if (!body) return false;
+  const s = document.createElement("div");
+  s.setAttribute("tabindex", "0");
+  s.setAttribute("data-dt-sentinel", "");
+  s.setAttribute("style", "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden;outline:none;z-index:-1");
+  body.prepend(s);
+  st.sentinel = s;
+  s.focus({ preventScroll: true });
+  return document.activeElement === s;
+}
+function sentinelRemove(_arg) {
+  const st = window.__dtBeh;
+  if (st && st.sentinel) {
+    st.sentinel.remove();
+    st.sentinel = null;
+  }
+  return true;
+}
+function walkStep(arg) {
+  const st = window.__dtBeh;
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  if (!st) return { end: "body", opener: false, ancestor: null, inside: null, dup: false };
+  if (a !== null && a === st.sentinel) return { end: "sentinel", opener: false, ancestor: null, inside: null, dup: false };
+  if (a === null || a === document.body || a === document.documentElement) return st.stops.length ? { end: "body", opener: false, ancestor: null, inside: null, dup: false } : { end: null, opener: false, ancestor: null, inside: null, dup: true };
+  const o = st.opener;
+  const ctrl = st.control && st.control.isConnected ? st.control : null;
+  const descOf = (e) => `<${e.tagName.toLowerCase()}${e.getAttribute("tabindex") !== null ? ` tabindex="${e.getAttribute("tabindex") ?? ""}"` : ""}${e.getAttribute("role") ? ` role="${e.getAttribute("role") ?? ""}"` : ""}${e.getAttribute("aria-label") ? ` aria-label="${e.getAttribute("aria-label") ?? ""}"` : ""}>`;
+  const opener = !!ctrl && a === ctrl;
+  const inside = !opener && !!o && o !== a && o.contains(a) ? descOf(a) : null;
+  const ancestor = !opener && !!o && a.contains(o) ? descOf(a) : null;
+  if (st.stops.includes(a)) return { end: null, opener, ancestor, inside, dup: true };
+  if (arg.record) {
+    const r = a.getBoundingClientRect();
+    st.stops.push(a);
+    st.stopVisible.push(r.width > 0 && r.height > 0 && a.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }));
+  }
+  return { end: null, opener, ancestor, inside, dup: false };
+}
+function keyTarget(_arg) {
+  const st = window.__dtBeh;
+  const o = st ? st.opener : null;
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  if (!a || a === document.body || a === document.documentElement) return { ok: false, desc: "<body>", why: "focus is on <body>" };
+  const desc = `<${a.tagName.toLowerCase()}${a.getAttribute("type") ? ` type="${a.getAttribute("type") ?? ""}"` : ""}${a.hasAttribute("readonly") ? " readonly" : ""}${a.getAttribute("tabindex") !== null ? ` tabindex="${a.getAttribute("tabindex") ?? ""}"` : ""}${a.getAttribute("role") ? ` role="${a.getAttribute("role") ?? ""}"` : ""}>`;
+  if (!o) return { ok: false, desc, why: "the opener is gone" };
+  const ctrl = st && st.control && st.control.isConnected ? st.control : null;
+  if (a !== ctrl) return { ok: false, desc, why: o.contains(a) ? "the opener is a container; its focusable child is not pressed" : a.contains(o) ? "an ancestor of the opener" : "not the opener" };
+  const tag = a.tagName.toLowerCase();
+  if (tag === "input" || tag === "select" || tag === "textarea" || a.isContentEditable === true) return { ok: false, desc, why: "a form field \u2014 Enter in it can submit its form" };
+  if (!a.matches("button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]")) return { ok: false, desc, why: "not a button-like control" };
+  return { ok: true, desc, why: "" };
+}
+function stopsCount(_arg) {
+  const st = window.__dtBeh;
+  return st ? { n: st.stops.length, visible: st.stopVisible.slice() } : { n: 0, visible: [] };
+}
+function stopsInfo(_arg) {
+  const st = window.__dtBeh;
+  if (!st) return [];
+  const pathOf = (el) => {
+    const segs = [];
+    let cur = el, joiner = "";
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (parent) {
+        segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})${joiner}`);
+        joiner = " > ";
+        cur = parent;
+        continue;
+      }
+      const root = cur.getRootNode ? cur.getRootNode() : null;
+      const host = root && root.host ? root.host : null;
+      if (!root || !host || !root.children) break;
+      segs.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(root.children).indexOf(cur) + 1})${joiner}`);
+      joiner = " ";
+      cur = host;
+    }
+    return `html > ${segs.join("")}`;
+  };
+  const domName = (el) => {
+    const label = (el.getAttribute("aria-label") || "").trim();
+    if (label) return label;
+    const by = (el.getAttribute("aria-labelledby") || "").trim().split(/\s+/).filter((x) => x !== "").map((x) => document.getElementById(x)).filter((x) => x !== null).map((x) => (x.textContent || "").trim()).join(" ").trim();
+    if (by) return by;
+    const title = (el.getAttribute("title") || "").trim();
+    return title || null;
+  };
+  return st.stops.map((el) => ({
+    path: pathOf(el),
+    dt: el.getAttribute("data-dt-node"),
+    tag: el.tagName.toLowerCase(),
+    connected: el.isConnected,
+    domName: el.tagName.toLowerCase() === "iframe" || el.tagName.toLowerCase() === "frame" ? domName(el) : el.tagName.toLowerCase() === "summary" ? (el.textContent || "").trim() || null : null
+  }));
+}
+function subjectRead(arg) {
+  const st = window.__dtBeh;
+  const stops = st ? st.stops : [];
+  const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
+  const id = arg.id;
+  let els = Array.from(document.querySelectorAll(`[data-dt-node="${id.replace(/["\\]/g, "\\$&")}"]`)).filter((e) => e.closest("dialog:not([open])") === null);
+  if (els.length > 1) els = els.filter((e) => e.getClientRects().length > 0);
+  const el = els.length === 1 ? els[0] : void 0;
+  if (!el) return { id, count: els.length, closedIn: null, hasBox: false, disabled: false, stop: -1, inside: null, visibility: "", tabindex: null, tag: "" };
+  let closedIn = null;
+  for (let p = el.parentElement; p && p !== document.body && closedIn === null; p = p.parentElement) {
+    const desc = `<${p.tagName.toLowerCase()}${p.id ? ` id="${p.id}"` : ""}>`;
+    if (p.tagName.toLowerCase() === "details" && !p.hasAttribute("open") && el.closest("summary") === null) closedIn = `a closed <details>`;
+    else if (p.hasAttribute("hidden")) closedIn = `${desc} [hidden]`;
+    else if (getComputedStyle(p).getPropertyValue("display") === "none") closedIn = `${desc} (display:none)`;
+    else if (p.id) {
+      const ctl = Array.from(document.querySelectorAll("[aria-controls]")).find((c) => (c.getAttribute("aria-controls") || "").split(/\s+/).includes(p.id) && (c.getAttribute("aria-expanded") || "").toLowerCase() === "false");
+      if (ctl) closedIn = `${desc}, which its [aria-expanded=false] control ${ctl.id ? `#${ctl.id}` : `<${ctl.tagName.toLowerCase()}>`} keeps closed`;
+    }
+  }
+  const f = el.closest(FOCUSABLE);
+  const ctrl = st && st.opener === el && st.control && st.control.isConnected ? st.control : null;
+  const stop = stops.findIndex((s) => s === el || s === f || s === ctrl);
+  const inner = stop < 0 ? stops.find((s) => s !== el && el.contains(s)) : void 0;
+  return {
+    id,
+    count: 1,
+    closedIn,
+    hasBox: el.getClientRects().length > 0,
+    disabled: el.closest(':disabled, [disabled], [aria-disabled="true" i]') !== null,
+    stop,
+    inside: inner ? `<${inner.tagName.toLowerCase()}${inner.getAttribute("aria-label") ? ` aria-label="${inner.getAttribute("aria-label") ?? ""}"` : ""}>` : null,
+    visibility: getComputedStyle(el).getPropertyValue("visibility"),
+    tabindex: el.getAttribute("tabindex"),
+    tag: el.tagName.toLowerCase()
+  };
+}
+function focusBefore(arg) {
+  const st = window.__dtBeh;
+  if (!st) return false;
+  const prev = arg.i === 0 ? st.sentinel : st.stops[arg.i - 1];
+  if (!prev || !prev.isConnected) return false;
+  prev.focus({ preventScroll: false });
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return a === prev;
+}
+function focusedStop(arg) {
+  const st = window.__dtBeh;
+  const el = st ? st.stops[arg.i] : void 0;
+  let act = document.activeElement;
+  while (act && act.shadowRoot && act.shadowRoot.activeElement) act = act.shadowRoot.activeElement;
+  const ok = !!el && act === el;
+  const prev = st ? arg.i === 0 ? st.sentinel : st.stops[arg.i - 1] : null;
+  const onPrev = !!prev && act === prev;
+  if (!el) return { ok: false, onPrev, visible: false, rect: { x: 0, y: 0, w: 0, h: 0 }, vw: innerWidth, vh: innerHeight, outlineStyle: "", outlineWidth: "", boxShadow: "", focusVisible: false };
+  const r = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  let fv = false;
+  try {
+    fv = el.matches(":focus-visible");
+  } catch {
+  }
+  return {
+    ok,
+    onPrev,
+    visible: r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }),
+    rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+    vw: innerWidth,
+    vh: innerHeight,
+    outlineStyle: cs.getPropertyValue("outline-style"),
+    outlineWidth: cs.getPropertyValue("outline-width"),
+    boxShadow: cs.getPropertyValue("box-shadow"),
+    focusVisible: fv
+  };
+}
+function blurActive(_arg) {
+  const a = document.activeElement;
+  if (a && a !== document.body) a.blur();
+  return true;
+}
+function unnamedRegions(_arg) {
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const out = [];
+  for (const el of Array.from(document.querySelectorAll("[role=region i]"))) {
+    if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    const label = (el.getAttribute("aria-label") || "").trim();
+    const by = (el.getAttribute("aria-labelledby") || "").trim().split(/\s+/).filter((x) => x !== "").map((x) => document.getElementById(x)).filter((x) => x !== null);
+    const byText = by.map((x) => (x.textContent || "").trim()).join(" ").trim();
+    const title = (el.getAttribute("title") || "").trim();
+    if (!label && !byText && !title) out.push(pathOf(el));
+  }
+  return out;
+}
+function subpixelRead(_arg) {
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const out = [];
+  const body = document.body;
+  if (!body) return out;
+  for (const el of Array.from(body.querySelectorAll("*"))) {
+    if (el.getAttribute("data-dt-sentinel") !== null) continue;
+    const tag = el.tagName.toLowerCase();
+    const cell = tag === "td" || tag === "th";
+    const ownText = Array.from(el.childNodes).filter((n) => n.nodeType === 3).map((n) => n.nodeValue || "").join("").trim();
+    if (!cell && ownText === "") continue;
+    if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template" || tag === "title") continue;
+    if (el.closest("dialog:not([open])") !== null) continue;
+    if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 && r.height > 0) {
+      const tagged = el.closest("[data-dt-node]");
+      out.push({ path: pathOf(el), dt: tagged ? tagged.getAttribute("data-dt-node") : null, tag, width: Math.round(r.width * 100) / 100, text: (ownText || (el.textContent || "").trim()).slice(0, 40) });
+    }
+  }
+  return out.slice(0, 50);
+}
+function offendersAre2D(arg) {
+  if (!arg.paths.length) return false;
+  return arg.paths.every((p) => {
+    const el = document.querySelector(p);
+    return !!el && el.closest("table, pre, figure, img, canvas, svg, video, [role=grid], [role=table]") !== null;
+  });
+}
+function visibleTags(_arg) {
+  const out = [];
+  for (const el of Array.from(document.querySelectorAll("[data-dt-node]"))) {
+    if (el.getClientRects().length === 0 || el.closest("dialog:not([open])") !== null || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    const v = el.getAttribute("data-dt-node");
+    if (v !== null && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+function docSize(_arg) {
+  const de = document.documentElement;
+  return { sw: de.scrollWidth, sh: de.scrollHeight, scrollY, vh: innerHeight, vw: innerWidth };
+}
+function maskCandidates(arg) {
+  const st = window.__dtBeh ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
+  window.__dtBeh = st;
+  st.masks = [];
+  st.maskInline = [];
+  const body = document.body;
+  if (!body) return [];
+  const out = [];
+  for (const el of Array.from(body.querySelectorAll("*"))) {
+    if (out.length >= arg.cap) break;
+    const cs = getComputedStyle(el);
+    const m = cs.getPropertyValue("mask-image"), wm = cs.getPropertyValue("-webkit-mask-image");
+    if ((m === "" || m === "none") && (wm === "" || wm === "none")) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true })) continue;
+    st.masks.push(el);
+    st.maskInline.push({ value: el.style.getPropertyValue("visibility"), priority: el.style.getPropertyPriority("visibility") });
+    const tagged = el.closest("[data-dt-node]");
+    out.push({ dt: tagged ? tagged.getAttribute("data-dt-node") : null, tag: el.tagName.toLowerCase() });
+  }
+  return out;
+}
+function maskShow(arg) {
+  const st = window.__dtBeh;
+  const el = st ? st.masks[arg.i] : void 0;
+  if (!el || !el.isConnected) return null;
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  const r = el.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight };
+}
+function maskHide(arg) {
+  const st = window.__dtBeh;
+  const el = st ? st.masks[arg.i] : void 0;
+  const prev = st ? st.maskInline[arg.i] : void 0;
+  if (!el || !prev) return false;
+  if (arg.hide) el.style.setProperty("visibility", "hidden", "important");
+  else if (prev.value) el.style.setProperty("visibility", prev.value, prev.priority);
+  else el.style.removeProperty("visibility");
+  return true;
+}
+function scrollToY(arg) {
+  window.scrollTo({ top: arg.y, left: 0, behavior: "instant" });
+  return scrollY;
+}
+function markOpener(arg) {
+  const st = window.__dtBeh ?? { stops: [], stopVisible: [], sentinel: null, opener: null, dialog: null, dialogModal: false, expander: null, masks: [], maskInline: [] };
+  window.__dtBeh = st;
+  window.__dtOwn = null;
+  const none = { found: false, visible: false, x: 0, y: 0, inViewport: false, hits: false, hover: null, sole: false, why: null };
+  let els = Array.from(document.querySelectorAll(`[data-dt-node="${arg.id.replace(/["\\]/g, "\\$&")}"]`)).filter((e) => e.closest("dialog:not([open])") === null);
+  if (els.length > 1) els = els.filter((e) => e.getClientRects().length > 0);
+  const el = els.length === 1 ? els[0] : void 0;
+  if (!el) {
+    st.opener = null;
+    st.control = null;
+    return none;
+  }
+  st.opener = el;
+  const sees = (e, opacity) => {
+    if (e.getClientRects().length === 0) return false;
+    const r2 = e.getBoundingClientRect();
+    return r2.width > 0 && r2.height > 0 && e.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: opacity, checkOpacity: opacity });
+  };
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const visible = sees(el, true);
+  const r = el.getBoundingClientRect();
+  const x = r.x + r.width / 2, y = r.y + r.height / 2;
+  const inViewport = x >= 0 && y >= 0 && x < vw && y < vh;
+  const hit = inViewport ? document.elementFromPoint(x, y) : null;
+  const FOC = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
+  const BTN = "button, a[href], summary, [role=button i], [role=link i], [role=menuitem i], [role=tab i]";
+  const ownContent = (box, ctl) => {
+    const up = (n) => n.assignedSlot ?? n.parentElement ?? (n.getRootNode ? n.getRootNode()?.host ?? null : null);
+    const css = (e, prop, pseudo = null) => getComputedStyle(e, pseudo).getPropertyValue(prop).trim();
+    const set = (e, prop, pseudo = null) => {
+      const v = css(e, prop, pseudo);
+      return v !== "" && v !== "none";
+    };
+    const chain = (test) => {
+      const memo = /* @__PURE__ */ new Map();
+      return (e) => {
+        const seen = [];
+        let hit2 = false;
+        for (let p = e; p && p !== box; p = up(p)) {
+          const m = memo.get(p);
+          if (m !== void 0) {
+            hit2 = m;
+            break;
+          }
+          seen.push(p);
+          if (test(p)) {
+            hit2 = true;
+            break;
+          }
+        }
+        for (const s of seen) memo.set(s, hit2);
+        return hit2;
+      };
+    };
+    let work = 0;
+    const OWN_WORK_CAP = 2e4;
+    const tick = () => ++work > OWN_WORK_CAP;
+    const inCtl = chain((p) => p === ctl);
+    const outOfFlow = (e, pseudo = null) => /^(absolute|fixed)$/.test(css(e, "position", pseudo));
+    const faded = chain((p) => css(p, "opacity") === "0" && outOfFlow(p));
+    const boxed = (e) => {
+      let p = e;
+      while (p && css(p, "display") === "contents") p = up(p);
+      return p;
+    };
+    const shown = (e) => {
+      const b = boxed(e);
+      return !!b && b.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true }) && !/^(hidden|collapse)$/.test(css(e, "visibility")) && !faded(b);
+    };
+    const holdsFixed = (p) => ["transform", "translate", "rotate", "scale", "perspective", "filter", "backdrop-filter"].some((k) => set(p, k)) || css(p, "transform-style") === "preserve-3d" || /\b(transform|translate|rotate|scale|perspective|filter|backdrop-filter)\b/.test(css(p, "will-change")) || /\b(layout|paint|strict|content)\b/.test(css(p, "contain")) || /^(auto|hidden)$/.test(css(p, "content-visibility"));
+    const de2 = document.documentElement;
+    const horizontal = !/^(vertical|sideways)/.test(css(de2, "writing-mode"));
+    let sx = scrollX, sy = scrollY;
+    for (let p = box; p && p !== de2; p = up(p)) {
+      sx += Math.abs(p.scrollLeft || 0);
+      sy += Math.abs(p.scrollTop || 0);
+    }
+    const startX = horizontal && css(de2, "direction") !== "rtl" ? -sx : -Infinity, startY = horizontal ? -sy : -Infinity;
+    const clipped = (e, q) => {
+      let x0 = Math.max(q.x, startX), y0 = Math.max(q.y, startY), x1 = q.right, y1 = q.bottom;
+      let flow = "in";
+      for (let p = e; p; p = p === box ? null : up(p)) {
+        if (tick()) return null;
+        if (css(p, "display") === "contents") continue;
+        const pr = p.getBoundingClientRect();
+        const pos = css(p, "position");
+        const skip = p !== e && (flow === "fixed" ? !holdsFixed(p) : flow === "absolute" && !/^(relative|absolute|fixed|sticky)$/.test(pos) && !holdsFixed(p));
+        if (!skip) {
+          const ox = css(p, "overflow-x"), oy = css(p, "overflow-y");
+          const cm = ox === "clip" && oy === "clip" ? parseFloat(/(-?[\d.]+)px/.exec(css(p, "overflow-clip-margin"))?.[1] ?? "0") || 0 : 0;
+          if (ox !== "visible") {
+            x0 = Math.max(x0, pr.x - cm);
+            x1 = Math.min(x1, pr.right + cm);
+          }
+          if (oy !== "visible") {
+            y0 = Math.max(y0, pr.y - cm);
+            y1 = Math.min(y1, pr.bottom + cm);
+          }
+          flow = pos === "fixed" ? "fixed" : pos === "absolute" ? "absolute" : "in";
+        }
+        const ins = /^inset\((.*)\)$/.exec(css(p, "clip-path"));
+        if (ins) {
+          const [t = "0", r2 = t, b = t, l = r2] = (ins[1] ?? "").split(/\s+round\s+/)[0]?.trim().split(/\s+/) ?? [];
+          const len = (s, size) => s.endsWith("%") ? parseFloat(s) / 100 * size : parseFloat(s);
+          const T = len(t, pr.height), R = len(r2, pr.width), B = len(b, pr.height), L = len(l, pr.width);
+          if (![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.right - R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.bottom - B);
+          }
+        }
+        const rc = /^rect\((.*)\)$/.exec(css(p, "clip"));
+        if (rc && /^(absolute|fixed)$/.test(pos)) {
+          const v = (rc[1] ?? "").split(/[\s,]+/).filter(Boolean);
+          const at = (s, auto) => s === void 0 || s === "auto" ? auto : parseFloat(s);
+          const T = at(v[0], 0), R = at(v[1], pr.width), B = at(v[2], pr.height), L = at(v[3], 0);
+          if (v.length === 4 && ![T, R, B, L].some(Number.isNaN)) {
+            x0 = Math.max(x0, pr.x + L);
+            x1 = Math.min(x1, pr.x + R);
+            y0 = Math.max(y0, pr.y + T);
+            y1 = Math.min(y1, pr.y + B);
+          }
+        }
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const area = (e, q) => {
+      const c = clipped(e, q);
+      return c ? Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0) : Infinity;
+    };
+    const els2 = [];
+    const texts = [];
+    const todo = [box];
+    for (let e = todo.pop(); e; e = todo.pop()) {
+      if (tick()) return `more than ${OWN_WORK_CAP} boxes to check`;
+      els2.push(e);
+      for (const t of Array.from(e.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+      const sr = e.shadowRoot;
+      let kids = Array.from(e.children);
+      if (sr) {
+        for (const t of Array.from(sr.childNodes)) if (t.nodeType === 3) texts.push({ t, e });
+        kids = Array.from(sr.children).concat(kids);
+      }
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const k = kids[i];
+        if (k) todo.push(k);
+      }
+    }
+    const cr = ctl.getBoundingClientRect(), mx = cr.x + cr.width / 2, my = cr.y + cr.height / 2;
+    const chrome = (e) => {
+      if (e.contains(ctl)) return true;
+      const r2 = e.getBoundingClientRect();
+      return mx >= r2.x && mx <= r2.right && my >= r2.y && my <= r2.bottom;
+    };
+    const clear = (v) => v === "" || /^(transparent|rgba\(.*,\s*0\)|.*\/\s*0\))$/.test(v);
+    for (const e of els2) {
+      if (inCtl(e) || !shown(e)) continue;
+      if (/^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(e.tagName.toUpperCase()) && area(e, e.getBoundingClientRect()) > 1) return `<${e.tagName.toLowerCase()}>`;
+      const host = boxed(e) ?? e;
+      for (const ps of ["::before", "::after"]) {
+        const c = css(e, "content", ps);
+        if (!c || c === "none" || c === "normal" || css(e, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(e, "visibility", ps)) || css(e, "opacity", ps) === "0" && outOfFlow(e, ps)) continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        const s = str ? str[1] ?? "" : null;
+        const fill2 = !clear(css(e, "background-color", ps));
+        const paints2 = s === null || /\S/.test(s) || set(e, "background-image", ps) || set(e, "mask-image", ps) || fill2 && (s !== "" || !chrome(host));
+        if (paints2 && area(host, host.getBoundingClientRect()) > 1) return `${ps} content`;
+      }
+      if (/list-item/.test(css(e, "display")) && (!/^(none)?$/.test(css(e, "list-style-type")) || set(e, "list-style-image") || !/^(normal|none)?$/.test(css(e, "content", "::marker"))) && area(e, e.getBoundingClientRect()) > 1) return "a list marker";
+      if ((!/^(visible|clip)$/.test(css(e, "overflow-x")) || !/^(visible|clip)$/.test(css(e, "overflow-y"))) && !/^(none|normal)?$/.test(css(e, "content", "::scroll-button(*)")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll button";
+      if (!/^(none)?$/.test(css(e, "scroll-marker-group")) && area(e, e.getBoundingClientRect()) > 1) return "a scroll-marker group";
+      if (e === box) {
+        if (/\b(url|image|image-set|cross-fade|element|paint|[a-z-]*gradient)\(/i.test(css(e, "background-image"))) return "its own background image";
+        if (set(e, "border-image-source")) return "its own border image";
+        const sides = ["top", "right", "bottom", "left"].map((k) => ({ w: /^(none|hidden)$/.test(css(e, `border-${k}-style`)) ? 0 : parseFloat(css(e, `border-${k}-width`)) || 0, c: css(e, `border-${k}-color`) }));
+        const painted = sides.filter((d) => d.w > 0 && !clear(d.c));
+        if (new Set(painted.map((d) => d.c)).size > 1) return "its own border in more than one colour";
+        const ws = sides.map((d) => d.w > 0 && !clear(d.c) ? d.w : 0);
+        if (painted.length > 0 && Math.max(...ws) - Math.min(...ws) >= 2) return "its own border stripe";
+        const layers = [];
+        let depth = 0, cur = "";
+        for (const ch of `${css(e, "box-shadow")},`) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          if (ch !== "," || depth > 0) {
+            cur += ch;
+            continue;
+          }
+          const n = Array.from(cur.matchAll(/(-?[\d.]+)px/g), (m) => parseFloat(m[1] ?? "0") || 0);
+          const c = cur.replace(/-?[\d.]+px/g, "").replace(/\binset\b/, "").trim();
+          if (n.length >= 2 && c !== "" && c !== "none" && !clear(c)) layers.push({ c, n, inset: /\binset\b/.test(cur) });
+          cur = "";
+        }
+        if (layers.some((l) => l.inset && (Math.max(Math.abs(l.n[0] ?? 0), Math.abs(l.n[1] ?? 0)) >= 2 || (l.n[2] ?? 0) > 0))) return "its own inset box-shadow (a stripe, a fill or a glow)";
+        const ownBg = css(e, "background-color");
+        const rings = layers.filter((l) => !((l.n[2] ?? 0) > 0) && (l.n[0] !== 0 || l.n[1] !== 0 || (l.n[3] ?? 0) !== 0) && !(l.c === ownBg && (!l.inset || /^rgb\(/.test(ownBg) && /^(border|padding)-box$/.test(css(e, "background-clip")))));
+        if (new Set(rings.map((l) => l.c)).size > 1) return "its own box-shadow ring in more than one colour";
+        const paints2 = !clear(css(e, "background-color")) || painted.length > 0 || layers.length > 0;
+        if (paints2 && set(e, "mask-image")) return "its own paint under a mask";
+        const cp = css(e, "clip-path");
+        if (paints2 && cp !== "" && cp !== "none" && !/^inset\(0(px)?( 0(px)?){0,3}( round .*)?\)$/.test(cp)) return "its own paint under a clip-path";
+        continue;
+      }
+      if (css(e, "display") === "contents") continue;
+      if (set(e, "background-image") && area(e, e.getBoundingClientRect()) > 1) return "a background image";
+      if (set(e, "mask-image") && !e.contains(ctl) && area(e, e.getBoundingClientRect()) > 1) return "a mask image";
+      if (!clear(css(e, "background-color")) && !chrome(e) && area(e, e.getBoundingClientRect()) > 1) return "a filled box";
+    }
+    for (const { t, e } of texts) {
+      const text = (t.nodeValue || "").trim();
+      if (!text || inCtl(e) || !shown(e)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(t);
+      for (const q of Array.from(range.getClientRects())) if (area(e, q) > 1) return `text "${text.slice(0, 40)}"`;
+    }
+    const br = box.getBoundingClientRect();
+    const anc = /* @__PURE__ */ new Set();
+    for (let p = up(box); p; p = up(p)) anc.add(p);
+    const bg = css(box, "background-color");
+    let opaque = /^rgb\(/.test(bg) || /^rgba\(.*,\s*1\)$/.test(bg);
+    for (let p = box; p && opaque; p = up(p)) {
+      const op = css(p, "opacity"), bm = css(p, "mix-blend-mode");
+      if (op !== "" && parseFloat(op) < 1 || bm !== "" && bm !== "normal") opaque = false;
+    }
+    const meets = (q) => q.right > br.x && q.x < br.right && q.bottom > br.y && q.y < br.bottom;
+    const over = (f, c, events) => {
+      if (!c) return true;
+      const a = Math.max(0, c.x1 - c.x0) * Math.max(0, c.y1 - c.y0);
+      const ix0 = Math.max(c.x0, br.x), iy0 = Math.max(c.y0, br.y), ix1 = Math.min(c.x1, br.right), iy1 = Math.min(c.y1, br.bottom);
+      if (a <= 1 || ix1 <= ix0 || iy1 <= iy0 || (ix1 - ix0) * (iy1 - iy0) < a / 2) return false;
+      if (events === "none" || !opaque) return true;
+      const hits = Array.from(document.elementsFromPoint((ix0 + ix1) / 2, (iy0 + iy1) / 2));
+      const iF = hits.indexOf(f), iB = hits.findIndex((h) => h === box || box.contains(h));
+      return iF < 0 || iB < 0 || iF < iB;
+    };
+    const pinned = chain((p) => !anc.has(p) && /^(fixed|sticky)$/.test(css(p, "position")));
+    const tipIds = new Set((ctl.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean));
+    const tipPre = window.__dtTipPre;
+    const tip = (f) => !!tipPre && !tipPre.has(f) && !anc.has(f) && ((f.getAttribute("role") ?? "").trim().split(/\s+/)[0]?.toLowerCase() === "tooltip" || tipIds.has(f.getAttribute("id") ?? ""));
+    const gone2 = chain((p) => css(p, "opacity") === "0");
+    const FOREIGN_CAP = 5e5;
+    let walked = 0;
+    const moved = (f) => {
+      const s = getComputedStyle(f);
+      return s.getPropertyValue("position") !== "static" || ["transform", "translate", "rotate", "scale"].some((k) => {
+        const v = s.getPropertyValue(k);
+        return v !== "" && v !== "none";
+      });
+    };
+    const ftodo = [{ f: de2, near: true }];
+    for (let t = ftodo.pop(); t; t = ftodo.pop()) {
+      if (++walked > FOREIGN_CAP) return `more than ${FOREIGN_CAP} boxes on the page to check for a label laid over it`;
+      const f = t.f;
+      if (f === box || tip(f)) continue;
+      const isAnc = anc.has(f);
+      const fr = t.near || isAnc || moved(f) ? f.getBoundingClientRect() : null;
+      const near = isAnc || fr !== null && meets(fr);
+      const sr = f.shadowRoot;
+      for (const k of Array.from(f.children ?? [])) ftodo.push({ f: k, near });
+      if (sr) for (const k of Array.from(sr.children)) ftodo.push({ f: k, near });
+      if (!fr || !near || pinned(f) || !shown(f) || gone2(f)) continue;
+      const events = css(f, "pointer-events");
+      for (const t2 of [...Array.from(f.childNodes), ...sr ? Array.from(sr.childNodes) : []]) {
+        const text = t2.nodeType === 3 ? (t2.nodeValue || "").trim() : "";
+        if (!text) continue;
+        const range = document.createRange();
+        range.selectNodeContents(t2);
+        for (const q of Array.from(range.getClientRects())) if (over(f, clipped(f, q), events)) return `text "${text.slice(0, 40)}" laid over it from outside it`;
+      }
+      if (!isAnc && /^(IMG|SVG|CANVAS|VIDEO|AUDIO|PICTURE|OBJECT|EMBED|IFRAME|INPUT|PROGRESS|METER)$/.test(f.tagName.toUpperCase()) && over(f, clipped(f, fr), events)) return `<${f.tagName.toLowerCase()}> laid over it from outside it`;
+      if (!isAnc && set(f, "background-image") && over(f, clipped(f, fr), events)) return "a background image laid over it from outside it";
+      for (const ps of ["::before", "::after"]) {
+        const c = css(f, "content", ps);
+        const pos = css(f, "position", ps);
+        if (!c || c === "none" || c === "normal" || pos === "fixed" || css(f, "display", ps) === "none" || /^(hidden|collapse)$/.test(css(f, "visibility", ps)) || css(f, "opacity", ps) === "0") continue;
+        const str = /^"([\s\S]*)"$/.exec(c) ?? /^'([\s\S]*)'$/.exec(c);
+        if (!(str === null || /\S/.test(str[1] ?? "") || set(f, "background-image", ps) || set(f, "mask-image", ps))) continue;
+        let q = fr;
+        if (pos === "absolute") {
+          let cb = f;
+          while (cb && css(cb, "position") === "static" && !holdsFixed(cb)) cb = up(cb);
+          const cr0 = cb ? cb.getBoundingClientRect() : null;
+          const n = (k) => parseFloat(css(f, k, ps)) || 0;
+          const x2 = (cr0 && cb ? cr0.x + (parseFloat(css(cb, "border-left-width")) || 0) : -scrollX) + n("left") + n("margin-left");
+          const y2 = (cr0 && cb ? cr0.y + (parseFloat(css(cb, "border-top-width")) || 0) : -scrollY) + n("top") + n("margin-top");
+          const extra = css(f, "box-sizing", ps) === "border-box" ? [0, 0] : [n("padding-left") + n("padding-right") + n("border-left-width") + n("border-right-width"), n("padding-top") + n("padding-bottom") + n("border-top-width") + n("border-bottom-width")];
+          const w = n("width") + (extra[0] ?? 0), h = n("height") + (extra[1] ?? 0);
+          q = { x: x2, y: y2, width: w, height: h, right: x2 + w, bottom: y2 + h };
+        } else if (isAnc) continue;
+        if (over(f, clipped(f, q), css(f, "pointer-events", ps))) return `a generated ${ps} label laid over it from outside it`;
+      }
+    }
+    return null;
+  };
+  let control = null, sole = false, why = null;
+  if (el.matches(FOC)) control = el;
+  else {
+    const anc = el.parentElement ? el.parentElement.closest(BTN) : null;
+    if (anc && anc.matches(FOC) && Array.from(anc.querySelectorAll(FOC)).length === 0) control = anc;
+    else {
+      const inner = Array.from(el.querySelectorAll(FOC));
+      const one = inner.length === 1 ? inner[0] : void 0;
+      if (one && one.matches(BTN) && !one.matches("input, select, textarea, [contenteditable]")) {
+        const b = one.getBoundingClientRect();
+        const own = (inViewport ? !!hit && (hit === one || one.contains(hit)) : x >= b.x && x <= b.right && y >= b.y && y <= b.bottom) ? ownContent(el, one) : void 0;
+        if (own === null) {
+          const seen = (st.ownSeen ?? []).find((p) => p.box === el && p.ctl === one);
+          if (seen) {
+            control = seen.own ? null : one;
+            why = seen.why ?? null;
+          } else {
+            control = one;
+            sole = true;
+            window.__dtOwn = { box: el, ctl: one };
+          }
+        } else if (own !== void 0) why = `its own content: ${own}`;
+      }
+    }
+  }
+  st.control = control;
+  let hover = null;
+  if (!visible) {
+    for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      if (!sees(p, false)) continue;
+      const pr = p.getBoundingClientRect();
+      const hx = pr.x + Math.min(8, pr.width / 2), hy = pr.y + pr.height / 2;
+      hover = { x: hx, y: hy, inViewport: hx >= 0 && hy >= 0 && hx < vw && hy < vh };
+      break;
+    }
+  }
+  return { found: true, visible, x, y, inViewport, hits: !!hit && (hit === el || el.contains(hit)), hover, sole, why };
+}
+function ownDecide(arg) {
+  const st = window.__dtBeh;
+  if (!st || !st.opener || !st.control) return false;
+  const seen = st.ownSeen ?? [];
+  seen.push({ box: st.opener, ctl: st.control, own: arg.own, why: arg.why ?? null });
+  st.ownSeen = seen;
+  if (arg.own) st.control = null;
+  return true;
+}
+function focusOpener(arg) {
+  const st = window.__dtBeh;
+  const f = st && st.opener && st.control && st.control.isConnected ? st.control : null;
+  if (!f) return false;
+  f.focus({ preventScroll: arg.preventScroll });
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return a === f;
+}
+function markDialog(arg) {
+  const st = window.__dtBeh;
+  const el = document.querySelector(arg.path);
+  if (!st || !el) return { found: false, modal: false, dialogOpen: false, ariaModal: false, native: false };
+  const before = window.__dtDrive ? [...window.__dtDrive.before, ...window.__dtDrive.roots ?? []] : [];
+  const own = el.matches("dialog, [role=dialog i], [role=alertdialog i]");
+  const anc = own ? null : el.closest('dialog[open], [aria-modal="true" i]');
+  const root = anc && !before.includes(anc) ? anc : el;
+  let modal = false;
+  try {
+    modal = root.matches(":modal");
+  } catch {
+  }
+  const ariaModal = (root.getAttribute("aria-modal") || "").toLowerCase() === "true";
+  const sized = (e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && e.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true });
+  };
+  let box = root;
+  if (!sized(root)) {
+    box = el !== root && sized(el) ? el : Array.from(root.querySelectorAll("[role=dialog i], [role=alertdialog i], [data-dt-node], [class*=panel i]")).find(sized) ?? null;
+  }
+  st.dialog = root;
+  st.box = box;
+  st.dialogModal = modal || ariaModal;
+  return { found: true, modal, dialogOpen: root.matches("dialog[open]"), ariaModal, native: root.tagName.toLowerCase() === "dialog" };
+}
+function dialogOpenNow(_arg) {
+  const st = window.__dtBeh;
+  const root = st ? st.dialog : null;
+  if (!root || !root.isConnected) return false;
+  const el = st && st.box ? st.box : root;
+  if (!el.isConnected || el.getClientRects().length === 0) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return false;
+  if (!el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true })) return false;
+  if (root.tagName.toLowerCase() === "dialog") {
+    let modal = false;
+    try {
+      modal = root.matches(":modal");
+    } catch {
+    }
+    return root.matches("dialog[open]") && (modal || !st?.dialogModal);
+  }
+  return true;
+}
+function focusVsDialog(arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  const a = document.activeElement;
+  const desc = (el) => {
+    if (!el) return "nothing";
+    const dt = el.getAttribute("data-dt-node");
+    const label = el.getAttribute("aria-label");
+    const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30);
+    return `<${el.tagName.toLowerCase()}${dt !== null ? ` data-dt-node="${dt}"` : ""}${el.id ? ` id="${el.id}"` : ""}>${label ? ` "${label}"` : text ? ` "${text}"` : ""}`;
+  };
+  const body = a === null || a === document.body || a === document.documentElement;
+  let inside = !body && !!d && !!a && (d === a || d.contains(a));
+  if (!inside && !body && a && arg.destId !== null) {
+    const tagged = a.closest(`[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`);
+    if (tagged) inside = true;
+  }
+  return { inside, body, desc: desc(body ? null : a), name: a && !body ? a.getAttribute("aria-label") || (a.textContent || "").trim().slice(0, 40) : "" };
+}
+function dialogTabbables(_arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  if (!d) return 0;
+  const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, iframe, [tabindex], [contenteditable]";
+  let n = 0;
+  for (const el of Array.from(d.querySelectorAll(FOCUSABLE))) {
+    if (n > 30) break;
+    const ti = el.getAttribute("tabindex");
+    if (ti !== null && Number(ti) < 0) continue;
+    if (el.matches(":disabled")) continue;
+    if (el.getClientRects().length === 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) continue;
+    n++;
+  }
+  return n;
+}
+function expanderFind(_arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  if (!st || !d) return { path: null, nativePicker: false, desc: "" };
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const ok = (el) => el.getClientRects().length > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }) && !el.matches(":disabled");
+  const x = Array.from(d.querySelectorAll('[aria-expanded="false" i]')).find(ok);
+  st.expander = x ?? null;
+  if (x) return { path: pathOf(x), nativePicker: false, desc: `<${x.tagName.toLowerCase()}${x.getAttribute("role") ? ` role="${x.getAttribute("role") ?? ""}"` : ""}> "${(x.getAttribute("aria-label") || (x.textContent || "").trim()).slice(0, 30)}"` };
+  const native = Array.from(d.querySelectorAll("select, input[type=date i], input[type=time i], input[type=datetime-local i], input[type=month i], input[type=week i], input[type=color i]")).some(ok);
+  return { path: null, nativePicker: native, desc: "" };
+}
+function expanderState(_arg) {
+  const st = window.__dtBeh;
+  const x = st ? st.expander : null;
+  return x && x.isConnected ? x.getAttribute("aria-expanded") : null;
+}
+function closeCandidates(_arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  if (!d) return [];
+  const pathOf = (el) => {
+    const parts = [];
+    let cur = el;
+    while (cur && cur !== document.documentElement) {
+      const parent = cur.parentElement;
+      if (!parent) break;
+      parts.unshift(`${cur.tagName.toLowerCase()}:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`);
+      cur = parent;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const out = [];
+  for (const el of Array.from(d.querySelectorAll("button, [role=button i], a[href]"))) {
+    if (out.length >= 50) break;
+    if (el.tagName.toLowerCase() === "a") {
+      const href = (el.getAttribute("href") || "").trim();
+      if (!(href === "" || href === "#" || /^javascript:/i.test(href))) continue;
+    }
+    if (el.getClientRects().length === 0 || !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true, opacityProperty: true, checkOpacity: true }) || el.matches(":disabled")) continue;
+    const label = el.getAttribute("aria-label");
+    const by = (el.getAttribute("aria-labelledby") || "").trim().split(/\s+/).filter((x) => x !== "").map((x) => document.getElementById(x)).filter((x) => x !== null).map((x) => (x.textContent || "").trim()).join(" ").trim();
+    const value = el.tagName.toLowerCase() === "input" ? el.getAttribute("value") || "" : "";
+    const name = label && label.trim() || by || (el.textContent || "").trim().replace(/\s+/g, " ") || value || el.getAttribute("title") || "";
+    out.push({ path: pathOf(el), name, ariaLabel: label, button: el.tagName.toLowerCase() === "button" });
+  }
+  return out;
+}
+function focusReturnRead(_arg) {
+  const st = window.__dtBeh;
+  const o = st ? st.opener : null;
+  const a = document.activeElement;
+  const activeIsBody = a === null || a === document.body || a === document.documentElement;
+  const desc = (el) => {
+    if (!el) return "nothing";
+    const dt = el.getAttribute("data-dt-node");
+    const label = el.getAttribute("aria-label");
+    const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30);
+    return `<${el.tagName.toLowerCase()}${dt !== null ? ` data-dt-node="${dt}"` : ""}${el.id ? ` id="${el.id}"` : ""}>${label ? ` "${label}"` : text ? ` "${text}"` : ""}`;
+  };
+  const vis = (el) => {
+    if (el.getClientRects().length === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true });
+  };
+  let opacity0 = false;
+  for (let p = o; p; p = p.parentElement) if (Number(getComputedStyle(p).getPropertyValue("opacity")) === 0) {
+    opacity0 = true;
+    break;
+  }
+  const FOCUSABLE = "a[href], area[href], button, input, select, textarea, summary, [tabindex], [contenteditable]";
+  const onOpener = !!o && !!a && !activeIsBody && (a === o || o.contains(a) || a === o.closest(FOCUSABLE));
+  return {
+    connected: !!o && o.isConnected,
+    openerVisible: !!o && o.isConnected && vis(o),
+    opacity0,
+    onOpener,
+    activeIsBody,
+    activeVisible: !!a && !activeIsBody && vis(a) && a.checkVisibility({ opacityProperty: true, checkOpacity: true }),
+    activeDesc: desc(activeIsBody ? null : a)
+  };
+}
+function dialogGeometry(arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  let el = st && st.box ? st.box : d;
+  let via = el !== d ? "the dialog's panel (its modal root has no box)" : "the opened element";
+  if (d && arg.destId !== null) {
+    const sel = `[data-dt-node="${arg.destId.replace(/["\\]/g, "\\$&")}"]`;
+    const inner = d.matches(sel) ? d : Array.from(d.querySelectorAll(sel)).find((e) => e.getClientRects().length > 0) ?? null;
+    if (inner) {
+      el = inner;
+      via = `the destination-tagged element (data-dt-node="${arg.destId}")`;
+    }
+  }
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  let eff = scrollY;
+  for (const e of [document.body, document.documentElement]) {
+    if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
+    const t = parseFloat(e.style.getPropertyValue("top") || getComputedStyle(e).getPropertyValue("top"));
+    if (Number.isFinite(t)) {
+      eff = -t;
+      break;
+    }
+  }
+  if (!el) return { rect: { x: 0, y: 0, w: 0, h: 0 }, vw, vh, position: "", scrollY: eff, via };
+  const r = el.getBoundingClientRect();
+  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, vw, vh, position: getComputedStyle(st && st.box ? st.box : el).getPropertyValue("position"), scrollY: eff, via };
+}
+function effScroll(_arg) {
+  for (const e of [document.body, document.documentElement]) {
+    if (!e || getComputedStyle(e).getPropertyValue("position") !== "fixed") continue;
+    const t = parseFloat(e.style.getPropertyValue("top") || getComputedStyle(e).getPropertyValue("top"));
+    if (Number.isFinite(t)) return -t;
+  }
+  return scrollY;
+}
+async function settleDialog(_arg) {
+  const st = window.__dtBeh;
+  const root = st ? st.dialog : null;
+  const box = st && st.box ? st.box : root;
+  if (!root || !box) return { animations: 0, stable: false };
+  const frame = () => new Promise((r) => {
+    requestAnimationFrame(() => r());
+  });
+  const cap = (ms) => new Promise((r) => {
+    setTimeout(r, ms);
+  });
+  const running = (root.getAnimations ? root.getAnimations({ subtree: true }) : []).filter((a) => a.playState === "running");
+  if (running.length) await Promise.race([Promise.all(running.map((a) => a.finished.catch(() => void 0))), cap(1e3)]);
+  const sig = () => {
+    const r = box.getBoundingClientRect();
+    return `${r.x},${r.y},${r.width},${r.height}`;
+  };
+  const t = Date.now();
+  let last = sig(), same = 0;
+  while (Date.now() - t < 1e3) {
+    await frame();
+    const now = sig();
+    same = now === last ? same + 1 : 0;
+    last = now;
+    if (same >= 2) return { animations: running.length, stable: true };
+  }
+  return { animations: running.length, stable: false };
+}
+function scrimRead(_arg) {
+  const st = window.__dtBeh;
+  const d = st ? st.dialog : null;
+  const box = st && st.box ? st.box : d;
+  let backdrop = null;
+  const native = !!d && d.tagName.toLowerCase() === "dialog";
+  if (d && native) {
+    let modal = false;
+    try {
+      modal = d.matches(":modal");
+    } catch {
+    }
+    if (modal) backdrop = getComputedStyle(d, "::backdrop").getPropertyValue("background-color");
+  }
+  const de = document.documentElement;
+  const vw = Math.min(de.clientWidth || innerWidth, innerWidth), vh = Math.min(de.clientHeight || innerHeight, innerHeight);
+  const br = box ? box.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0, right: 0, bottom: 0 };
+  const dist = (x, y) => Math.hypot(Math.max(br.x - x, 0, x - br.right), Math.max(br.y - y, 0, y - br.bottom));
+  const CONTROL = 'a[href], button, input, select, textarea, summary, label, [role=button i], [role=link i], [role=menuitem i], [role=option i], [role=checkbox i], [role=tab i], [onclick], [tabindex]:not([tabindex^="-"])';
+  const covers = (e) => {
+    const r = e.getBoundingClientRect();
+    return Math.max(0, Math.min(r.right, vw) - Math.max(r.x, 0)) * Math.max(0, Math.min(r.bottom, vh) - Math.max(r.y, 0)) >= 0.9 * vw * vh;
+  };
+  const layered = (e) => {
+    const pos = getComputedStyle(e).getPropertyValue("position");
+    if (pos === "fixed") return true;
+    if (pos !== "absolute") return false;
+    for (let p = e.parentElement; p && p !== de; p = p.parentElement) if (getComputedStyle(p).getPropertyValue("position") === "fixed") return true;
+    return false;
+  };
+  const alpha = (c) => {
+    const t = c.trim().toLowerCase();
+    if (t === "transparent") return 0;
+    const m = /^(rgba?|oklab|oklch|lab|lch|color)\(([^)]*)\)$/.exec(t);
+    if (!m) return null;
+    const body = m[2] ?? "";
+    const slash = body.lastIndexOf("/");
+    const a = slash >= 0 ? body.slice(slash + 1).trim() : m[1] === "rgba" || m[1] === "rgb" ? (body.split(",")[3] ?? "").trim() : "";
+    if (a === "") return 1;
+    if (a === "none") return 0;
+    const n = a.endsWith("%") ? Number(a.slice(0, -1)) / 100 : Number(a);
+    return Number.isFinite(n) ? n : null;
+  };
+  const pts = [];
+  for (const x of [4, Math.round(vw / 2), vw - 5]) for (const y of [4, Math.round(vh / 2), vh - 5]) if (!(x === Math.round(vw / 2) && y === Math.round(vh / 2))) pts.push({ x, y });
+  pts.sort((a, b) => dist(b.x, b.y) - dist(a.x, a.y));
+  let cover = null, point = null, hitDesc = "nothing", unreadable = null;
+  for (const pt of pts) {
+    if (dist(pt.x, pt.y) <= 0) continue;
+    const stack = document.elementsFromPoint(pt.x, pt.y);
+    const top = stack[0];
+    if (top && hitDesc === "nothing") hitDesc = `<${top.tagName.toLowerCase()}${top.id ? ` id="${top.id}"` : ""}>`;
+    let safe = true, found = false;
+    for (const e of stack) {
+      if (native && e === d) {
+        found = true;
+        break;
+      }
+      if (box && (e === box || box.contains(e))) {
+        safe = false;
+        break;
+      }
+      if (e.matches(CONTROL) || e.closest(CONTROL) !== null) {
+        safe = false;
+        break;
+      }
+      if (!covers(e) || !layered(e)) {
+        safe = false;
+        break;
+      }
+      const bg = getComputedStyle(e).getPropertyValue("background-color");
+      const a = alpha(bg);
+      if (a === null) {
+        unreadable = unreadable ?? bg;
+        safe = false;
+        break;
+      }
+      if (a > 0.05) {
+        found = true;
+        if (cover === null) cover = bg;
+        break;
+      }
+    }
+    if (found && safe) {
+      point = pt;
+      break;
+    }
+  }
+  return { backdrop, cover, point, hitDesc, unreadable };
+}
+var WALK_CAP = 150;
+var NAVIGATED2 = /Execution context was destroyed|frame was detached|Cannot find context with specified id|interrupted by another navigation/i;
+var firstLine2 = (e) => errMsg(e).split("\n")[0] ?? "";
+var UnitNavigated = class extends Error {
+};
+var AxeTimeout = class extends Error {
+};
+var AXE_CAP_MS = 2e4;
+var AXE_TIMED_OUT = /* @__PURE__ */ Symbol("axe timed out");
+var BatteryStop = class extends Error {
+};
+var raf22 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var park = async (page) => {
+  await page.mouse.move(0, 0);
+  await raf22(page);
+};
+async function markOpenerSeen(page, id, act) {
+  await page.evaluate(tipPreMark, null).catch(() => false);
+  const r = await page.evaluate(markOpener, { id });
+  if (!r.sole) return r;
+  act();
+  const px = await ownPixels(page, { park: false });
+  const own = px === null || px.why !== null;
+  const why = own ? px === null ? "its pixels could not be compared" : px.why : null;
+  await page.evaluate(ownDecide, { own, why });
+  return { ...r, why };
+}
+async function safeCloseOn(page, closedAfter, act) {
+  const cands = await page.evaluate(closeCandidates, null);
+  for (const c of cands) {
+    if (!safeCloseName(c.name, c.ariaLabel)) continue;
+    const loc = page.locator(c.path).first();
+    if (await loc.evaluate(submitGuard) !== null) continue;
+    const before = page.url();
+    act();
+    await loc.click({ timeout: 2e3 });
+    const closed = await closedAfter();
+    if (page.url() !== before) return { closed: false, name: c.name, why: `the close control "${c.name}" navigated (${before} \u2192 ${page.url()})` };
+    return closed ? { closed: true, name: c.name, why: "" } : { closed: false, name: c.name, why: `the close control "${c.name}" did not close it` };
+  }
+  return { closed: false, name: "", why: "no visible Cancel / Close / Dismiss / No / Not now / \xD7 button in the dialog (the probe never clicks Save, Delete, a submit or a link)" };
+}
+async function pressOnOpener(page, key, act) {
+  const k = await page.evaluate(keyTarget, null);
+  if (!k.ok) return `${k.desc}: ${k.why}`;
+  const submits = await page.locator(":focus").last().evaluate(submitGuard, void 0, { timeout: 2e3 }).catch(() => "the focused element could not be checked");
+  if (submits !== null) return `${k.desc} would submit a form (${submits})`;
+  act();
+  await page.keyboard.press(key === " " ? "Space" : key);
+  return null;
+}
+var TRIED_CAP = 20;
+function logTried(log, method, url, cap = TRIED_CAP) {
+  if (log.list.length < cap) {
+    log.list.push({ method, url });
+    return true;
+  }
+  log.more++;
+  return false;
+}
+function blockedOf(log, phases) {
+  return log.list.map((w, i) => ({ method: w.method, url: w.url, phases, ...i === log.list.length - 1 && log.more > 0 ? { more: log.more } : {} }));
+}
+var READ_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
+var phaseOf = (c) => `${c.id}|${c.variant ?? ""}`;
+function judgeWrites(rows, blocked) {
+  return rows.map((c) => {
+    const hits = blocked.filter((b) => b.phases.includes(phaseOf(c)) || b.phases.includes(`${c.id}|`));
+    if (!hits.length) return c;
+    const first = hits[0];
+    const extra = hits.length - 1 + hits.reduce((n, b) => n + (b.more ?? 0), 0);
+    return {
+      ...c,
+      status: "not-run",
+      detail: `not-run: the page tried to write (${first ? `${first.method} ${new URL(first.url).pathname}` : "?"}${extra > 0 ? ` +${extra} more` : ""}) \u2014 blocked; not judged`,
+      evidence: { ...c.evidence ?? {}, blockedWrites: hits.slice(0, 5).map((b) => ({ method: b.method, url: b.url })), was: c.status }
+    };
+  });
+}
+var originPath = (url) => {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+};
+async function openWriteBlock(browser) {
+  const cdp = await browser.newBrowserCDPSession();
+  let current = null;
+  cdp.on("Fetch.requestPaused", (ev) => {
+    const method = ev.request.method.toUpperCase();
+    if (READ_METHODS.has(method) || current === null || !current.armed) {
+      cdp.send("Fetch.continueRequest", { requestId: ev.requestId }).catch(() => void 0);
+      return;
+    }
+    current.write(method, originPath(ev.request.url));
+    cdp.send("Fetch.failRequest", { requestId: ev.requestId, errorReason: "BlockedByClient" }).catch(() => void 0);
+  });
+  try {
+    await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
+  } catch (e) {
+    await cdp.detach().catch(() => void 0);
+    throw e;
+  }
+  return { unit: (n) => {
+    current = n;
+  }, close: () => {
+    cdp.detach().catch(() => void 0);
+  } };
+}
+async function openUnitPage(browser, o, onContext, net) {
+  const context = await browser.newContext({ viewport: { width: o.viewport.w, height: o.viewport.h }, deviceScaleFactor: 1, reducedMotion: "reduce" });
+  onContext(context);
+  let loads = 0;
+  const failed = [];
+  try {
+    await context.routeWebSocket(/.*/, (ws) => {
+      const url = originPath(ws.url());
+      if (net.armed) {
+        const kept = net.write("WebSocket", url);
+        ws.onMessage(() => {
+          net.write("WebSocket", url);
+        });
+        if (kept) ws.close().catch(() => void 0);
+        return;
+      }
+      const server = ws.connectToServer();
+      ws.onMessage((m) => {
+        if (net.armed) net.write("WebSocket", url);
+        else server.send(m);
+      });
+      server.onMessage((m) => {
+        ws.send(m);
+      });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(o.timeout);
+    await page.addInitScript({ content: o.initScript });
+    page.on("load", () => {
+      loads++;
+    });
+    page.on("requestfailed", (r) => {
+      if (!net.armed && failed.length < 5) failed.push(`${r.method()} ${new URL(originPath(r.url()), "http://x").pathname} (${r.failure()?.errorText ?? "failed"})`);
+    });
+    await o.reach(page);
+    return { context, page, loads: () => loads, failed };
+  } catch (e) {
+    await context.close().catch(() => void 0);
+    throw e;
+  }
+}
+var sameKey = (d, p) => d.id === p.id && (d.nodeId === void 0 || d.nodeId === p.nodeId) && (d.trigger === void 0 || d.trigger === p.trigger) && (d.variant === void 0 || d.variant === p.variant);
+function fill(out, produced, declared, why) {
+  for (const d of declared) {
+    if (produced.some((p) => sameKey(d, p))) continue;
+    out.push({ id: d.id, status: "not-run", ...d.nodeId !== void 0 ? { nodeId: d.nodeId } : {}, ...d.trigger !== void 0 ? { trigger: d.trigger } : {}, ...d.variant !== void 0 ? { variant: d.variant } : {}, detail: `not-run: ${why}` });
+  }
+}
+async function runBehaviour(browser, o) {
+  const t0 = Date.now();
+  const opening = openWriteBlock(browser);
+  const late = /* @__PURE__ */ Symbol("no answer");
+  const block = await Promise.race([opening, sleep2(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs), late, { ref: false })]);
+  if (block === late) {
+    opening.then((b) => {
+      b.close();
+    }, () => void 0);
+    throw new Error(`the write block could not be set up (the browser did not answer within ${Math.round(Math.min(WRITE_BLOCK_SETUP_MS, o.budgetMs) / 1e3)} s)`);
+  }
+  try {
+    return await runUnits(browser, o, block, t0);
+  } finally {
+    block.close();
+  }
+}
+var WRITE_BLOCK_SETUP_MS = 5e3;
+async function runUnits(browser, o, block, t0) {
+  const end = t0 + o.budgetMs;
+  const checks = [];
+  let cut = false;
+  let landmarks = null;
+  let axe = "why" in o.axe ? { ran: false, why: o.axe.why } : { ran: false, why: "axe did not run (the a11y unit was not reached)" };
+  const widths = [];
+  let forced = null;
+  const keyOpens = /* @__PURE__ */ new Map();
+  const nonModal = /* @__PURE__ */ new Set();
+  let batteryLeft = 0;
+  const runUnit = async (unit) => {
+    const tu = Date.now();
+    try {
+      await runUnitInner(unit);
+    } finally {
+      if (process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name} ${Date.now() - tu}ms`);
+    }
+  };
+  const runUnitInner = async (unit) => {
+    const produced = [];
+    const budgetLeft = end - Date.now();
+    const left = unit.battery ? unitCap(budgetLeft, batteryLeft) : budgetLeft;
+    if (unit.battery) batteryLeft--;
+    if (left <= 0) {
+      cut = true;
+      fill(checks, [], unit.declared, "time budget");
+      return;
+    }
+    const unitEnd = Date.now() + left;
+    let closed = false;
+    const held = {};
+    let loadsAt = 0;
+    let loadsNow = () => 0;
+    const trace = { phases: [{ seq: 0, keys: ["reach|"] }], actions: [] };
+    const tried = { list: [], more: 0 };
+    const net = { armed: false, write: (method, url) => {
+      const kept = logTried(tried, method, url);
+      if (kept && process.env.DT_BEHAVIOUR_DEBUG) console.error(`[behaviour] ${unit.name}: blocked ${method} ${url} (in ${trace.phases.at(-1)?.keys.join(" ") ?? "?"})`);
+      return kept;
+    } };
+    const api = (page) => ({
+      page,
+      add: (c) => {
+        if (!closed) produced.push(c);
+      },
+      phase: (...keys) => {
+        trace.phases.push({ seq: trace.phases.length, keys: keys.map((k) => k.includes("|") ? k : `${k}|`) });
+      },
+      act: () => {
+        net.armed = true;
+        trace.actions.push({ at: Date.now(), seq: trace.phases.length - 1 });
+      },
+      guard: () => {
+        if (loadsNow() !== loadsAt) throw new UnitNavigated("the page loaded a new document");
+      }
+    });
+    const blocked = () => blockedOf(tried, taintedPhases(trace));
+    block.unit(net);
+    let timer;
+    const cutP = new Promise((resolve) => {
+      timer = setTimeout(() => resolve("cut"), left);
+    });
+    const work = (async () => {
+      let reached;
+      try {
+        reached = await openUnitPage(browser, o, (c) => {
+          held.ctx = c;
+        }, net);
+      } catch (e) {
+        return e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine2(e)}`;
+      }
+      try {
+        loadsAt = reached.loads();
+        loadsNow = reached.loads;
+        if (o.measuredTags && o.measuredTags.length) {
+          const diff = fingerprintDiff(o.measuredTags, await reached.page.evaluate(visibleTags, null), unit.uses);
+          if (diff !== null) throw new BatteryStop(`the page reached for this check differs from the measured page (${diff}${reached.failed.length ? `; failed while loading: ${reached.failed.slice(0, 3).join(", ")}` : ""})`);
+        }
+        await reached.page.evaluate(tipPreMark, null).catch(() => false);
+        await unit.run(api(reached.page));
+        return null;
+      } finally {
+        const last = trace.actions.at(-1);
+        const wait = last ? Math.min(WRITE_SETTLE_MS - (Date.now() - last.at), unitEnd - Date.now()) : 0;
+        if (wait > 0) await sleep2(wait, void 0, { ref: false });
+        await reached.context.close().catch(() => void 0);
+      }
+    })().catch((e) => {
+      if (e instanceof UnitNavigated || NAVIGATED2.test(errMsg(e))) return "the page loaded a new document";
+      if (e instanceof BatteryStop) return e.message;
+      return `the check could not run \u2014 ${firstLine2(e)}`;
+    });
+    const r = await Promise.race([work, cutP]);
+    clearTimeout(timer);
+    if (r === "cut") {
+      closed = true;
+      cut = true;
+      const ctx = held.ctx;
+      await Promise.race([(async () => {
+        if (ctx) await ctx.close().catch(() => void 0);
+        await work;
+      })(), sleep2(CUT_SETTLE_MS2, void 0, { ref: false })]);
+      block.unit(null);
+      checks.push(...judgeWrites(produced, blocked()));
+      fill(checks, produced, unit.declared, left < budgetLeft ? `time budget (this unit's share: ${Math.round(left / 1e3)} s)` : "time budget");
+      return;
+    }
+    block.unit(null);
+    closed = true;
+    checks.push(...judgeWrites(produced, blocked()));
+    if (r !== null) fill(checks, produced, unit.declared, r);
+    else fill(checks, produced, unit.declared, "the unit ended before this check");
+  };
+  const exp = o.expectation;
+  const hidden = new Set(exp.hidden && exp.hidden.ids || []);
+  const subjectIds = [...new Set((exp.interactions || []).filter((r) => !hidden.has(r.nodeId) && /^on_(click|press)$/i.test(String(r.trigger))).map((r) => r.nodeId))];
+  await runUnit({
+    name: "a11y",
+    declared: [{ id: "a11y.landmarks" }, { id: "a11y.axe" }, { id: "keyboard.reachable" }, { id: "keyboard.focus-visible" }, { id: "a11y.name" }],
+    run: async (u) => {
+      const { page } = u;
+      await park(page);
+      u.phase("a11y.landmarks");
+      let yaml = null;
+      try {
+        yaml = await page.locator("body").ariaSnapshot({ timeout: Math.min(o.timeout, 1e4) });
+      } catch (e) {
+        if (NAVIGATED2.test(errMsg(e))) throw e;
+      }
+      const tree = yaml === null ? null : parseAriaLandmarkTree(yaml);
+      landmarks = tree ? tree.landmarks : null;
+      for (const c of landmarkFindings(tree, tree ? await page.evaluate(unnamedRegions, null) : [])) u.add(c);
+      u.guard();
+      u.phase("a11y.axe");
+      if ("why" in o.axe) u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${o.axe.why}` });
+      else {
+        try {
+          await page.evaluate(o.axe.source);
+          const axeCap = Math.max(1e3, Math.min(AXE_CAP_MS, end - Date.now()));
+          const res = await Promise.race([
+            page.evaluate(`(async () => { const r = await axe.run(document, { resultTypes: ["violations"], iframes: false }); return { version: axe.version, violations: r.violations.map((v) => ({ id: v.id, impact: v.impact == null ? null : String(v.impact), nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => Array.isArray(n.target) ? n.target.map(String).join(" ") : String(n.target)) })) }; })()`),
+            sleep2(axeCap, AXE_TIMED_OUT, { ref: false })
+          ]);
+          if (res === AXE_TIMED_OUT) throw new AxeTimeout(`axe timed out after ${Math.round(axeCap / 1e3)} s`);
+          const parsed = readAxeResult(res, o.axe.version);
+          axe = parsed;
+          if (parsed.ran) {
+            const st = axeStatus(parsed.violations);
+            const list = parsed.violations.map((v) => `${v.id} (${v.impact ?? "?"}, ${v.nodes} node${v.nodes === 1 ? "" : "s"})`).join(", ");
+            u.add({ id: "a11y.axe", status: st, detail: st === "pass" ? `axe-core ${parsed.version}: no violations (main frame; iframes not scanned)` : `axe-core ${parsed.version}: ${parsed.violations.length} violation(s) \u2014 ${list} (critical/serious = fail, moderate/minor = warn; main frame; iframes not scanned)`, evidence: { version: parsed.version, violations: parsed.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes, help: v.help, targets: v.targets })) } });
+          }
+        } catch (e) {
+          if (NAVIGATED2.test(errMsg(e))) throw e;
+          axe = { ran: false, why: e instanceof AxeTimeout ? e.message : `axe-core ${o.axe.version} failed in the page: ${firstLine2(e)}` };
+          u.add({ id: "a11y.axe", status: "not-run", detail: `not-run: ${axe.why}` });
+        }
+      }
+      u.guard();
+      await park(page);
+      u.phase("keyboard.reachable", "keyboard.focus-visible", "a11y.name");
+      await page.evaluate(sentinelInsert, null);
+      let walkEnd = "cap";
+      for (let i = 0; i < WALK_CAP; i++) {
+        u.act();
+        await page.keyboard.press("Tab");
+        const s = await page.evaluate(walkStep, { record: true });
+        if (s.end !== null) {
+          walkEnd = s.end;
+          break;
+        }
+      }
+      u.guard();
+      const { n: nStops, visible: stopVisible } = await page.evaluate(stopsCount, null);
+      const visibleAt = (i) => stopVisible[i] === true;
+      const subs = [];
+      for (const id of subjectIds) {
+        const mo = await markOpenerSeen(page, id, u.act);
+        subs.push({ ...await page.evaluate(subjectRead, { id }), why: mo.why });
+      }
+      const reachRows = [];
+      let reachedOk = 0, reachTotal = 0;
+      for (const s of subs) {
+        if (s.count !== 1) continue;
+        reachTotal++;
+        const ev = { visibility: s.visibility, tabindex: s.tabindex, tag: s.tag };
+        if (!s.hasBox) {
+          reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: "not-run: display:none at rest (no layout box) \u2014 nothing to reach", evidence: ev });
+          continue;
+        }
+        if (s.disabled) {
+          reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: "not-run: disabled", evidence: ev });
+          continue;
+        }
+        if (s.stop < 0) {
+          if (s.closedIn !== null) {
+            reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: inside a closed container (${s.closedIn}) \u2014 reachable once it is opened`, evidence: ev });
+            continue;
+          }
+          if (walkEnd === "cap") {
+            reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: the Tab walk stopped at ${WALK_CAP} Tab presses (${nStops} stops) before reaching it`, evidence: ev });
+            continue;
+          }
+          if (s.inside !== null) {
+            reachRows.push({ id: "keyboard.reachable", status: "not-run", nodeId: s.id, detail: `not-run: the opener is a container; Tab reaches ${s.inside} inside it, which is not the opener's own control${s.why !== null ? ` \u2014 ${s.why}` : ""} (keyboard.activation reports it)`, evidence: ev });
+            continue;
+          }
+          reachRows.push({ id: "keyboard.reachable", status: "fail", nodeId: s.id, detail: `not reached by Tab (computed visibility ${s.visibility || "?"}, tabindex ${s.tabindex ?? "none"}, <${s.tag}>) \u2014 a keyboard user cannot reach this control; hover-only actions must stay focusable (opacity + :focus-within, never visibility:hidden), and a clickable non-button needs tabindex="0" or a <button>`, evidence: ev });
+          continue;
+        }
+        if (!visibleAt(s.stop)) {
+          reachRows.push({ id: "keyboard.reachable", status: "warn", nodeId: s.id, detail: "reached by Tab but invisible while focused (opacity 0 / hidden) \u2014 reveal it on focus too (e.g. group-focus-within:opacity-100)", evidence: { ...ev, stop: s.stop } });
+          continue;
+        }
+        reachedOk++;
+      }
+      for (const c of perElement("keyboard.reachable", reachRows, reachedOk, reachTotal, "interactive element(s) reached by Tab and visible while focused")) u.add(c);
+      if (reachTotal === 0) u.add({ id: "keyboard.reachable", status: "not-run", detail: "not-run: the expectation lists no click/press interaction tagged exactly once on the screen" });
+      const fvRows = [];
+      let fvOk = 0;
+      const fvN = Math.min(nStops, 60);
+      const shot = (clip) => page.screenshot({ clip, animations: "disabled", caret: "hide" });
+      u.phase("keyboard.focus-visible");
+      const fvRes = [];
+      for (let i = 0; i < fvN; i++) {
+        u.guard();
+        if (!await page.evaluate(focusBefore, { i })) {
+          fvRes.push({ i, status: "not-run", detail: "not-run: could not focus the stop before it" });
+          continue;
+        }
+        u.act();
+        await page.keyboard.press("Tab");
+        await raf22(page);
+        let f = await page.evaluate(focusedStop, { i });
+        for (let k = 0; k < 10 && !f.ok && f.onPrev; k++) {
+          u.act();
+          await page.keyboard.press("Tab");
+          await raf22(page);
+          f = await page.evaluate(focusedStop, { i });
+        }
+        if (!f.ok) {
+          fvRes.push({ i, status: "not-run", detail: "not-run: a Tab from the previous stop did not land on it again" });
+          continue;
+        }
+        if (!f.visible) {
+          fvRes.push({ i, status: "not-run", detail: "not-run: invisible while focused (keyboard.reachable reports it when it is an interaction)" });
+          continue;
+        }
+        const M = 8;
+        const x0 = Math.max(0, Math.floor(f.rect.x - M)), y0 = Math.max(0, Math.floor(f.rect.y - M));
+        const x1 = Math.min(f.vw, Math.ceil(f.rect.x + f.rect.w + M)), y1 = Math.min(f.vh, Math.ceil(f.rect.y + f.rect.h + M));
+        if (x1 - x0 < 1 || y1 - y0 < 1) {
+          fvRes.push({ i, status: "not-run", detail: "not-run: off screen while focused" });
+          continue;
+        }
+        const clip = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+        const focusedPng = await shot(clip);
+        await page.evaluate(blurActive, null);
+        await raf22(page);
+        const blurredPng = await shot(clip);
+        const evidence = { outlineStyle: f.outlineStyle, outlineWidth: f.outlineWidth, boxShadow: f.boxShadow, focusVisible: f.focusVisible };
+        if (focusedPng.equals(blurredPng)) fvRes.push({ i, status: "fail", detail: `no visible focus indicator: focused and unfocused look identical (\xB18 px around it) \u2014 outline-style ${f.outlineStyle || "?"}, box-shadow ${f.boxShadow || "?"}; a utility that hides the outline needs a visible replacement on :focus-visible (e.g. Tailwind v4 focus-visible:outline-solid, or a ring)`, evidence });
+        else {
+          fvRes.push({ i, status: "pass", detail: "", evidence });
+          fvOk++;
+        }
+      }
+      await page.evaluate(sentinelRemove, null);
+      const info = await page.evaluate(stopsInfo, null);
+      for (const r of fvRes) {
+        if (r.status === "pass") continue;
+        const s = info[r.i];
+        fvRows.push({ id: "keyboard.focus-visible", status: r.status, ...s && s.dt !== null ? { nodeId: s.dt } : {}, ...s ? { target: s.path } : {}, detail: r.detail, ...r.evidence ? { evidence: r.evidence } : {} });
+      }
+      if (nStops > 60) fvRows.push({ id: "keyboard.focus-visible", status: "not-run", detail: `not-run: ${nStops - 60} Tab stop(s) after the first 60`, evidence: { count: nStops - 60 } });
+      for (const c of perElement("keyboard.focus-visible", fvRows, fvOk, fvN, "Tab stop(s) show a visible focus indicator")) u.add(c);
+      if (nStops === 0) u.add({ id: "keyboard.focus-visible", status: "not-run", detail: "not-run: Tab reached no focusable element" });
+      u.phase("a11y.name");
+      const nameRows = [];
+      let nameOk = 0;
+      for (const [i, s] of info.entries()) {
+        u.guard();
+        if (!s.connected) {
+          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: "not-run: left the document during the walk" });
+          continue;
+        }
+        let snap = "";
+        try {
+          snap = await page.locator(s.path).first().ariaSnapshot({ timeout: 2e3 });
+        } catch (e) {
+          if (NAVIGATED2.test(errMsg(e))) throw e;
+          nameRows.push({ id: "a11y.name", status: "not-run", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `not-run: no accessibility snapshot (${firstLine2(e)})` });
+          continue;
+        }
+        const n = nameStatus(snap, s);
+        const ev = { snapshot: (snap.split("\n")[0] ?? "").slice(0, 120), tag: s.tag, stop: i, ...s.domName !== null ? { domName: s.domName } : {} };
+        if (n.status === "warn") nameRows.push({ id: "a11y.name", status: "warn", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `a focusable <${s.tag}> with no role \u2014 give it a role (or use a native control) and a name; names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+        else if (n.status === "fail") nameRows.push({ id: "a11y.name", status: "fail", ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `${n.role} with no accessible name \u2014 an icon-only control needs aria-label (or visible text); names computed by ${NAMES_COMPUTED_BY}`, evidence: ev });
+        else nameOk++;
+      }
+      for (const c of perElement("a11y.name", nameRows, nameOk, info.length, `Tab stop(s) have a role and an accessible name (${NAMES_COMPUTED_BY})`)) u.add(c);
+      if (info.length === 0) u.add({ id: "a11y.name", status: "not-run", detail: "not-run: Tab reached no focusable element" });
+    }
+  });
+  const designW = o.viewport.w, designH = o.viewport.h;
+  const mid = designW >= 1280, narrow = designW > 320;
+  await runUnit({
+    name: "render",
+    declared: [
+      { id: "forced-colors.visible" },
+      { id: "layout.subpixel", variant: "design" },
+      ...mid ? [{ id: "overflow.mid" }, { id: "layout.subpixel", variant: `1024x${designH}` }] : [],
+      ...narrow ? [{ id: "overflow.narrow" }, { id: "layout.subpixel", variant: `320x${designH}` }] : []
+    ],
+    run: async (u) => {
+      const { page } = u;
+      await park(page);
+      u.phase("forced-colors.visible");
+      if ((o.browserName ?? "chromium") !== "chromium") u.add({ id: "forced-colors.visible", status: "unsupported", detail: "forced colours are emulated in Chromium only" });
+      else {
+        const cands = await page.evaluate(maskCandidates, { cap: 40 });
+        const pairs = [];
+        const toggle = async (i) => {
+          u.act();
+          const r = await page.evaluate(maskShow, { i });
+          if (!r) return null;
+          await raf22(page);
+          const x0 = Math.max(0, Math.floor(r.x)), y0 = Math.max(0, Math.floor(r.y)), x1 = Math.min(r.vw, Math.ceil(r.x + r.w)), y1 = Math.min(r.vh, Math.ceil(r.y + r.h));
+          if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+          const clip = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+          const a = await page.screenshot({ clip, animations: "disabled", caret: "hide" });
+          await page.evaluate(maskHide, { i, hide: true });
+          await raf22(page);
+          const b = await page.screenshot({ clip, animations: "disabled", caret: "hide" });
+          await page.evaluate(maskHide, { i, hide: false });
+          return { differs: !a.equals(b), clip };
+        };
+        for (let i = 0; i < cands.length; i++) {
+          u.guard();
+          const t = await toggle(i);
+          pairs.push({ normalDiffers: t ? t.differs : false, clip: t ? t.clip : null });
+        }
+        u.act();
+        await page.emulateMedia({ forcedColors: "active" });
+        await page.evaluate(scrollToY, { y: 0 });
+        await raf22(page);
+        forced = await page.screenshot({ animations: "disabled", caret: "hide" });
+        const rows = [];
+        let okN = 0, total = 0;
+        for (let i = 0; i < cands.length; i++) {
+          u.guard();
+          const c = cands[i];
+          const p = pairs[i];
+          if (!c || !p) continue;
+          const nodeId = c.dt !== null ? { nodeId: c.dt } : {};
+          if (!p.normalDiffers) {
+            rows.push({ id: "forced-colors.visible", status: "not-run", ...nodeId, detail: "not-run: hiding it changes nothing even in normal colours (covered or blank)" });
+            continue;
+          }
+          total++;
+          const t = await toggle(i);
+          if (t === null) {
+            rows.push({ id: "forced-colors.visible", status: "not-run", ...nodeId, detail: "not-run: not on screen under forced colours" });
+            continue;
+          }
+          if (!t.differs) rows.push({ id: "forced-colors.visible", status: "fail", ...nodeId, detail: `a CSS-mask icon (<${c.tag}>${c.dt !== null ? ` in data-dt-node="${c.dt}"` : ""}) vanishes under forced colours: its background-color is forced to Canvas \u2014 add forced-color-adjust:none, or background-color:CanvasText inside @media (forced-colors: active) (an inline SVG with fill=currentColor needs nothing)` });
+          else okN++;
+        }
+        await page.emulateMedia({ forcedColors: "none" });
+        await raf22(page);
+        for (const c of perElement("forced-colors.visible", rows, okN, total, "CSS-mask icon(s) stay visible under forced colours")) u.add(c);
+        if (!cands.length) u.add({ id: "forced-colors.visible", status: "not-run", detail: "not-run: no CSS-mask icon on the screen (the only kind this check tests: SVG fill/stroke, <img> and url() backgrounds are not forced; plain background-colour boxes become Canvas by design)" });
+      }
+      u.phase("layout.subpixel", "overflow.mid", "overflow.narrow");
+      const subRows = (variant, list) => {
+        const rows = list.map((s) => ({ id: "layout.subpixel", status: "warn", variant, ...s.dt !== null ? { nodeId: s.dt } : {}, target: s.path, detail: `<${s.tag}>${s.text ? ` "${s.text}"` : ""} renders ${s.width}px wide \u2014 a collapsed ${s.tag === "td" || s.tag === "th" ? "table column" : "text box"} (D42: a behaviour warning, not a fidelity delta)`, evidence: { width: s.width } }));
+        if (rows.length) for (const c of perElement("layout.subpixel", rows, 0, 0, "", variant)) u.add(c);
+        else u.add({ id: "layout.subpixel", status: "pass", variant, detail: "no table cell or text renders under 1px wide" });
+      };
+      const overflowOf = (ov) => {
+        const { compatMode, ...rest } = ov;
+        return { ...rest, ...compatMode !== "CSS1Compat" ? { compatMode } : {} };
+      };
+      u.act();
+      await page.evaluate(scrollToY, { y: 0 });
+      const designSub = await page.evaluate(subpixelRead, null);
+      widths.push({ role: "design", overflow: overflowOf(await page.evaluate(readPageOverflow, null)), subpixel: designSub });
+      subRows("design", designSub);
+      const settleResize = async (w) => {
+        u.act();
+        await page.setViewportSize({ width: w, height: designH });
+        await raf22(page);
+        const t = Date.now();
+        let last = "", stable = 0;
+        for (; ; ) {
+          await sleep2(100);
+          const s = await page.evaluate(docSize, null);
+          const sig = `${s.sw}x${s.sh}`;
+          stable = sig === last ? stable + 1 : 0;
+          last = sig;
+          if (stable >= 2 && Date.now() - t >= 300 || Date.now() - t >= 1500) break;
+        }
+      };
+      const at = async (role, w) => {
+        u.guard();
+        await settleResize(w);
+        u.guard();
+        const ov = overflowOf(await page.evaluate(readPageOverflow, null));
+        const sub = await page.evaluate(subpixelRead, null);
+        widths.push({ role, overflow: ov, subpixel: sub });
+        const variant = `${w}x${designH}`;
+        const id = role === "mid" ? "overflow.mid" : "overflow.narrow";
+        const note = "live resize: load-time-only layouts not reproduced";
+        const evidence = { viewport: variant, scrollWidth: ov.scrollWidth, clientWidth: ov.clientWidth, overflowX: ov.overflowX, offenders: ov.offenders.map((x) => ({ path: x.path, dt: x.dt, right: x.right })), note };
+        if (ov.scrollable) {
+          const twoD = role === "narrow" && await page.evaluate(offendersAre2D, { paths: ov.offenders.map((x) => x.path) });
+          const names = ov.offenders.slice(0, 3).map((x) => x.dt !== null ? `data-dt-node="${x.dt}"` : x.path).join(", ");
+          u.add({ id, status: "warn", variant, detail: `at ${w}px the page scrolls sideways (scrollWidth ${ov.scrollWidth} > ${ov.clientWidth}; widest: ${names || "?"})${role === "narrow" ? " \u2014 WCAG 1.4.10 reflow" : ""}${twoD ? "; WCAG 1.4.10 2-D content exception may apply (every offender is inside a table/pre/figure/media/grid)" : ""} (${note})`, evidence });
+        } else u.add({ id, status: "pass", variant, detail: `no sideways scroll at ${w}px (${note})`, evidence });
+        subRows(variant, sub);
+      };
+      if (mid) await at("mid", 1024);
+      if (narrow) await at("narrow", 320);
+      if (!mid) u.add({ id: "overflow.mid", status: "not-run", detail: `not-run: the design is ${designW}px wide (the 1024px check runs for designs \u2265 1280px)` });
+      if (!narrow) u.add({ id: "overflow.narrow", status: "not-run", detail: `not-run: the design is ${designW}px wide (not wider than 320px)` });
+    }
+  });
+  const { battery, skipped } = batteryRows(exp, o.driven);
+  for (const { row, why } of skipped) for (const id of DIALOG_IDS) checks.push({ id, status: "not-run", nodeId: row.nodeId, trigger: row.trigger, detail: `not-run: ${why}` });
+  batteryLeft = battery.length * 2;
+  for (const row of battery) {
+    const key = `${row.nodeId}|${row.trigger}`;
+    const base = { nodeId: row.nodeId, trigger: row.trigger };
+    const destId = row.destinationId ?? null;
+    const contract = [...DIALOG_CONTRACT];
+    const uses = destId === null ? [row.nodeId] : [row.nodeId, destId];
+    await runUnit({
+      name: `keyboard ${key}`,
+      battery: true,
+      uses,
+      declared: [
+        { id: "keyboard.activation", ...base },
+        { id: "dialog.focus-on-open", ...base },
+        { id: "dialog.focus-trap", ...base },
+        { id: "dialog.escape-closes", ...base },
+        { id: "dialog.focus-return", ...base, variant: "escape" },
+        { id: "dialog.focus-return", ...base, variant: "close" },
+        { id: "dialog.nested-escape", ...base }
+      ],
+      run: async (u) => {
+        const { page } = u;
+        const add = (c2) => u.add({ ...c2, ...base });
+        await park(page);
+        const detect = async () => {
+          const t = Date.now();
+          for (; ; ) {
+            const r = await page.evaluate(pollDetector, { destId, contract });
+            if (r.lost) throw new UnitNavigated("the page loaded a new document");
+            if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
+            if (Date.now() - t >= 2e3) return r.opened;
+            await sleep2(100);
+          }
+        };
+        const keyOpen = async (key2) => {
+          await page.evaluate(armDetector, { destId, contract });
+          const blocked = await pressOnOpener(page, key2, u.act);
+          return blocked !== null ? { opened: null, blocked } : { opened: await detect(), blocked: null };
+        };
+        const mouseOpen = async () => {
+          let st = await page.evaluate(openerState, { id: row.nodeId });
+          if (st.count !== 1 || st.path === null) return { opened: null, why: `the opener matched ${st.count} element(s)` };
+          if (st.disabled) return { opened: null, why: "the opener is disabled" };
+          if (!st.visible && st.hoverPath !== null) {
+            await page.mouse.move(0, 0);
+            u.act();
+            await page.locator(st.hoverPath).first().hover({ timeout: 2e3 }).catch(() => void 0);
+            await raf22(page);
+            st = await page.evaluate(openerState, { id: row.nodeId });
+          }
+          if (!st.visible || st.path === null) return { opened: null, why: "the opener is not visible even on hover" };
+          const loc = page.locator(st.path).first();
+          if (await loc.evaluate(submitGuard) !== null) return { opened: null, why: "the opener would submit a form" };
+          await markOpenerSeen(page, row.nodeId, u.act);
+          await page.evaluate(armDetector, { destId, contract });
+          u.act();
+          await loc.click({ timeout: 2e3 });
+          return { opened: await detect() };
+        };
+        u.phase("keyboard.activation");
+        const marked = await markOpenerSeen(page, row.nodeId, u.act);
+        await page.evaluate(sentinelInsert, null);
+        let reachedOpener = false;
+        let ancestorStop = null, insideStop = null;
+        for (let i = 0; i < WALK_CAP; i++) {
+          u.act();
+          await page.keyboard.press("Tab");
+          const s = await page.evaluate(walkStep, { record: true });
+          if (s.opener) {
+            reachedOpener = true;
+            break;
+          }
+          if (s.ancestor !== null && ancestorStop === null) ancestorStop = s.ancestor;
+          if (s.inside !== null && insideStop === null) insideStop = s.inside;
+          if (s.end !== null) break;
+        }
+        await page.evaluate(sentinelRemove, null);
+        u.guard();
+        let opened = null;
+        let via = null;
+        const notSelf = (what) => `not-run: the Tab stop at the opener is not the opener itself (${what}) \u2014 no key is pressed there (D40(8))`;
+        if (!reachedOpener) add({ id: "keyboard.activation", status: "not-run", detail: insideStop !== null ? notSelf(`the opener is a container; its focusable child ${insideStop} is not pressed${marked.why !== null ? ` \u2014 ${marked.why}` : ""}`) : ancestorStop !== null ? notSelf(`${ancestorStop}, an ancestor of it`) : "not-run: Tab never reaches the opener (keyboard.reachable reports it)" });
+        else {
+          const e1 = await keyOpen("Enter");
+          if (e1.blocked !== null) add({ id: "keyboard.activation", status: "not-run", detail: notSelf(e1.blocked) });
+          else {
+            opened = e1.opened;
+            let spaceBlocked = null;
+            if (opened) via = "Enter";
+            else {
+              u.guard();
+              const e2 = await keyOpen(" ");
+              spaceBlocked = e2.blocked;
+              opened = e2.opened;
+              if (opened) via = " ";
+            }
+            add(via === "Enter" ? { id: "keyboard.activation", status: "pass", detail: "Tab reaches the opener and Enter opens the dialog" } : via === " " ? { id: "keyboard.activation", status: "warn", detail: "only Space opens it, Enter does not \u2014 a button opens on both (a <button> does this by itself)" } : { id: "keyboard.activation", status: "fail", detail: `Tab reaches the opener but ${spaceBlocked === null ? "neither Enter nor Space opens" : `Enter does not open (Space not pressed: ${spaceBlocked})`} the dialog \u2014 a div with only onclick? use <button> (or handle Enter and Space)` });
+          }
+        }
+        keyOpens.set(key, via);
+        u.guard();
+        const open = async () => {
+          if (via !== null) {
+            await markOpenerSeen(page, row.nodeId, u.act);
+            await page.evaluate(focusOpener, { preventScroll: false });
+            const r = await keyOpen(via);
+            if (r.blocked === null) return { opened: r.opened };
+          }
+          return mouseOpen();
+        };
+        if (!opened) {
+          u.phase("dialog.focus-on-open");
+          const m = await mouseOpen();
+          opened = m.opened;
+          if (!opened) throw new BatteryStop(`the dialog did not open in the battery's page (${m.why ?? "nothing opened within 2 s"})`);
+        }
+        const kind = await page.evaluate(markDialog, { path: opened.selector });
+        if (!kind.found) throw new BatteryStop("the opened element could not be found again");
+        if (!(kind.modal || kind.dialogOpen || kind.ariaModal)) {
+          nonModal.add(key);
+          throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+        }
+        const modal = kind.modal || kind.ariaModal;
+        u.phase("dialog.focus-on-open");
+        await park(page);
+        const f0 = await page.evaluate(focusVsDialog, { destId });
+        add(f0.inside ? { id: "dialog.focus-on-open", status: "pass", detail: `focus moved into the dialog (initial target ${f0.desc}; recorded, not graded)`, evidence: { initial: f0.desc } } : { id: "dialog.focus-on-open", status: "fail", detail: `focus stayed ${f0.body ? "on <body>" : `on ${f0.desc}, outside the dialog`} when it opened \u2014 move focus into the dialog (its first control or its heading)`, evidence: { active: f0.desc } });
+        u.guard();
+        u.phase("dialog.focus-trap");
+        if (!modal) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: a non-modal dialog[open] (show()) does not trap focus" });
+        else {
+          const n = await page.evaluate(dialogTabbables, null);
+          if (n > 30) add({ id: "dialog.focus-trap", status: "not-run", detail: "not-run: too many tabbables to prove a trap (more than 30 in the dialog)" });
+          let escaped = n > 30 ? "" : null;
+          for (const k of ["Tab", "Shift+Tab"]) {
+            for (let i = 0; i < n + 2 && escaped === null; i++) {
+              u.act();
+              await page.keyboard.press(k);
+              const f = await page.evaluate(focusVsDialog, { destId });
+              if (!f.inside && !f.body) escaped = `${k} \xD7${i + 1} moved focus to ${f.desc}`;
+            }
+          }
+          if (n <= 30) add(escaped === null ? { id: "dialog.focus-trap", status: "pass", detail: `Tab and Shift+Tab \xD7${n + 2} each stay inside the dialog (${n} tabbable element(s))` } : { id: "dialog.focus-trap", status: "fail", detail: `focus left the modal dialog: ${escaped} \u2014 trap Tab inside a modal (showModal() does, a div needs a focus trap)` });
+        }
+        u.guard();
+        u.phase("dialog.escape-closes", "dialog.focus-return|escape");
+        u.act();
+        await page.keyboard.press("Escape");
+        const closedAfter = async () => {
+          const t = Date.now();
+          for (; ; ) {
+            await raf22(page);
+            if (!await page.evaluate(dialogOpenNow, null)) return true;
+            if (Date.now() - t >= 1e3) return false;
+            await sleep2(100);
+          }
+        };
+        const escClosed = await closedAfter();
+        add(escClosed ? { id: "dialog.escape-closes", status: "pass", detail: "Escape closes the dialog" } : { id: "dialog.escape-closes", status: modal ? "fail" : "warn", detail: `Escape left the ${modal ? "modal " : ""}dialog open \u2014 close it on Escape (showModal() does; a div dialog needs a keydown handler)` });
+        let closedBy = "";
+        const focusReturn = async (variant) => {
+          await park(page);
+          const r = await page.evaluate(focusReturnRead, null);
+          const s = focusReturnStatus(r);
+          add({
+            id: "dialog.focus-return",
+            status: s.status,
+            variant,
+            detail: `after ${variant === "escape" ? "Escape" : `the close control "${closedBy}"`}: ${s.detail}`,
+            evidence: { active: r.activeDesc, openerVisible: r.openerVisible, opacity0: r.opacity0, connected: r.connected, ...variant === "close" ? { closedBy } : {} }
+          });
+        };
+        const safeClose = async () => {
+          const r = await safeCloseOn(page, closedAfter, u.act);
+          closedBy = r.name;
+          return r;
+        };
+        let closeDone = false;
+        if (escClosed) await focusReturn("escape");
+        else {
+          add({ id: "dialog.focus-return", status: "not-run", variant: "escape", detail: "not-run: Escape did not close the dialog" });
+          u.phase("dialog.focus-return|close");
+          const c2 = await safeClose();
+          if (!c2.closed) {
+            add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c2.why ?? "the dialog stayed open"}` });
+            throw new BatteryStop(`the dialog could not be closed for a fresh open (${c2.why ?? "?"})`);
+          }
+          await focusReturn("close");
+          closeDone = true;
+        }
+        u.guard();
+        u.phase("dialog.nested-escape");
+        const o2 = await open();
+        if (!o2.opened) throw new BatteryStop(`the dialog did not open again (${o2.why ?? "nothing opened within 2 s"})`);
+        await page.evaluate(markDialog, { path: o2.opened.selector });
+        const x = await page.evaluate(expanderFind, null);
+        let stillOpen = true;
+        if (x.path === null) {
+          add(x.nativePicker ? { id: "dialog.nested-escape", status: "not-run", synthetic: true, detail: "not-run: native picker: synthetic (headless), not a real-browser observation \u2014 the dialog holds only a native <select>/date control, whose popup headless Chromium does not open (F-122)" } : { id: "dialog.nested-escape", status: "not-run", detail: "not-run: no expandable control ([aria-expanded]) in the dialog" });
+        } else {
+          const loc = page.locator(x.path).first();
+          if (await loc.evaluate(submitGuard) !== null) add({ id: "dialog.nested-escape", status: "not-run", detail: "not-run: the expandable control would submit a form" });
+          else {
+            u.act();
+            await loc.click({ timeout: 2e3 });
+            let expanded = false;
+            const t = Date.now();
+            while (Date.now() - t < 1e3) {
+              if (await page.evaluate(expanderState, null) === "true") {
+                expanded = true;
+                break;
+              }
+              await sleep2(100);
+            }
+            if (!expanded) add({ id: "dialog.nested-escape", status: "not-run", detail: `not-run: ${x.desc} never reported aria-expanded="true" within 1 s of a click` });
+            else {
+              u.act();
+              await page.keyboard.press("Escape");
+              await raf22(page);
+              await sleep2(150);
+              await raf22(page);
+              const dlgOpen = await page.evaluate(dialogOpenNow, null);
+              const ctl = await page.evaluate(expanderState, null);
+              stillOpen = dlgOpen;
+              add(!dlgOpen ? { id: "dialog.nested-escape", status: "fail", detail: `Escape on the open ${x.desc} closed the whole dialog \u2014 the inner control must handle Escape (collapse it, preventDefault + stopPropagation) so the dialog stays open (DT-66)` } : ctl === "true" ? { id: "dialog.nested-escape", status: "warn", detail: `Escape left ${x.desc} expanded (the dialog stayed open) \u2014 Escape should collapse it first` } : { id: "dialog.nested-escape", status: "pass", detail: `Escape collapsed ${x.desc} and the dialog stayed open` });
+            }
+          }
+        }
+        u.guard();
+        if (closeDone) return;
+        u.phase("dialog.focus-return|close");
+        if (!stillOpen || !await page.evaluate(dialogOpenNow, null)) {
+          const o3 = await open();
+          if (!o3.opened) {
+            add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: the dialog did not open again (${o3.why ?? "nothing opened"})` });
+            return;
+          }
+          await page.evaluate(markDialog, { path: o3.opened.selector });
+        }
+        const c = await safeClose();
+        if (!c.closed) {
+          add({ id: "dialog.focus-return", status: "not-run", variant: "close", detail: `not-run: ${c.why ?? "the dialog stayed open"}` });
+          return;
+        }
+        await focusReturn("close");
+      }
+    });
+    if (keyOpens.get(key) !== null && checks.some((c) => c.id === "keyboard.activation" && c.nodeId === row.nodeId && c.trigger === row.trigger && c.status === "not-run")) keyOpens.set(key, null);
+    await runUnit({
+      name: `scroll ${key}`,
+      battery: true,
+      uses,
+      declared: [{ id: "dialog.scroll-open", ...base }, { id: "dialog.scrim", ...base }, { id: "dialog.click-outside", ...base }],
+      run: async (u) => {
+        if (nonModal.has(key)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+        const { page } = u;
+        const add = (c) => u.add({ ...c, ...base });
+        const ov = row.overlay;
+        const centre = overlayCentred(ov);
+        const keyVia = keyOpens.get(key) ?? null;
+        await park(page);
+        const detect = async () => {
+          const t = Date.now();
+          for (; ; ) {
+            const r = await page.evaluate(pollDetector, { destId, contract });
+            if (r.lost) throw new UnitNavigated("the page loaded a new document");
+            if (r.opened && (destId === null || r.dest !== null && r.dest.inside || Date.now() - t >= 500)) return r.opened;
+            if (Date.now() - t >= 2e3) return r.opened;
+            await sleep2(100);
+          }
+        };
+        const openStill = async () => {
+          await page.mouse.move(0, 0);
+          let p = await markOpenerSeen(page, row.nodeId, u.act);
+          if (!p.found) return { why: "the opener is not on the page" };
+          if (!p.visible && p.hover && p.hover.inViewport) {
+            u.act();
+            await page.mouse.move(p.hover.x, p.hover.y);
+            await raf22(page);
+            p = await markOpenerSeen(page, row.nodeId, u.act);
+          }
+          if (p.visible && p.inViewport && p.hits) {
+            await page.evaluate(armDetector, { destId, contract });
+            u.act();
+            await page.mouse.click(p.x, p.y);
+            return { opened: await detect(), how: "a mouse click at its on-screen point" };
+          }
+          if (keyVia !== null) {
+            await page.evaluate(focusOpener, { preventScroll: true });
+            await page.evaluate(armDetector, { destId, contract });
+            const blocked = await pressOnOpener(page, keyVia, u.act);
+            if (blocked !== null) return { why: `the opener is off screen at this scroll and the key is not pressed there (${blocked})` };
+            return { opened: await detect(), how: `focus({preventScroll}) + ${keyVia === " " ? "Space" : "Enter"}` };
+          }
+          return { why: "the opener is off screen at this scroll and opens only by mouse (keyboard.activation did not pass)" };
+        };
+        const closedAfter = async () => {
+          const t = Date.now();
+          for (; ; ) {
+            await raf22(page);
+            if (!await page.evaluate(dialogOpenNow, null)) return true;
+            if (Date.now() - t >= 1e3) return false;
+            await sleep2(100);
+          }
+        };
+        const closeAny = async () => (await safeCloseOn(page, closedAfter, u.act)).closed;
+        const size = await page.evaluate(docSize, null);
+        const max = Math.max(0, size.sh - size.vh);
+        const ys = max > 1 ? max > 150 ? [{ y: 150, variant: "y=150" }, { y: max, variant: "y=max" }] : [{ y: max, variant: "y=max" }] : [{ y: 0, variant: "y=0" }];
+        let stuck = false;
+        for (const { y, variant } of ys) {
+          u.phase(`dialog.scroll-open|${variant}`);
+          u.guard();
+          if (stuck) {
+            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: "not-run: the dialog did not close after the previous scroll position" });
+            continue;
+          }
+          u.act();
+          await page.evaluate(scrollToY, { y });
+          await raf22(page);
+          const y0 = await page.evaluate(effScroll, null);
+          const op2 = await openStill();
+          if ("why" in op2) {
+            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: ${op2.why}` });
+            continue;
+          }
+          if (!op2.opened) {
+            add({ id: "dialog.scroll-open", status: "not-run", variant, detail: `not-run: nothing opened after ${op2.how}` });
+            continue;
+          }
+          const k = await page.evaluate(markDialog, { path: op2.opened.selector });
+          if (k.found && !(k.modal || k.dialogOpen || k.ariaModal)) throw new BatteryStop(`the opened element is not a modal dialog \u2014 ${NOT_MODAL}`);
+          const settled = await page.evaluate(settleDialog, null);
+          const g = await page.evaluate(dialogGeometry, { destId });
+          const problems = [];
+          if (Math.abs(g.scrollY - y0) > 1) problems.push(`opening it scrolled the page from y=${Math.round(y0)} to y=${Math.round(g.scrollY)}`);
+          const rect = { x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) };
+          if (centre) {
+            const c = centredIn(g.rect, { w: g.vw, h: g.vh });
+            if (!c.centred) problems.push(`it is not centred in the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh}; position ${g.position || "?"}) \u2014 the design centres it (overlay ${ov?.from === "default" ? "default = center" : "position center"}); a fixed / top-layer dialog stays centred at any scroll`);
+          } else if (g.rect.x < -1 || g.rect.y < -1 || g.rect.x + g.rect.w > g.vw + 1 || g.rect.y + g.rect.h > g.vh + 1) problems.push(`it leaves the viewport (${g.via} at ${rect.x},${rect.y} ${rect.w}\xD7${rect.h} in ${g.vw}\xD7${g.vh})`);
+          u.act();
+          await page.keyboard.press("Escape");
+          const closed = await closedAfter();
+          await raf22(page);
+          const after = await page.evaluate(effScroll, null);
+          if (closed && Math.abs(after - y0) > 1) problems.push(`closing it scrolled the page from y=${Math.round(y0)} to y=${Math.round(after)}`);
+          if (!closed && !await closeAny()) stuck = true;
+          const evidence = {
+            y: Math.round(y0),
+            afterOpen: Math.round(g.scrollY),
+            afterClose: closed ? Math.round(after) : null,
+            rect,
+            viewport: { w: g.vw, h: g.vh },
+            position: g.position,
+            openedBy: op2.how,
+            animations: settled.animations,
+            stable: settled.stable
+          };
+          add(problems.length ? { id: "dialog.scroll-open", status: "fail", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: ${problems.join("; ")}`, evidence } : { id: "dialog.scroll-open", status: "pass", variant, detail: `opened at scroll y=${Math.round(y0)} by ${op2.how}: the page did not move${centre ? ", the dialog is centred" : ", the dialog is inside the viewport"}`, evidence });
+        }
+        u.guard();
+        u.phase("dialog.scrim", "dialog.click-outside");
+        if (!ov) {
+          add({ id: "dialog.scrim", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row (a plan row, or the destination was not exported)" });
+          add({ id: "dialog.click-outside", status: "not-run", detail: "not-run: the expectation has no overlay settings for this row" });
+          return;
+        }
+        if (stuck) {
+          for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: "not-run: the dialog could not be closed for a fresh open" });
+          return;
+        }
+        u.act();
+        await page.evaluate(scrollToY, { y: 0 });
+        await raf22(page);
+        const op = await openStill();
+        if ("why" in op || !op.opened) {
+          for (const id of ["dialog.scrim", "dialog.click-outside"]) add({ id, status: "not-run", detail: `not-run: ${"why" in op ? op.why : "nothing opened"}` });
+          return;
+        }
+        const kd = await page.evaluate(markDialog, { path: op.opened.selector });
+        await page.evaluate(settleDialog, null);
+        const sr = await page.evaluate(scrimRead, null);
+        const built = sr.backdrop ?? sr.cover;
+        const want = ov.background;
+        const unread = sr.backdrop === null && sr.unreadable !== null ? sr.unreadable : built !== null && parseColor(built) === null ? built : want !== null && parseColor(want) === null ? want : null;
+        if (unread !== null) {
+          add({ id: "dialog.scrim", status: "not-run", detail: `not-run: the scrim colour ${unread} is in a colour space the probe does not read`, evidence: { built, designed: want } });
+        } else {
+          const match = scrimMatches(want, built);
+          add({ id: "dialog.scrim", status: match ? "pass" : "warn", detail: match ? `the scrim matches the design (${want ?? "no scrim"} vs ${built ?? "none"})` : `the scrim is ${built ?? "none"}${sr.backdrop !== null ? " (::backdrop)" : ""}, the design's overlay background is ${want ?? "none (no scrim)"}${ov.from === "default" ? " (Figma's default)" : ""}`, evidence: { built: built ?? null, designed: want, via: sr.backdrop !== null ? "::backdrop" : sr.cover !== null ? "fixed cover" : "none" } });
+        }
+        const pt = sr.point;
+        if (pt === null) add({ id: "dialog.click-outside", status: "not-run", detail: sr.unreadable !== null ? `not-run: a layer over the page has a colour the probe does not read (${sr.unreadable}) \u2014 no point is known to be the backdrop` : `not-run: no backdrop to click \u2014 nothing covers the page outside the dialog (the furthest point hits ${sr.hitDesc}); a click there would land on the page` });
+        else {
+          u.phase("dialog.click-outside");
+          u.act();
+          await page.mouse.click(pt.x, pt.y);
+          const closed = await closedAfter();
+          const want2 = ov.closeOnClickOutside;
+          const hint = closed ? "" : kd.native ? " (a native <dialog>: close it on a click whose event.target is the dialog)" : " (close it from the scrim's click)";
+          add(closed === want2 ? { id: "dialog.click-outside", status: "pass", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it, as designed (closeOnClickOutside ${String(want2)})` } : { id: "dialog.click-outside", status: "warn", detail: `a click on the backdrop (${pt.x},${pt.y}) ${closed ? "closed" : "did not close"} it \u2014 the design says closeOnClickOutside ${String(want2)}${ov.from === "default" ? " (Figma's default)" : ""}${hint}`, evidence: { x: pt.x, y: pt.y, closed, designed: want2 } });
+        }
+      }
+    });
+  }
+  return {
+    behaviour: {
+      version: 1,
+      ran: true,
+      browser: { name: o.browserName ?? "chromium", version: browser.version() },
+      namesComputedBy: NAMES_COMPUTED_BY,
+      budgetMs: o.budgetMs,
+      elapsedMs: Date.now() - t0,
+      cut,
+      checks,
+      landmarks,
+      axe,
+      widths,
+      artifacts: forced ? [o.forcedPng] : [],
+      writeBlock: WRITE_BLOCK_SCOPE
+    },
+    forcedPng: forced
+  };
+}
+function readAxeResult(x, fallbackVersion) {
+  if (typeof x !== "object" || x === null || !("violations" in x) || !Array.isArray(x.violations)) return { ran: false, why: "axe-core returned no result" };
+  const version = "version" in x && typeof x.version === "string" ? x.version : fallbackVersion;
+  const violations = [];
+  for (const v of x.violations) {
+    if (typeof v !== "object" || v === null) continue;
+    const id = "id" in v && typeof v.id === "string" ? v.id : "?";
+    const impact = "impact" in v && typeof v.impact === "string" ? v.impact : null;
+    const nodes = "nodes" in v && typeof v.nodes === "number" ? v.nodes : 0;
+    const help = "help" in v && typeof v.help === "string" ? v.help : "";
+    const targets = "targets" in v && Array.isArray(v.targets) ? v.targets.filter((t) => typeof t === "string").slice(0, 3) : [];
+    violations.push({ id, impact, nodes, help, targets });
+  }
+  return { ran: true, package: "axe-core", version, violations };
+}
+
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
@@ -1898,9 +4979,12 @@ function browserHint(dir) {
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
+function projectRequire(dir) {
+  return createRequire(path3.join(path3.resolve(dir), "package.json"));
+}
 function resolvePlaywright(dir) {
   const abs = path3.resolve(dir);
-  const req = createRequire(path3.join(abs, "package.json"));
+  const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
     let file;
@@ -1931,6 +5015,29 @@ function resolvePlaywright(dir) {
   }
   const pnp = fs4.existsSync(path3.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
   return { ok: false, reason: `no playwright package resolvable from ${path3.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+}
+function resolveAxe(dir) {
+  const req = projectRequire(dir);
+  let file;
+  try {
+    file = req.resolve("axe-core");
+  } catch {
+    return { ok: false, why: "axe-core not installed in the project (optional)" };
+  }
+  let mod;
+  try {
+    mod = req("axe-core");
+  } catch (e) {
+    return { ok: false, why: `axe-core failed to load (${errMsg(e).split("\n")[0]})` };
+  }
+  if (typeof mod !== "object" || mod === null || !("source" in mod) || typeof mod.source !== "string") return { ok: false, why: "axe-core resolved, but it exports no source" };
+  let version = "version" in mod && typeof mod.version === "string" ? mod.version : "unknown";
+  try {
+    const pj = req("axe-core/package.json");
+    if (isJsonObject(pj) && typeof pj.version === "string") version = pj.version;
+  } catch {
+  }
+  return { ok: true, source: mod.source, version, file };
 }
 function rendererUnavailable(reason, hint) {
   console.error(`verify-probe: renderer unavailable \u2014 ${reason}
@@ -1972,9 +5079,13 @@ function gitState(dir) {
 }
 var INIT_SCRIPT = `(() => {
   try { Object.defineProperty(window, "__dtProbeDoc", { value: Math.random().toString(36).slice(2), configurable: true }); } catch (e) {}
-  const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important}";
-  const add = () => { const s = document.createElement("style"); s.setAttribute("data-dt-probe", ""); s.textContent = css; (document.head || document.documentElement).appendChild(s); };
+  const css = "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important;scroll-behavior:auto!important}";
+  let sheet = null;
+  const adopt = () => { try { if (!sheet) { sheet = new CSSStyleSheet(); sheet.replaceSync(css); } if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]; } catch (e) {} };
+  adopt();
+  const add = () => { adopt(); const s = document.createElement("style"); s.setAttribute("data-dt-probe", ""); s.textContent = css; (document.head || document.documentElement).appendChild(s); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add, { once: true }); else add();
+  addEventListener("load", adopt, { once: true });
 })();`;
 var QUIET_MS = 500;
 var QUIET_CAP_MS = 1e4;
@@ -2085,12 +5196,12 @@ async function settle(page, log, ready, timeout) {
       }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) {
-        await sleep2(POLL_MS);
+        await sleep3(POLL_MS);
         continue;
       }
       if (moved()) throw kept();
       if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) {
-        await sleep2(POLL_MS);
+        await sleep3(POLL_MS);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
@@ -2098,7 +5209,7 @@ async function settle(page, log, ready, timeout) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep2(POLL_MS);
+      await sleep3(POLL_MS);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -2151,7 +5262,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep2(POLL_MS);
+    await sleep3(POLL_MS);
   }
 }
 function linkHref(el) {
@@ -2320,7 +5431,7 @@ function foreignTags(tagged, expectedIds, frameIds) {
   const ids = [...n.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
   return { count: n.size, ids };
 }
-var raf22 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var raf23 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
   return String(v);
@@ -2413,7 +5524,7 @@ async function pass(page, log, o) {
             continue;
           }
         }
-        await raf22(page);
+        await raf23(page);
         const [r] = await page.evaluate(measureElements, { frameRect: frameRectOf(spec), keys: STYLE_KEYS, items: [item(spec, m)] });
         if (r) {
           const shaped = shapeNode(spec, m, r, STYLE_KEYS);
@@ -2427,7 +5538,7 @@ async function pass(page, log, o) {
         else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
       }
     }
-    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf22(page);
+    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf23(page);
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow = { ...overflow, compatMode };
@@ -2449,7 +5560,8 @@ async function pass(page, log, o) {
       notes,
       tagsNotInExpectation: foreignTags(collected.tagged, expectedIds, new Set(frameIn.map((f) => f.nodeId))),
       page: pageOverflow,
-      url: reachedUrl
+      url: reachedUrl,
+      visibleTags: [...new Set(collected.tagged.flatMap((c) => c.dt !== null && c.flags.box && c.flags.visible && !c.flags.inClosedDialog ? [c.dt] : []))]
     };
   } catch (e) {
     if (e instanceof NavigatedError || e instanceof UnreachableError || e instanceof BrowserGoneError || e instanceof StepError) throw e;
@@ -2468,7 +5580,7 @@ function hoverTarget(c, byTag) {
 }
 var BODY_WAIT_MS = 2e3;
 async function bodiesRead(reads, served) {
-  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep2(BODY_WAIT_MS, void 0, { ref: false })]);
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep3(BODY_WAIT_MS, void 0, { ref: false })]);
   const missed = /* @__PURE__ */ new Map();
   for (const r of reads) {
     if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
@@ -2557,10 +5669,15 @@ async function runProbe(browser, o) {
     await context.close().catch(() => void 0);
   }
 }
+function behaviourLine(b) {
+  if (!b.ran) return `behaviour not run (${b.why})`;
+  const n = (st) => b.checks.filter((c) => c.status === st).length;
+  return `behaviour (not the fidelity verdict) ${n("fail")} fail \xB7 ${n("warn")} warn \xB7 ${n("pass")} pass \xB7 ${n("not-run")} not run${n("unsupported") ? ` \xB7 ${n("unsupported")} unsupported` : ""} \xB7 axe ${b.axe.ran ? `axe-core ${b.axe.version}` : `not run (${b.axe.why})`} \xB7 ${Math.round(b.elapsedMs / 1e3)}s of ${Math.round(b.budgetMs / 1e3)}s${b.cut ? " \u2014 CUT by the time budget" : ""}` + (b.artifacts.length ? ` \xB7 ${b.artifacts.join(", ")}` : "");
+}
 var USAGE = `usage:
   ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]
       [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]
-      [--steps <steps.json | plan.json>]
+      [--steps <steps.json | plan.json>] [--behaviour on|off]
       renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag \u2192 shared path \u2192 alias \u2192
       text \u2192 text-ordinal \u2192 --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.
       --out defaults to the .expected.json path minus \`.expected\`; --viewport to the frame's w\xD7h; --project to cwd.
@@ -2577,13 +5694,37 @@ var USAGE = `usage:
       (nothing written). Recorded as measured.reach.
       After measuring, the expectation's overlay interactions (on_click/on_press overlay/swap, plan expect:"dialog") are
       driven, each on a fresh page: measured.interactions (evidence; ok:true or ok:null, never false).
+      Then the behaviour/accessibility checks run, each unit on a fresh page within min(90 s, what --max-time leaves less
+      20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,
+      1024/320 px widths, and the keyboard/scroll battery on modal overlays \u2014 measured.behaviour (+ <out>.forced-colors.png),
+      never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).
   ${scriptCmd("verify-probe")} --check [--project <dir>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
       navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step
       failed (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
-var CLOSE_CAP_MS = 1e4;
+async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
+  const cap = () => sleep3(capMs, void 0, { ref: false });
+  await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
+  await Promise.race([b.close().catch(() => void 0), cap()]);
+  killBrowserChildren();
+}
+function killBrowserChildren() {
+  if (process.platform === "win32") return;
+  try {
+    const r = spawnSync2("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", timeout: PS_CAP_MS });
+    for (const line of String(r.stdout || "").split("\n")) {
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (!m || Number(m[2]) !== process.pid || !/chrom|headless/i.test(m[3] ?? "")) continue;
+      try {
+        process.kill(Number(m[1]), "SIGKILL");
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
@@ -2606,7 +5747,8 @@ async function main(argv) {
     help: { type: "boolean", short: "h" },
     run: { type: "string" },
     "max-time": { type: "string" },
-    steps: { type: "string" }
+    steps: { type: "string" },
+    behaviour: { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
   const project = path3.resolve(f.project ?? ".");
@@ -2622,6 +5764,17 @@ ${USAGE}`);
 ${USAGE}`);
     return 2;
   }
+  if (f.behaviour !== void 0 && f.behaviour !== "on" && f.behaviour !== "off") {
+    console.error(`verify-probe: --behaviour must be on or off, got '${f.behaviour}'
+${USAGE}`);
+    return 2;
+  }
+  if (f.behaviour !== void 0 && f.check) {
+    console.error(`verify-probe: --behaviour does not apply to --check
+${USAGE}`);
+    return 2;
+  }
+  const behaviourOn = f.behaviour !== "off";
   if (f.run !== void 0 && (f.check || !/^[\w.:-]+$/.test(f.run))) {
     console.error(`verify-probe: ${f.check ? "--run does not apply to --check" : `--run must be a run id (letters, digits, . : _ -), got '${f.run}'`}
 ${USAGE}`);
@@ -2736,24 +5889,65 @@ ${USAGE}`);
       throw e;
     }
     let driven2 = null, driveNote2 = null;
+    let wedged = false;
     const rows = run2.kind === "ok" ? drivable(expectation) : [];
     if (rows.length) {
       try {
-        driven2 = await driveInteractions(browser, {
+        const driveMs = driveBudget(Date.now(), runDeadline);
+        const hung = /* @__PURE__ */ Symbol("drive hung");
+        const hungAt = Math.max(0, Math.min(driveMs + CUT_SETTLE_MS2 + 1e3, runDeadline - Date.now() - PS_CAP_MS - WRITE_MARGIN_MS));
+        const r2 = await Promise.race([driveInteractions(browser, {
           rows,
           viewport,
           timeout,
           initScript: INIT_SCRIPT,
-          budgetMs: driveBudget(Date.now(), runDeadline),
+          budgetMs: driveMs,
           reach: async (page) => {
             await reachPage(page, attachNavLog(page), probeOpts);
           }
-        });
+        }), sleep3(hungAt, hung, { ref: false })]);
+        if (r2 === hung) {
+          wedged = true;
+          driveNote2 = "driving the interactions did not finish within its budget (the browser stopped answering) \u2014 none recorded";
+        } else driven2 = r2;
       } catch (e) {
         driveNote2 = `driving the interactions failed (${errMsg(e).split("\n")[0]}) \u2014 none recorded`;
       }
     }
-    await browser.close().catch(() => void 0);
+    let behaviour2 = { version: 1, ran: false, why: "--behaviour off" };
+    let forcedPng2 = null;
+    if (wedged && behaviourOn) behaviour2 = { version: 1, ran: false, why: "the browser stopped answering while the interactions were driven" };
+    else if (run2.kind === "ok" && behaviourOn) {
+      const budgetMs = behaviourBudget(Date.now(), runDeadline);
+      if (budgetMs <= 0) behaviour2 = { version: 1, ran: false, why: "no time left within --max-time after measuring and driving" };
+      else {
+        try {
+          const axe = resolveAxe(project);
+          const r2 = await runBehaviour(browser, {
+            expectation,
+            driven: driven2,
+            viewport,
+            timeout,
+            initScript: INIT_SCRIPT,
+            budgetMs,
+            measuredTags: run2.result.visibleTags,
+            reach: async (page) => {
+              await reachPage(page, attachNavLog(page), probeOpts);
+            },
+            axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
+            forcedPng: (outBase + ".forced-colors.png").split(path3.sep).join("/")
+          });
+          behaviour2 = r2.behaviour;
+          forcedPng2 = r2.forcedPng;
+        } catch (e) {
+          behaviour2 = { version: 1, ran: false, why: `the behaviour checks failed (${errMsg(e).split("\n")[0]})` };
+        }
+      }
+    }
+    if (wedged) {
+      killBrowserChildren();
+      await Promise.race([browser.close().catch(() => void 0), sleep3(1e3, void 0, { ref: false })]);
+    } else await closeCapped(browser);
     if (held.timedOut) return 4;
     if (run2.kind === "browser-gone") {
       console.error(`verify-probe: ${run2.why} \u2014 nothing written. This is not a page reload: re-run the probe; if it recurs, run --check.`);
@@ -2783,7 +5977,7 @@ ${USAGE}`);
 ` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
       return 4;
     }
-    return { run: run2, identity: identity2, driven: driven2, driveNote: driveNote2 };
+    return { run: run2, identity: identity2, driven: driven2, driveNote: driveNote2, behaviour: behaviour2, forcedPng: forcedPng2 };
   })();
   const first = await Promise.race([work, watchdog]);
   clearTimeout(timer);
@@ -2791,17 +5985,13 @@ ${USAGE}`);
     held.timedOut = true;
     work.catch(() => void 0);
     const b = held.browser;
-    if (b) {
-      const cap = () => sleep2(CLOSE_CAP_MS, void 0, { ref: false });
-      await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
-      await Promise.race([b.close().catch(() => void 0), cap()]);
-    }
+    if (b) await closeCapped(b);
     console.error(`verify-probe: timed out after ${maxTime / 1e3}s (--max-time) \u2014 the browser was closed, nothing written.
   a page that never settles (a script that does not yield, a request that never ends): re-run the probe once; if it times out again, report it (status failed).`);
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
-  const { run, identity, driven, driveNote } = first;
+  const { run, identity, driven, driveNote, behaviour, forcedPng } = first;
   if (!expectation || !expBytes || !f.expected || !f.url) return 2;
   const png = outBase + ".png";
   const r = run.result;
@@ -2827,11 +6017,19 @@ ${USAGE}`);
     build: { ...run.build, ...gitState(project) },
     ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
     page: r.page,
-    ...driven ? { interactions: driven } : {}
+    ...driven ? { interactions: driven } : {},
+    behaviour
   };
   const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
   const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
   writeFileAtomic(png, r.png);
+  const forcedPath = outBase + ".forced-colors.png";
+  try {
+    if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
+    else if (fs4.existsSync(forcedPath)) fs4.rmSync(forcedPath, { force: true });
+  } catch (e) {
+    console.error(`warning  ${forcedPath}: ${errMsg(e).split("\n")[0]} \u2014 the behaviour screenshot is not written`);
+  }
   writeFileAtomic(outBase + ".measured.json", measuredText);
   const statusRefused = runId !== void 0 && !status({
     runId,
@@ -2850,6 +6048,7 @@ ${USAGE}`);
   const pg = r.page;
   console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? pg.scrollable ? ` \u2014 scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " \u2014 overflows but clipped" : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} \u2192 ${ev.ok === true ? "ok" : "ok:null"} \xB7 ${ev.detail ?? ""}`);
+  console.error(behaviourLine(behaviour));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}`);
   if (statusRefused && runId !== void 0) {
@@ -2870,8 +6069,11 @@ if (import.meta.main ?? isMainFallback(import.meta.url)) {
 }
 export {
   BODY_WAIT_MS,
+  INIT_SCRIPT,
   PLAYWRIGHT_PACKAGES,
+  behaviourLine,
   buildFrom,
+  closeCapped,
   errorKind,
   foreignTags,
   installHint,
@@ -2879,6 +6081,8 @@ export {
   isPlaywrightModule,
   linkHref,
   main,
+  projectRequire,
+  resolveAxe,
   resolvePlaywright,
   runProbe
 };
