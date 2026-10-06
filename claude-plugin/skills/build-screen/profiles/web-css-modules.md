@@ -153,10 +153,13 @@ before the image loads; always set explicit width+height on the container.
 **Interaction states** — look up the component in `design/export/design-system/components.local.json`'s `components` catalog and
 check its variant `options` for hover/focus/disabled/error/selected states before shipping. Always add a
 visible `:focus-visible` rule even if the Figma design only shows a `:hover` state — it's the most
-commonly missed a11y requirement. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
+commonly missed a11y requirement. A reset that sets `outline-style: none` defeats a bare `outline-width`:
+state `outline-style: solid` (or the full `outline` shorthand) in the `:focus-visible` rule. Gate `:hover` with `@media (hover:hover)`; add `:active`, `:disabled`/
 `[aria-disabled="true"]`.
 The browser's default `<button>` cursor is the arrow: set `cursor:pointer` on enabled buttons in the base CSS. A design
 with no Pressed variant still gets a default `:active` treatment (defaulted state, designer question).
+Hover-revealed row actions: `opacity: 0` at rest, `opacity: 1` on `:hover`, `:focus-within` and under `@media (pointer: coarse)`;
+never `visibility: hidden` or `display: none`, which drop the control from the tab order and leave a dialog opener unable to take focus back.
 
 **Accessibility & RTL** — WCAG contrast 4.5:1 text, 3:1 large text (≥24px or ≥18.66px bold) and UI parts;
 target size ≥24×24 CSS px (2.5.8 AA), 44 recommended; 2.4.7 Focus Visible is AA (2.4.13 appearance is AAA).

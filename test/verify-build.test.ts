@@ -15,9 +15,11 @@ import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/
 import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
-import type { CodeConnectMap, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
+import * as verifyBuild from "../design-to-code/verify-build.ts";
+import { buildExpectation, compare, STYLE_KEYS } from "../design-to-code/verify-screen.ts";
+import type { BehaviourCheck, CodeConnectMap, MeasuredBehaviour, MeasuredNode, MeasuredStyles, Plan, PlanComputedStatus, PlanHookRecord, PlanTokenRow, PlanVerification } from "../design-to-code/types.ts";
 import { check, report } from "./assert.ts";
-import { codeMap, must, parseAs, readFixture } from "./fixtures.ts";
+import { codeMap, must, parseAs, readFixture, screenExport } from "./fixtures.ts";
 import { isAuditReport, isPlan, isVerifyExpectation, isVerifyReport, parsePlan } from "../design-to-code/doc-guards.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
 import { isCodeConnectMap } from "../design-to-code/map-validate.ts";
@@ -54,7 +56,7 @@ const problems = (files: Record<string, string>, plan: Plan, map?: CodeConnectMa
 const blocks = (files: Record<string, string>, plan: Plan, map?: CodeConnectMap) => split(files, plan, map).blocking;
 const has = (list: string[], re: RegExp) => list.some((m) => re.test(m));
 // A located report with only the fields a check reads set (the rest as locateReports writes them when absent).
-const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, ...r });
+const reportRef = (r: Partial<ReportRef> & { rel: string }): ReportRef => ({ matchedBy: "name", schema: null, verdict: null, headline: null, why: [], deltas: null, exportedAt: null, measuredAt: null, mtimeMs: 0, exportContentSha256: null, code: null, expectationChanged: false, expectationRel: null, waiversSha256: null, behaviour: null, shippedProbe: false, ...r });
 const statusOf = (root: string) => computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") }).status;
 
 const STATIC: PlanVerification = { mode: "static-only", reason: "no dev server in package.json" };
@@ -1147,6 +1149,139 @@ check("without --out it still prints to stdout (back-compat)", (() => {
 })());
 check("an unknown option is refused, not swallowed as a file path", spawnSync(process.execPath, [BOOT, catalogFile, "--output", mapFile], { encoding: "utf8" }).status === 1);
 
+// ---------------------------------------------------------------- 12b, D40(9): report.behaviour → hook WARNINGS, never a block
+console.log("12b — behaviour/a11y in the Stop hook (warnings only):");
+{
+  // looked up by name: a verify-build without it fails these checks cleanly instead of failing to import
+  const vb: Record<string, unknown> = { ...verifyBuild };
+  const bw = (plan: Plan, refs: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): string[] | null => (typeof vb.behaviourWarnings === "function" ? verifyBuild.behaviourWarnings(plan, refs, ctx) : null);
+  const beh = (fail: number, failed: string[], ran = true, why: string | null = null): ReportRef["behaviour"] => ({ ran, why, fail, warn: 1, failed });
+  const R = "design/verify/login.report.json";
+  const twoFail = [reportRef({ rel: R, behaviour: beh(2, ["dialog.focus-return", "keyboard.reachable"]) })];
+  const w1 = bw({ verification: { mode: "rendered" } }, twoFail);
+  check("[15] fail 2 → a warning naming the report, the count and the ids, 'never waived'", !!w1 && w1.some((w) => w.startsWith(`${R}: behaviour/a11y — 2 failures (dialog.focus-return, keyboard.reachable)`) && /never waived: fix it or raise a designer question/.test(w)));
+  const w2 = bw({ verification: { mode: "rendered", a11y: { tool: "verify-probe+axe-core 4.13.0", violations: 0 } } }, twoFail);
+  check("[15] plan.verification.a11y.violations 0 vs report fail 2 → 'records 0 violations … has 2 failures — copy report.behaviour.summary'", !!w2 && w2.some((w) => /^verification\.a11y records 0 violations but design\/verify\/login\.report\.json behaviour has 2 failures — copy report\.behaviour\.summary$/.test(w)));
+  const w3 = bw({ verification: { mode: "rendered", a11y: { tool: "verify-probe", violations: 2 } } }, twoFail);
+  check("[15] …equal (2 and 2) → no disagreement (the fail warning stays)", !!w3 && !w3.some((w) => /verification\.a11y records/.test(w)) && w3.some((w) => /2 failures \(/.test(w)));
+  const w4 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [reportRef({ rel: R, behaviour: beh(0, []) })]);
+  check("[15] fail 0 and a11y 0 → nothing", !!w4 && w4.length === 0);
+  const w5 = bw({ verification: { mode: "rendered" } }, [reportRef({ rel: R, behaviour: beh(0, [], false, "--behaviour off") })]); // (shippedProbe false: still warns)
+  check("[15] D45 ran:false '--behaviour off' → 'not run (--behaviour off)' warning", !!w5 && w5.some((w) => w.startsWith(`${R}: behaviour/a11y checks were not run (--behaviour off)`)));
+  const w6 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [reportRef({ rel: R, shippedProbe: true, behaviour: beh(0, [], false, "the measured file carries no behaviour checks (hand-written, or a probe older than 12b)") })]);
+  check("[15] ran:false (no block) → 'did not run (why)'; no a11y disagreement on a run that did not happen", !!w6 && w6.length === 1 && /did not run \(the measured file carries no behaviour checks/.test(w6[0] ?? ""));
+  const w7 = bw({ verification: { mode: "rendered", a11y: { violations: 3 } } }, [reportRef({ rel: R })]);
+  check("[15] a report with no behaviour section (older than 12b) → no behaviour warning", !!w7 && w7.length === 0);
+  // L6: the plan's ONE a11y number is compared with the ONE report it came from, never with every matching report
+  const own = reportRef({ rel: "design/verify/Crates.report.json", matchedBy: "name", mtimeMs: 2, shippedProbe: true, behaviour: beh(1, ["a11y.name"]) });
+  const older = reportRef({ rel: "design/verify/80_1.report.json", matchedBy: "nodeId", mtimeMs: 1, shippedProbe: true, behaviour: beh(3, ["a11y.name"]) });
+  const dis = (ws: string[] | null): string[] => (ws || []).filter((w) => /^verification\.a11y records/.test(w));
+  const l6a = bw({ verification: { mode: "rendered", a11y: { violations: 1 } } }, [older, own]);
+  check("[L6] two matching reports (fail 3 by nodeId, fail 1 by name, newer), a11y.violations 1 → no disagreement (the plan's own report agrees)", !!l6a && dis(l6a).length === 0);
+  const l6b = bw({ verification: { mode: "rendered", a11y: { violations: 3, report: "design/verify/80_1.report.json" } } }, [own, older]);
+  check("[L6] a11y.report names the other report (fail 3), violations 3 → no disagreement with the one it does not name", !!l6b && dis(l6b).length === 0);
+  const l6c = bw({ verification: { mode: "rendered", a11y: { violations: 3 } } }, [own, older]);
+  check("[L6] no a11y.report, violations 3 → ONE disagreement, against the plan's own (name-matched, newest) report", !!l6c && dis(l6c).length === 1 && /Crates\.report\.json behaviour has 1 fail/.test(dis(l6c)[0] ?? ""));
+  const l6d = bw({ verification: { mode: "rendered", a11y: { violations: 1, report: "./design/verify/Crates.report.md" } } }, [own, older]);
+  check("[L6] a11y.report naming the .md (with ./) resolves to its report.json", !!l6d && dis(l6d).length === 0 && !l6d.some((w) => /not a verify report found/.test(w)));
+  const l6e = bw({ verification: { mode: "rendered", a11y: { violations: 1, report: "design/verify/Gone.report.json" } } }, [own, older]);
+  // fix2: a11y.report spelled as a bare name, an absolute path, or relative to the plan file still finds its report
+  const CTX = { cwd: path.join(os.tmpdir(), "seed-shelf"), planFile: path.join(os.tmpdir(), "seed-shelf", "design", "plan", "login.json") };
+  const NF = /not a verify report found/;
+  const spell = (report: string, violations: number) => bw({ verification: { mode: "rendered", a11y: { violations, report } } }, [own, older], CTX) ?? [];
+  for (const [how, name] of [["a bare file name", "80_1.report.json"], ["an absolute path", path.join(CTX.cwd, "design", "verify", "80_1.report.json")], ["a path relative to the plan file", "../verify/80_1.report.md"]] as const) {
+    const agree = spell(name, 3), differ = spell(name, 1);
+    check(`[L6b] a11y.report as ${how} → resolves to 80_1 (agrees: no warning; differs: the disagreement against 80_1, never 'not found')`,
+      dis(agree).length === 0 && !agree.some((w) => NF.test(w)) && dis(differ).length === 1 && /80_1\.report\.json behaviour has 3 fail/.test(dis(differ)[0] ?? "") && !differ.some((w) => NF.test(w)));
+  }
+  check("[L6b] a bare name matching two reports' basename (other dirs) → the own-screen rule among them, never 'not found'", (() => {
+    const a = reportRef({ rel: "design/verify/x/Crates.report.json", matchedBy: "name", mtimeMs: 5, shippedProbe: true, behaviour: beh(2, ["a11y.name"]) });
+    const b2 = reportRef({ rel: "design/verify/y/Crates.report.json", matchedBy: "nodeId", mtimeMs: 9, shippedProbe: true, behaviour: beh(4, ["a11y.name"]) });
+    const w = bw({ verification: { mode: "rendered", a11y: { violations: 9, report: "Crates.report.json" } } }, [a, b2], CTX) ?? [];
+    return dis(w).length === 1 && /x\/Crates\.report\.json behaviour has 2 fail/.test(dis(w)[0] ?? "") && !w.some((m) => NF.test(m));
+  })());
+  check("[L6b] two reports share a basename: an absolute path and a plan-relative path pick the one they name (not the basename fallback's)", (() => {
+    const x = reportRef({ rel: "design/verify/x/Crates.report.json", matchedBy: "name", mtimeMs: 5, shippedProbe: true, behaviour: beh(2, ["a11y.name"]) });
+    const y = reportRef({ rel: "design/verify/y/Crates.report.json", matchedBy: "nodeId", mtimeMs: 9, shippedProbe: true, behaviour: beh(4, ["a11y.name"]) });
+    const at = (report: string) => bw({ verification: { mode: "rendered", a11y: { violations: 4, report } } }, [x, y], CTX) ?? [];
+    const abs = at(path.join(CTX.cwd, "design", "verify", "y", "Crates.report.json")), rel = at("../verify/y/Crates.report.json");
+    const absNoPlan = bw({ verification: { mode: "rendered", a11y: { violations: 4, report: path.join(CTX.cwd, "design", "verify", "y", "Crates.report.json") } } }, [x, y], { cwd: CTX.cwd }) ?? [];
+    return dis(abs).length === 0 && dis(rel).length === 0 && dis(absNoPlan).length === 0 && !abs.some((m) => NF.test(m)) && !rel.some((m) => NF.test(m));
+  })());
+  check("[L6] a11y.report naming no located report → says so, compares with none", !!l6e && dis(l6e).length === 0 && l6e.some((w) => /a11y\.report names design\/verify\/Gone\.report\.json, which is not a verify report found/.test(w)));
+  check("[15] the a11y-missing warning says to copy report.behaviour.summary", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /a11y is missing — copy report\.behaviour\.summary/.test(w)));
+  // L-5 (review 3): ONE behaviour warning for the run — the plan's own newest report (or the one a11y.report names) — with its
+  // count's singular/plural. Review 5 L-3: design/verify/ is flat (locateReports reads only it), so a re-run with the same --out
+  // overwrites its report and every other matched file is another --out: each warns on its own failures, never "not run"
+  const own1 = reportRef({ rel: "design/verify/Crates.report.json", matchedBy: "name", mtimeMs: 2, shippedProbe: true, behaviour: beh(1, ["a11y.name"]) });
+  const earlier3 = reportRef({ rel: "design/verify/Crates-r1.report.json", matchedBy: "nodeId", mtimeMs: 1, shippedProbe: true, behaviour: beh(3, ["a11y.name", "keyboard.reachable"]) });
+  const offOld = reportRef({ rel: "design/verify/Crates-r0.report.json", matchedBy: "nodeId", mtimeMs: 0, shippedProbe: true, behaviour: beh(0, [], false, "--behaviour off") });
+  const l5 = bw({ verification: { mode: "rendered" } }, [offOld, own1]) ?? [];
+  check("[L-5/review 5 L-3] the own report (1 failure) + an earlier --out's report run with --behaviour off → ONE warning: the own report's '1 failure (a11y.name)', no 'not run' for the other file",
+    l5.length === 1 && (l5[0] ?? "").startsWith("design/verify/Crates.report.json: behaviour/a11y — 1 failure (a11y.name) —"));
+  const l5b = bw({ verification: { mode: "rendered", a11y: { violations: 3, report: "design/verify/Crates-r1.report.json" } } }, [offOld, earlier3, own1]) ?? [];
+  check("[L-5/review 5 L-3] a11y.report names the earlier file (3 failures) → its warning ('3 failures'), no disagreement, and the own file's 1 failure still warns (another report file is never silenced)",
+    l5b.length === 2 && (l5b[0] ?? "").startsWith("design/verify/Crates-r1.report.json: behaviour/a11y — 3 failures (a11y.name, keyboard.reachable)")
+    && (l5b[1] ?? "").startsWith("design/verify/Crates.report.json: behaviour/a11y — 1 failure (a11y.name)") && !l5b.some((w) => /records .* but/.test(w)));
+  const l5c = bw({ verification: { mode: "rendered", a11y: { violations: 1 } } }, [reportRef({ rel: R, behaviour: beh(2, ["a11y.name"]) })]) ?? [];
+  check("[L-5] the disagreement's own plural: 'records 1 violation but … has 2 failures'", l5c.some((w) => /^verification\.a11y records 1 violation but design\/verify\/login\.report\.json behaviour has 2 failures — /.test(w)));
+  // review 4 L-4: another matched VARIANT of the screen (a narrow-width run, a nodeId-named report) still warns on its failures
+  const narrow = reportRef({ rel: "design/verify/Crates@320.report.json", matchedBy: "nodeId", mtimeMs: 3, shippedProbe: true, behaviour: beh(2, ["overflow.narrow", "a11y.name"]) });
+  const clean = reportRef({ rel: "design/verify/Crates.report.json", matchedBy: "name", mtimeMs: 4, shippedProbe: true, behaviour: beh(0, []) });
+  const darkOff = reportRef({ rel: "design/verify/Crates.dark.report.json", matchedBy: "layer name", mtimeMs: 5, shippedProbe: true, behaviour: beh(0, [], false, "--behaviour off") });
+  const l4 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [narrow, clean, darkOff]) ?? [];
+  check("[review 4 L-4] the own report is clean, another variant (Crates@320, nodeId-matched) has 2 failures → ONE warning for that file ('2 failures (overflow.narrow, a11y.name)'), no disagreement (the plan agrees with its own report), no 'not run' for a variant",
+    l4.length === 1 && (l4[0] ?? "").startsWith("design/verify/Crates@320.report.json: behaviour/a11y — 2 failures (overflow.narrow, a11y.name) —"));
+  const l4b = bw({ verification: { mode: "rendered" } }, [narrow, own1]) ?? [];
+  check("[review 4 L-4] two report files both failing → exactly two warnings (the own Crates 1 failure first, then Crates@320 2 failures)",
+    l4b.length === 2 && (l4b[0] ?? "").startsWith("design/verify/Crates.report.json: behaviour/a11y — 1 failure") && (l4b[1] ?? "").startsWith("design/verify/Crates@320.report.json: behaviour/a11y — 2 failures"));
+  // review 5 L-3: the "newest round of each file name" grouping is gone (the hook never sees two files with one name): two refs
+  // that share a basename (the reports option of the API) are two report files — both warn
+  const twinA = reportRef({ rel: "design/verify/a/Crates@320.report.json", matchedBy: "nodeId", mtimeMs: 1, shippedProbe: true, behaviour: beh(4, ["overflow.narrow"]) });
+  const twinB = reportRef({ rel: "design/verify/b/Crates@320.report.json", matchedBy: "nodeId", mtimeMs: 3, shippedProbe: true, behaviour: beh(2, ["a11y.name"]) });
+  const l3 = bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [twinA, twinB, clean]) ?? [];
+  check("[review 5 L-3] one warning per other report FILE: two failing files sharing a basename → two warnings (no grouping by name)",
+    l3.length === 2 && (l3[0] ?? "").startsWith("design/verify/a/Crates@320.report.json: behaviour/a11y — 4 failures") && (l3[1] ?? "").startsWith("design/verify/b/Crates@320.report.json: behaviour/a11y — 2 failures"));
+  check("[L-5] the a11y-missing warning names `report` among the fields to copy", verifyBuild.verificationWarnings({ verification: { mode: "rendered" } }).some((w) => /\{tool, violations: summary\.fail, warnings: summary\.warn, report: the report\.json it came from\}/.test(w)));
+
+  // end to end: a real --compare report (buildExpectation over a plugin-shaped export) with 2 behaviour fails, through the hook
+  const exp = buildExpectation([{ doc: screenExport([{ type: "FRAME", id: "80:1", name: "Crates", box: { x: 0, y: 0, w: 1280, h: 800 }, fills: [{ type: "solid", color: "#ffffff" }] }],
+    { exportedAt: "2026-10-02T00:00:00Z", screen: "Crates", nodeId: "80:1" }), label: "login" }]);
+  const echo = (n: { nodeId: string }): MeasuredNode => { const styles: MeasuredStyles = {}; const src: Record<string, unknown> = { ...n }; for (const k of STYLE_KEYS) { const v = src[k]; if (v !== undefined) styles[k] = v; } return { nodeId: n.nodeId, styles, matchedBy: "tag" }; };
+  const fail = (id: string): BehaviourCheck => ({ id, status: "fail", detail: `${id} failed`, nodeId: "80:1" });
+  const behaviour: MeasuredBehaviour = { version: 1, ran: true, browser: { name: "chromium", version: "153.0" }, namesComputedBy: "Playwright (Chromium)", budgetMs: 90000, elapsedMs: 1000, cut: false,
+    checks: [fail("a11y.axe"), fail("keyboard.focus-visible"), { id: "a11y.landmarks", status: "pass", detail: "1 main" }], landmarks: [], axe: { ran: true, package: "axe-core", version: "4.13.0", violations: [] }, widths: [], artifacts: [] };
+  const rep = compare(exp, { measuredAt: "2026-10-02T01:00:00Z", renderer: "playwright-chromium", nodes: exp.nodes.map(echo), behaviour });
+  const files = { "a.tsx": "", "design/verify/login.png": "png", "design/verify/login.report.json": JSON.stringify(rep) };
+  const VER = { mode: "rendered", artifacts: ["design/verify/login.png"], deltas: [], coverage: { rendered: ["default"], notChecked: [] } } as const;
+  const root = project(files, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { tool: "verify-probe", violations: 0 } } });
+  const ref = verifyBuild.locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
+  check("[15] locateReports summarises report.behaviour {ran, fail 2, failed ids}", JSON.stringify(ref && "behaviour" in ref ? ref.behaviour : undefined) === JSON.stringify({ ran: true, why: null, fail: 2, warn: 0, failed: ["a11y.axe", "keyboard.focus-visible"] }));
+  const r1 = runHook(root);
+  check("[15] the hook: exit 0 (never blocked), stderr warns '2 failures (a11y.axe, keyboard.focus-visible)' and the a11y disagreement",
+    r1.status === 0 && /login\.report\.json: behaviour\/a11y — 2 failures \(a11y\.axe, keyboard\.focus-visible\)/.test(r1.stderr) && /verification\.a11y records 0 violations but .* has 2 failures/.test(r1.stderr));
+  {
+    // a measured file with no behaviour block: hand-written / non-web (inputs.probe "unknown") → silent; the shipped probe's → warns
+    const PROBE = { name: "verify-probe", version: "1.0.0", sha256: "b".repeat(64), playwright: { package: "playwright", version: "1.63.0" }, browser: { name: "chromium", version: "153.0" } };
+    const m0 = { measuredAt: "2026-10-02T01:00:00Z", renderer: "playwright-chromium", nodes: exp.nodes.map(echo) };
+    const handRep = compare(exp, m0), probeRep = compare(exp, { ...m0, probe: PROBE });
+    const at = (r: unknown) => project({ ...files, "design/verify/login.report.json": JSON.stringify(r) }, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { violations: 0 } } });
+    const hand = at(handRep), shipped = at(probeRep);
+    const refOf = (root: string) => verifyBuild.locateReports(planOf(root), path.join(root, "design", "plan", "login.json"), root, null).find((r) => r.rel === R);
+    const hRef = refOf(hand), sRef = refOf(shipped);
+    const hw = hRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [hRef]) : null;
+    const sw = sRef ? bw({ verification: { mode: "rendered", a11y: { violations: 0 } } }, [sRef]) : null;
+    check("[15] no behaviour block, inputs.probe 'unknown' (hand-written / non-web) → no behaviour warning, in the function and in the hook",
+      handRep.inputs?.probe === "unknown" && !!hw && hw.length === 0 && !/behaviour\/a11y checks did not run/.test(runHook(hand).stderr));
+    check("[15] no behaviour block, inputs.probe = the shipped probe (pre-12b) → 'did not run … re-run the shipped probe', in the function and in the hook",
+      !!sRef && "shippedProbe" in sRef && sRef.shippedProbe && !!sw && sw.some((w) => /behaviour\/a11y checks did not run \(the measured file carries no behaviour checks.*re-run the shipped probe/.test(w))
+      && /login\.report\.json: behaviour\/a11y checks did not run/.test(runHook(shipped).stderr));
+  }
+  const mal = project({ ...files, "design/verify/login.report.json": JSON.stringify({ ...rep, behaviour: { ran: "maybe" } }) }, { status: "pending", files: ["a.tsx"], verification: { ...VER, a11y: { violations: 0 } } });
+  const ref2 = verifyBuild.locateReports(planOf(mal), path.join(mal, "design", "plan", "login.json"), mal, null).find((r) => r.rel === R);
+  check("[15] a malformed report.behaviour is read as none (the report itself still located)", !!ref2 && "behaviour" in ref2 && ref2.behaviour === null);
+}
+
 console.log("claude-plugin/scripts bundles:");
 const SCRIPTS = path.join(import.meta.dirname, "..", "claude-plugin", "scripts");
 check("every entry is a committed REAL file (a symlink out of the plugin dir is not installed)", ENTRIES.every((n) => {
@@ -1173,10 +1308,11 @@ check("bundles are self-contained — no require() that leaves the plugin direct
   }
   check("bundles use Node builtins only — no package imported or inlined" + (bad.length ? " — " + [...new Set(bad)].join(", ") : ""), bad.length === 0);
 }
-// The ONE explicit exception (owner decision D2): verify-probe.js loads the PROJECT's Playwright at run time
-// through createRequire(<project>/package.json) — a computed specifier the literal-import check above cannot
-// see. So: exactly one createRequire( call site, in that bundle only, and no bundle names a Playwright
-// package in a literal import/require.
+// The ONE explicit exception (owner decisions D2, D40(5)): verify-probe.js loads the PROJECT's Playwright — and, 12b,
+// the project's axe-core when it has one — at run time through createRequire(<project>/package.json), a computed
+// specifier the literal-import check above cannot see. Both packages go through that one call site. So: exactly
+// one createRequire( call site, in that bundle only, and no bundle names a Playwright package or axe-core in a
+// literal import/require (axe-core is never bundled).
 {
   const DYNAMIC_REQUIRE_ALLOWED: Record<string, number> = { "verify-probe": 1 };
   const wrong: string[] = [];
@@ -1185,8 +1321,9 @@ check("bundles are self-contained — no require() that leaves the plugin direct
     const calls = [...text.matchAll(/\bcreateRequire\(/g)].length;
     if (calls !== (DYNAMIC_REQUIRE_ALLOWED[n] ?? 0)) wrong.push(`${n}.js has ${calls} createRequire( call(s), allowed ${DYNAMIC_REQUIRE_ALLOWED[n] ?? 0}`);
     if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["'](?:playwright|playwright-core|@playwright\/test)(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports a Playwright package literally`);
+    if (/(?:\bfrom\s*|\b(?:import|require)\(\s*)["']axe-core(?:\/[^"']*)?["']/.test(text)) wrong.push(`${n}.js imports axe-core literally`);
   }
-  check("dynamic require only where allowed: verify-probe.js has exactly one createRequire(, every other bundle has none, none imports Playwright literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
+  check("dynamic require only where allowed: verify-probe.js has exactly one createRequire( (the project's Playwright and axe-core both go through it), every other bundle has none, none imports Playwright or axe-core literally" + (wrong.length ? " — " + wrong.join("; ") : ""), wrong.length === 0);
 }
 
 // A skill that tells the agent to run one of these with no arguments hands it a usage error in the

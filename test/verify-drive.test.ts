@@ -285,7 +285,7 @@ const over = compare(exp, measured(ALL, { page: page() }), bound());
   safe("[16] …measured again and fitting → fixed", () => !!fixed && fixed.against?.deltas?.fixed === 1 && fixed.against.deltas.lostCoverage.length === 0);
 }
 {
-  const ok = compare(exp, measured(ALL, { page: page({ scrollWidth: 1280 }), reach: { steps: [{ click: "#pantry" }], sha256: stepsSha256([{ click: "#pantry" }]), source: "--steps steps.json", url: "http://localhost:5173/" }, behaviour: { summary: {} } }), bound());
+  const ok = compare(exp, measured(ALL, { page: page({ scrollWidth: 1280 }), reach: { steps: [{ click: "#pantry" }], sha256: stepsSha256([{ click: "#pantry" }]), source: "--steps steps.json", url: "http://localhost:5173/" }, behaviour: { version: 1, ran: false, why: "--behaviour off" } }), bound());
   safe("[17] reach / page / behaviour are known top-level keys (not listed as unknown)", () =>
     !(ok.probe.unknownTopLevelKeys || []).some((k) => ["reach", "page", "behaviour"].includes(k.key)));
   const rm = readableMeasured({ nodes: [], page: { scrollWidth: "wide" }, reach: { steps: "x" } });

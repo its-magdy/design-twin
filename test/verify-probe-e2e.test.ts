@@ -88,8 +88,11 @@ const url = (mode?: string): string => `http://127.0.0.1:${port}/staff-directory
 
 // async spawn: the server above lives in THIS process, so a spawnSync would block it from answering
 interface Run { status: number | null; stdout: string; stderr: string }
+// 12b (D45): these runs check measuring, not behaviour — `--behaviour off` keeps them fast (test/verify-probe-behaviour-e2e.test.ts
+// runs the behaviour checks)
+const behaviourOff = (args: string[]): string[] => (args.includes("--check") || args.includes("--behaviour") ? args : [...args, "--behaviour", "off"]);
 const probe = (args: string[]): Promise<Run> => new Promise((resolve) => {
-  const p = spawn(process.execPath, [BUNDLE, ...args], { cwd: tmp });
+  const p = spawn(process.execPath, [BUNDLE, ...behaviourOff(args)], { cwd: tmp });
   let stdout = "", stderr = "";
   p.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
   p.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });

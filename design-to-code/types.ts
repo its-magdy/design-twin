@@ -497,7 +497,8 @@ export interface PlanVerification {
   artifacts?: string[] | JsonValue;
   deltas?: JsonValue[] | JsonValue;
   coverage?: { rendered?: string[]; notChecked?: Array<string | { what?: string; why?: string }> };
-  a11y?: { tool?: string; violations?: number };
+  /** 12b: the skill copies report.behaviour.summary here — violations = summary.fail, warnings = summary.warn */
+  a11y?: { tool?: string; violations?: number; warnings?: number; report?: string };
   verifyScreenVerdict?: string | { verdict?: string };
   verdict?: string | { verdict?: string };
   hook?: PlanHookRecord;
@@ -766,6 +767,63 @@ export interface PageOverflow {
   /** document.compatMode when not "CSS1Compat" (quirks mode measures the viewport off body) — informational */
   compatMode?: string;
 }
+// ---------------------------------------------------------------- 12b behaviour / a11y (D4, D40, D42, D45, D46)
+// Never part of the fidelity verdict (D4): compare copies and counts these, nothing else reads them.
+export type BehaviourStatus = "pass" | "fail" | "warn" | "not-run" | "unsupported";
+export type BehaviourCheckId =
+  | "dialog.focus-on-open" | "dialog.focus-trap" | "dialog.escape-closes" | "dialog.focus-return" | "dialog.nested-escape"
+  | "dialog.scroll-open" | "dialog.scrim" | "dialog.click-outside"
+  | "keyboard.reachable" | "keyboard.activation" | "keyboard.focus-visible"
+  | "a11y.name" | "a11y.landmarks" | "a11y.axe"
+  | "forced-colors.visible" | "layout.subpixel" | "overflow.mid" | "overflow.narrow";
+/** One behaviour/a11y result. Per-element checks: one row per non-pass element (≤20, then a "+N more" row of the same
+ *  status with evidence.count) plus one aggregate pass row ("k of n"). */
+export interface BehaviourCheck {
+  /** a BehaviourCheckId from this probe; a reader keeps unknown ids (older/newer probes interoperate) */
+  id: BehaviourCheckId | (string & {});
+  status: BehaviourStatus;
+  /** the interaction row (dialog.*, keyboard.activation) or the tagged element */
+  nodeId?: string; trigger?: string;
+  /** "escape" | "close" (focus-return), "y=0" | "y=150" | "y=max" (scroll-open), "design" | "1024x900" | "320x900" (widths) */
+  variant?: string;
+  /** element path when untagged */
+  target?: string;
+  detail: string;
+  /** F-122: a synthetic (headless) observation, not a real-browser one */
+  synthetic?: true;
+  evidence?: JsonObject;
+}
+export interface BehaviourLandmark { role: string; name: string | null; depth: number }
+export type BehaviourAxe =
+  | { ran: true; package: "axe-core"; version: string; violations: Array<{ id: string; impact: string | null; nodes: number; help: string; targets: string[] }> }
+  | { ran: false; why: string };
+export interface BehaviourWidth {
+  role: "design" | "mid" | "narrow";
+  overflow: PageOverflow;
+  subpixel: Array<{ path: string; dt: string | null; tag: string; width: number; text: string }>;
+}
+/** measured.behaviour — written by the shipped probe after measuring and driving (never exit 4, never blocks the file). */
+export type MeasuredBehaviour =
+  | { version: 1; ran: true; browser: { name: string; version: string }; namesComputedBy: string; budgetMs: number; elapsedMs: number;
+      cut: boolean; checks: BehaviourCheck[]; landmarks: BehaviourLandmark[] | null; axe: BehaviourAxe; widths: BehaviourWidth[]; artifacts: string[];
+      /** L-6: the write block's scope, one line — what the battery's pages cannot send and what it does not see */
+      writeBlock?: string }
+  | { version: 1; ran: false; why: string };
+export interface BehaviourSummary { pass: number; fail: number; warn: number; notRun: number; unsupported: number }
+/** report.behaviour — always written by --compare (ran:false + why when the measured file has no behaviour block). */
+export interface ReportBehaviour {
+  ran: boolean; why?: string;
+  summary: BehaviourSummary;
+  /** the second headline: "BEHAVIOUR/A11Y (not the fidelity verdict) — …" */
+  headline: string;
+  namesComputedBy?: string;
+  axe?: { version: string } | { notRun: string };
+  /** sorted fail > warn > not-run > unsupported > pass */
+  checks: BehaviourCheck[];
+  artifacts?: string[];
+  /** L-6: measured.behaviour.writeBlock, copied (the write block's scope in one line) */
+  writeBlock?: string;
+}
 /** measured.build (DT-81): what the probe was served — so a stale preview/dist is visible. */
 export interface BuildIdentity {
   url: string;
@@ -824,8 +882,8 @@ export interface VerifyMeasured {
   reach?: ProbeReach;
   /** D43: page overflow at the measured viewport */
   page?: PageOverflow;
-  /** 12b seam: behaviour/a11y checks — carried, never read in 12a */
-  behaviour?: JsonObject;
+  /** 12b: behaviour/a11y checks (D4: never read for the verdict) */
+  behaviour?: MeasuredBehaviour;
 }
 export type DeltaSeverity = "high" | "medium" | "low";
 export interface VerifyDelta {
@@ -897,6 +955,8 @@ export interface VerifyReport {
     reach?: { sha256: string; steps: number; source: string; matchesPlan: boolean | null } };
   verdict?: VerifyVerdict | (string & {});
   headline?: string;
+  /** 12b: the behaviour/a11y section — a second headline, never the verdict (D4) */
+  behaviour?: ReportBehaviour;
   why?: string[];
   /** L-1: the why[] entries that say the run itself is unverified (D26) — what --accept refuses on. Absent in reports
    *  written before it was recorded (--accept then matches why[] by wording). */
@@ -997,6 +1057,8 @@ export interface VerifyReportV2 extends Omit<VerifyReport, "artifacts"> {
   artifacts: Array<string | ArtifactCheck | { path?: string }>;
   verdict: VerifyVerdict;
   headline: string;
+  /** 12b: always written (ran:false + why when the measured file has none) — never the verdict (D4) */
+  behaviour: ReportBehaviour;
   why: string[];
   integrity: string[];
   coverage: VerifyCoverageV2;

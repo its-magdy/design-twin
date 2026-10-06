@@ -245,6 +245,17 @@ function isProbeReach(x) {
 function isPageOverflow(x) {
   return isObj(x) && isObj(x.viewport) && isNum(x.viewport.w) && isNum(x.viewport.h) && isNum(x.scrollWidth) && isNum(x.clientWidth) && typeof x.overflowX === "string" && typeof x.scrollable === "boolean" && Array.isArray(x.offenders) && x.offenders.every((o) => isObj(o) && typeof o.path === "string" && (o.dt === null || typeof o.dt === "string") && isNum(o.right)) && optStr(x.compatMode);
 }
+var BEHAVIOUR_STATUSES = ["pass", "fail", "warn", "not-run", "unsupported"];
+var isBehaviourStatus = (x) => typeof x === "string" && BEHAVIOUR_STATUSES.some((s) => s === x);
+function isBehaviourCheck(x) {
+  return isObj(x) && typeof x.id === "string" && isBehaviourStatus(x.status) && typeof x.detail === "string";
+}
+function isMeasuredBehaviour(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
+}
+function isReportBehaviour(x) {
+  return isObj(x) && typeof x.ran === "boolean" && isObj(x.summary) && ["pass", "fail", "warn", "notRun", "unsupported"].every((k) => isObj(x.summary) && isNum(x.summary[k])) && Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) && optStr(x.why) && optStr(x.headline);
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -257,10 +268,10 @@ var MEASURED_EXTRAS = [
   ["build", isBuildIdentity, "a build identity {url, mode: vite-dev|static|unknown, assets, assetsSha256, gitHead, gitDirty} \u2014 read as build: unknown"],
   // group 11 (DT-47): the shipped probe's foreign tags
   ["tagsNotInExpectation", isTagsNotInExpectation, "a foreign-tag list {count, ids: [{id, elements}]}"],
-  // group 12a: the steps replayed (L-1), the page's overflow (D43), the behaviour seam (12b)
+  // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isObj, "an object (behaviour checks)"]
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -1105,8 +1116,55 @@ function verificationWarnings(plan) {
   const out = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
-  if (!v.a11y) out.push("verification.a11y is missing \u2014 no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}); when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
   return out;
+}
+var newestOwn = (reports) => {
+  const own = reports.filter((r) => r.matchedBy === "name");
+  return (own.length ? own : reports).reduce((best, r) => !best || r.mtimeMs > best.mtimeMs ? r : best, null);
+};
+function a11yReportOf(named, reports, ctx = {}) {
+  if (named === void 0 || !named.trim()) return { ref: newestOwn(reports) };
+  const json = (x) => x.replace(/\.report\.md$/, ".report.json");
+  const slash = (x) => x.split(path4.sep).join("/").split("\\").join("/");
+  const want = slash(named.trim());
+  const rels = /* @__PURE__ */ new Set([json(want.replace(/^\.\//, ""))]);
+  if (ctx.cwd !== void 0) {
+    rels.add(json(slash(path4.relative(ctx.cwd, path4.resolve(ctx.cwd, named.trim())))));
+    if (ctx.planFile !== void 0) rels.add(json(slash(path4.relative(ctx.cwd, path4.resolve(path4.dirname(path4.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  }
+  const exact = reports.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = json(path4.posix.basename(want));
+  const byBase = reports.filter((r) => path4.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  return { ref: null, missing: want };
+}
+function behaviourWarnings(plan, reports, ctx = {}) {
+  const out = [];
+  const all = reports || [];
+  const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : void 0;
+  const recorded = a11y && typeof a11y === "object" ? a11y.violations : void 0;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : void 0, all, ctx);
+  if (recorded !== void 0 && target.missing !== void 0 && all.some((r2) => r2.behaviour && r2.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ \u2014 the a11y count was not checked against it`);
+  const r = target.ref ?? newestOwn(all);
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref, fail, failed) => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y \u2014 ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) \u2014 not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+  };
+  const others = all.filter((x) => x !== r);
+  const otherFails = others.flatMap((x) => x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []);
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off" ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) \u2014 the skills never pass that switch; re-run the probe without it before claiming accessibility` : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) \u2014 re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (recorded !== void 0 && target.missing === void 0 && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} \u2014 copy report.behaviour.summary`);
+  return [...out, ...otherFails];
 }
 var A11Y = /\b(a11y|axe|accessib)/i;
 function verificationContradictions(plan, reports) {
@@ -1568,7 +1626,9 @@ function checkPlan({ plan, file }, cwd, opts) {
   warnings.push(...undeclaredColourTokens(live, graph()));
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
-  warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
+  const reports = o.reports || locateReports(plan, file, cwd, exp);
+  warnings.push(...verificationContradictions(plan, reports));
+  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
@@ -1595,6 +1655,10 @@ function auditGateWarnings(plan, cwd, exp) {
   if (uncovered.length) return [`${g.auditFile} has ${uncovered.length} blocker(s) not listed in this plan's auditGate.overridden: ${uncovered.join(", ")} \u2014 either resolve them or add them with a reason`];
   if (!gate.reason) return [`this plan's auditGate overrides ${overridden.size} blocker(s) but gives no \`reason\` \u2014 say why it is safe to build past ${g.auditFile}`];
   return [];
+}
+function behaviourRef(x) {
+  if (!isReportBehaviour(x)) return null;
+  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
 }
 function locateReports(plan, planFile, cwd, exp) {
   const dir = path4.join(cwd, "design", "verify");
@@ -1653,7 +1717,9 @@ function locateReports(plan, planFile, cwd, exp) {
       code: r.inputs && r.inputs.code || null,
       expectationChanged,
       expectationRel: expectationChanged ? path4.relative(cwd, expFile).split(path4.sep).join("/") : null,
-      waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null
+      waiversSha256: r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256 || null,
+      behaviour: behaviourRef(r.behaviour),
+      shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe)
     });
   }
   return out;
@@ -2101,6 +2167,7 @@ export {
   anchorCoverage,
   arbitraryPx,
   auditGateWarnings,
+  behaviourWarnings,
   checkPlan,
   checkVerification,
   colorKey,

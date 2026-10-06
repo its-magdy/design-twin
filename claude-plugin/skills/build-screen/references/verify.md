@@ -84,8 +84,9 @@ Work top-down; a structural miss makes pixel diffs meaningless.
    alignment and spacing, then color and effects. When a pixel-diff tool is available, align the images
    before diffing so a 1px global offset doesn't drown real differences; prefer a perceptual/SSIM
    score plus the numeric checks over raw pixel equality.
-4. **Accessibility.** Web: axe-core through `@axe-core/playwright` (Playwright's own accessibility
-   guide uses it) on the same page you screenshotted, keyboard tab-through with visible focus. iOS: Accessibility
+4. **Accessibility.** Web: the probe runs the behaviour battery and axe-core (when the project has it) on the page
+   it measured — read `report.behaviour`; a hand-run axe (`@axe-core/playwright`) or keyboard tab-through is only for what the probe
+   reports `not-run`. iOS: Accessibility
    Inspector / VoiceOver labels, Dynamic Type at AX sizes. Android: accessibility scanner / semantics
    tree, font scale 2.0. Touch targets at platform minimums.
 
@@ -116,7 +117,7 @@ Render at least once each, when the stack supports it:
 - A narrow and a wide width (small phone / tablet, or web breakpoints) for fill/hug behavior.
 
 Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
-why}]}` — and, when an accessibility check ran, `verification.a11y` — `{tool, violations}`. One
+why}]}` — and, when an accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
 rendered frame is a legitimate result; an unstated one is not, because the report would then read as
 "verified" for states nobody looked at. The Stop hook only warns when these are missing.
 

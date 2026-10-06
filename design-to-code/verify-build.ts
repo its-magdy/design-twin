@@ -81,7 +81,7 @@ import { isJsonObject } from "./types.ts";
 import { colorKey } from "./color.ts";
 import { scriptCmd } from "./cli-args.ts";
 import { isPassingVerdict, waiversHash } from "./plan-waivers.ts";
-import { isPageIndex, isPagesRootIndex, isVerifyReport, parsePlan } from "./doc-guards.ts";
+import { isPageIndex, isPagesRootIndex, isProbeIdentity, isReportBehaviour, isVerifyReport, parsePlan } from "./doc-guards.ts";
 import { anyJson, readJson, readJsonOrNull } from "./read-json.ts";
 import { isCodeConnectMap } from "./map-validate.ts";
 import { isScreenDoc } from "./export-shape.ts";
@@ -587,7 +587,7 @@ function verificationWarnings(plan: Plan): string[] {
   const out: string[] = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push("verification.coverage is missing — record {rendered:[…], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, \"Beyond the ideal frame\")");
-  if (!v.a11y) out.push("verification.a11y is missing — no accessibility check is recorded (web: @axe-core/playwright on the rendered page); say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing — copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}); when no behaviour checks ran, no accessibility check is recorded — say so in the report rather than implying one ran");
   return out;
 }
 
@@ -600,6 +600,76 @@ export interface ReportRef {
   expectationChanged: boolean; expectationRel: string | null;
   /** inputs.waivers.sha256: the plan waivers/descopes the compare applied (null = recorded none — an older report). */
   waiversSha256: string | null;
+  /** 12b report.behaviour, summarised (null = none or unreadable — a report older than 12b). Warnings only (D40(9)). */
+  behaviour: { ran: boolean; why: string | null; fail: number; warn: number; failed: string[] } | null;
+  /** report.inputs.probe is the shipped probe's identity (not "unknown" / absent: a hand-written or non-web measured file) */
+  shippedProbe: boolean;
+}
+
+// 12b, D40(9): what the report's behaviour/a11y section says — WARNINGS only, never a block (D4: not the fidelity verdict).
+// (a) a failed check; (b) plan.verification.a11y disagreeing with the report's fail count; (c) the checks did not run.
+// L6: (b) compares the plan's ONE a11y number with the ONE report it was copied from — verification.a11y.report when set
+// (report.json or its .md), else the report for the plan's own screen (matched by name, as locateReports ranks), newest first.
+// The name is read as written: project-relative, absolute, relative to the plan file, or a bare file name — the last two
+// fall back to the basename when exactly one located report has it. Several with that basename → the own-screen rule among
+// them. "Not found" only when nothing matches, so a real disagreement is never hidden behind a path spelling.
+const newestOwn = (reports: ReportRef[]): ReportRef | null => {
+  const own = reports.filter((r) => r.matchedBy === "name");
+  return (own.length ? own : reports).reduce<ReportRef | null>((best, r) => (!best || r.mtimeMs > best.mtimeMs ? r : best), null);
+};
+function a11yReportOf(named: string | undefined, reports: ReportRef[], ctx: { cwd?: string; planFile?: string } = {}): { ref: ReportRef | null; missing?: string } {
+  if (named === undefined || !named.trim()) return { ref: newestOwn(reports) };
+  const json = (x: string): string => x.replace(/\.report\.md$/, ".report.json");
+  const slash = (x: string): string => x.split(path.sep).join("/").split("\\").join("/");
+  const want = slash(named.trim());
+  const rels = new Set<string>([json(want.replace(/^\.\//, ""))]);
+  if (ctx.cwd !== undefined) {
+    rels.add(json(slash(path.relative(ctx.cwd, path.resolve(ctx.cwd, named.trim()))))); // absolute, or relative to the project
+    if (ctx.planFile !== undefined) rels.add(json(slash(path.relative(ctx.cwd, path.resolve(path.dirname(path.resolve(ctx.cwd, ctx.planFile)), named.trim())))));
+  }
+  const exact = reports.find((r) => rels.has(r.rel));
+  if (exact) return { ref: exact };
+  const base = json(path.posix.basename(want));
+  const byBase = reports.filter((r) => path.posix.basename(r.rel) === base);
+  if (byBase.length) return { ref: byBase.length === 1 ? byBase[0] ?? null : newestOwn(byBase) };
+  return { ref: null, missing: want };
+}
+// L-5: ONE report speaks for the run — the one verification.a11y.report names, else the plan's own newest; its fail count is of
+// failed elements ("+N more" rows count N), so it says "failures". A re-run with the same --out overwrites its report, so a run's
+// older rounds are gone. Review 4 L-4 / review 5 L-3: every OTHER report file locateReports matched (design/verify/ is flat, so
+// another file is another --out — a narrow-width or dark-theme variant, a nodeId-named run, or one left from an earlier name)
+// warns on its own failures: one warning per other report file, so no FAIL is silenced; the disagreement and "did not run"
+// warnings stay with the one report above.
+function behaviourWarnings(plan: Plan, reports: ReportRef[] | null | undefined, ctx: { cwd?: string; planFile?: string } = {}): string[] {
+  const out: string[] = [];
+  const all = reports || [];
+  const a11y = plan.verification && typeof plan.verification === "object" ? plan.verification.a11y : undefined;
+  const recorded = a11y && typeof a11y === "object" ? a11y.violations : undefined;
+  const target = a11yReportOf(a11y && typeof a11y === "object" && typeof a11y.report === "string" ? a11y.report : undefined, all, ctx);
+  if (recorded !== undefined && target.missing !== undefined && all.some((r) => r.behaviour && r.behaviour.ran)) out.push(`verification.a11y.report names ${target.missing}, which is not a verify report found for this plan in design/verify/ — the a11y count was not checked against it`);
+  const r = target.ref ?? newestOwn(all);
+  const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
+  const failWarning = (ref: ReportRef, fail: number, failed: string[]): string => {
+    const ids = [...new Set(failed)];
+    return `${ref.rel}: behaviour/a11y — ${n(fail, "failure", "failures")} (${ids.slice(0, 6).join(", ")}${ids.length > 6 ? `, +${ids.length - 6} more` : ""}) — not the fidelity verdict, but a measurable accessibility failure is never waived: fix it or raise a designer question`;
+  };
+  // review 4 L-4 / review 5 L-3: every other report file (not the one speaking for the run)
+  const others = all.filter((x) => x !== r);
+  const otherFails = others.flatMap((x) => (x.behaviour && x.behaviour.ran && x.behaviour.fail > 0 ? [failWarning(x, x.behaviour.fail, x.behaviour.failed)] : []));
+  const b = r ? r.behaviour : null;
+  if (!r || !b) return [...out, ...otherFails];
+  if (!b.ran) {
+    // a measured file the shipped probe did not write (hand-written, non-web — D2: the probe is web only) never has a
+    // block: no warning every Stop. "--behaviour off" is the probe's own switch, so it always warns.
+    if (b.why !== "--behaviour off" && !r.shippedProbe) return out;
+    out.push(b.why === "--behaviour off"
+      ? `${r.rel}: behaviour/a11y checks were not run (--behaviour off) — the skills never pass that switch; re-run the probe without it before claiming accessibility`
+      : `${r.rel}: behaviour/a11y checks did not run (${b.why || "no reason recorded"}) — re-run the shipped probe, or say in the report that accessibility was not checked`);
+    return [...out, ...otherFails];
+  }
+  if (b.fail > 0) out.push(failWarning(r, b.fail, b.failed));
+  if (recorded !== undefined && target.missing === undefined && recorded !== b.fail) out.push(`verification.a11y records ${JSON.stringify(recorded)} ${recorded === 1 ? "violation" : "violations"} but ${r.rel} behaviour has ${n(b.fail, "failure", "failures")} — copy report.behaviour.summary`);
+  return [...out, ...otherFails];
 }
 
 // Finding 156: the verification block contradicting itself in adjacent keys.
@@ -1094,7 +1164,9 @@ function checkPlan({ plan, file }: PlanFile, cwd: string, opts?: CheckPlanOption
 
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
-  warnings.push(...verificationContradictions(plan, o.reports || locateReports(plan, file, cwd, exp)));
+  const reports = o.reports || locateReports(plan, file, cwd, exp);
+  warnings.push(...verificationContradictions(plan, reports));
+  warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
   warnings.push(...deviationWarnings(plan));
   warnings.push(...deviationConflicts(plan));
   warnings.push(...validatePlanHeader(plan));
@@ -1137,6 +1209,11 @@ function auditGateWarnings(plan: Plan, cwd: string, exp: ExportHit | null | unde
 // Both report shapes are read: @1 (`verdict`, `why`) and @2 (`verdict` pass|pass-with-deviations|fail|
 // incomplete, `headline`, `inputs.expectationSha256` — the expectation it was computed against,
 // `inputs.waivers.sha256` — the plan waivers/descopes it applied).
+// (read leniently: a malformed behaviour section is read as none — it never decides anything here)
+function behaviourRef(x: unknown): ReportRef["behaviour"] {
+  if (!isReportBehaviour(x)) return null;
+  return { ran: x.ran, why: x.why ?? null, fail: x.summary.fail, warn: x.summary.warn, failed: x.checks.filter((c) => c.status === "fail").map((c) => c.id) };
+}
 function locateReports(plan: Plan, planFile: string | undefined, cwd: string, exp: ExportHit | null | undefined): ReportRef[] {
   const dir = path.join(cwd, "design", "verify");
   if (!fs.existsSync(dir)) return [];
@@ -1174,7 +1251,8 @@ function locateReports(plan: Plan, planFile: string | undefined, cwd: string, ex
       why: r.why || [], deltas: r.deltas || null, exportedAt: r.exportedAt || null, measuredAt: r.measuredAt || null, mtimeMs,
       exportContentSha256: (r.inputs && r.inputs.exportContentSha256) || null, code: (r.inputs && r.inputs.code) || null,
       expectationChanged, expectationRel: expectationChanged ? path.relative(cwd, expFile).split(path.sep).join("/") : null,
-      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null });
+      waiversSha256: (r.inputs && r.inputs.waivers && typeof r.inputs.waivers.sha256 === "string" && r.inputs.waivers.sha256) || null,
+      behaviour: behaviourRef(r.behaviour), shippedProbe: isProbeIdentity(r.inputs && r.inputs.probe) });
   }
   return out;
 }
@@ -1580,7 +1658,7 @@ async function main(argv: string[]): Promise<number> {
 
 export {
   checkPlan, computeStatus, locateReports, locateExport, anchorCoverage, moduleImported, importsOf, scanText, isSourceFile,
-  verificationWarnings, verificationContradictions, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
+  verificationWarnings, verificationContradictions, behaviourWarnings, deviationWarnings, validatePlanHeader, ownPlans, checkVerification, auditGateWarnings,
   colorLiterals, arbitraryPx, colorKey, isStale, isOpen, planHash, fileHashes, readHookInput, main, USAGE,
 };
 
