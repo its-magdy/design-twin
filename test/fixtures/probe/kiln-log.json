@@ -1,0 +1,452 @@
+{
+ "exportedAt": "2026-10-06T00:00:00Z",
+ "screen": "Firings",
+ "page": "Kilns",
+ "pageId": "90:0",
+ "nodeId": "90:1",
+ "sourceFile": "Kiln Log",
+ "nodes": [
+  {
+   "type": "FRAME",
+   "name": "Firings",
+   "id": "90:1",
+   "box": {
+    "w": 1440,
+    "h": 720,
+    "x": 1000,
+    "y": 2000
+   },
+   "renderBox": {
+    "x": 988,
+    "y": 1988,
+    "w": 1464,
+    "h": 744
+   },
+   "clip": true,
+   "fills": [
+    {
+     "type": "solid",
+     "color": "#f7f3ee"
+    }
+   ],
+   "effects": [
+    {
+     "type": "drop_shadow",
+     "color": "#28140a59",
+     "offset": {
+      "x": 0,
+      "y": 2
+     },
+     "radius": 10,
+     "spread": 2
+    }
+   ],
+   "children": [
+    {
+     "type": "FRAME",
+     "name": "Top Bar",
+     "id": "90:2",
+     "box": {
+      "w": 1440,
+      "h": 64,
+      "x": 1000,
+      "y": 2000
+     },
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#3a2e2a"
+      }
+     ],
+     "children": [
+      {
+       "type": "TEXT",
+       "name": "Brand",
+       "id": "90:3",
+       "box": {
+        "w": 85,
+        "h": 24,
+        "x": 1032
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#ffffff"
+        }
+       ],
+       "text": "Kiln Log",
+       "font": {
+        "size": 20,
+        "family": "Helvetica",
+        "weight": "Bold",
+        "lineHeight": {
+         "value": 24,
+         "unit": "px"
+        },
+        "color": "#ffffff"
+       },
+       "autoResize": "width_and_height"
+      }
+     ]
+    },
+    {
+     "type": "TEXT",
+     "name": "Page Title",
+     "id": "90:4",
+     "box": {
+      "w": 100,
+      "h": 36,
+      "x": 1032
+     },
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#2b211d"
+      }
+     ],
+     "text": "Firings",
+     "font": {
+      "size": 28,
+      "family": "Helvetica",
+      "weight": "Bold",
+      "lineHeight": {
+       "value": 36,
+       "unit": "px"
+      },
+      "color": "#2b211d"
+     },
+     "autoResize": "width_and_height"
+    },
+    {
+     "type": "FRAME",
+     "name": "Firing Card",
+     "id": "90:10",
+     "box": {
+      "w": 300,
+      "h": 200,
+      "x": 1032,
+      "y": 2160
+     },
+     "radius": 12,
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#ffffff"
+      }
+     ],
+     "strokes": {
+      "colors": [
+       "#e2d8cf"
+      ],
+      "weight": 1,
+      "align": "inside"
+     },
+     "children": [
+      {
+       "type": "TEXT",
+       "name": "Firing Name",
+       "id": "90:20",
+       "box": {
+        "w": 90,
+        "h": 24,
+        "x": 1053,
+        "y": 2181
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#2b211d"
+        }
+       ],
+       "text": "Bisque 04",
+       "font": {
+        "size": 18,
+        "family": "Helvetica",
+        "weight": "Regular",
+        "lineHeight": {
+         "value": 24,
+         "unit": "px"
+        },
+        "color": "#2b211d"
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "type": "FRAME",
+       "name": "Cone Badge",
+       "id": "90:30",
+       "box": {
+        "w": 96,
+        "h": 32,
+        "x": 1053,
+        "y": 2301
+       },
+       "radius": 16,
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#c8643c"
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "type": "FRAME",
+     "name": "Firing Card",
+     "id": "90:11",
+     "box": {
+      "w": 300,
+      "h": 200,
+      "x": 1356,
+      "y": 2160
+     },
+     "radius": 12,
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#ffffff"
+      }
+     ],
+     "strokes": {
+      "colors": [
+       "#e2d8cf"
+      ],
+      "weight": 1,
+      "align": "inside"
+     },
+     "children": [
+      {
+       "type": "TEXT",
+       "name": "Firing Name",
+       "id": "90:21",
+       "box": {
+        "w": 90,
+        "h": 24,
+        "x": 1377,
+        "y": 2181
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#2b211d"
+        }
+       ],
+       "text": "Glaze 6",
+       "font": {
+        "size": 18,
+        "family": "Helvetica",
+        "weight": "Regular",
+        "lineHeight": {
+         "value": 24,
+         "unit": "px"
+        },
+        "color": "#2b211d"
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "type": "FRAME",
+       "name": "Cone Badge",
+       "id": "90:31",
+       "box": {
+        "w": 96,
+        "h": 32,
+        "x": 1377,
+        "y": 2301
+       },
+       "radius": 16,
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#c8643c"
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "type": "FRAME",
+     "name": "Firing Card",
+     "id": "90:12",
+     "box": {
+      "w": 300,
+      "h": 200,
+      "x": 1680,
+      "y": 2160
+     },
+     "radius": 12,
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#ffffff"
+      }
+     ],
+     "strokes": {
+      "colors": [
+       "#e2d8cf"
+      ],
+      "weight": 1,
+      "align": "inside"
+     },
+     "children": [
+      {
+       "type": "TEXT",
+       "name": "Firing Name",
+       "id": "90:22",
+       "box": {
+        "w": 90,
+        "h": 24,
+        "x": 1701,
+        "y": 2181
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#2b211d"
+        }
+       ],
+       "text": "Raku",
+       "font": {
+        "size": 18,
+        "family": "Helvetica",
+        "weight": "Regular",
+        "lineHeight": {
+         "value": 24,
+         "unit": "px"
+        },
+        "color": "#2b211d"
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "type": "FRAME",
+       "name": "Cone Badge",
+       "id": "90:32",
+       "box": {
+        "w": 96,
+        "h": 32,
+        "x": 1701,
+        "y": 2301
+       },
+       "radius": 16,
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#c8643c"
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "type": "FRAME",
+     "name": "Firing Card",
+     "id": "90:13",
+     "box": {
+      "w": 300,
+      "h": 200,
+      "x": 2004,
+      "y": 2160
+     },
+     "radius": 12,
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#ffffff"
+      }
+     ],
+     "strokes": {
+      "colors": [
+       "#e2d8cf"
+      ],
+      "weight": 1,
+      "align": "inside"
+     },
+     "children": [
+      {
+       "type": "TEXT",
+       "name": "Firing Name",
+       "id": "90:23",
+       "box": {
+        "w": 90,
+        "h": 24,
+        "x": 2025,
+        "y": 2181
+       },
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#2b211d"
+        }
+       ],
+       "text": "Test tiles",
+       "font": {
+        "size": 18,
+        "family": "Helvetica",
+        "weight": "Regular",
+        "lineHeight": {
+         "value": 24,
+         "unit": "px"
+        },
+        "color": "#2b211d"
+       },
+       "autoResize": "width_and_height"
+      },
+      {
+       "type": "FRAME",
+       "name": "Cone Badge",
+       "id": "90:33",
+       "box": {
+        "w": 96,
+        "h": 32,
+        "x": 2025,
+        "y": 2301
+       },
+       "radius": 16,
+       "fills": [
+        {
+         "type": "solid",
+         "color": "#c8643c"
+        }
+       ],
+       "children": []
+      }
+     ]
+    },
+    {
+     "type": "TEXT",
+     "name": "Footnote",
+     "id": "90:5",
+     "box": {
+      "w": 160,
+      "h": 20,
+      "x": 1032
+     },
+     "fills": [
+      {
+       "type": "solid",
+       "color": "#6b5a52"
+      }
+     ],
+     "text": "4 firings this week",
+     "font": {
+      "size": 14,
+      "family": "Helvetica",
+      "weight": "Regular",
+      "lineHeight": {
+       "value": 20,
+       "unit": "px"
+      },
+      "color": "#6b5a52"
+     },
+     "autoResize": "width_and_height"
+    }
+   ],
+   "reference": "assets/90_1_ref.png"
+  }
+ ]
+}

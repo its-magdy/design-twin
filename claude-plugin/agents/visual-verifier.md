@@ -17,7 +17,8 @@ Inputs you need (ask the caller once if missing): the screen name; the **expecta
 `design/verify/<Screen>.expected.json` (generated from the export — it carries every VISIBLE node
 spec, instance and designed interaction, the `coordinates` convention, the canonical `measuredKeys`,
 and under `hidden` the ids of every layer the designer switched off); the reference PNG
-(`nodes[0].reference` in the screen export, a path relative to `design/export/`); the plan at
+(`nodes[0].reference` in the screen export, a path relative to `design/export/`; its scale and offset live in the
+expectation's `referenceImage`, so never recompute the reference geometry); the plan at
 `design/plan/<screen>.json`; and how to reach the built screen (route / component / preview name). The plan's `route` is advisory free text; when the
 screen is a section of the app chosen by component state (not by the URL), the plan's `navigate` steps reach it (§4).
 
@@ -364,8 +365,18 @@ On web, `components` and `interactions` go to `<Screen>.evidence.json` in the st
 
 ## 5. Look, as well as measure
 
-Numbers do not catch everything. Read the reference PNG and your render side by side and report
-anything the measurement cannot express, as a `note`:
+Numbers do not catch everything. The probe also diffs its render against the reference PNG
+(informational, never the verdict). Open `<S>.diff.png` and read `report.visual.regions`; start at the
+hot regions, then still compare the whole reference PNG and your render side by side — 1-px lines and
+borders, light greys and tints below the 0.2 threshold, and text-only changes rarely become regions.
+Report anything the measurement cannot express as a `note` (name the region and its `built` /
+`designed` nodeIds when there is one):
+
+- Never turn the diff percentage into a verdict or a delta. A 1–3 % text-edge noise floor is normal
+  (Figma's renderer vs Chromium); read the regions, not the number.
+- `grid "1x"` means both images were resampled, which can hide a difference — look at 1:1.
+- Never compare diffs taken on different headless channels (headless-shell vs chromium differ at a
+  fractional scale).
 
 - Clipped or overlapping text, misalignment, a wrong image.
 - **Do not downgrade a visible difference because "the reference is downscaled".** The reference is

@@ -426,5 +426,22 @@ console.log("build-screen docs (group 12b):");
     /outline-style: ?none/.test(cssm) && /outline-style: ?solid/.test(cssm) && /opacity: ?0/.test(cssm) && /:focus-within/.test(cssm) && /never `visibility: hidden`.{0,200}(focus back|take focus)/.test(cssm));
   check("[12b] references/verify: the probe runs the battery and axe; a hand-run axe / Tab-through is only for what the probe reports not-run",
     /probe runs the behaviour battery and axe-core/.test(verifyRef) && /only for what the probe reports `not-run`/.test(verifyRef));
+  console.log("build-screen docs (group 12c):");
+  check("[12c F-89] visual-verifier: opens <S>.diff.png and report.visual, the diff is never the verdict, grid 1x hides differences",
+    /\.diff\.png/.test(verifier) && /report\.visual/.test(verifier) && /never the verdict/.test(verifier) && /referenceImage/.test(verifier) && /grid "1x"/.test(verifier));
+  check("[12c F-89] verify skill: a Visual diff paragraph names referenceImage and re-running --expect",
+    /\*\*Visual diff\*\*/.test(verifySkill) && /referenceImage/.test(verifySkill) && /re-run `--expect` after upgrading/.test(verifySkill) && /never the verdict/.test(verifySkill));
+  check("[12c F-89] references/verify: the web probe renders at the reference's scale; Pixels reads report.visual",
+    /report\.visual/.test(verifyRef) && /renders at the reference's scale itself/.test(verifyRef));
+  // D59 (12c review 1 F-4): the diff cannot see 1-px lines, light tints or replaced text — the regions are where to START
+  const flat = (t: string): string => t.replace(/\s+/g, " ");
+  const v3 = [verifier, verifySkill, verifyRef].map(flat);
+  check("[12c F-4] none of the three docs says to look \"only at the hot regions\"", v3.every((t) => !/only at the hot regions/.test(t)));
+  check("[12c F-4] all three start at the hot regions, then still compare the whole reference and build side by side (lines, tints, text changes)",
+    v3.every((t) => /start at the hot regions, then still compare the whole reference.{0,40}side by side/.test(t) && /1-px lines/.test(t) && /text-only changes rarely become regions/.test(t)));
+  check("[12c F-13] verify skill limits: the 0.2 threshold is blind to small luminance steps and anti-aliasing absorbs thin lines",
+    /0\.2 threshold is blind to luminance steps/.test(v3[1] ?? "") && /anti-aliasing detection absorbs much of a thin line/.test(v3[1] ?? ""));
+  check("[12c F-2/F-8] verify skill: the reference is read from the project owning the expectation; a positive offset is a note",
+    /project that owns the expectation/.test(v3[1] ?? "") && /alignment unverified/.test(v3[1] ?? ""));
 }
 report();

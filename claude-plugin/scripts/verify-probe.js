@@ -2,13 +2,13 @@
 
 
 // design-to-code/verify-probe.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
-import crypto3 from "node:crypto";
+import fs5 from "node:fs";
+import path5 from "node:path";
+import crypto4 from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { parseArgs as parseArgs2 } from "node:util";
-import { setTimeout as sleep3 } from "node:timers/promises";
+import { setTimeout as sleep4 } from "node:timers/promises";
 import { spawnSync as spawnSync2 } from "node:child_process";
 
 // design-to-code/probe-page.ts
@@ -464,9 +464,9 @@ function measureElements(input) {
     return res;
   });
 }
-function focusablePath(path4) {
+function focusablePath(path6) {
   const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex], [contenteditable]";
-  const el = document.querySelector(path4);
+  const el = document.querySelector(path6);
   const f = el ? el.closest(FOCUSABLE) : null;
   if (!f) return null;
   const parts = [];
@@ -480,8 +480,8 @@ function focusablePath(path4) {
   parts.unshift("html");
   return parts.join(" > ");
 }
-function focusInfo(path4) {
-  const el = document.querySelector(path4);
+function focusInfo(path6) {
+  const el = document.querySelector(path6);
   const focused = !!el && document.activeElement === el;
   return { focused, focusVisible: focused && !!el && el.matches(":focus-visible") };
 }
@@ -718,6 +718,9 @@ function census(nodes, notMeasured) {
   return c;
 }
 
+// design-to-code/verify-screen.ts
+import path3 from "node:path";
+
 // design-to-code/content-hash.ts
 import { spawnSync } from "node:child_process";
 
@@ -945,6 +948,15 @@ function isBehaviourCheck(x) {
 function isMeasuredBehaviour(x) {
   return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? Array.isArray(x.checks) && x.checks.every(isBehaviourCheck) : typeof x.why === "string");
 }
+var isRect4 = (x) => isObj(x) && isNum(x.x) && isNum(x.y) && isNum(x.w) && isNum(x.h);
+function isMeasuredVisual(x) {
+  return isObj(x) && x.version === 1 && typeof x.ran === "boolean" && (x.ran ? isNum(x.differingPct) && isNum(x.shiftTolerantPct) && Array.isArray(x.regions) : typeof x.why === "string");
+}
+function isVerifyReferenceImage(x) {
+  if (!isObj(x)) return false;
+  if (x.usable === false) return (x.path === null || typeof x.path === "string") && typeof x.why === "string";
+  return x.usable === true && typeof x.path === "string" && typeof x.sha256 === "string" && isObj(x.png) && isNum(x.png.w) && isNum(x.png.h) && isNum(x.scale) && x.scale > 0 && isObj(x.offset) && isNum(x.offset.x) && isNum(x.offset.y) && (x.from === "index" || x.from === "export") && isRect4(x.crop) && optStr(x.colorProfile);
+}
 var MEASURED_EXTRAS = [
   ["probe", isProbeIdentity, "the shipped probe's identity {name, version, sha256, playwright:{package, version}, browser:{name, version}} \u2014 read as probe: unknown"],
   ["frame", isProbeFrame, "a probe frame {nodeId, selector, via, rect}"],
@@ -960,7 +972,9 @@ var MEASURED_EXTRAS = [
   // group 12a: the steps replayed (L-1), the page's overflow (D43); 12b: the behaviour/a11y block
   ["reach", isProbeReach, "the probe's steps {steps[], sha256, source, url}"],
   ["page", isPageOverflow, "a page overflow {viewport:{w,h}, scrollWidth, clientWidth, overflowX, scrollable, offenders[]} \u2014 page overflow not measured"],
-  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"]
+  ["behaviour", isMeasuredBehaviour, "a behaviour block {version: 1, ran: true, checks: [{id, status: pass|fail|warn|not-run|unsupported, detail}], \u2026} or {version: 1, ran: false, why} \u2014 behaviour/a11y not reported"],
+  // 12c: the visual diff (informational, D40(3))
+  ["visual", isMeasuredVisual, "a visual block {version: 1, ran: true, differingPct, shiftTolerantPct, regions: [\u2026], \u2026} or {version: 1, ran: false, why} \u2014 the visual diff not reported"]
 ];
 function isMeasuredCore(x) {
   return isObj(x) && optArrayOf(x.nodes, (n) => isObj(n) && typeof n.nodeId === "string") && optArrayOf(x.components, anyObject) && optArrayOf(x.interactions, anyObject) && (x.artifacts === void 0 || Array.isArray(x.artifacts)) && optStr(x.mode) && optStr(x.expectationSha256);
@@ -1369,6 +1383,10 @@ function normFamily(v) {
   if (v == null) return null;
   return (String(v).split(",")[0] ?? "").trim().replace(/^['"]|['"]$/g, "").toLowerCase();
 }
+function resolveInside(base, rel, within = base) {
+  const root = path3.resolve(within), file = path3.resolve(base, ...rel.split("/"));
+  return file.startsWith(root + path3.sep) ? file : null;
+}
 var FIELDS = [
   { key: "fontFamily", tol: null, norm: normFamily, label: "font-family" },
   { key: "fontSize", tol: TOLERANCE.fontSize, label: "font-size", unit: "px", high: true },
@@ -1421,6 +1439,7 @@ var MEASURED_KEYS_DOC = {
 var CANONICAL_MATCH = new Set(CANONICAL_MATCHED_BY);
 var INTERACTION_OUTCOMES = ["url-changed", "dialog-opened", "selector-appeared", "state-changed", "none"];
 var ANY_BUT_NONE = INTERACTION_OUTCOMES.filter((o) => o !== "none");
+var pctText = (n) => n > 0 && n < 0.05 ? "<0.1" : (Math.round(n * 10) / 10).toFixed(1);
 if (false) {
   const code = main(process.argv.slice(2));
   if (typeof code === "number") process.exitCode = code;
@@ -1902,8 +1921,8 @@ function ownClear(_arg) {
   window.__dtOwn = null;
   return true;
 }
-function syntheticClick(path4) {
-  const el = document.querySelector(path4);
+function syntheticClick(path6) {
+  const el = document.querySelector(path6);
   if (!el) return false;
   el.click();
   return true;
@@ -2836,7 +2855,7 @@ function parseColor(s) {
   const num = "(-?[\\d.]+(?:e-?\\d+)?%?|none)";
   const ok = new RegExp(`^(oklab|oklch)\\(\\s*${num}\\s+${num}\\s+${num}(?:\\s*/\\s*([\\d.]+%?|none))?\\s*\\)$`).exec(t);
   if (ok) {
-    const v = (x, pct) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct : Number(x);
+    const v = (x, pct2) => x === void 0 || x === "none" ? 0 : x.endsWith("%") ? Number(x.slice(0, -1)) / 100 * pct2 : Number(x);
     const L = v(ok[2], 1);
     let a, b;
     if (ok[1] === "oklab") {
@@ -4958,6 +4977,614 @@ function readAxeResult(x, fallbackVersion) {
   return { ran: true, package: "axe-core", version, violations };
 }
 
+// design-to-code/probe-visual.ts
+import fs4 from "node:fs";
+import path4 from "node:path";
+import crypto3 from "node:crypto";
+import { setTimeout as sleep3 } from "node:timers/promises";
+
+// design-to-code/png.ts
+import { crc32, deflateSync, inflateSync as inflateSync2 } from "node:zlib";
+var PngError = class extends Error {
+};
+var SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+function chunks(b) {
+  const buf = Buffer.from(b.buffer, b.byteOffset, b.byteLength);
+  if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new PngError("not a PNG (bad signature)");
+  const out = [];
+  let o = 8;
+  while (o + 12 <= buf.length) {
+    const len = buf.readUInt32BE(o);
+    if (o + 12 + len > buf.length) throw new PngError("truncated PNG chunk");
+    const type = buf.toString("latin1", o + 4, o + 8), data = buf.subarray(o + 8, o + 8 + len);
+    if (crc32(buf.subarray(o + 4, o + 8 + len)) >>> 0 !== buf.readUInt32BE(o + 8 + len)) throw new PngError(`bad CRC in the ${type} chunk`);
+    out.push({ type, data });
+    o += 12 + len;
+    if (type === "IEND") break;
+  }
+  if (!out.length || out[0]?.type !== "IHDR") throw new PngError("not a PNG (no IHDR)");
+  return out;
+}
+var MAX_DECODE_SIDE = 4096;
+var MAX_DECODE_PIXELS = MAX_DECODE_SIDE * MAX_DECODE_SIDE;
+function decodePng2(b) {
+  const cs = chunks(b);
+  const d = cs[0]?.data;
+  if (!d || d.length < 13) throw new PngError("bad IHDR");
+  const w = d.readUInt32BE(0), h = d.readUInt32BE(4), depth = d[8] ?? 0, ct = d[9] ?? 0, interlace = d[12] ?? 0;
+  if (depth !== 8 || ct !== 2 && ct !== 6 || interlace !== 0) throw new PngError(`unsupported PNG (colour type ${ct} / depth ${depth}${interlace ? " / interlaced" : ""}) \u2014 only 8-bit RGB / RGBA, not interlaced`);
+  if (!w || !h) throw new PngError("empty PNG");
+  if (w * h > MAX_DECODE_PIXELS) throw new PngError(`the PNG is ${w}\xD7${h} px \u2014 over the ${MAX_DECODE_SIDE}\xD7${MAX_DECODE_SIDE} pixels this decoder reads`);
+  const ch = ct === 6 ? 4 : 3, stride = w * ch;
+  let raw;
+  try {
+    raw = inflateSync2(Buffer.concat(cs.filter((c) => c.type === "IDAT").map((c) => c.data)), { maxOutputLength: (stride + 1) * h });
+  } catch (e) {
+    throw new PngError(`bad image data (${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (raw.length < (stride + 1) * h) throw new PngError("truncated image data");
+  const px = new Uint8Array(stride * h);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)] ?? 0, s = y * (stride + 1) + 1, dst = y * stride, prev = dst - stride;
+    if (f > 4) throw new PngError(`bad filter type ${f} on row ${y}`);
+    for (let i = 0; i < stride; i++) {
+      const x = raw[s + i] ?? 0, a = i >= ch ? px[dst + i - ch] ?? 0 : 0, up = y ? px[prev + i] ?? 0 : 0, c = y && i >= ch ? px[prev + i - ch] ?? 0 : 0;
+      let v;
+      if (f === 0) v = x;
+      else if (f === 1) v = x + a;
+      else if (f === 2) v = x + up;
+      else if (f === 3) v = x + (a + up >> 1);
+      else {
+        const p = a + up - c, pa = Math.abs(p - a), pb = Math.abs(p - up), pc = Math.abs(p - c);
+        v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? up : c);
+      }
+      px[dst + i] = v & 255;
+    }
+  }
+  if (ch === 4) return { w, h, data: px };
+  const data = new Uint8Array(w * h * 4);
+  for (let i = 0, j = 0; i < px.length; i += 3, j += 4) {
+    data[j] = px[i] ?? 0;
+    data[j + 1] = px[i + 1] ?? 0;
+    data[j + 2] = px[i + 2] ?? 0;
+    data[j + 3] = 255;
+  }
+  return { w, h, data };
+}
+function chunk(type, data) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, "latin1");
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+function encodePng(img) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(img.w, 0);
+  ihdr.writeUInt32BE(img.h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const stride = img.w * 3 + 1, raw = Buffer.alloc(stride * img.h);
+  for (let y = 0; y < img.h; y++) {
+    let o = y * stride + 1, i = y * img.w * 4;
+    for (let x = 0; x < img.w; x++, i += 4) {
+      raw[o++] = img.data[i] ?? 0;
+      raw[o++] = img.data[i + 1] ?? 0;
+      raw[o++] = img.data[i + 2] ?? 0;
+    }
+  }
+  return Buffer.concat([SIGNATURE, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 1 })), chunk("IEND", Buffer.alloc(0))]);
+}
+function crop(img, r) {
+  const x0 = Math.max(0, Math.min(img.w, Math.round(r.x))), y0 = Math.max(0, Math.min(img.h, Math.round(r.y)));
+  const w = Math.max(0, Math.min(img.w - x0, Math.round(r.w))), h = Math.max(0, Math.min(img.h - y0, Math.round(r.h)));
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) data.set(img.data.subarray(((y0 + y) * img.w + x0) * 4, ((y0 + y) * img.w + x0 + w) * 4), y * w * 4);
+  return { w, h, data };
+}
+function resampleBox(img, w, h) {
+  if (w <= 0 || h <= 0) return { w: Math.max(0, w), h: Math.max(0, h), data: new Uint8Array(0) };
+  if (w === img.w && h === img.h) return { w, h, data: img.data.slice() };
+  const spans = (n, m) => {
+    const sc = n / m, out = [];
+    for (let o = 0; o < m; o++) {
+      const a = o * sc, b = (o + 1) * sc, list = [];
+      for (let s = Math.floor(a); s < Math.min(n, Math.ceil(b)); s++) {
+        const wgt = Math.min(b, s + 1) - Math.max(a, s);
+        if (wgt > 1e-9) list.push([s, wgt]);
+      }
+      out.push(list);
+    }
+    return out;
+  };
+  const xs = spans(img.w, w), ys = spans(img.h, h);
+  const tmp = new Float64Array(w * img.h * 4);
+  for (let y = 0; y < img.h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
+      for (const [s, wgt] of xs[x] ?? []) {
+        const i = (y * img.w + s) * 4, al = img.data[i + 3] ?? 0;
+        r += (img.data[i] ?? 0) * al * wgt;
+        g += (img.data[i + 1] ?? 0) * al * wgt;
+        bl += (img.data[i + 2] ?? 0) * al * wgt;
+        a += al * wgt;
+        tw += wgt;
+      }
+      const o = (y * w + x) * 4;
+      tmp[o] = r / tw;
+      tmp[o + 1] = g / tw;
+      tmp[o + 2] = bl / tw;
+      tmp[o + 3] = a / tw;
+    }
+  }
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, bl = 0, a = 0, tw = 0;
+      for (const [s, wgt] of ys[y] ?? []) {
+        const i = (s * w + x) * 4;
+        r += (tmp[i] ?? 0) * wgt;
+        g += (tmp[i + 1] ?? 0) * wgt;
+        bl += (tmp[i + 2] ?? 0) * wgt;
+        a += (tmp[i + 3] ?? 0) * wgt;
+        tw += wgt;
+      }
+      const o = (y * w + x) * 4;
+      a /= tw;
+      data[o + 3] = Math.round(a);
+      if (a > 0) {
+        data[o] = Math.round(r / tw / a);
+        data[o + 1] = Math.round(g / tw / a);
+        data[o + 2] = Math.round(bl / tw / a);
+      }
+    }
+  }
+  return { w, h, data };
+}
+
+// design-to-code/visual-diff.ts
+var rgb2y = (r, g, b) => r * 0.29889531 + g * 0.58662247 + b * 0.11448223;
+var rgb2i = (r, g, b) => r * 0.59597799 - g * 0.2741761 - b * 0.32180189;
+var rgb2q = (r, g, b) => r * 0.21147017 - g * 0.52261711 + b * 0.31114694;
+var blend = (c, a) => 255 + (c - 255) * a;
+function colorDelta(img1, img2, k, m, yOnly) {
+  let r1 = img1[k] ?? 0, g1 = img1[k + 1] ?? 0, b1 = img1[k + 2] ?? 0, a1 = img1[k + 3] ?? 0;
+  let r2 = img2[m] ?? 0, g2 = img2[m + 1] ?? 0, b2 = img2[m + 2] ?? 0, a2 = img2[m + 3] ?? 0;
+  if (a1 === a2 && r1 === r2 && g1 === g2 && b1 === b2) return 0;
+  if (a1 < 255) {
+    a1 /= 255;
+    r1 = blend(r1, a1);
+    g1 = blend(g1, a1);
+    b1 = blend(b1, a1);
+  }
+  if (a2 < 255) {
+    a2 /= 255;
+    r2 = blend(r2, a2);
+    g2 = blend(g2, a2);
+    b2 = blend(b2, a2);
+  }
+  const y1 = rgb2y(r1, g1, b1), y2 = rgb2y(r2, g2, b2), y = y1 - y2;
+  if (yOnly) return y;
+  const i = rgb2i(r1, g1, b1) - rgb2i(r2, g2, b2), q = rgb2q(r1, g1, b1) - rgb2q(r2, g2, b2);
+  const delta = 0.5053 * y * y + 0.299 * i * i + 0.1957 * q * q;
+  return y1 > y2 ? -delta : delta;
+}
+var maxDeltaOf = (threshold) => 35215 * threshold * threshold;
+function antialiased(img, x1, y1, width, height, img2) {
+  const x0 = Math.max(x1 - 1, 0), y0 = Math.max(y1 - 1, 0), x2 = Math.min(x1 + 1, width - 1), y2 = Math.min(y1 + 1, height - 1);
+  const pos = (y1 * width + x1) * 4;
+  let zeroes = x1 === x0 || x1 === x2 || y1 === y0 || y1 === y2 ? 1 : 0;
+  let min = 0, max = 0, minX = 0, minY = 0, maxX = 0, maxY = 0;
+  for (let x = x0; x <= x2; x++) {
+    for (let y = y0; y <= y2; y++) {
+      if (x === x1 && y === y1) continue;
+      const delta = colorDelta(img, img, pos, (y * width + x) * 4, true);
+      if (delta === 0) {
+        zeroes++;
+        if (zeroes > 2) return false;
+      } else if (delta < min) {
+        min = delta;
+        minX = x;
+        minY = y;
+      } else if (delta > max) {
+        max = delta;
+        maxX = x;
+        maxY = y;
+      }
+    }
+  }
+  if (min === 0 || max === 0) return false;
+  return hasManySiblings(img, minX, minY, width, height) && hasManySiblings(img2, minX, minY, width, height) || hasManySiblings(img, maxX, maxY, width, height) && hasManySiblings(img2, maxX, maxY, width, height);
+}
+function hasManySiblings(img, x1, y1, width, height) {
+  const x0 = Math.max(x1 - 1, 0), y0 = Math.max(y1 - 1, 0), x2 = Math.min(x1 + 1, width - 1), y2 = Math.min(y1 + 1, height - 1);
+  const pos = (y1 * width + x1) * 4;
+  let zeroes = x1 === x0 || x1 === x2 || y1 === y0 || y1 === y2 ? 1 : 0;
+  for (let x = x0; x <= x2; x++) {
+    for (let y = y0; y <= y2; y++) {
+      if (x === x1 && y === y1) continue;
+      const pos2 = (y * width + x) * 4;
+      if (img[pos] === img[pos2] && img[pos + 1] === img[pos2 + 1] && img[pos + 2] === img[pos2 + 2] && img[pos + 3] === img[pos2 + 3]) zeroes++;
+      if (zeroes > 2) return true;
+    }
+  }
+  return false;
+}
+var MASK = { same: 0, diff: 1, aa: 2, absorbed: 3 };
+function diffOptionsFor(k) {
+  return { threshold: 0.2, shiftPx: Math.max(1, Math.round(k)), cellPx: Math.max(2, Math.round(8 * k)), hotFraction: 0.08, hotMinPx: 4, edgePx: Number.isInteger(k) ? 0 : 1, maxRegions: 10 };
+}
+function matchedNear(a, b, x, y, w, h, r, maxDelta) {
+  const p = (y * w + x) * 4;
+  for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) {
+    for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
+      if (Math.abs(colorDelta(a, b, p, (yy * w + xx) * 4)) <= maxDelta) return true;
+    }
+  }
+  return false;
+}
+function diffPixels(ref, build, o) {
+  if (ref.w !== build.w || ref.h !== build.h || ref.data.length !== build.data.length) throw new Error(`image sizes do not match (${ref.w}\xD7${ref.h} vs ${build.w}\xD7${build.h})`);
+  const { w, h } = ref, a = ref.data, b = build.data;
+  if (a.length !== w * h * 4) throw new Error("image data size does not match width/height");
+  const maxDelta = maxDeltaOf(o.threshold), r = Math.max(0, Math.round(o.shiftPx));
+  const mask = new Uint8Array(w * h);
+  let differing = 0, aa = 0, absorbed = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const pos = (y * w + x) * 4;
+      const delta = colorDelta(a, b, pos, pos);
+      if (Math.abs(delta) <= maxDelta) continue;
+      if (antialiased(a, x, y, w, h, b) || antialiased(b, x, y, w, h, a)) {
+        mask[y * w + x] = MASK.aa;
+        aa++;
+        continue;
+      }
+      differing++;
+      if (r > 0 && matchedNear(a, b, x, y, w, h, r, maxDelta) && matchedNear(b, a, x, y, w, h, r, maxDelta)) {
+        mask[y * w + x] = MASK.absorbed;
+        absorbed++;
+      } else mask[y * w + x] = MASK.diff;
+    }
+  }
+  const cell = Math.max(1, Math.round(o.cellPx)), cw = Math.ceil(w / cell), chh = Math.ceil(h / cell);
+  const count = new Uint32Array(cw * chh), e = Math.max(0, Math.round(o.edgePx));
+  for (let y = e; y < h - e; y++) for (let x = e; x < w - e; x++) if (mask[y * w + x] === MASK.diff) {
+    const i = Math.floor(y / cell) * cw + Math.floor(x / cell);
+    count[i] = (count[i] ?? 0) + 1;
+  }
+  const hotCell = new Uint8Array(cw * chh), hotAt = Math.max(o.hotMinPx, o.hotFraction * cell * cell);
+  for (let i = 0; i < hotCell.length; i++) if ((count[i] ?? 0) >= hotAt) hotCell[i] = 1;
+  const seen = new Uint8Array(cw * chh), regions = [];
+  for (let i = 0; i < hotCell.length; i++) {
+    if (!hotCell[i] || seen[i]) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1, pixels = 0;
+    const stack = [i];
+    seen[i] = 1;
+    while (stack.length) {
+      const c = stack.pop() ?? 0, cx = c % cw, cy = Math.floor(c / cw);
+      x0 = Math.min(x0, cx);
+      y0 = Math.min(y0, cy);
+      x1 = Math.max(x1, cx);
+      y1 = Math.max(y1, cy);
+      pixels += count[c] ?? 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= cw || ny >= chh) continue;
+        const n = ny * cw + nx;
+        if (hotCell[n] && !seen[n]) {
+          seen[n] = 1;
+          stack.push(n);
+        }
+      }
+    }
+    const rx = x0 * cell, ry = y0 * cell;
+    regions.push({ x: rx, y: ry, w: Math.min(w, (x1 + 1) * cell) - rx, h: Math.min(h, (y1 + 1) * cell) - ry, pixels });
+  }
+  regions.sort((p, q) => q.pixels - p.pixels || p.y - q.y || p.x - q.x);
+  return { compared: w * h, differing, aa, shiftTolerant: differing - absorbed, mask, hot: regions.slice(0, Math.max(0, o.maxRegions)), hotTotal: regions.length };
+}
+var SHAPE_TOLERANCE = 0.01;
+function referenceCrop(png, scale, offset, frame) {
+  const x = Math.max(0, Math.min(png.w, Math.round(-offset.x * scale))), y = Math.max(0, Math.min(png.h, Math.round(-offset.y * scale)));
+  return { x, y, w: Math.max(0, Math.min(png.w - x, Math.round(frame.w * scale))), h: Math.max(0, Math.min(png.h - y, Math.round(frame.h * scale))) };
+}
+function planGrid(refCrop, capture, tolPx = 2) {
+  const dw = capture.w - refCrop.w, dh = capture.h - refCrop.h;
+  if (Math.abs(dw) <= tolPx && Math.abs(dh) <= tolPx) {
+    const w = Math.min(capture.w, refCrop.w), h = Math.min(capture.h, refCrop.h);
+    return { grid: "reference", w, h, note: dw || dh ? `the capture is ${capture.w}\xD7${capture.h} device px and the reference's frame ${refCrop.w}\xD7${refCrop.h} (rounding) \u2014 compared over the common ${w}\xD7${h}` : null };
+  }
+  const shape = refCrop.w > 0 && refCrop.h > 0 && capture.w > 0 && capture.h > 0 ? capture.w / capture.h / (refCrop.w / refCrop.h) : 0;
+  if (!(Math.abs(shape - 1) <= SHAPE_TOLERANCE)) {
+    return { grid: "none", why: `the capture is ${capture.w}\xD7${capture.h} device px and the reference's frame ${refCrop.w}\xD7${refCrop.h} \u2014 different shapes (aspect ratios ${shape > 0 ? `${Math.round(Math.abs(shape - 1) * 1e3) / 10} %` : "not comparable"} apart), so resampling would stretch one of them: not compared (a stale or clipped reference \u2014 re-pull the screen, then re-run --expect)` };
+  }
+  return { grid: "1x", why: `the capture is ${capture.w}\xD7${capture.h} device px and the reference's frame ${refCrop.w}\xD7${refCrop.h} \u2014 resampled to 1x (resampling can hide a difference)` };
+}
+var overlap = (a, b) => Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x) && Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y);
+function attribute(hot, k, built, designed) {
+  const names = (list, r) => {
+    const ids = [];
+    for (const n of list.filter((n2) => n2.rect.w > 0 && n2.rect.h > 0 && overlap(n2.rect, r)).sort((p, q) => p.rect.w * p.rect.h - q.rect.w * q.rect.h)) {
+      if (!ids.includes(n.id)) ids.push(n.id);
+      if (ids.length >= 5) break;
+    }
+    return ids;
+  };
+  return hot.map((h) => {
+    const x = Math.floor(h.x / k), y = Math.floor(h.y / k);
+    const rect = { x, y, w: Math.ceil((h.x + h.w) / k) - x, h: Math.ceil((h.y + h.h) / k) - y };
+    return { rect, pixels: h.pixels, pct: Math.round(h.pixels / Math.max(1, h.w * h.h) * 1e3) / 10, built: names(built, rect), designed: names(designed, rect) };
+  });
+}
+function renderDiff(build, d) {
+  const { w, h } = build, out = new Uint8Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4, m = d.mask[i] ?? 0;
+    let r, g, b;
+    if (m === MASK.diff) {
+      r = 255;
+      g = 0;
+      b = 0;
+    } else if (m === MASK.aa) {
+      r = 255;
+      g = 255;
+      b = 0;
+    } else if (m === MASK.absorbed) {
+      r = 255;
+      g = 200;
+      b = 140;
+    } else {
+      const v = blend(rgb2y(build.data[p] ?? 0, build.data[p + 1] ?? 0, build.data[p + 2] ?? 0), 0.1 * (build.data[p + 3] ?? 0) / 255);
+      r = v;
+      g = v;
+      b = v;
+    }
+    out[p] = r;
+    out[p + 1] = g;
+    out[p + 2] = b;
+    out[p + 3] = 255;
+  }
+  const put = (x, y) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const p = (y * w + x) * 4;
+    out[p] = 255;
+    out[p + 1] = 0;
+    out[p + 2] = 255;
+    out[p + 3] = 255;
+  };
+  for (const r of d.hot) {
+    for (let t = 0; t < 2; t++) {
+      for (let x = r.x; x < r.x + r.w; x++) {
+        put(x, r.y + t);
+        put(x, r.y + r.h - 1 - t);
+      }
+      for (let y = r.y; y < r.y + r.h; y++) {
+        put(r.x + t, y);
+        put(r.x + r.w - 1 - t, y);
+      }
+    }
+  }
+  return { w, h, data: out };
+}
+
+// design-to-code/probe-visual.ts
+var VISUAL_CAP_MS = 3e4;
+function visualBudget(now, deadline, cap = VISUAL_CAP_MS, reserve = BEHAVIOUR_RESERVE_MS) {
+  return Math.max(0, Math.min(cap, deadline - now - reserve));
+}
+var FONTS_CAP_MS = 5e3;
+var BUILT_CAP = 2e3;
+function referenceRoot(expected, project) {
+  const dir = path4.resolve(path4.dirname(expected));
+  return path4.basename(dir) === "verify" && path4.basename(path4.dirname(dir)) === "design" ? path4.dirname(path4.dirname(dir)) : project;
+}
+var REFERENCE_MALFORMED = "the expectation's referenceImage is malformed \u2014 re-run --expect";
+function prepareVisual(exp, root) {
+  const ri = exp.referenceImage;
+  if (ri === void 0) {
+    return { ok: false, why: typeof exp.reference === "string" && exp.reference ? "the expectation is older than 12c (no referenceImage) \u2014 re-run --expect" : "the export has no reference image for this screen" };
+  }
+  if (!isVerifyReferenceImage(ri)) return { ok: false, why: REFERENCE_MALFORMED };
+  if (!ri.usable) return { ok: false, why: ri.why };
+  const fw = exp.frame?.w, fh = exp.frame?.h;
+  if (typeof fw !== "number" || typeof fh !== "number" || fw < 1 || fh < 1) return { ok: false, why: "the expectation states no frame size" };
+  const file = resolveInside(root, ri.path, path4.join(root, "design", "export"));
+  if (file === null) return { ok: false, why: `the reference path ${ri.path} is outside design/export \u2014 re-run --expect` };
+  let bytes;
+  try {
+    bytes = fs4.readFileSync(file);
+  } catch {
+    return { ok: false, why: `the reference PNG ${ri.path} is missing \u2014 re-pull the screen, then re-run --expect` };
+  }
+  if (crypto3.createHash("sha256").update(bytes).digest("hex") !== ri.sha256) return { ok: false, why: `the reference PNG changed since --expect (${ri.path}) \u2014 re-run --expect` };
+  const notes = [];
+  if (exp.frames && exp.frames.length > 1) notes.push(`the expectation has ${exp.frames.length} frames \u2014 only the first (${exp.frame?.nodeId ?? "?"}) is diffed`);
+  if (ri.colorProfile !== void 0) notes.push(`the reference's colour profile is ${ri.colorProfile} \u2014 colours are compared as raw samples, without colour management (a colour difference may be the profile's)`);
+  return { ok: true, ref: ri, bytes, frameSize: { w: fw, h: fh }, notes };
+}
+function readFrame(arg) {
+  let count = 0, rect = null;
+  if (arg.selector !== null) {
+    try {
+      const list = document.querySelectorAll(arg.selector);
+      count = list.length;
+      const el = list.item(0);
+      if (count === 1 && el) {
+        const r = el.getBoundingClientRect();
+        rect = { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height };
+      }
+    } catch {
+      count = 0;
+    }
+  }
+  const de = document.documentElement, b = document.body;
+  return { count, rect, doc: { w: Math.max(de.scrollWidth, b ? b.scrollWidth : 0), h: Math.max(de.scrollHeight, b ? b.scrollHeight : 0) }, token: String(window.__dtProbeDoc || "") };
+}
+function readBuilt(arg) {
+  const out = [];
+  for (const n of arg.nodes) {
+    try {
+      const list = document.querySelectorAll(n.selector), el = list.item(0);
+      if (list.length !== 1 || !el) continue;
+      const r = el.getBoundingClientRect();
+      out.push({ id: n.id, rect: { x: r.left + scrollX - arg.frame.x, y: r.top + scrollY - arg.frame.y, w: r.width, h: r.height } });
+    } catch {
+    }
+  }
+  return out;
+}
+var raf23 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+async function captureVisual(browser, o) {
+  if (o.budgetMs <= 0) return { why: "no time left within --max-time after measuring and driving" };
+  const held = {};
+  const work = (async () => {
+    let reached;
+    try {
+      reached = await openReached(browser, { viewport: o.viewport, timeout: o.timeout, initScript: o.initScript, reach: o.reach }, { dsf: o.ref.scale, onContext: (c) => {
+        held.ctx = c;
+      } });
+    } catch (e) {
+      return { why: e instanceof StepError ? `the steps failed \u2014 ${e.message}` : `could not reach the screen \u2014 ${firstLine3(e)}` };
+    }
+    const { context, page, loads } = reached;
+    try {
+      const loads0 = loads();
+      await Promise.race([page.evaluate("document.fonts.ready.then(() => true)"), sleep3(FONTS_CAP_MS, void 0, { ref: false })]);
+      await raf23(page);
+      const notes = [];
+      const fr = o.frame;
+      const sel = fr && fr.via !== "viewport" ? fr.selector : null;
+      const read = await page.evaluate(readFrame, { selector: sel });
+      let origin;
+      if (!fr) {
+        origin = { x: 0, y: 0 };
+        notes.push("no frame root was measured \u2014 the capture starts at the page's origin");
+      } else if (fr.via === "viewport") origin = { x: 0, y: 0 };
+      else if (read.rect !== null) origin = { x: read.rect.x, y: read.rect.y };
+      else {
+        origin = { x: fr.rect.x, y: fr.rect.y };
+        notes.push(`the frame's selector matched ${read.count} element(s) on the capture page \u2014 the measurement pass's position was used`);
+      }
+      const built0 = fr && fr.via !== "viewport" && read.rect !== null ? read.rect : fr ? fr.rect : null;
+      if (built0 !== null && fr && fr.via !== "viewport" && (Math.abs(built0.h - o.frameSize.h) > 1 || Math.abs(built0.w - o.frameSize.w) > 1)) {
+        notes.push(`the built frame is ${Math.round(built0.w)}\xD7${Math.round(built0.h)} CSS px and the design ${o.frameSize.w}\xD7${o.frameSize.h} \u2014 only the design-size window at the built frame's top-left is compared (D48)`);
+      }
+      const clip = { x: Math.round(origin.x), y: Math.round(origin.y), w: Math.floor(o.frameSize.w), h: Math.floor(o.frameSize.h) };
+      const x0 = Math.max(0, clip.x), y0 = Math.max(0, clip.y);
+      const shot = { x: x0, y: y0, w: Math.max(0, Math.min(clip.x + clip.w, read.doc.w) - x0), h: Math.max(0, Math.min(clip.y + clip.h, read.doc.h) - y0) };
+      if (shot.w < 1 || shot.h < 1) return { why: `the frame's window (${clip.w}\xD7${clip.h} at ${clip.x},${clip.y}) lies outside the ${read.doc.w}\xD7${read.doc.h} document` };
+      const nodes = [];
+      for (const n of o.nodes) if (n.selectorCount === 1 && typeof n.selector === "string" && n.selector && nodes.length < BUILT_CAP) nodes.push({ id: n.nodeId, selector: n.selector });
+      const built = await page.evaluate(readBuilt, { nodes, frame: origin });
+      const png = await page.screenshot({ clip: { x: shot.x, y: shot.y, width: shot.w, height: shot.h }, fullPage: true, animations: "disabled", caret: "hide", scale: "device" });
+      const after = await page.evaluate(readFrame, { selector: null });
+      if (loads() !== loads0 || after.token !== read.token) return { why: "the page loaded a new document during the visual capture" };
+      return { png, dsf: o.ref.scale, clip, shot, frame: fr ? { nodeId: fr.nodeId, via: fr.via, selector: fr.selector } : { nodeId: "", via: "none", selector: null }, built, notes };
+    } finally {
+      await context.close().catch(() => void 0);
+    }
+  })().catch((e) => ({ why: /Execution context was destroyed|frame was detached|navigation/i.test(errMsg(e)) ? "the page loaded a new document during the visual capture" : `the visual capture failed \u2014 ${firstLine3(e)}` }));
+  let timer;
+  const cutP = new Promise((resolve) => {
+    timer = setTimeout(() => resolve("cut"), o.budgetMs);
+  });
+  const r = await Promise.race([work, cutP]);
+  clearTimeout(timer);
+  if (r !== "cut") return r;
+  const ctx = held.ctx;
+  await Promise.race([(async () => {
+    if (ctx) await ctx.close().catch(() => void 0);
+    await work;
+  })(), sleep3(CUT_SETTLE_MS2, void 0, { ref: false })]);
+  return { why: `the visual capture did not finish within its budget (${Math.round(o.budgetMs / 1e3)} s)` };
+}
+var firstLine3 = (e) => errMsg(e).split("\n")[0] ?? "";
+var pct = (n, of) => of > 0 ? Math.round(n / of * 1e4) / 100 : 0;
+function designedRects(exp) {
+  const first = exp.frame?.nodeId;
+  const out = [];
+  for (const s of exp.nodes ?? []) {
+    if (first !== void 0 && s.frameId !== void 0 && s.frameId !== first) continue;
+    if (s.nodeId === first) continue;
+    const h = typeof s.height === "number" ? s.height : typeof s.lineHeight === "number" ? s.lineHeight : typeof s.fontSize === "number" ? s.fontSize * 1.2 : null;
+    if (typeof s.x !== "number" || typeof s.y !== "number" || typeof s.width !== "number" || h === null) continue;
+    out.push({ id: s.nodeId, rect: { x: s.x, y: s.y, w: s.width, h } });
+  }
+  return out;
+}
+function finishVisual(o) {
+  const t0 = Date.now(), cap = o.capture;
+  if ("why" in cap) return { visual: { version: 1, ran: false, why: cap.why }, diffPng: null };
+  try {
+    const { ref } = o.prep, s = ref.scale;
+    const notes = [...o.prep.notes, ...cap.notes];
+    if (ref.offset.x > 0 || ref.offset.y > 0) notes.push(`the reference's render bounds lie inside the frame box (offset ${ref.offset.x},${ref.offset.y}) \u2014 alignment unverified`);
+    const refImg = decodePng2(o.prep.bytes);
+    const full = referenceCrop(refImg, s, ref.offset, o.prep.frameSize);
+    if (full.x !== ref.crop.x || full.y !== ref.crop.y || full.w !== ref.crop.w || full.h !== ref.crop.h) notes.push(`the expectation's reference crop ${JSON.stringify(ref.crop)} differs from the one recomputed from its scale and offset ${JSON.stringify(full)} \u2014 the recomputed one is used`);
+    const dx = cap.shot.x - cap.clip.x, dy = cap.shot.y - cap.clip.y;
+    const sub = { x: full.x + Math.round(dx * s), y: full.y + Math.round(dy * s), w: cap.shot.w === cap.clip.w ? full.w : Math.round(cap.shot.w * s), h: cap.shot.h === cap.clip.h ? full.h : Math.round(cap.shot.h * s) };
+    const notCompared = cap.shot.w * cap.shot.h < cap.clip.w * cap.clip.h ? { pct: Math.round((1 - cap.shot.w * cap.shot.h / (cap.clip.w * cap.clip.h)) * 1e3) / 10, why: `the design window ${cap.clip.w}\xD7${cap.clip.h} at ${cap.clip.x},${cap.clip.y} reaches past the built page's end (${cap.shot.w}\xD7${cap.shot.h} of it exists)` } : null;
+    const refCrop = crop(refImg, sub);
+    const shotImg = decodePng2(cap.png);
+    const plan = planGrid(refCrop, shotImg);
+    if (plan.grid === "none") return { visual: { version: 1, ran: false, why: plan.why }, diffPng: null };
+    let a, b, k, resampled;
+    if (plan.grid === "reference") {
+      a = crop(refCrop, { x: 0, y: 0, w: plan.w, h: plan.h });
+      b = crop(shotImg, { x: 0, y: 0, w: plan.w, h: plan.h });
+      k = s;
+      resampled = "none";
+      if (plan.note !== null) notes.push(plan.note);
+    } else {
+      a = resampleBox(refCrop, cap.shot.w, cap.shot.h);
+      b = resampleBox(shotImg, cap.shot.w, cap.shot.h);
+      k = 1;
+      resampled = "both";
+      notes.push(plan.why);
+    }
+    const opts = diffOptionsFor(k);
+    const d = diffPixels(a, b, opts);
+    const regions = attribute(d.hot, k, cap.built.filter((n) => n.id !== cap.frame.nodeId), designedRects(o.expectation));
+    const diffPng = encodePng(renderDiff(b, d));
+    const visual = {
+      version: 1,
+      ran: true,
+      reference: { path: ref.path, sha256: ref.sha256, scale: s, offset: ref.offset, from: ref.from, crop: sub, ...ref.colorProfile !== void 0 ? { colorProfile: ref.colorProfile } : {} },
+      capture: { dsf: cap.dsf, clip: cap.clip, frame: cap.frame, size: { w: shotImg.w, h: shotImg.h } },
+      grid: plan.grid,
+      resampled,
+      compared: { w: a.w, h: a.h, k },
+      ...notCompared !== null ? { notCompared } : {},
+      threshold: opts.threshold,
+      shiftPx: opts.shiftPx,
+      cellPx: opts.cellPx,
+      hotFraction: opts.hotFraction,
+      hotMinPx: opts.hotMinPx,
+      differingPct: pct(d.differing, d.compared),
+      shiftTolerantPct: pct(d.shiftTolerant, d.compared),
+      aaPct: pct(d.aa, d.compared),
+      regions,
+      regionsTotal: d.hotTotal,
+      diff: o.diffPath,
+      elapsedMs: o.captureMs + (Date.now() - t0),
+      notes
+    };
+    return { visual, diffPng };
+  } catch (e) {
+    return { visual: { version: 1, ran: false, why: `the visual diff failed (${e instanceof PngError ? e.message : firstLine3(e)})` }, diffPng: null };
+  }
+}
+function visualLine(v) {
+  if (!v.ran) return `visual not run (${v.why})`;
+  return `visual (informational \u2014 never the verdict) ${pctText(v.shiftTolerantPct)}% of pixels differ (${pctText(v.differingPct)}% before ${v.shiftPx}-px shift tolerance) \xB7 ${v.regionsTotal} hot region(s) \xB7 at the reference's ${v.reference.scale}x (${v.reference.from}) \xB7 grid ${v.grid}${v.diff !== null ? ` \xB7 ${v.diff}` : ""}`;
+}
+
 // design-to-code/verify-probe.ts
 var PLAYWRIGHT_PACKAGES = ["playwright", "@playwright/test", "playwright-core"];
 function isPlaywrightModule(x) {
@@ -4966,24 +5593,24 @@ function isPlaywrightModule(x) {
   return typeof c === "object" && c !== null && "launch" in c && typeof c.launch === "function";
 }
 function installHint(dir) {
-  const has = (f) => fs4.existsSync(path3.join(dir, f));
+  const has = (f) => fs5.existsSync(path5.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm add -D playwright && pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn add -D playwright && yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bun add -d playwright && bunx playwright install chromium";
   return "npm i -D playwright && npx playwright install chromium";
 }
 function browserHint(dir) {
-  const has = (f) => fs4.existsSync(path3.join(dir, f));
+  const has = (f) => fs5.existsSync(path5.join(dir, f));
   if (has("pnpm-lock.yaml")) return "pnpm exec playwright install chromium";
   if (has("yarn.lock")) return "yarn playwright install chromium";
   if (has("bun.lock") || has("bun.lockb")) return "bunx playwright install chromium";
   return "npx playwright install chromium";
 }
 function projectRequire(dir) {
-  return createRequire(path3.join(path3.resolve(dir), "package.json"));
+  return createRequire(path5.join(path5.resolve(dir), "package.json"));
 }
 function resolvePlaywright(dir) {
-  const abs = path3.resolve(dir);
+  const abs = path5.resolve(dir);
   const req = projectRequire(abs);
   const tried = [];
   for (const name of PLAYWRIGHT_PACKAGES) {
@@ -5013,8 +5640,8 @@ function resolvePlaywright(dir) {
     }
     return { ok: true, pkg: name, version, mod, file };
   }
-  const pnp = fs4.existsSync(path3.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
-  return { ok: false, reason: `no playwright package resolvable from ${path3.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
+  const pnp = fs5.existsSync(path5.join(abs, ".pnp.cjs")) ? " \u2014 this project uses Yarn Plug'n'Play: retry the probe as `yarn node <this script> \u2026`" : "";
+  return { ok: false, reason: `no playwright package resolvable from ${path5.join(abs, "package.json")} (${tried.join("; ")})${pnp}`, hint: installHint(abs) };
 }
 function resolveAxe(dir) {
   const req = projectRequire(dir);
@@ -5055,13 +5682,13 @@ async function launch(r, dir) {
 }
 var SELF2 = fileURLToPath3(import.meta.url);
 function probeVersion() {
-  for (const p of [path3.join(path3.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path3.join(path3.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
+  for (const p of [path5.join(path5.dirname(SELF2), "..", ".claude-plugin", "plugin.json"), path5.join(path5.dirname(SELF2), "..", "claude-plugin", ".claude-plugin", "plugin.json")]) {
     const doc = readJsonOrNull(p, isJsonObject);
     if (doc && typeof doc.version === "string") return doc.version;
   }
   return null;
 }
-var selfSha256 = () => crypto3.createHash("sha256").update(fs4.readFileSync(SELF2)).digest("hex");
+var selfSha256 = () => crypto4.createHash("sha256").update(fs5.readFileSync(SELF2)).digest("hex");
 var BUILD_TYPES = /* @__PURE__ */ new Set(["document", "script", "stylesheet"]);
 function buildFrom(url, served, viteClient, unhashed = 0) {
   const lines = [...served].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([p, h]) => `${p} ${h}`);
@@ -5196,12 +5823,12 @@ async function settle(page, log, ready, timeout) {
       }
       if (token === null && now !== null) token = now;
       if (moved() && Date.now() < docDeadline) {
-        await sleep3(POLL_MS);
+        await sleep4(POLL_MS);
         continue;
       }
       if (moved()) throw kept();
       if (errorKind(errMsg(e), false) === "navigated" && Date.now() < docDeadline) {
-        await sleep3(POLL_MS);
+        await sleep4(POLL_MS);
         continue;
       }
       throw new UnreachableError(ready ? `--ready '${ready}' never became visible: ${errMsg(e).split("\n")[0]}` : errMsg(e).split("\n")[0]);
@@ -5209,7 +5836,7 @@ async function settle(page, log, ready, timeout) {
     let mark = log.docLoads;
     let last = "", since = Date.now();
     for (; ; ) {
-      await sleep3(POLL_MS);
+      await sleep4(POLL_MS);
       let tok, sig;
       try {
         const v = await page.evaluate("[window.__dtProbeDoc || '', document.getElementsByTagName('*').length + ':' + (document.body && document.body.textContent || '').length]");
@@ -5262,7 +5889,7 @@ async function oneVisible(page, sel, wait, name, atLeastOne = false) {
     if (Date.now() >= deadline) {
       throw new StepError(`${name} matched ${last.visible} visible element(s)${last.all !== last.visible ? ` (${last.all} in the document)` : ""} after ${Math.round(wait / 1e3)}s \u2014 ${atLeastOne ? "a waitFor needs at least one" : "a click needs exactly one"}`);
     }
-    await sleep3(POLL_MS);
+    await sleep4(POLL_MS);
   }
 }
 function linkHref(el) {
@@ -5431,7 +6058,7 @@ function foreignTags(tagged, expectedIds, frameIds) {
   const ids = [...n.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0).slice(0, 50).map((id) => ({ id, elements: n.get(id) ?? 0 }));
   return { count: n.size, ids };
 }
-var raf23 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+var raf24 = (page) => page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 var docToken = async (page) => {
   const v = await page.evaluate("window.__dtProbeDoc || ''");
   return String(v);
@@ -5524,7 +6151,7 @@ async function pass(page, log, o) {
             continue;
           }
         }
-        await raf23(page);
+        await raf24(page);
         const [r] = await page.evaluate(measureElements, { frameRect: frameRectOf(spec), keys: STYLE_KEYS, items: [item(spec, m)] });
         if (r) {
           const shaped = shapeNode(spec, m, r, STYLE_KEYS);
@@ -5538,7 +6165,7 @@ async function pass(page, log, o) {
         else if (focusPath !== null) await page.locator(focusPath).first().blur({ timeout: 2e3 }).catch(() => void 0);
       }
     }
-    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf23(page);
+    if (matches.some(({ spec }) => spec.drawnState === "hover")) await raf24(page);
     const png = await page.screenshot({ animations: "disabled", caret: "hide" });
     const { compatMode, ...overflow } = await page.evaluate(readPageOverflow, null);
     const pageOverflow = { ...overflow, compatMode };
@@ -5580,7 +6207,7 @@ function hoverTarget(c, byTag) {
 }
 var BODY_WAIT_MS = 2e3;
 async function bodiesRead(reads, served) {
-  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep3(BODY_WAIT_MS, void 0, { ref: false })]);
+  await Promise.race([Promise.allSettled(reads.map((r) => r.done)), sleep4(BODY_WAIT_MS, void 0, { ref: false })]);
   const missed = /* @__PURE__ */ new Map();
   for (const r of reads) {
     if (served.has(r.path) || r.state !== "pending" && r.state !== "failed") continue;
@@ -5698,6 +6325,10 @@ var USAGE = `usage:
       20 s): landmarks, axe-core (when the project has it), a Tab walk (reachable, visible focus, names), forced colours,
       1024/320 px widths, and the keyboard/scroll battery on modal overlays \u2014 measured.behaviour (+ <out>.forced-colors.png),
       never the fidelity verdict and never an exit 4. --behaviour off skips them (measured.behaviour says so).
+      Before them, when the expectation carries a usable referenceImage (--expect), the frame is captured once more at the
+      reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png
+      (informational \u2014 never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/\u2026 PNG is read
+      from the project that owns the expectation (the folder above design/verify/), else from --project.
   ${scriptCmd("verify-probe")} --check [--project <dir>]
       resolves the project's Playwright and launches chromium once \u2014 nothing measured, nothing written.
 exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install; never installed here) \xB7 4 the page kept
@@ -5705,7 +6336,7 @@ exit: 0 wrote \xB7 2 usage \xB7 3 renderer unavailable (ask the user to install;
       failed (nothing written).`;
 var MAX_TIME_DEFAULT = 18e4;
 async function closeCapped(b, capMs = CLOSE_STEP_CAP_MS) {
-  const cap = () => sleep3(capMs, void 0, { ref: false });
+  const cap = () => sleep4(capMs, void 0, { ref: false });
   await Promise.race([b.newBrowserCDPSession().then((cdp) => cdp.send("Browser.close")).catch(() => void 0), cap()]);
   await Promise.race([b.close().catch(() => void 0), cap()]);
   killBrowserChildren();
@@ -5751,7 +6382,7 @@ async function main(argv) {
     behaviour: { type: "string" }
   };
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs2({ args, options: OPTIONS, allowPositionals: false }));
-  const project = path3.resolve(f.project ?? ".");
+  const project = path5.resolve(f.project ?? ".");
   const timeout = f.timeout === void 0 ? 3e4 : Number(f.timeout);
   if (!Number.isFinite(timeout) || timeout <= 0) {
     console.error(`verify-probe: --timeout must be a positive number of milliseconds
@@ -5806,7 +6437,7 @@ ${USAGE}`);
       return 2;
     }
     steps = parsed.steps;
-    stepsSource = `--steps ${(path3.relative(process.cwd(), path3.resolve(f.steps)) || f.steps).split(path3.sep).join("/")}`;
+    stepsSource = `--steps ${(path5.relative(process.cwd(), path5.resolve(f.steps)) || f.steps).split(path5.sep).join("/")}`;
   }
   let expectation = null, expBytes = null;
   let viewport = { w: 1280, h: 800 };
@@ -5818,7 +6449,7 @@ ${USAGE}`);
       return 2;
     }
     expectation = r2.doc;
-    expBytes = fs4.readFileSync(f.expected);
+    expBytes = fs5.readFileSync(f.expected);
     const fr = expectation.frame || {};
     if (f.viewport !== void 0) {
       const m = /^(\d+)x(\d+)$/i.exec(f.viewport.trim());
@@ -5831,8 +6462,8 @@ ${USAGE}`);
     } else if (typeof fr.w === "number" && typeof fr.h === "number") viewport = { w: Math.round(fr.w), h: Math.round(fr.h) };
     else notes.push("the expectation states no frame size \u2014 measured at 1280x800; pass --viewport");
   }
-  const outBase = f.out ?? (f.expected ? path3.join(path3.dirname(f.expected), path3.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
-  const statusBase = f.expected ? path3.join(path3.dirname(f.expected), path3.basename(outBase)) : "";
+  const outBase = f.out ?? (f.expected ? path5.join(path5.dirname(f.expected), path5.basename(f.expected, ".json").replace(/\.expected$/, "")) : "");
+  const statusBase = f.expected ? path5.join(path5.dirname(f.expected), path5.basename(outBase)) : "";
   const expSha = expBytes ? sha256Of(expBytes) : void 0;
   const runId = f.run !== void 0 && !f.check && statusBase ? f.run : void 0;
   const status = (w) => {
@@ -5869,7 +6500,7 @@ ${USAGE}`);
     const identity2 = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path3.relative(project, res.file) || res.file}) \xB7 chromium ${identity2.browser.version} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path5.relative(project, res.file) || res.file}) \xB7 chromium ${identity2.browser.version} \xB7 verify-probe ${identity2.version ?? "?"} (sha ${identity2.sha256.slice(0, 12)}\u2026)`);
       return 0;
     }
     let run2;
@@ -5905,7 +6536,7 @@ ${USAGE}`);
           reach: async (page) => {
             await reachPage(page, attachNavLog(page), probeOpts);
           }
-        }), sleep3(hungAt, hung, { ref: false })]);
+        }), sleep4(hungAt, hung, { ref: false })]);
         if (r2 === hung) {
           wedged = true;
           driveNote2 = "driving the interactions did not finish within its budget (the browser stopped answering) \u2014 none recorded";
@@ -5914,6 +6545,36 @@ ${USAGE}`);
         driveNote2 = `driving the interactions failed (${errMsg(e).split("\n")[0]}) \u2014 none recorded`;
       }
     }
+    let prep2 = { ok: false, why: "not measured" };
+    if (run2.kind === "ok") {
+      try {
+        prep2 = prepareVisual(expectation, referenceRoot(f.expected, project));
+      } catch (e) {
+        prep2 = { ok: false, why: `the reference could not be read (${errMsg(e).split("\n")[0]})` };
+      }
+    }
+    const visualAt = Date.now();
+    let visualCap2 = { why: prep2.ok ? "not captured" : prep2.why };
+    if (run2.kind === "ok" && prep2.ok) {
+      const fr0 = run2.result.frames[0];
+      if (wedged) visualCap2 = { why: "the browser stopped answering while the interactions were driven" };
+      else {
+        visualCap2 = await captureVisual(browser, {
+          ref: prep2.ref,
+          frame: fr0 ? { nodeId: fr0.nodeId, selector: fr0.selector, via: fr0.via, rect: fr0.rect } : null,
+          frameSize: prep2.frameSize,
+          nodes: run2.result.nodes,
+          viewport,
+          timeout,
+          initScript: INIT_SCRIPT,
+          reach: async (page) => {
+            await reachPage(page, attachNavLog(page), probeOpts);
+          },
+          budgetMs: visualBudget(Date.now(), runDeadline)
+        });
+      }
+    }
+    const captureMs2 = Date.now() - visualAt;
     let behaviour2 = { version: 1, ran: false, why: "--behaviour off" };
     let forcedPng2 = null;
     if (wedged && behaviourOn) behaviour2 = { version: 1, ran: false, why: "the browser stopped answering while the interactions were driven" };
@@ -5935,7 +6596,7 @@ ${USAGE}`);
               await reachPage(page, attachNavLog(page), probeOpts);
             },
             axe: axe.ok ? { source: axe.source, version: axe.version } : { why: axe.why },
-            forcedPng: (outBase + ".forced-colors.png").split(path3.sep).join("/")
+            forcedPng: (outBase + ".forced-colors.png").split(path5.sep).join("/")
           });
           behaviour2 = r2.behaviour;
           forcedPng2 = r2.forcedPng;
@@ -5946,7 +6607,7 @@ ${USAGE}`);
     }
     if (wedged) {
       killBrowserChildren();
-      await Promise.race([browser.close().catch(() => void 0), sleep3(1e3, void 0, { ref: false })]);
+      await Promise.race([browser.close().catch(() => void 0), sleep4(1e3, void 0, { ref: false })]);
     } else await closeCapped(browser);
     if (held.timedOut) return 4;
     if (run2.kind === "browser-gone") {
@@ -5977,10 +6638,13 @@ ${USAGE}`);
 ` + run2.navigation.events.map((ev) => `    +${ev.at}ms ${ev.type} ${ev.url}`).join("\n"));
       return 4;
     }
-    return { run: run2, identity: identity2, driven: driven2, driveNote: driveNote2, behaviour: behaviour2, forcedPng: forcedPng2 };
-  })();
-  const first = await Promise.race([work, watchdog]);
-  clearTimeout(timer);
+    return { run: run2, identity: identity2, driven: driven2, driveNote: driveNote2, behaviour: behaviour2, forcedPng: forcedPng2, prep: prep2, visualCap: visualCap2, captureMs: captureMs2 };
+  })().catch(async (e) => {
+    const b = held.browser;
+    if (b && !held.timedOut) await closeCapped(b);
+    throw e;
+  });
+  const first = await Promise.race([work, watchdog]).finally(() => clearTimeout(timer));
   if (first === "timeout") {
     held.timedOut = true;
     work.catch(() => void 0);
@@ -5991,17 +6655,28 @@ ${USAGE}`);
     return ended(4);
   }
   if (typeof first === "number") return ended(first);
-  const { run, identity, driven, driveNote, behaviour, forcedPng } = first;
+  const { run, identity, driven, driveNote, behaviour, forcedPng, prep, visualCap, captureMs } = first;
   if (!expectation || !expBytes || !f.expected || !f.url) return 2;
   const png = outBase + ".png";
   const r = run.result;
   const frameOut = (fr) => ({ nodeId: fr.nodeId, selector: fr.selector, via: fr.via, rect: fr.rect });
   const firstFrame = r.frames[0];
+  const diffPath = outBase + ".diff.png";
+  let visual = { version: 1, ran: false, why: prep.ok ? "not captured" : prep.why };
+  let diffPng = null;
+  if (prep.ok) ({ visual, diffPng } = finishVisual({ expectation, prep, capture: visualCap, diffPath: diffPath.split(path5.sep).join("/"), captureMs }));
+  try {
+    if (diffPng !== null) writeFileAtomic(diffPath, diffPng);
+    else if (fs5.existsSync(diffPath)) fs5.rmSync(diffPath, { force: true });
+  } catch (e) {
+    console.error(`warning  ${diffPath}: ${errMsg(e).split("\n")[0]} \u2014 the visual diff image is not written`);
+    if (visual.ran) visual = { ...visual, diff: null, notes: [...visual.notes, `the diff image could not be written (${errMsg(e).split("\n")[0]})`] };
+  }
   const measured = {
     measuredAt: (/* @__PURE__ */ new Date()).toISOString(),
     renderer: "playwright-chromium",
     viewport: `${viewport.w}x${viewport.h}`,
-    artifacts: [png.split(path3.sep).join("/")],
+    artifacts: [png.split(path5.sep).join("/")],
     expectationSha256: sha256Of(expBytes),
     probe: identity,
     ...firstFrame ? { frame: frameOut(firstFrame) } : {},
@@ -6018,7 +6693,8 @@ ${USAGE}`);
     ...stepsSource !== null ? { reach: { steps, sha256: stepsSha256(steps), source: stepsSource, url: r.url } } : {},
     page: r.page,
     ...driven ? { interactions: driven } : {},
-    behaviour
+    behaviour,
+    visual
   };
   const allNotes = [...notes, ...r.notes, ...driveNote !== null ? [driveNote] : []];
   const measuredText = JSON.stringify(allNotes.length ? { ...measured, notes: allNotes } : measured, null, 2) + "\n";
@@ -6026,7 +6702,7 @@ ${USAGE}`);
   const forcedPath = outBase + ".forced-colors.png";
   try {
     if (forcedPng !== null) writeFileAtomic(forcedPath, forcedPng);
-    else if (fs4.existsSync(forcedPath)) fs4.rmSync(forcedPath, { force: true });
+    else if (fs5.existsSync(forcedPath)) fs5.rmSync(forcedPath, { force: true });
   } catch (e) {
     console.error(`warning  ${forcedPath}: ${errMsg(e).split("\n")[0]} \u2014 the behaviour screenshot is not written`);
   }
@@ -6049,12 +6725,13 @@ ${USAGE}`);
   console.error(`page  scrollWidth ${pg.scrollWidth} at clientWidth ${pg.clientWidth} (overflow-x ${pg.overflowX})${pg.scrollWidth > pg.clientWidth + 1 ? pg.scrollable ? ` \u2014 scrolls sideways (widest: ${pg.offenders.slice(0, 3).map((o) => o.dt ? `data-dt-node="${o.dt}"` : o.path).join(", ") || "?"})` : " \u2014 overflows but clipped" : ""}`);
   for (const ev of driven || []) console.error(`drive ${ev.nodeId} ${ev.trigger ?? ""} \u2192 ${ev.ok === true ? "ok" : "ok:null"} \xB7 ${ev.detail ?? ""}`);
   console.error(behaviourLine(behaviour));
+  console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
   console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}\u2026) \xB7 ${res.pkg} ${res.version} \xB7 chromium ${identity.browser.version}`);
   if (statusRefused && runId !== void 0) {
-    const outDir = path3.resolve(path3.dirname(outBase)), verifyDir = path3.resolve(path3.dirname(statusBase));
-    const findable = outDir === verifyDir || outDir === path3.resolve(stageDirOf(statusBase, runId));
-    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path3.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
+    const outDir = path5.resolve(path5.dirname(outBase)), verifyDir = path5.resolve(path5.dirname(statusBase));
+    const findable = outDir === verifyDir || outDir === path5.resolve(stageDirOf(statusBase, runId));
+    console.error(`warning  ${outBase}.measured.json is written, but the run cache refused the probe's \`measured\` status write for run ${runId}` + (measuringRecorded ? " \u2014 the live status still says measuring, so --compare reports the run incomplete" : " (its `measuring` write was refused too) \u2014 no live status of the run exists, so --compare will report the run as unrecorded") + `. Record it, from where the run cache takes writes, with: ${scriptCmd("verify-screen")} --status ${shellArg(path5.basename(statusBase))} --phase measured --run ${runId} --dir ${shellArg(verifyDir)}` + (findable ? "" : ` \u2014 after moving ${outBase}.measured.json to ${statusBase}.measured.json (it reads the verify dir or the run's stage dir)`));
   }
   console.error(`next  ${scriptCmd("verify-screen")} --compare ${shellArg(f.expected)} ${shellArg(outBase + ".measured.json")} --out ${shellArg(outBase)}`);
   return 0;
@@ -6086,3 +6763,26 @@ export {
   resolvePlaywright,
   runProbe
 };
+/*! visual-diff.ts — colorDelta, antialiased and hasManySiblings are a port of pixelmatch v6.0.0 (index.js,
+ * https://github.com/mapbox/pixelmatch/tree/v6.0.0), under its licence:
+ *
+ * ISC License
+ *
+ * Copyright (c) 2024, Mapbox
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any purpose
+ * with or without fee is hereby granted, provided that the above copyright notice
+ * and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ * REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ * FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+ * INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+ * OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+ * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+ * THIS SOFTWARE.
+ *
+ * The colour metric is from Y. Kotsarenko and F. Ramos, "Measuring perceived color difference using YIQ NTSC
+ * transmission color space in mobile applications" (2010); the anti-aliasing detector from V. Vysniauskas,
+ * "Anti-aliased Pixel and Intensity Slope Detector" (2009).
+ */
