@@ -142,7 +142,9 @@ obviously about failure:
 | `truncated`, `skipped` | the export did not finish the tree — treat as a failed pull |
 | `assetsFailed` | a render failed and nothing replaced it |
 | `warnings` | read every line |
-| `assetsGeometry` | that many nodes took the **fallback** path: the render failed and their vector paths were inlined instead. `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
+| `assetsHidden` | hidden graphics not exported (`assetSkipped:"hidden"`). Normal, not a failure; the pull prints an info line, and the bridge reuses a visible twin's file where one matches. |
+| `hiddenNodes` | nodes hidden themselves or under a hidden ancestor, kept in the tree (only the first carry `hidden:true`). Informational. |
+| `assetsGeometry` | that many VISIBLE nodes took the **fallback** path: the render failed and their vector paths were inlined instead (any fallback warns and names them). `assetsFailed` stays 0, so the three obvious fields say "clean" while 13% of the nodes took a degraded route. Expect to hand-check those nodes. |
 | `assetsSkippedInvisible` | vector nodes with nothing visible to render. Normal, and not a failure. |
 
 **What lands depends on the pull**, so check for what your command actually produces:

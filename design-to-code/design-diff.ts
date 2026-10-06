@@ -63,11 +63,11 @@ const CATEGORY: Partial<Record<DiffCategory, string[]>> = {
   paint: ["fills", "strokes", "effects", "opacity", "blendMode", "mask", "maskType"],
   layout: ["layout", "widthMode", "heightMode", "sizeLimits", "aspectRatio", "grow", "alignSelf", "absolute", "pin", "clip", "fixedChildren", "strokesInLayout", "layoutGrids",
     "gridColumnSpan", "gridRowSpan", "gridColumnStart", "gridRowStart", "gridJustifySelf", "gridAlignSelf", "size"],
-  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "arc", "shape", "booleanOp"],
+  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],
   component: ["component", "mainComponent", "props", "propRefs", "overrides", "exposedInstances", "detachedFrom", "tableCells"],
   visibility: ["hidden"],
-  asset: ["asset", "geometry", "assetSkipped", "exportSettings"],
+  asset: ["asset", "assetFrom", "geometry", "assetSkipped", "exportSettings"],
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"],
 };

@@ -246,7 +246,7 @@ function isTextStylesDoc(x) {
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
 function isScreenAssetsDoc(x) {
-  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number") && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 function isLibrariesIndex(x) {
@@ -1252,7 +1252,13 @@ function expectNodeRow(n, ctxOrPath) {
     else spec.radiusCorners = c;
   }
   const L = n.layout;
-  if (L && typeof L === "object") {
+  if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
+    const BAKED = "inset baked into the exported asset (DT-50)";
+    const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : void 0;
+    if (g !== void 0) skip("gap", g, BAKED);
+    const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
+    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) skip("padding", pad.map((v) => typeof v === "number" ? v : 0), BAKED);
+  } else if (L && typeof L === "object") {
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : void 0;
     if (g !== void 0) {
       const dir = L.flexDirection === "column" ? "column" : "row";

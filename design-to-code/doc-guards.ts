@@ -70,7 +70,8 @@ isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array 
 // ---------------------------------------------------------------- <Screen>.assets.json (write-out.ts writeScreenAssets)
 export function isScreenAssetsDoc(x: unknown): x is ScreenAssetsDoc {
   return isObj(x)
-    && optArrayOf(x.heavy, (h): h is { file: string; bytes: number } => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number")
+    && optArrayOf(x.heavy, (h): h is { file: string; bytes: number } => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number"
+      && (h.paths === undefined || typeof h.paths === "number") && (h.embeddedRaster === undefined || typeof h.embeddedRaster === "number"))
     && optArrayOf(x.files, (f): f is { file: string } => isObj(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";

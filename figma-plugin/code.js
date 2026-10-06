@@ -15,11 +15,12 @@
   function safe(id) {
     return String(id).replace(/[^a-zA-Z0-9]/g, "_");
   }
+  var shown = (c) => !!c && typeof c === "object" && !c.hidden;
   function firstByName(node, name) {
     if (!node || typeof node !== "object") return null;
     if (node.name === name) return node;
     for (const c of node.children || []) {
-      const found = firstByName(c, name);
+      const found = shown(c) ? firstByName(c, name) : null;
       if (found) return found;
     }
     return null;
@@ -32,7 +33,7 @@
       if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
     }
     for (const c of node.children || []) {
-      const found = firstText(c);
+      const found = shown(c) ? firstText(c) : null;
       if (found) return found;
     }
     return null;
@@ -43,7 +44,7 @@
       return node.text;
     }
     for (const c of node.children || []) {
-      const found = firstNamedText(c, name);
+      const found = shown(c) ? firstNamedText(c, name) : null;
       if (found) return found;
     }
     return null;
@@ -63,8 +64,8 @@
     const n = limit || 8;
     const seen = /* @__PURE__ */ new Set();
     const out = [];
-    (function walk(node) {
-      if (!node || typeof node !== "object" || out.length >= n) return;
+    (function walk(node, isRoot) {
+      if (!node || typeof node !== "object" || node.hidden && !isRoot || out.length >= n) return;
       if (node.type === "TEXT" && typeof node.text === "string") {
         const t = node.text.trim();
         if (t && !seen.has(t)) {
@@ -74,9 +75,9 @@
       }
       for (const c of node.children || []) {
         if (out.length >= n) break;
-        walk(c);
+        walk(c, false);
       }
-    })(root);
+    })(root, true);
     return out;
   }
   function buildPageLayout(layersDoc, sep) {
@@ -499,6 +500,9 @@
     if (!("width" in node) || typeof node.width !== "number" || typeof node.height !== "number") return true;
     return node.width > 0 && node.height > 0;
   }
+  function paintsNothing(node, isVector, fills) {
+    return !hasArea(node) || isVector && !hasVisiblePaint(node, fills);
+  }
   function geometryOf(node) {
     const ds = (g) => g ? g.map((p) => p && p.data).filter((d) => typeof d === "string" && !!d) : [];
     const fills = ds("fillGeometry" in node ? node.fillGeometry : void 0);
@@ -513,7 +517,7 @@
     }
     return out;
   }
-  async function collectAsset(node) {
+  async function collectAsset(node, hidden) {
     const isVector = VECTOR_TYPES.has(node.type);
     const rawFills = "fills" in node ? node.fills : void 0;
     const fills = Array.isArray(rawFills) ? rawFills : null;
@@ -538,12 +542,20 @@
       stats.assetsSkipped++;
       return { skipped: true };
     }
+    if (hidden && (isVector || iconLike || hasImage)) {
+      if ((isVector || iconLike) && paintsNothing(node, isVector, fills)) {
+        stats.assetsSkippedInvisible++;
+        return void 0;
+      }
+      stats.assetsHidden++;
+      return { skipped: "hidden" };
+    }
     if (isVector || iconLike || hasImage) {
       checkCancelled();
       progress("assets", { nodes: stats.nodes, assets: assets.length });
     }
     if (isVector || iconLike) {
-      if (!hasArea(node) || isVector && !hasVisiblePaint(node, fills)) {
+      if (paintsNothing(node, isVector, fills)) {
         stats.assetsSkippedInvisible++;
         return void 0;
       }
@@ -557,7 +569,7 @@
       if (svg && svg.indexOf("<svg") !== -1) {
         return { path: register({ id: node.id, name: node.name, format: "svg", text: svg }) };
       }
-      const geo = geometryOf(node);
+      const geo = isVector ? geometryOf(node) : void 0;
       if (geo) {
         stats.assetsGeometry++;
         return { geometry: geo };
@@ -671,7 +683,16 @@
   var runOpts = readOptDefaults();
   var imageSizeCache = /* @__PURE__ */ new Map();
   var warnings = [];
-  var newStats = () => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+  var newStats = () => ({
+    nodes: 0,
+    assetsFailed: 0,
+    assetsSkipped: 0,
+    assetsSkippedInvisible: 0,
+    assetsGeometry: 0,
+    assetsHidden: 0,
+    hiddenNodes: 0,
+    truncated: 0
+  });
   var stats = newStats();
   function warn(msg) {
     warnings.push(msg);
@@ -2701,7 +2722,27 @@
       return void 0;
     }
   }
-  async function serialize(node, depth, parentControlsLayout) {
+  function leaf(out) {
+    delete out.layout;
+    return out;
+  }
+  function bakeTransform(out) {
+    const st = {};
+    if (out.rotation !== void 0) {
+      st.rotation = out.rotation;
+      delete out.rotation;
+    }
+    if (out.flipped) {
+      st.flipped = true;
+      delete out.flipped;
+    }
+    if (out.skew !== void 0) {
+      st.skew = out.skew;
+      delete out.skew;
+    }
+    putNonEmpty(out, "sourceTransform", st);
+  }
+  async function serialize(node, depth, parentControlsLayout, underHidden) {
     if (depth > MAX_DEPTH) {
       stats.truncated++;
       if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached \u2014 deep subtrees truncated (first: " + node.name + ")");
@@ -2710,6 +2751,8 @@
     stats.nodes++;
     const out = { type: node.type, name: node.name, id: node.id };
     if ("visible" in node && node.visible === false) out.hidden = true;
+    const hidden = !!out.hidden || !!underHidden;
+    if (hidden) stats.hiddenNodes++;
     if (node.type === "INSTANCE" && node.componentProperties) {
       const props = {};
       const propTokens = {};
@@ -2895,7 +2938,7 @@
       instanceComponentRef(node),
       boundTokens(node),
       nodeStyles(node),
-      collectAsset(node),
+      collectAsset(node, hidden),
       simplifyReactions(node),
       variableModes(node),
       runOpts.css ? nodeCss(node) : Promise.resolve(void 0)
@@ -2910,16 +2953,17 @@
     if (varModes) out.variableModes = varModes;
     if (css) out.css = css;
     if (asset && "skipped" in asset) {
-      out.assetSkipped = true;
-      return out;
+      out.assetSkipped = asset.skipped;
+      return leaf(out);
     }
     if (asset && "geometry" in asset) {
       out.geometry = asset.geometry;
-      return out;
+      return leaf(out);
     }
     if (asset) {
       out.asset = asset.path;
-      return out;
+      bakeTransform(out);
+      return leaf(out);
     }
     if (node.type === "TABLE" && typeof node.numRows === "number" && typeof node.numColumns === "number") {
       const grid = await Promise.all(
@@ -2947,7 +2991,7 @@
       const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
       const kids = [];
       for (const c of children) {
-        const s = await serialize(c, depth + 1, controlsChildren);
+        const s = await serialize(c, depth + 1, controlsChildren, hidden);
         if (s) kids.push(s);
       }
       if (kids.length) out.children = kids;
@@ -2956,15 +3000,26 @@
   }
 
   // src/collect.ts
-  async function serializeWithRefs(node) {
-    const tree = await serialize(node, 0);
+  async function serializeWithRefs(node, underHidden) {
+    const tree = await serialize(node, 0, void 0, underHidden);
     if (!tree) return { tree: null };
     const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
     if (modes) tree.resolvedModes = modes;
     return { tree, ...ifDefined("ref", ref || void 0), ...ifDefined("dev", dev || void 0) };
   }
+  function hiddenAncestor(node) {
+    for (let p = node.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent) {
+      if ("visible" in p && p.visible === false) return true;
+    }
+    return false;
+  }
   async function rootTree(node) {
-    const { tree, ref, dev } = await serializeWithRefs(node);
+    const self = "visible" in node && node.visible === false;
+    const underHidden = hiddenAncestor(node);
+    if (self || underHidden) {
+      warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") + ' \u2014 its graphics are not exported (assetSkipped:"hidden") and its reference image may be blank');
+    }
+    const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
     if (!tree) return null;
     if (ref) tree.reference = ref;
     if (dev) tree.devResources = dev;
@@ -2995,7 +3050,78 @@
       o.h = Math.round(nd.height);
     }
     if ("visible" in nd && nd.visible === false) o.hidden = true;
+    if ("children" in nd) {
+      try {
+        o.childCount = nd.children.length;
+      } catch (e) {
+      }
+    }
     return o;
+  }
+  function collisionGroups(rows) {
+    const by = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      if (typeof r.w !== "number") continue;
+      const k = JSON.stringify([r.name, r.w, r.h]);
+      const g = by.get(k);
+      if (g) g.push(r);
+      else by.set(k, [r]);
+    }
+    return Array.from(by.values()).filter((g) => g.length > 1);
+  }
+  function collisionNote(g, what, tellBy) {
+    const first2 = g[0];
+    const name = first2 ? first2.name : "";
+    const size = first2 ? first2.w + "\xD7" + first2.h : "";
+    return g.length + " " + what + " share name '" + name + "' and size " + size + " \u2014 told apart by " + tellBy + "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
+  }
+  var TITLE_VISIT_CAP = 5e3;
+  var TitleCapReached = class extends Error {
+  };
+  function titleOf(node) {
+    let visits = 0;
+    const visit = () => {
+      if (++visits > TITLE_VISIT_CAP) throw new TitleCapReached();
+    };
+    const wrap = (n) => {
+      let src;
+      const kids = [];
+      const children = {
+        [Symbol.iterator]: () => {
+          let i = 0;
+          return {
+            next: () => {
+              if (!src) src = "children" in n ? n.children : [];
+              const c = src[i];
+              if (!c) return { done: true, value: void 0 };
+              visit();
+              const w = kids[i] || (kids[i] = wrap(c));
+              i++;
+              return { done: false, value: w };
+            }
+          };
+        }
+      };
+      return {
+        name: n.name,
+        type: n.type,
+        hidden: "visible" in n && n.visible === false,
+        get text() {
+          return n.type === "TEXT" ? n.characters : "";
+        },
+        // read only when a walker hits a TEXT
+        children
+      };
+    };
+    visit();
+    const root = wrap(node);
+    try {
+      return deriveTitle(root);
+    } catch (e) {
+      if (!(e instanceof TitleCapReached)) throw e;
+    }
+    visits = 1;
+    return firstText(root) || void 0;
   }
   async function loadPageSafely(page2, sink, what) {
     if (typeof page2.loadAsync !== "function") return false;
@@ -3202,6 +3328,7 @@
           continue;
         }
         const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
+        for (const g of collisionGroups(frames)) sink("page '" + page2.name + "': " + collisionNote(g, "frames", "`childCount`"));
         frameCount += frames.length;
         entry.frames = frames;
       }
@@ -3235,13 +3362,22 @@
     }
     for (const nd of kids) {
       const c = summarize(nd);
-      if ("children" in nd) {
+      if (c.childCount !== void 0) c.hasChildren = c.childCount > 0;
+      children.push(c);
+    }
+    for (const g of collisionGroups(children)) {
+      for (const row of g) {
+        const nd = kids.find((k) => k.id === row.id);
+        if (!nd) continue;
         try {
-          c.hasChildren = nd.children.length > 0;
+          const t = titleOf(nd);
+          if (t) row.title = t;
         } catch (e) {
+          if (!(e instanceof TitleCapReached)) throw e;
+          sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
         }
       }
-      children.push(c);
+      sink(collisionNote(g, "children", "`title`/`childCount`"));
     }
     return {
       exportedAt: exportedAt(),

@@ -473,8 +473,8 @@ server.registerTool(
   "figma_list_children",
   {
     description:
-      "CHEAP listing of ONE node's DIRECT children (id/name/type/size/hasChildren) — no recursion, no " +
-      "assets. Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
+      "CHEAP listing of ONE node's DIRECT children (id/name/type/size/childCount/hasChildren) — no recursion, no " +
+      "assets. Rows that share name + size also carry a `title` (first visible text), with one warning per group. Use it to drill into a frame that figma_list_pages surfaced before committing to a full " +
       "export of it. Accepts a bare node id or a figma.com URL containing ?node-id=.",
     inputSchema: {
       ...clientShape,

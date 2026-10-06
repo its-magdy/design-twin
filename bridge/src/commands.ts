@@ -128,6 +128,10 @@ export interface NodeSummary {
   h?: number;
   hidden?: true;
   hasChildren?: boolean;
+  /** number of direct children, when they are readable */
+  childCount?: number;
+  /** first-visible-text title, only on rows that share name + size with another row of the same listing */
+  title?: string;
 }
 /** One page of a listPages reply. `frames` is present at depth 2 only, and absent on an `unreadable` page. */
 export interface PageSummary {

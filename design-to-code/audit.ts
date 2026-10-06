@@ -62,6 +62,7 @@ import type {
 } from "./types.ts";
 import { ifDefined } from "../bridge/src/json-util.ts";
 import { isMainFallback } from "../bridge/src/is-main.ts"; // import.meta.main is undefined before Node 24.2
+import { isRasterShell } from "../bridge/src/svg-normalize.ts"; // the pull warning's own rule (L-7)
 
 const SEVERITY_ORDER: Record<Severity, number> = { blocker: 0, warning: 1, info: 2 };
 
@@ -474,7 +475,9 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
     }
 
     // ---- spacing / radius
-    if (node.layout) {
+    // DT-50: an asset leaf is one exported image; the padding/gap an old export inferred for it is the inset baked into
+    // the file, not spacing to build — never tallied, never off-grid (assetSkipped true|"hidden" are leaves too).
+    if (node.layout && !isAssetLeaf && !node.assetSkipped) {
       const L = node.layout;
       const spacing: Array<[string, number, boolean]> = [];
       if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
@@ -748,9 +751,13 @@ function audit(input: AuditArg | Array<AuditArg | null | undefined> | null | und
       const nodeId = (Array.isArray(a.files) ? a.files : []).find((f) => f.file === h.file)?.node;
       if (nodeId && hiddenIds.has(nodeId)) continue; // a hidden layer's asset is not built (finding 74)
       const node = nodeId ? nodesById.get(nodeId) : undefined;
-      add("info", "heavy-asset",
-        `'${h.file}' is ${(h.bytes / 1048576).toFixed(2)} MB${h.paths ? ` / ${h.paths} <path> elements` : ""} — too heavy to inline; import it by URL, or ask the designer for a raster export. Do not redraw or simplify it`,
-        node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths) });
+      // DT-09: a raster image inside an SVG shell is not "vector paths" — say what it is and what to ask for.
+      // The bridge's rule (an <image> AND under 50 paths), so the audit and the pull agree on one file (L-7).
+      const mb = (h.bytes / 1048576).toFixed(2);
+      const msg = isRasterShell(h.embeddedRaster, h.paths)
+        ? `'${h.file}' is ${mb} MB — a raster image embedded in an SVG shell; use it as an image (<img src>/URL import) or ask the designer for a PNG/JPG export of that layer. Do not inline it`
+        : `'${h.file}' is ${mb} MB${h.paths ? ` / ${h.paths} <path> elements` : ""} — too heavy to inline; import it by URL, or ask the designer for a raster export. Do not redraw or simplify it`;
+      add("info", "heavy-asset", msg, node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths), ...ifDefined("embeddedRaster", h.embeddedRaster) });
     }
   }
 

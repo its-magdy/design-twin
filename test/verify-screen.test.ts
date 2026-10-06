@@ -89,6 +89,27 @@ console.log("verify-screen — the spec as data:");
     !("gap" in aroundRow) && aroundExp.notComparable.some((n) => n.nodeId === "3:2" && n.field === "gap"));
 }
 {
+  // DT-50 (old exports): an asset leaf carried an inferred `layout` whose padding/gap is the inset already baked into the
+  // exported file — never a spec to compare. Real shapes: asset = "assets/<name>", layout.padding = [t,r,b,l].
+  const BAKED = "inset baked into the exported asset (DT-50)";
+  const leaf = (id: string, extra: Record<string, unknown>): NodeInput => malformed<NodeInput>({ type: "FRAME", id, name: "Mark", box: { w: 24, h: 24 }, layout: { display: "flex", padding: [3.33, 3.33, 3.33, 3.33], gap: 2 }, ...extra });
+  const exp = buildExpectation([doc([
+    leaf("4:1", { asset: "assets/mark.svg" }),
+    leaf("4:2", { geometry: { fills: ["M0 0"] } }),
+    leaf("4:3", { assetSkipped: true }),
+    leaf("4:4", { assetSkipped: "hidden" }),
+    malformed<NodeInput>({ type: "FRAME", id: "4:5", name: "Plain", box: { w: 24, h: 24 }, layout: { display: "flex", padding: [4, 4, 4, 4] }, children: [{ type: "FRAME", id: "4:51", name: "a" }] }),
+  ])]);
+  for (const id of ["4:1", "4:2", "4:3", "4:4"]) {
+    const row = exp.nodes.find((r) => r.nodeId === id);
+    ok(`[DT-50] ${id}: an asset leaf's inferred padding/gap is not a spec`, !row || (row.padding === undefined && row.gap === undefined && row.paddingSkip === undefined));
+    ok(`[DT-50] ${id}: …it is a notComparable row for padding (value kept) and for gap, with the baked-inset reason`,
+      exp.notComparable.some((r) => r.nodeId === id && r.field === "padding" && r.why === BAKED && JSON.stringify(r.value) === "[3.33,3.33,3.33,3.33]")
+      && exp.notComparable.some((r) => r.nodeId === id && r.field === "gap" && r.why === BAKED && r.value === 2));
+  }
+  ok("[DT-50] a non-leaf frame keeps its padding spec", JSON.stringify(exp.nodes.find((r) => r.nodeId === "4:5")?.padding) === "[4,4,4,4]" && !exp.notComparable.some((r) => r.nodeId === "4:5"));
+}
+{
   // Hidden nodes are not rendered, so measuring them is a false failure waiting to happen. The export
   // marks them `hidden: true` — NOT `visible: false` (finding 34), and a hidden parent hides its subtree.
   const exp = buildExpectation([doc([

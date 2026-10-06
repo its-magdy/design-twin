@@ -13,7 +13,7 @@ import { locateAuditFile, auditGateStatus } from "../design-to-code/audit-gate.t
 import { check, report } from "./assert.ts";
 import { catalog as catalog1, malformed, must, node, parseAs, readFixture, screenExport } from "./fixtures.ts";
 import { isScreenExport } from "../design-to-code/export-shape.ts";
-import { isAuditReport, isComponentsCatalog } from "../design-to-code/doc-guards.ts";
+import { isAuditReport, isComponentsCatalog, isScreenAssetsDoc } from "../design-to-code/doc-guards.ts";
 import { isJsonObject } from "../design-to-code/types.ts";
 // cross-check --json: a report whose findings are the only part read here.
 const isCrossCheckOut = (x: unknown): x is { findings: CrossCheckFinding[] } => isJsonObject(x) && Array.isArray(x.findings);
@@ -507,6 +507,39 @@ const g4 = (nodes: Parameters<typeof screenExport>[0], screenName = "Items"): Au
   const nav = codes(res, "prototype-navigation");
   check("[DT-14(5)] prototype links: one info per destination, counted", nav.length === 2 && nav.some((f) => f.destination === "Item Details" && f.sources === 2) && nav.some((f) => f.destination === "Add Item" && f.navigation === "overlay"));
   check("[DT-14(5)] a hover variant swap (change_to) is not a link", !nav.some((f) => f.destination === "state=hover"));
+}
+
+// ---- DT-50 (old exports) / DT-09: asset-leaf spacing is the inset baked into the file; a raster in an SVG shell
+{
+  const pad = (v: number): { display: "flex"; padding: number[]; gap: number } => ({ display: "flex", padding: [v, v, v, v], gap: 5 });
+  const res = audit(g4([{ id: "5:1", type: "FRAME", name: "Items", layout: { display: "flex", padding: [13, 13, 13, 13] }, children: [
+    { id: "5:2", type: "VECTOR", name: "mark", asset: "assets/mark.svg", layout: pad(3.33) },
+    { id: "5:3", type: "VECTOR", name: "mark two", geometry: { fills: ["M0 0"] }, layout: pad(1.25) },
+    { id: "5:4", type: "VECTOR", name: "mark three", assetSkipped: "hidden", layout: pad(0.09375) },
+    { id: "5:5", type: "VECTOR", name: "mark four", assetSkipped: true, layout: pad(5.0001) },
+  ] }]), { platform: "web" });
+  const og = codes(res, "off-grid-spacing");
+  check("[DT-50] off-grid inferred padding/gap on asset leaves (asset, geometry, assetSkipped true and \"hidden\") is not reported", !og.some((f) => ["5:2", "5:3", "5:4", "5:5"].includes(String(f.nodeId))));
+  check("[DT-50] …while a real frame's off-grid padding still is", og.some((f) => f.nodeId === "5:1" && /paddingTop=13/.test(f.message)));
+  const tally = (r: typeof res) => JSON.stringify(r.tokenBinding.spacing);
+  const plain = audit(g4([{ id: "5:1", type: "FRAME", name: "Items", layout: { display: "flex", padding: [13, 13, 13, 13] }, children: [] }]), { platform: "web" });
+  check("[DT-50] …and the spacing tally counts only the real frame (the asset leaves add nothing)", tally(res) === tally(plain));
+
+  check("[DT-09] the .assets.json guard accepts heavy[].embeddedRaster and extra files[] fields, and rejects a non-number embeddedRaster",
+    isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9, paths: 2, embeddedRaster: 1 }], files: [{ file: "assets/a.svg", node: "1:1", owner: "x", reuseKey: "k" }] })
+    && isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9 }] })
+    && !isScreenAssetsDoc({ heavy: [{ file: "assets/a.svg", bytes: 9, embeddedRaster: "1" }] }));
+  const mk = (h: { file: string; bytes: number; paths?: number; embeddedRaster?: number }) => audit({ ...g4([{ id: "5:6", type: "FRAME", name: "Avatar", asset: h.file }]), assets: { heavy: [h], files: [{ file: h.file, node: "5:6" }] } }, { platform: "web" });
+  const raster = codes(mk({ file: "assets/avatar-raster.svg", bytes: 1980000, paths: 2, embeddedRaster: 1 }), "heavy-asset");
+  check("[DT-09] a heavy row with embeddedRaster uses the raster wording, not 'too heavy to inline'",
+    raster.length === 1 && /1\.89 MB — a raster image embedded in an SVG shell; use it as an image/.test(raster[0]?.message ?? "") && /PNG\/JPG export/.test(raster[0]?.message ?? "") && !/<path>|too heavy/.test(raster[0]?.message ?? "") && raster[0]?.embeddedRaster === 1);
+  const paths = codes(mk({ file: "assets/big.svg", bytes: 2465864, paths: 1523 }), "heavy-asset");
+  // L-7: the pull's rule — an <image> in an illustration of 2000 paths is still "too many paths", not a shell.
+  // pre-fix: the raster wording (the audit read embeddedRaster alone).
+  const busy = codes(mk({ file: "assets/illustration.svg", bytes: 2400000, paths: 2000, embeddedRaster: 1 }), "heavy-asset");
+  check("[L-7] embeddedRaster with 2000 paths keeps the paths wording (the bridge's raster-shell rule: under 50 paths)",
+    busy.length === 1 && /2\.29 MB \/ 2000 <path> elements — too heavy to inline/.test(busy[0]?.message ?? "") && !/SVG shell/.test(busy[0]?.message ?? "") && busy[0]?.embeddedRaster === 1);
+  check("[DT-09] without embeddedRaster the paths wording stays (default)", paths.length === 1 && /2\.35 MB \/ 1523 <path> elements — too heavy to inline/.test(paths[0]?.message ?? "") && paths[0]?.embeddedRaster === undefined);
 }
 
 // ---- DT-80 / DT-11: state coverage reads every catalog, and says so when it cannot run

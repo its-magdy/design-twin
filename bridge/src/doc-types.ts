@@ -516,7 +516,12 @@ export interface IrNode extends Partial<TextFields> {
 
   // assets (asset nodes are LEAVES — no children)
   asset?: string;
-  assetSkipped?: true;
+  /** `true` = skipped via --no-assets; `"hidden"` = a graphic that is hidden (itself or an ancestor) — never exported */
+  assetSkipped?: true | "hidden";
+  /** a hidden node whose `asset` is a visible twin's file (set by the bridge): the twin's node id */
+  assetFrom?: string;
+  /** on an `asset` leaf only: the rotation/flip/skew Figma already drew into the file — never apply it again */
+  sourceTransform?: { rotation?: number; flipped?: true; skew?: number };
   geometry?: Geometry;
   tableCells?: TableCell[][];
 
@@ -541,6 +546,10 @@ export interface Manifest {
   assetsSkippedInvisible: number;
   /** real export failures RECOVERED as inline path geometry (assets.ts geometryOf) */
   assetsGeometry: number;
+  /** hidden graphics (the node or an ancestor hidden) not exported — `assetSkipped:"hidden"`; absent on older exports */
+  assetsHidden?: number;
+  /** nodes kept as hidden (the node or an ancestor hidden); absent on older exports */
+  hiddenNodes?: number;
   /** which opt-in reads ran */
   reads?: string[];
   warnings: string[];

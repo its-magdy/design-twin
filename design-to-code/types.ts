@@ -199,7 +199,7 @@ export interface FindingExtras {
   /** component-states-unchecked: the controls no catalog defines */
   controls?: string[];
   /** heavy-asset (the row of <Screen>.assets.json `heavy`) */
-  file?: string; bytes?: number; paths?: number;
+  file?: string; bytes?: number; paths?: number; embeddedRaster?: number;
   /** prototype-navigation: where the prototype goes, and from how many visible layers */
   destination?: string; destinationId?: string; navigation?: string; sources?: number;
   /** state-in-sibling: the undrawn state, and the same-page frames whose copy reads like it */
@@ -314,7 +314,7 @@ export type ScreenStateValue = "designed" | "not-found" | "not-applicable";
 export type AuditScreenStates = Record<ScreenStateKey, ScreenStateValue> & { validation?: ScreenStateValue };
 /** The two fields of <Screen>.assets.json (bridge/src/write-out.ts writeScreenAssets) the audit reads. */
 export interface ScreenAssetsDoc {
-  heavy?: Array<{ file: string; bytes: number; paths?: number }>;
+  heavy?: Array<{ file: string; bytes: number; paths?: number; embeddedRaster?: number }>;
   files?: Array<{ file: string; node?: string }>;
 }
 /** audit.js audit() — also what --out writes to <out>.json. */

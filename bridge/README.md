@@ -275,7 +275,9 @@ URL — the same lenient parsing `--children`/`--screenshot` use.
 
 Don't confuse it with its two neighbors:
 - `--children <id>` peeks at one node's **direct children only** — no recursion, no assets, for
-  deciding whether to pull further.
+  deciding whether to pull further. Each row has `childCount`; rows sharing name + size also get a
+  `title` (the first visible text), and the listing warns once per such group ("N children share name
+  … and size … — told apart by `title`/`childCount`").
 - `--screenshot <id>` renders a **PNG only** — skips `serialize()` and the asset walk entirely, for
   visual validation after you've already generated code.
 - `--node <id>` is the one that actually **exports** — real node tree + real assets, just scoped
@@ -292,12 +294,27 @@ which pull produced a file:
 design/export/pages/<Page>/<Name>__<node-id>.json        the screen tree
 design/export/pages/<Page>/<Name>__<node-id>.vars.json   exactly the variables THIS screen binds
 design/export/pages/<Page>/<Name>__<node-id>.assets.json its assets, with content hashes,
-                                                         plus duplicates / monochrome / heavy
+                                                         plus duplicates / monochrome / heavy; rows carry
+                                                         name / owner / context / usedBy (search those,
+                                                         not file names)
 design/export/pages/<Page>/index.json                    merged, one row per screen pulled
 design/export/pages/index.json                           merged, one row per page
 design/export/variables.json                             the UNION of every screen's slice
 design/export/assets/                                    shared, deduped by content
 ```
+
+A pull prints these asset lines: `warn  N node(s) fell back to raw geometry …` (any fallback, naming the
+nodes), `warn  … too heavy to inline` (or "a raster image embedded in an SVG shell" when it is one), and
+`info  N hidden graphic(s) not exported (assetSkipped:"hidden"); M reuse a visible twin's file` and
+`info  N node(s) hidden (themselves or under a hidden ancestor) kept in the tree (conditional UI)` (only
+the ones hidden themselves carry `hidden:true`). A root that is hidden itself or under a
+hidden ancestor is exported with a warning (its graphics are not rendered, its reference may be blank).
+A file a hidden node reuses from another screen is listed in this screen's `.assets.json` with
+`reusedFrom`.
+`duplicates` is found by a tolerant compare (def ids and numbers within ±0.01 ignored — except an
+embedded image's scale/offset/tile, the numbers of a transform on `<use>`/`<image>` and of a `<pattern>`'s
+x/y/width/height, compared relatively, within 1 %), so the same artwork re-exported under another name
+is one file.
 
 Three consequences worth knowing:
 
@@ -724,5 +741,17 @@ Pre-approve tools in `.claude/settings.json`:
 - Image assets travel as base64 (not JSON int-arrays) — ~3.5–4x smaller on the wire.
 - v1 sends each response as a single WebSocket frame. If you hit very large pages, add chunking
   (see ARCHITECTURE.md "chunk large payloads").
+- Hidden-graphic reuse (`assetFrom`) compares the node's own rotation/flip and box only, not an
+  ancestor's, and not which slot of its parent the icon sits in (two icons of one component in one
+  parent variant count as one, even if that variant colours them differently); across screens it depends on pull order (a screen pulled before its twin's screen keeps
+  `assetSkipped:"hidden"`, and re-pulling it later changes its JSON with nothing changed in Figma), and
+  each `.assets.json` row offers one `reuseKey`. With an old plugin still loaded, the geometry warning
+  may name hidden nodes — re-run the plugin.
+- A cross-screen twin comes from any screen JSON on disk, however old: a screen pulled before its icon
+  component was redrawn hands its old file to a hidden node of a screen pulled today (the IR carries no
+  component version to check). Re-pull every screen in a sync.
+- `list children` titles a colliding row from its "Page Title" slot; when that search runs past its node
+  cap (a very large frame), the row's `title` falls back to the first text — which can differ from the
+  title the pages index gives the same screen after a pull.
 - Write ops are a deliberately small, explicit set — extend `applyWrite()` in
   `../figma-plugin/src/writes.ts` (rebuild `code.js`) and add a matching `registerTool` here as needed.
