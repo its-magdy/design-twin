@@ -278,4 +278,36 @@ ok("[shape] a pages/index.json whose pageDirs is a string resolves nothing (was:
   return r.status === "not-found" && r.candidates.length === 0;
 })());
 
+// ---------- [F-53] hidden nodes (and their subtrees) are invisible to the text walkers ----------
+const txt = (text: string, extra: Record<string, unknown> = {}) => ({ type: "TEXT", name: "t", text, ...extra });
+const hiddenTree = {
+  type: "FRAME", name: "Screen",
+  children: [
+    txt("Ghost label", { hidden: true }),
+    { type: "FRAME", name: "Ghost panel", hidden: true, children: [txt("Ghost inside"), { type: "FRAME", name: "Page Title", children: [txt("Ghost title")] }] },
+    txt("Visible label"),
+  ],
+};
+ok("[F-53] hidden TEXT and hidden FRAME's TEXT are excluded from texts; the visible sibling stays",
+  JSON.stringify(collectTexts(hiddenTree)) === JSON.stringify(["Visible label"]));
+ok("[F-53] title skips hidden TEXT, hidden subtree and a hidden 'Page Title' slot",
+  deriveTitle(hiddenTree) === "Visible label");
+ok("[F-53] hidden:false behaves like absent",
+  JSON.stringify(collectTexts({ type: "FRAME", name: "S", children: [txt("A", { hidden: false }), txt("B")] })) === JSON.stringify(["A", "B"]));
+ok("[F-53] DEFAULT (hidden absent) still collects every text and derives the first as title", (() => {
+  const tree = { type: "FRAME", name: "S", children: [{ type: "FRAME", name: "Box", children: [txt("A")] }, txt("B")] };
+  return JSON.stringify(collectTexts(tree)) === JSON.stringify(["A", "B"]) && deriveTitle(tree) === "A";
+})());
+
+// ---------- [M-4] a HIDDEN ROOT keeps its title and texts — only hidden DESCENDANTS are skipped ----------
+// (a hidden top-level frame in a page walk, a hidden frame pulled by id, a hidden listChildren row)
+const hiddenRoot = { ...hiddenTree, hidden: true };
+// pre-fix: title undefined and texts [] — the walkers returned early on the root's own flag.
+ok("[M-4] a hidden root's texts are its visible descendants' (the hidden ones still skipped)",
+  JSON.stringify(collectTexts(hiddenRoot)) === JSON.stringify(["Visible label"]));
+ok("[M-4] a hidden root still gets its title", deriveTitle(hiddenRoot) === "Visible label");
+ok("[M-4] the 'Page Title' slot inside a hidden root is found",
+  deriveTitle({ type: "FRAME", name: "Popup", hidden: true, children: [txt("Close"), { type: "FRAME", name: "Page Title", children: [txt("Edit profile", { name: "Title" })] }] }) === "Edit profile");
+ok("[M-4] a hidden TEXT root is its own text", deriveTitle(txt("Lonely", { hidden: true })) === "Lonely" && JSON.stringify(collectTexts(txt("Lonely", { hidden: true }))) === JSON.stringify(["Lonely"]));
+
 report();

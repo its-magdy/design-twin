@@ -35,9 +35,9 @@ layer binds; cross-file warnings carry a `confirm` question (also in `questions[
 | `detached-instance` | warning | `detachedFrom` | |
 | `self-inconsistent-geometry` | warning | padding + the FLOW children's heights (hidden and `absolute` children excluded) contradict `box.h`: content overflows a fixed/fill box, or differs either way from a hug box | compare with the screenshot |
 | `low-token-binding` | warning | a category with ≥5 values under 50% bound | |
-| `off-grid-spacing` | info | unbound gap/padding not a multiple of `--grid` or non-integer | 34pt bottom padding is often a safe-area value — fine |
+| `off-grid-spacing` | info | unbound gap/padding not a multiple of `--grid` or non-integer (never on an icon/asset leaf — its inset is in the file) | 34pt bottom padding is often a safe-area value — fine |
 | `near-duplicate-colors` | info | unbound opaque hexes with CIE76 ΔE < 3 | |
-| `heavy-asset` | info | an entry of the screen's `<Screen>.assets.json` `heavy` list (≥ 250 KB or ≥ 400 `<path>`s) on a visible layer | import by URL / ask for a raster; never redraw |
+| `heavy-asset` | info | an entry of the screen's `<Screen>.assets.json` `heavy` list (≥ 250 KB or ≥ 400 `<path>`s) on a visible layer | import by URL / ask for a raster; never redraw (`embeddedRaster` with under 50 `<path>`s: a raster embedded in an SVG shell — use it as an image) |
 | `state-in-sibling` | info | a loading/empty/error state not drawn in the audited frame, but a RELATED frame on the same page (same name or on-screen title, or state copy naming the screen) has copy that reads like it — read from that frame's own export | audit both together; the state stays "not found" until confirmed |
 | `unexported-frames` | info | `assets/<id>_ref.png` / `_shot@Nx.png` files with no row in `pages/index.json` — screenshotted, never exported | look at the PNG; extract any that is a state of this screen |
 | `prototype-navigation` | info | one per destination: visible layers whose prototype `reactions` navigate / open an overlay / swap to another frame (variant `change_to` excluded) | a link copied along with a layer looks the same as a designed one |

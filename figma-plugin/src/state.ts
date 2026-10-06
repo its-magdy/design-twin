@@ -22,6 +22,11 @@ export interface RunStats {
   assetsSkippedInvisible: number;
   /** Real export failures that were RECOVERED as inline path geometry (see assets.ts geometryOf). */
   assetsGeometry: number;
+  /** Graphics that are hidden (the node or an ancestor `visible:false`) — never sent to exportAsync,
+   *  which returns no SVG for them; the node stays a leaf with `assetSkipped: "hidden"`. */
+  assetsHidden: number;
+  /** Nodes kept as hidden: `visible:false` themselves or anywhere under a hidden ancestor. */
+  hiddenNodes: number;
   truncated: number;
 }
 
@@ -43,7 +48,8 @@ export const imageSizeCache = new Map<string, Promise<{ w: number; h: number } |
 export let warnings: string[] = [];
 // ONE spelling of the zeroed counters — resetRun() uses the same factory, so adding a counter to
 // RunStats is one edit the compiler checks, not two literals that can silently drift apart.
-const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0, truncated: 0 });
+const newStats = (): RunStats => ({ nodes: 0, assetsFailed: 0, assetsSkipped: 0, assetsSkippedInvisible: 0, assetsGeometry: 0,
+  assetsHidden: 0, hiddenNodes: 0, truncated: 0 });
 export let stats: RunStats = newStats();
 
 export function warn(msg: string): void {

@@ -448,7 +448,15 @@ function expectNodeRow(n: IrNode, ctxOrPath?: string | ExpectContext | null): { 
   }
 
   const L: LegacyLayout | undefined = n.layout;
-  if (L && typeof L === "object") {
+  // DT-50: an asset/geometry/assetSkipped leaf is one exported image — whatever padding/gap an OLD export inferred for it is
+  // the inset already baked into the file (new exports carry no `layout` on such a leaf). Never compared.
+  if (L && typeof L === "object" && (n.asset || n.geometry || n.assetSkipped)) {
+    const BAKED = "inset baked into the exported asset (DT-50)";
+    const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
+    if (g !== undefined) skip("gap", g, BAKED);
+    const pad = Array.isArray(L.padding) ? L.padding.slice(0, 4) : PAD_KEYS.some((k) => typeof L[k] === "number") ? PAD_KEYS.map((k) => L[k]) : null;
+    if (pad && pad.some((v) => typeof v === "number" && v !== 0)) skip("padding", pad.map((v) => (typeof v === "number" ? v : 0)), BAKED);
+  } else if (L && typeof L === "object") {
     const g = typeof L.gap === "number" ? L.gap : typeof L.itemSpacing === "number" ? L.itemSpacing : undefined;
     if (g !== undefined) {
       // A stored gap is only a GAP when it separates laid-out children. Three shapes where it is not

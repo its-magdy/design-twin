@@ -109,6 +109,7 @@ interface DesignSystemResult extends DesignSystemReply { designSystem: DesignSys
  *  never emitted — an index is not an export (the [LIST]/[CHILDREN] checks assert exactly that). */
 interface NodeSummary {
   name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
+  childCount?: number; title?: string;
   children?: undefined; fills?: undefined; layout?: undefined; tokens?: undefined;
 }
 interface ListPagesResult {
@@ -135,6 +136,7 @@ interface CollectOpts extends Partial<Record<ReadOptName, boolean>> { allPages?:
 interface DesignExportApi {
   serialize(node: FakeNode, depth: number, parentControlsLayout?: boolean): Promise<IrNode>;
   collectSelection(opts?: CollectOpts): Promise<SelectionResult>;
+  collectNode(rawId: string, opts?: CollectOpts): Promise<SelectionResult>;
   collectFull(opts?: CollectOpts): Promise<FullResult>;
   collectDesignSystemOnly(opts?: CollectOpts): Promise<DesignSystemResult>;
   collectLibraryFile(opts?: CollectOpts & { asLibrary?: string }): Promise<DesignSystemResult>;
@@ -372,7 +374,7 @@ Object.assign(context, context.__designExport || {});
 // Narrowed by a runtime check — every API member present as a function, `figma` the fake passed in —
 // so a bundle that stopped exporting a method fails here by name, not as a TypeError at first use.
 const API_MEMBERS: Record<keyof DesignExportApi, true> = {
-  serialize: true, collectSelection: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
+  serialize: true, collectSelection: true, collectNode: true, collectFull: true, collectDesignSystemOnly: true, collectLibraryFile: true,
   buildDesignSystem: true, listPages: true, listChildren: true, listLibraries: true, collectLibraryComponents: true,
   applyWrites: true, serializeRun: true, requestCancel: true,
 };
@@ -2584,6 +2586,241 @@ const sandbox: Sandbox = context;
 
     sandbox.figma.root.children = prevKids;
     sandbox.figma.ui.postMessage = prevPost;
+  }
+
+  // ---------- [G13] hidden graphics, icon containers, asset-leaf layout/transform, same-name children ----------
+  // Group 13 (DT-10, DT-50, DT-72, DT-53, DT-04/F-03). Every hidden graphic used to be sent to
+  // exportAsync, come back with no `<svg`, and land as `geometry` — for an icon CONTAINER that was its
+  // own background square. Real shapes: `assetSkipped` a string/true, `geometry` {fills,strokes,w,h}.
+  {
+    const solid = [{ type: "SOLID", visible: true, color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
+    const square = [{ data: "M0 0L16 0L16 16L0 16L0 0Z", windingRule: "NONZERO" }];
+    let g13Exports = 0;
+    const spySvg = async () => { g13Exports++; return "<svg width=\"16\" height=\"16\"><path d=\"M1 1h14\"/></svg>"; };
+    const png = async () => new Uint8Array([137, 80, 78, 71]); // the root's reference PNG — not a per-node asset
+    const prevSelG = sandbox.figma.currentPage.selection;
+    const hiddenScreen = () => ({
+      type: "FRAME", name: "Screen", visible: true, id: "g13:1", width: 400, height: 300, layoutMode: "NONE", exportAsync: png,
+      children: [
+        { type: "FRAME", name: "Panel", visible: false, id: "g13:2", width: 200, height: 100, layoutMode: "NONE",
+          children: [
+            { type: "INSTANCE", name: "icon/x", visible: true, id: "g13:3", width: 16, height: 16, findOne: () => null,
+              getMainComponentAsync: async () => null, fills: solid, fillGeometry: square, exportAsync: spySvg,
+              children: [{ type: "VECTOR", name: "path", visible: true, id: "g13:4", width: 16, height: 16, fills: solid, fillGeometry: square, exportAsync: spySvg }] },
+          ] },
+        { type: "FRAME", name: "Btn", visible: true, id: "g13:5", width: 80, height: 32, layoutMode: "NONE",
+          children: [{ type: "VECTOR", name: "Glyph", visible: false, id: "g13:6", width: 12, height: 12, fills: solid, fillGeometry: square, exportAsync: spySvg }] },
+      ],
+    });
+    sandbox.figma.currentPage.selection = [hiddenScreen()];
+    const hRun = await sandbox.collectSelection({ css: false });
+    const hRoot = must(hRun.screen.nodes[0], "[G13] hidden screen root");
+    const hPanel = hRoot.children?.[0];
+    const hIcon = hPanel?.children?.[0];
+    const hGlyph = hRoot.children?.[1]?.children?.[0];
+    // pre-change: fails — the icon came back as `geometry` (the square), assetSkipped undefined.
+    ok("[G13-hidden] an icon INSTANCE under a hidden FRAME is a leaf with assetSkipped:\"hidden\" (no geometry, no asset, no children)",
+      hIcon?.assetSkipped === "hidden" && hIcon.geometry === undefined && hIcon.asset === undefined && hIcon.children === undefined);
+    // pre-change: fails — the Glyph came back as `geometry`.
+    ok("[G13-hidden] a VECTOR that is itself visible:false is the same leaf, and keeps hidden:true",
+      hGlyph?.assetSkipped === "hidden" && hGlyph.geometry === undefined && hGlyph.asset === undefined && hGlyph.hidden === true);
+    ok("[G13-hidden] the hidden Panel itself stays a container (only graphics become leaves)", hPanel?.hidden === true && hPanel.assetSkipped === undefined && hPanel.children?.length === 1);
+    // pre-change: fails — exportAsync was called for both (2).
+    ok("[G13-hidden] exportAsync is never called for a hidden graphic", g13Exports === 0);
+    const hm = hRun.screen.manifest;
+    // pre-change: fails — assetsHidden absent, assetsGeometry 2.
+    ok("[G13-hidden] manifest: assetsHidden === 2, assetsGeometry === 0, assetsFailed === 0",
+      hm.assetsHidden === 2 && hm.assetsGeometry === 0 && hm.assetsFailed === 0);
+    // Panel (self) + icon/x (under Panel) + Glyph (self); the icon's own child is never serialized.
+    ok("[G13-hidden] manifest.hiddenNodes counts the hidden node AND what is under it (3)", hm.hiddenNodes === 3);
+    ok("[G13-hidden] no asset files are produced for hidden graphics (only the root reference)",
+      hRun.assets.length === 1 && hRun.assets[0]?.kind === "reference");
+
+    // [G13-noassets-wins] --no-assets keeps its own marker even for a hidden graphic.
+    g13Exports = 0;
+    sandbox.figma.currentPage.selection = [hiddenScreen()];
+    const naRun = await sandbox.collectSelection({ css: false, skipAssets: true });
+    const naRoot = must(naRun.screen.nodes[0], "[G13] no-assets root");
+    ok("[G13-noassets-wins] skipAssets + hidden -> assetSkipped === true on both graphics",
+      naRoot.children?.[0]?.children?.[0]?.assetSkipped === true && naRoot.children?.[1]?.children?.[0]?.assetSkipped === true);
+    ok("[G13-noassets-wins] counted as assetsSkipped (2), not assetsHidden (0), no export",
+      naRun.screen.manifest.assetsSkipped === 2 && naRun.screen.manifest.assetsHidden === 0 && g13Exports === 0);
+
+    // [G13-hidden-root] a frame pulled BY ID out of a hidden panel: its ancestor chain is hidden, so
+    // its graphics are too, though serialize() never sees the panel.
+    g13Exports = 0;
+    const g13Page: FakeNode = { type: "PAGE", name: "Page G13", id: "g13p:0" };
+    const hiddenParent: FakeNode = { type: "FRAME", name: "Drawer", visible: false, id: "g13p:1", parent: g13Page };
+    const card: FakeNode = { type: "FRAME", name: "Card", visible: true, id: "g13p:2", width: 100, height: 60, layoutMode: "NONE",
+      parent: hiddenParent, exportAsync: png,
+      children: [{ type: "VECTOR", name: "Mark", visible: true, id: "g13p:3", width: 12, height: 12, fills: solid, fillGeometry: square, exportAsync: spySvg }] };
+    const prevGetNodeG = sandbox.figma.getNodeByIdAsync;
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13p:2" ? card : null);
+    const rootRun = await sandbox.collectNode("g13p:2", { css: false });
+    const rootTree = must(rootRun.screen.nodes[0], "[G13] hidden-root tree");
+    // pre-change: fails — Mark exported (asset path), spy called once.
+    ok("[G13-hidden-root] collectNode on a frame whose PARENT is hidden: its vector is assetSkipped:\"hidden\", never exported",
+      rootTree.children?.[0]?.assetSkipped === "hidden" && rootTree.children[0].asset === undefined && g13Exports === 0);
+    ok("[G13-hidden-root] the root keeps no hidden flag of its own (it is not visible:false), hiddenNodes counts root + child",
+      rootTree.hidden === undefined && rootRun.screen.manifest.hiddenNodes === 2 && rootRun.screen.manifest.assetsHidden === 1);
+    // The same frame under a VISIBLE parent exports normally — the walk is what decides.
+    hiddenParent.visible = true;
+    const visRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-hidden-root] …and under a visible parent the same vector exports (asset path, hiddenNodes 0)",
+      typeof visRun.screen.nodes[0]?.children?.[0]?.asset === "string" && visRun.screen.manifest.hiddenNodes === 0 && g13Exports === 1);
+    // [G13-fix1 M-4] a root hidden by an ancestor, or hidden itself, is exported WITH a warning.
+    // pre-fix: no warning in either case.
+    const hiddenRootNote = (w: string[]) => w.filter((m) => /^'Card' \(g13p:2\) is hidden /.test(m));
+    hiddenParent.visible = false;
+    const ancRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a root under a hidden ancestor warns once: hidden under a hidden ancestor, graphics not exported, reference may be blank",
+      hiddenRootNote(ancRun.screen.manifest.warnings).length === 1 && /is hidden under a hidden ancestor — its graphics are not exported \(assetSkipped:"hidden"\) and its reference image may be blank$/.test(hiddenRootNote(ancRun.screen.manifest.warnings)[0] ?? ""));
+    hiddenParent.visible = true;
+    card.visible = false;
+    const selfRun = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a root that is hidden itself warns too (\"hidden itself\"), and keeps hidden:true",
+      hiddenRootNote(selfRun.screen.manifest.warnings).some((m) => /is hidden itself —/.test(m)) && selfRun.screen.nodes[0]?.hidden === true);
+    card.visible = true;
+    const visRun2 = await sandbox.collectNode("g13p:2", { css: false });
+    ok("[G13-fix1 M-4] a visible root under visible parents: no such warning (the default)", hiddenRootNote(visRun2.screen.manifest.warnings).length === 0);
+    sandbox.figma.getNodeByIdAsync = prevGetNodeG;
+
+    // [G13-fix1 L-11] a hidden layer that paints nothing (no visible paint, or no area) stays what it was
+    // before group 13: assetsSkippedInvisible, no marker — and a zero-area icon container still recurses.
+    // pre-fix: both became assetSkipped:"hidden" leaves and were counted assetsHidden (3).
+    const ghost = { type: "VECTOR", name: "Ghost", visible: false, id: "g13i:1", width: 12, height: 12, fills: [{ type: "SOLID", visible: false, color: { r: 0, g: 0, b: 0 } }], strokes: [], exportAsync: spySvg };
+    const flat = { type: "INSTANCE", name: "icon/flat", visible: false, id: "g13i:2", width: 0, height: 16, findOne: () => null,
+      getMainComponentAsync: async () => null, exportAsync: spySvg,
+      children: [{ type: "VECTOR", name: "inner", visible: true, id: "g13i:3", width: 8, height: 8, fills: solid, exportAsync: spySvg }] };
+    g13Exports = 0;
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Inv", visible: true, id: "g13i:0", width: 50, height: 50, layoutMode: "NONE", exportAsync: png, children: [ghost, flat] }];
+    const iRun = await sandbox.collectSelection({ css: false });
+    const [iGhost, iFlat] = [iRun.screen.nodes[0]?.children?.[0], iRun.screen.nodes[0]?.children?.[1]];
+    ok("[G13-fix1 L-11] a hidden VECTOR with no visible paint carries no assetSkipped (and no asset/geometry)",
+      !!iGhost && iGhost.assetSkipped === undefined && iGhost.asset === undefined && iGhost.geometry === undefined && iGhost.hidden === true);
+    ok("[G13-fix1 L-11] a hidden zero-area icon container still recurses: its painting child is the assetSkipped:\"hidden\" leaf",
+      !!iFlat && iFlat.assetSkipped === undefined && iFlat.children?.length === 1 && iFlat.children[0]?.assetSkipped === "hidden");
+    ok("[G13-fix1 L-11] counts: assetsSkippedInvisible 2, assetsHidden 1, no export",
+      iRun.screen.manifest.assetsSkippedInvisible === 2 && iRun.screen.manifest.assetsHidden === 1 && g13Exports === 0);
+    sandbox.figma.currentPage.selection = prevSelG;
+
+    // [G13-container] a VISIBLE icon container whose export fails: its fillGeometry is the frame's own
+    // background rect, which must never stand in for the icon.
+    const brokenIcon = { type: "INSTANCE", name: "icon/broken", visible: true, id: "g13c:1", width: 16, height: 16, findOne: () => null,
+      getMainComponentAsync: async () => null, fills: solid, fillGeometry: square, exportAsync: async () => "" };
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Host", visible: true, id: "g13c:0", width: 50, height: 50, layoutMode: "NONE",
+      exportAsync: png, children: [brokenIcon] }];
+    const cRun = await sandbox.collectSelection({ css: false });
+    const cNode = cRun.screen.nodes[0]?.children?.[0];
+    // pre-change: fails — geometry {fills:["M0 0L16 0…"]}, assetsGeometry 1, assetsFailed 0.
+    ok("[G13-container] a failed icon CONTAINER gets no geometry (never its background rect)", !!cNode && cNode.geometry === undefined && cNode.asset === undefined);
+    ok("[G13-container] it is a real failure: assetsFailed === 1, assetsGeometry === 0",
+      cRun.screen.manifest.assetsFailed === 1 && cRun.screen.manifest.assetsGeometry === 0);
+    ok("[G13-container] and the grouped warning names it",
+      cRun.screen.manifest.warnings.some((w) => /asset export failed/.test(w) && /icon\/broken \(g13c:1\)/.test(w)));
+
+    // [G13-layout] an asset leaf ships as ONE picture; its own layout (inferred padding, or a real
+    // auto-layout icon's padding + gap) is an inset baked into the file.
+    const padVec = { type: "VECTOR", name: "inset-vec", visible: true, id: "g13l:1", width: 20, height: 20, fills: solid, exportAsync: spySvg,
+      inferredAutoLayout: { layoutMode: "HORIZONTAL", paddingTop: 2, paddingRight: 2, paddingBottom: 2, paddingLeft: 2, itemSpacing: 0 },
+      layoutAlign: "STRETCH", layoutSizingHorizontal: "FILL" };
+    const flexIcon = { type: "INSTANCE", name: "icon/flex", visible: true, id: "g13l:2", width: 24, height: 24, findOne: () => null,
+      getMainComponentAsync: async () => null, exportAsync: spySvg, layoutMode: "HORIZONTAL", itemSpacing: 4,
+      paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, layoutSizingHorizontal: "HUG",
+      children: [{ type: "VECTOR", name: "a", visible: true, id: "g13l:3", width: 8, height: 8, fills: solid, exportAsync: spySvg }] };
+    const plainFrame = { type: "FRAME", name: "Row", visible: true, id: "g13l:4", width: 100, height: 24, layoutMode: "HORIZONTAL", itemSpacing: 8,
+      paddingTop: 4, paddingRight: 4, paddingBottom: 4, paddingLeft: 4, children: [] };
+    sandbox.figma.currentPage.selection = [{ type: "FRAME", name: "Bar", visible: true, id: "g13l:0", width: 200, height: 40, exportAsync: png,
+      layoutMode: "HORIZONTAL", itemSpacing: 0, paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0, children: [padVec, flexIcon, plainFrame] }];
+    const lRun = await sandbox.collectSelection({ css: false });
+    const lKids = lRun.screen.nodes[0]?.children || [];
+    const [lVec, lIcon, lRow] = [lKids[0], lKids[1], lKids[2]];
+    // pre-change: fails — layout {display:"flex",…,padding:[2,2,2,2],inferred:true}.
+    ok("[G13-layout] a VECTOR asset leaf with inferred padding carries no `layout`; its role in the parent stays (widthMode, alignSelf)",
+      typeof lVec?.asset === "string" && lVec.layout === undefined && lVec.widthMode === "fill" && lVec.alignSelf === "stretch");
+    // pre-change: fails — layout {display:"flex",flexDirection:"row",gap:4}.
+    ok("[G13-layout] an auto-layout icon INSTANCE asset (gap, no padding) carries no `layout` either; widthMode kept",
+      typeof lIcon?.asset === "string" && lIcon.layout === undefined && lIcon.widthMode === "hug");
+    ok("[G13-layout] a non-asset frame keeps its layout", lRow?.asset === undefined && lRow?.layout?.gap === 8 && JSON.stringify(lRow.layout.padding) === "[4,4,4,4]");
+    ok("[G13-layout] an assetSkipped:\"hidden\" leaf carries no layout", hIcon?.layout === undefined && hGlyph?.layout === undefined);
+
+    // [G13-transform] exportAsync draws the node as it is on screen, so rotation/flip already live in
+    // the file — on an asset leaf they move under sourceTransform; a geometry leaf keeps them bare.
+    const rotVec = { type: "VECTOR", name: "chevron", visible: true, id: "g13t:1", width: 18, height: 10, fills: solid, exportAsync: spySvg,
+      rotation: 90, relativeTransform: [[0, 1, 0], [1, 0, 0]] };
+    const rotGeo = { type: "VECTOR", name: "chevron-geo", visible: true, id: "g13t:2", width: 18, height: 10, fills: solid, fillGeometry: square,
+      exportAsync: async () => { throw new Error("could not be exported"); }, rotation: 45, relativeTransform: [[0.7071, -0.7071, 0], [0.7071, 0.7071, 0]] };
+    const host = () => ({ type: "FRAME", name: "Host", visible: true, id: "g13t:0", width: 50, height: 50, layoutMode: "NONE", exportAsync: png, children: [rotVec, rotGeo] });
+    sandbox.figma.currentPage.selection = [host()];
+    const tRun = await sandbox.collectSelection({ css: false });
+    const [tVec, tGeo] = [tRun.screen.nodes[0]?.children?.[0], tRun.screen.nodes[0]?.children?.[1]];
+    // pre-change: fails — sourceTransform absent, bare rotation 90 + flipped true.
+    ok("[G13-transform] an asset leaf: sourceTransform {rotation:90, flipped:true}, no bare rotation/flipped",
+      typeof tVec?.asset === "string" && JSON.stringify(tVec.sourceTransform) === '{"rotation":90,"flipped":true}' && tVec.rotation === undefined && tVec.flipped === undefined);
+    ok("[G13-transform] a geometry leaf keeps bare rotation (paths are in local space), no sourceTransform",
+      !!tGeo?.geometry && tGeo.rotation === 45 && tGeo.sourceTransform === undefined);
+    sandbox.figma.currentPage.selection = [host()];
+    const tNa = await sandbox.collectSelection({ css: false, skipAssets: true });
+    const tNaVec = tNa.screen.nodes[0]?.children?.[0];
+    ok("[G13-transform] an assetSkipped:true leaf (--no-assets) keeps bare rotation/flipped",
+      tNaVec?.assetSkipped === true && tNaVec.rotation === 90 && tNaVec.flipped === true && tNaVec.sourceTransform === undefined);
+    ok("[G13-transform] a node with no transform carries no sourceTransform (default absent)", lIcon?.sourceTransform === undefined);
+    sandbox.figma.currentPage.selection = prevSelG;
+
+    // [G13-children] listChildren: two FRAMEs "Screen A" 1440×1236 told apart by childCount + title
+    // (the hidden TEXT skipped), one "Screen B", one TEXT.
+    const txt = (id: string, characters: string, visible = true) => ({ type: "TEXT", name: "t", id, visible, characters, width: 10, height: 10 });
+    const screenA1 = { type: "FRAME", name: "Screen A", id: "g13s:1", width: 1440, height: 1236, children: [txt("g13s:11", "Welcome back")] };
+    const screenA2 = { type: "FRAME", name: "Screen A", id: "g13s:2", width: 1440, height: 1236.2,
+      children: [txt("g13s:21", "Draft note", false), txt("g13s:22", "Settings")] };
+    const screenB = { type: "FRAME", name: "Screen B", id: "g13s:3", width: 1440, height: 1236, children: [txt("g13s:31", "Other")] };
+    const caption = txt("g13s:4", "Caption");
+    // A third same-name pair that is too big to search: the title walk stops at its cap.
+    const huge = (id: string) => ({ type: "FRAME", name: "Big", id, width: 10, height: 10,
+      children: Array.from({ length: 5001 }, (_, i) => ({ type: "FRAME", name: "f", id: id + ":" + i, width: 1, height: 1, children: [] })) });
+    const section = { type: "SECTION", name: "Flows", id: "g13s:0", children: [screenA1, screenA2, screenB, caption, huge("g13s:5"), huge("g13s:6")] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13s:0" ? section : null);
+    const lc = await sandbox.listChildren("g13s:0");
+    // [G13-fix1 L-5] the "Page Title" search uses up its budget on a wide frame, and the first-text
+    // fallback still gets one of its own: a heading that is node #2 is found. [M-4] a hidden colliding row
+    // is titled from its own (visible) text. pre-fix: no title for either.
+    const wide = (id: string, heading: string, visible = true) => ({ type: "FRAME", name: "Grid", id, width: 900, height: 600, visible,
+      children: [txt(id + ":h", heading), ...Array.from({ length: 6000 }, (_, i) => ({ type: "FRAME", name: "cell", id: id + ":" + i, width: 1, height: 1, children: [] }))] });
+    const hiddenTwin = (id: string, label: string, visible: boolean) => ({ type: "FRAME", name: "Sheet", id, width: 300, height: 200, visible, children: [txt(id + ":t", label)] });
+    const section2 = { type: "SECTION", name: "More", id: "g13s:9", children: [wide("g13w:1", "Team members"), wide("g13w:2", "Projects"), hiddenTwin("g13w:3", "Filters", false), hiddenTwin("g13w:4", "Sort", true)] };
+    sandbox.figma.getNodeByIdAsync = async (id: string) => (id === "g13s:9" ? section2 : null);
+    const lc2 = await sandbox.listChildren("g13s:9");
+    const row2 = (id: string) => lc2.children.find((c) => c.id === id);
+    ok("[G13-fix1 L-5] a colliding frame with 6000 cells and its heading first is titled by the fallback's own budget",
+      row2("g13w:1")?.title === "Team members" && row2("g13w:2")?.title === "Projects" && !lc2.manifest.warnings.some((w) => /no title for 'Grid'/.test(w)));
+    ok("[G13-fix1 M-4] a HIDDEN colliding row gets its own visible text as title (hidden:true kept)",
+      row2("g13w:3")?.title === "Filters" && row2("g13w:3")?.hidden === true && row2("g13w:4")?.title === "Sort");
+    const row = (id: string) => lc.children.find((c) => c.id === id);
+    // pre-change: fails — childCount absent.
+    ok("[G13-children] childCount on every row with children (1, 2, 1), absent on the TEXT row",
+      row("g13s:1")?.childCount === 1 && row("g13s:2")?.childCount === 2 && row("g13s:3")?.childCount === 1 && row("g13s:4")?.childCount === undefined);
+    ok("[G13-children] hasChildren still agrees with childCount", row("g13s:1")?.hasChildren === true && row("g13s:4")?.hasChildren === undefined);
+    // pre-change: fails — title absent. The hidden "Draft note" is skipped (F-53 rule in deriveTitle).
+    ok("[G13-children] the two colliding rows carry their first VISIBLE text as title",
+      row("g13s:1")?.title === "Welcome back" && row("g13s:2")?.title === "Settings");
+    ok("[G13-children] no title on a row with no name+size twin (Screen B, the TEXT)", row("g13s:3")?.title === undefined && row("g13s:4")?.title === undefined);
+    ok("[G13-children] a colliding row too big to search gets no title, and says so",
+      row("g13s:5")?.title === undefined && lc.manifest.warnings.some((w) => /no title for 'Big' \(g13s:5\): more than 5000 nodes/.test(w)));
+    const notes = lc.manifest.warnings.filter((w) => /share name/.test(w));
+    ok("[G13-children] one manifest warning per collision group, naming the group and its ids",
+      notes.length === 2 && notes.some((w) => /^2 children share name 'Screen A' and size 1440×1236 — told apart by `title`\/`childCount`.*dtwin screenshot.*g13s:1, g13s:2/.test(w)));
+    sandbox.figma.getNodeByIdAsync = prevGetNodeG;
+
+    // listPages depth 2: childCount through the same summarize(), plus the per-page note (no titles).
+    const prevRootG = sandbox.figma.root.children;
+    sandbox.figma.root.children = [{ type: "PAGE", name: "Flows", id: "g13pg:1", loadAsync: async () => {}, children: [screenA1, screenA2, screenB] }];
+    const lp = await sandbox.listPages({ depth: 2 });
+    const lpFrames = lp.pages[0]?.frames || [];
+    ok("[G13-children] listPages frames carry childCount, never title",
+      lpFrames.map((f) => f.childCount).join() === "1,2,1" && lpFrames.every((f) => f.title === undefined));
+    ok("[G13-children] listPages notes the same-name group once, per page",
+      lp.manifest.warnings.filter((w) => /^page 'Flows': 2 frames share name 'Screen A'/.test(w)).length === 1);
+    sandbox.figma.root.children = prevRootG;
   }
 
   report();

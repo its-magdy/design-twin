@@ -30,6 +30,8 @@ how a value becomes code on your stack, see the profile.
 - **`hidden:true`** — the layer exists but is off by default: usually a conditional state (error
   message, tooltip, empty state). Implement it as conditional UI, don't render it and don't drop it.
 - Doc-level **`manifest`** (`truncated`/`assetsFailed`/`warnings`) — read before building.
+  `assetsHidden` counts hidden graphics not exported (`assetSkipped:"hidden"`), `hiddenNodes` every node
+  kept as hidden (itself or an ancestor).
 
 ## Tokens, styles and theme modes
 
@@ -228,7 +230,19 @@ Undesigned states use the audit's default (derived from tokens) and are reported
   jump.
 - **`geometry`** `{fills[], strokes[], w, h}` (SVG path `d` strings) — the SVG export **failed and there
   is NO asset file**. Render the paths in a `0 0 w h` space. This is the one case where you write paths.
-- **`assetSkipped`** — `--no-assets` run; the graphic exists in Figma but wasn't exported.
+- **`assetSkipped`** — the graphic exists in Figma but wasn't exported. `true`: a `--no-assets` run.
+  `"hidden"`: the graphic is hidden itself or under a hidden ancestor (check the ancestors' `hidden` —
+  most such graphics carry no flag of their own), so the plugin did not render it (a conditional state's
+  icon). When the bridge found a visible twin (same component and parent variants, same variable
+  modes, size, no paint overrides) it points the node at that file: `asset` = the twin's file and
+  **`assetFrom`** = the twin's node id; the node keeps `hidden:true` (when it had it) and `assetSkipped`
+  is gone. No `asset` and no `assetFrom` means no file — don't draw one. A pulled ROOT that is hidden itself or under a hidden
+  ancestor gets a pull warning: every graphic in it is `"hidden"` and its reference PNG may be blank.
+- **`sourceTransform`** — on an `asset` leaf: the file already has that rotation/flip drawn into it. Never
+  rotate or flip the file again. A bare `rotation`/`flipped` still applies on a `geometry` leaf (and on
+  non-asset nodes).
+- **`layout` is absent on asset, `geometry` and `assetSkipped` leaves** — the inset is already in the file
+  (or the paths), so there is no padding/gap to rebuild. Size the icon box from `box.w`/`box.h`.
 - **`exportSettings[]`** `{format, suffix, constraint}` — the designer's own export presets (formats,
   @2x/@3x).
 

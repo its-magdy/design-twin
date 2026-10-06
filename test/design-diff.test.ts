@@ -72,6 +72,20 @@ check("reordered children and a variant swap are both caught", (() => {
   const d = diffScreens(screen(), b);
   return d.reordered.length === 1 && d.reordered[0]?.after[0] === "Button" && d.changed.some((c) => c.id === "1:5" && c.categories.includes("component"));
 })());
+check("[DT-72] a sourceTransform change on an asset leaf is a `shape` change", (() => {
+  const a = screen(), b = screen();
+  must(a.tree.children[1], "a card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", asset: "assets/chevron.svg", sourceTransform: { rotation: 90 }, box: { w: 18, h: 10 } }] as FxNode[];
+  must(b.tree.children[1], "b card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", asset: "assets/chevron.svg", sourceTransform: { rotation: 90, flipped: true }, box: { w: 18, h: 10 } }] as FxNode[];
+  const f = diffScreens(a, b).changed.flatMap((c) => c.fields);
+  return f.length === 1 && f[0]?.field === "sourceTransform.flipped" && f[0]?.category === "shape";
+})());
+check("[DT-72] assetFrom (a hidden node reusing a visible twin's file) is an `asset` change", (() => {
+  const a = screen(), b = screen();
+  must(a.tree.children[1], "a card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", assetSkipped: "hidden", box: { w: 18, h: 10 } }] as FxNode[];
+  must(b.tree.children[1], "b card").children = [{ id: "1:6", name: "chevron", type: "VECTOR", assetSkipped: "hidden", asset: "assets/twin.svg", assetFrom: "1:9", box: { w: 18, h: 10 } }] as FxNode[];
+  const f = diffScreens(a, b).changed.flatMap((c) => c.fields);
+  return f.some((x) => x.field === "assetFrom" && x.category === "asset") && f.every((x) => x.category === "asset");
+})());
 check("a {nodes:[…]} multi-root document is walked too", diffScreens({ nodes: [screen().tree] }, { nodes: [Object.assign(screen().tree, { opacity: 0.5 })] }).changed[0]?.fields[0]?.field === "opacity");
 check("markdown: says so when nothing changed; lists fields when something did", /Nothing changed/.test(markdown(diffScreens(screen(), screen()), "x")) && (() => { const b = screen(); must(b.tree.children[0], "b.tree.children[0]").text = "Hi"; return /`text`: Welcome → Hi/.test(markdown(diffScreens(screen(), b), "x")); })());
 

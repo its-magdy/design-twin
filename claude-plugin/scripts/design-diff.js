@@ -144,7 +144,7 @@ function isTextStylesDoc(x) {
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
 function isScreenAssetsDoc(x) {
-  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number") && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 function isLibrariesIndex(x) {
@@ -388,6 +388,7 @@ function normalizeForCompare(fileName, content) {
 function sha1Hex(buf) {
   return crypto.createHash("sha1").update(buf).digest("hex");
 }
+var EMPTY_NUMS = new Float64Array(0);
 
 // bridge/src/design-system-layout.ts
 var COMPONENTS_DIR = "components";
@@ -454,11 +455,11 @@ var CATEGORY = {
     "gridAlignSelf",
     "size"
   ],
-  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "arc", "shape", "booleanOp"],
+  shape: ["radius", "cornerSmoothing", "rotation", "flipped", "skew", "sourceTransform", "arc", "shape", "booleanOp"],
   tokens: ["tokens", "styles", "variableModes", "propTokens"],
   component: ["component", "mainComponent", "props", "propRefs", "overrides", "exposedInstances", "detachedFrom", "tableCells"],
   visibility: ["hidden"],
-  asset: ["asset", "geometry", "assetSkipped", "exportSettings"],
+  asset: ["asset", "assetFrom", "geometry", "assetSkipped", "exportSettings"],
   interaction: ["reactions", "overlay", "motion"],
   handoff: ["annotations", "devStatus", "devStatusNote", "name", "type"]
 };

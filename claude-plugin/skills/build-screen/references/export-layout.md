@@ -149,9 +149,18 @@ open `design/<file>` verbatim, whichever layout you're looking at. Either re-nes
   It writes three siblings and one shared file:
   - `…__<id>.vars.json` — exactly the variables THIS screen binds, verbatim, as this pull saw them.
   - `…__<id>.assets.json` — every asset the screen references, with a content hash per file, plus
-    `duplicates` (byte-identical files under different names), `monochrome` (SVGs whose every
+    `duplicates` (the same artwork under different names — compared tolerantly: def ids and numbers
+    within ±0.01 are ignored, colours are not; an embedded image's scale/offset/tile — a transform on
+    `<use>`/`<image>`, a `<pattern>`'s x/y/width/height — relatively, within 1 %), `monochrome` (SVGs whose every
     fill/stroke is one colour — the ones safe to recolour to `currentColor` at render time) and
-    `heavy` (too large to inline).
+    `heavy` (too large to inline; `embeddedRaster` with under 50 `paths` = a raster inside an SVG shell,
+    not vector paths).
+    Each `files` row also carries `name` (the layer name), `owner` (`component`, `variant`,
+    `componentId`, `componentKey`, `instance`, `self`, `paintOverrides`), `context` (the instance above
+    the owner), `usedBy` (node ids in this screen, with `usedByCount` when capped), `hiddenUses` and
+    `reuseKey`. **Search `owner`/`name`, not file names** — a file is named after a generic layer.
+    A row with `reusedFrom` (the twin's node id) is a file ANOTHER screen's pull exported, listed here
+    because a hidden node of this screen reuses it.
   - a row in `pages/<Page>/index.json` and `pages/index.json`.
   - `design/export/variables.json` — the **union** of every screen pulled into this directory. It
     accumulates: a second pull merges into it, keyed on each variable's Figma key, so an earlier

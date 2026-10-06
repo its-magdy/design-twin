@@ -71,7 +71,8 @@ its export directly in `design/` — every path below works either way, just dro
   are not unique in it (two keys can share a name and differ in value) — read its `_conflicts` and
   `hygiene` before generating a theme from it.
 - **`…__<id>.assets.json`** beside the screen — which assets it uses, with content hashes,
-  `duplicates` (byte-identical files), `monochrome` (safe to recolour) and `heavy` (too big to inline).
+  `duplicates` (the same artwork under different names), `monochrome` (safe to recolour) and `heavy` (too big to inline).
+  Each row has `name`/`owner`/`context`/`usedBy`: search `owner`/`name`, not file names.
 - **`design/export/design-system/`** — tokens, styles and component catalogs. Written only by a
   `--design-system` (or full) pull, so legitimately **absent** after a single-screen pull; step 1 says
   what to do then. **`design/export/assets/`** — real icon/image files, named after their Figma layer
@@ -429,14 +430,18 @@ Copy this checklist into your notes and keep it updated:
      `align` (inside/outside/center) and per-side `weights`; shadows keep `spread` where the stack can.
    - **Assets** — import `asset` files per the profile. **Never hand-write an `<svg>`/`<path>`, draw
      your own icon, or leave a placeholder** — the only exception is a node carrying `geometry` (export
-     failed; its paths are provided). Reuse a project icon only if the glyph clearly matches. Size every
+     failed; its paths are provided; a graphic with `assetSkipped:"hidden"` — hidden itself or under a hidden
+     ancestor — has no file unless
+     `assetFrom` names a visible twin whose file it reuses). Never rotate/flip an asset that has
+     `sourceTransform` — it is already in the file. Reuse a project icon only if the glyph clearly matches. Size every
      icon explicitly (square container, both dimensions set).
 
      Three things the screen's `.assets.json` tells you that the files themselves do not:
      - **`heavy`** — faithfully exported and still unusable inline. A flattened noise texture arrives
        as thousands of paths; on the live run one 2.47 MB illustration inlined into a 2.71 MB JS
        bundle, and importing that single file by URL instead cut the bundle 11x. Import it by URL and
-       ask the designer to re-export as a PNG. Never redraw, simplify or paper over it in your code.
+       ask the designer to re-export as a PNG (an `embeddedRaster` row with few `paths` is a raster inside an SVG shell: use
+       it as an image, there are no paths to simplify). Never redraw, simplify or paper over it in your code.
      - **`monochrome`** — every fill and stroke in that SVG is one colour, so its colour is thematic,
        not semantic. Figma exports the frame as it LOOKS, which means a glyph taken from a Dark frame
        has `stroke="#D4D4D4"` baked in and cannot serve a Light theme. Do not edit the asset (the
@@ -446,7 +451,7 @@ Copy this checklist into your notes and keep it updated:
        under forced colours: add `forced-color-adjust: none`, or `background-color: CanvasText` under
        `@media (forced-colors: active)`; an inline SVG with `fill="currentColor"` needs nothing. A glyph NOT in that list — a red trash, a green tick, a brand mark —
        carries meaning in its colour, so leave it alone and give the wrapper an opt-out for it.
-     - **`duplicates`** — byte-identical files under different names. Import one.
+     - **`duplicates`** — the same artwork under different names. Import one.
    - **Instances** — before writing anything for an instance's sublayer, check `propRefs`,
      `overrides` and `exposedInstances` on the node: a prop-driven or overridden sublayer becomes a
      **prop on the mapped component**, never hand-built markup beside it. `detachedFrom` (`{key}`/

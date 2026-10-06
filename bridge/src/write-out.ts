@@ -19,7 +19,10 @@ import { buildDesignSystemLayout } from "./design-system-layout.ts";
 import type { DesignSystemLayout } from "./design-system-layout.ts";
 import { buildLibraryLayout, mergeLibrariesIndex, ROOT, INDEX } from "./library-layout.ts";
 import { mergeVariablesDoc } from "./variables-merge.ts";
-import { sha1Hex, normalizeForCompare } from "./asset-compare.ts";
+import { sha1Hex, normalizeForCompare, ContentIndex, contentKey } from "./asset-compare.ts";
+import { isRasterShell } from "./svg-normalize.ts";
+import { collectGraphics, reuseHiddenAssets, usesByPointer } from "./asset-owners.ts";
+import type { AssetContext, AssetOwner, Graphic, ReuseResult } from "./asset-owners.ts";
 import { EXPORT_DIR as DEFAULT_OUT_DIR } from "./project-layout.ts";
 import { ifDefined } from "./json-util.ts";
 import type { Asset, DesignSystemDoc, IrNode, LayersDoc, Manifest, PagesRootIndex, VariablesDoc, LibraryCounts } from "./doc-types.ts";
@@ -207,20 +210,25 @@ function readExistingDirCaseFold(adir: string): Map<string, string> {
 // one icon — because each pull's own suffix (assigned by the PLUGIN's per-run `byName`, or by an
 // earlier version of this file) was a different, equally-valid-looking name, and writeAssets only ever
 // asked "is anything ALREADY WRITTEN under THIS exact name" instead of "does this content already
-// exist ANYWHERE in the shared directory". Built once per writeAssets() call over the files ALREADY on
-// disk (sharedAssetHashes() does the identical scan for the duplicates report — same map, same
-// semantics, so a file this function reuses can never show up as a `duplicates` entry afterwards).
-function readExistingDirByContent(adir: string): Map<string, string> {
-  const map = new Map<string, string>(); // normalised sha1 -> real basename on disk
+// exist ANYWHERE in the shared directory".
+//
+// "The same content" is asset-compare.ts ContentIndex (DT-18, D61): an SVG fingerprint — def ids
+// canonical, every number within SVG_TOL — or the exact bytes for anything else. A hash of v1's rounded
+// text split real re-exports on three gaps (ids that embed the node id, `12` vs `11.9999`, a value either
+// side of a 0.1 rounding boundary), so 11 copies of one icon stayed 11 files. Built ONCE per writeScreen /
+// writeExport over the files ALREADY on disk, updated as writeAssets writes, and handed on to
+// writeScreenAssets' `duplicates` — one scan, one rule, so a file writeAssets reuses can never show up
+// as a `duplicates` entry it did not also see.
+function buildContentIndex(adir: string): ContentIndex {
+  const index = new ContentIndex();
   let names: string[] = [];
-  try { names = fs.readdirSync(adir); } catch { return map; }
+  try { names = fs.readdirSync(adir); } catch { return index; }
   for (const name of names) {
     let bytes: Buffer;
     try { bytes = fs.readFileSync(path.join(adir, name)); } catch { continue; }
-    const hash = sha1Hex(normalizeForCompare(name, bytes));
-    if (!map.has(hash)) map.set(hash, name); // first (alphabetically-readdir'd) name wins ties
+    index.add(name, bytes);
   }
-  return map;
+  return index;
 }
 
 // A file of THIS asset's own name family — `baseName` itself or `<stem>-<6 hex>[_N]<ext>`, the only names
@@ -310,14 +318,20 @@ function pngSize(bytes: Buffer): { w: number; h: number } | null {
 // Every `asset`/`reference` pointer in `tree` that names no file under `dir` — checked by EXACT name (a
 // case-insensitive disk would otherwise "find" a different-case file, which is how F-35 shipped the wrong
 // chevron). A pull should never produce one; if it does, say so instead of leaving a silent hole.
-function danglingPointers(dir: string, tree: unknown): string[] {
+// `exactExists(dir)` is that check on its own — also the hidden-reuse guard's (L-3: `fs.existsSync` said
+// yes to `assets/Angle-left.svg` when only `angle-left.svg`, a different icon, was on disk). One listing
+// per directory, read on first use: call it after the pull's assets are written.
+function exactExists(dir: string): (rel: string) => boolean {
   const listings = new Map<string, Set<string>>();
-  const exists = (rel: string): boolean => {
+  return (rel: string): boolean => {
     const d = path.join(dir, path.dirname(rel));
     let names = listings.get(d);
     if (!names) { try { names = new Set(fs.readdirSync(d)); } catch { names = new Set(); } listings.set(d, names); }
     return names.has(path.basename(rel));
   };
+}
+function danglingPointers(dir: string, tree: unknown): string[] {
+  const exists = exactExists(dir);
   const out = new Set<string>();
   const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object";
   const visit = (v: unknown): void => {
@@ -332,17 +346,26 @@ function danglingPointers(dir: string, tree: unknown): string[] {
   return [...out];
 }
 
-function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string): number {
+// An SVG with an embedded `<image>` and almost no paths is a PHOTO in an SVG shell (DT-09) — the rule is
+// svg-normalize.ts isRasterShell, shared with the audit so both say the same thing about one file (L-7).
+const countTag = (text: string, re: RegExp): number => (text.match(re) || []).length;
+const PATH_TAG_RE = /<path\b/g;
+const IMAGE_TAG_RE = /<image\b/g;
+
+// `index` is the directory's ContentIndex when the caller already built one (writeScreen, writeExport —
+// so assets/ is scanned once per pull, not once here and again for `duplicates`); it is updated in place
+// with every file this call writes.
+function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log, subdir?: string, index?: ContentIndex): number {
   if (!assets || !assets.length) return 0;
   const adir = path.join(dir, subdir || "assets");
   fs.mkdirSync(adir, { recursive: true });
   const existing = readExistingDirCaseFold(adir); // lower -> real name already on disk
   const claimed = new Map<string, string>(); // lower -> real name this call has written/claimed so far (this batch)
   for (const [k, v] of existing) claimed.set(k, v);
-  // normalised sha1 -> real name, seeded from disk and updated as THIS call writes new content, so two
-  // assets in the SAME pull that happen to share content (not just two pulls) also collapse to one file.
-  const byContent = readExistingDirByContent(adir);
-  const heavy: Array<{ file: string; node: string | undefined; bytes: number; paths: number }> = [];
+  // Seeded from disk and updated as THIS call writes new content, so two assets in the SAME pull that
+  // happen to share content (not just two pulls) also collapse to one file.
+  const byContent = index || buildContentIndex(adir);
+  const heavy: Array<{ file: string; node: string | undefined; bytes: number; paths: number; rasters: number }> = [];
   let n = 0;
   for (const a of assets) {
     let bytes: Buffer;
@@ -360,13 +383,14 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
     // hash suffix from an earlier pull — which is exactly the shape a live three-screen pull produced
     // (4 Ellipse_2327* files, 6 arrow-down* files, 3 angle-left* files for what should be 1/1/2 real
     // icons) even with the name-only reuse path already in place.
-    const contentHash = sha1Hex(normalizeForCompare(baseName, bytes));
+    const key = contentKey(baseName, bytes);
     // A reference PNG belongs to ONE frame (the plugin never dedups it — assets.ts register()): two frames
     // that render identically must keep their own `<id>_ref.png`, or both `reference`s would name one of
     // them. So a reference reuses only a file of its OWN: its name, or a suffixed copy an earlier pull of
     // the same frame wrote (`<id>_ref-<hash>[_N].png`, when the plain name held other bytes) — without the
     // second, every re-pull over an old thumbnail added another `_1`, `_2`, … copy.
-    const byContentName = a.kind === "reference" ? ownCopyWithContent(adir, claimed, baseName, contentHash) : byContent.get(contentHash);
+    // That own-copy check stays EXACT bytes (a PNG; the tolerance is for SVG coordinates only).
+    const byContentName = a.kind === "reference" ? ownCopyWithContent(adir, claimed, baseName, sha1Hex(normalizeForCompare(baseName, bytes))) : byContent.findKey(key);
     if (byContentName !== undefined) {
       let priorBytes: Buffer | null = null;
       try { priorBytes = fs.readFileSync(path.join(adir, byContentName)); } catch { /* fall through as new */ }
@@ -377,8 +401,8 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
       }
     }
 
-    let key = baseName.toLowerCase();
-    const priorName = claimed.get(key);
+    let lower = baseName.toLowerCase();
+    const priorName = claimed.get(lower);
     if (priorName !== undefined) {
       // Reaching here means the CONTENT check above already ruled out "this is the same asset under
       // any name" — so a name collision at this point is a same-name (mod case) DIFFERENT asset, full
@@ -393,30 +417,39 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
       const ext = path.extname(baseName);
       const stem = baseName.slice(0, baseName.length - ext.length);
       baseName = stem + "-" + shortHashOf(a, bytes) + ext;
-      key = baseName.toLowerCase();
+      lower = baseName.toLowerCase();
       let guard = 0;
-      while (claimed.has(key) && guard++ < 5) { baseName = stem + "-" + shortHashOf(a, bytes) + "_" + guard + ext; key = baseName.toLowerCase(); }
+      while (claimed.has(lower) && guard++ < 5) { baseName = stem + "-" + shortHashOf(a, bytes) + "_" + guard + ext; lower = baseName.toLowerCase(); }
     }
     const file = path.join(adir, baseName);
     fs.writeFileSync(file, bytes);
-    claimed.set(key, baseName);
-    byContent.set(contentHash, baseName); // so a LATER asset in this same call also dedups against it
+    claimed.set(lower, baseName);
+    byContent.addKey(baseName, key); // so a LATER asset in this same call also dedups against it
     a.file = dirPrefix + "/" + baseName; // downstream (writeScreenAssets, index entries) reads this
-    const paths = a.text != null ? (a.text.match(/<path\b/g) || []).length : 0;
+    const paths = a.text != null ? countTag(a.text, PATH_TAG_RE) : 0;
+    const rasters = a.text != null ? countTag(a.text, IMAGE_TAG_RE) : 0;
     // Finding 324: the whole-frame reference PNG (a.kind === "reference") is never inlined or shipped
     // — writeScreenAssets already excludes it from `count`/`totalBytes` and its own `heavy` list for
     // exactly this reason (finding 28's comment). This pull-time warning must agree: a "20174_143363_
     // ref.png 0.25 MB is too heavy to inline" is pure noise about a file the app never inlines.
-    if (a.kind !== "reference" && (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS)) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths });
+    if (a.kind !== "reference" && (bytes.length >= BIG_ASSET_BYTES || paths >= BUSY_SVG_PATHS)) heavy.push({ file: baseName, node: a.id, bytes: bytes.length, paths, rasters });
     n++;
   }
   if (log) log("wrote " + n + " asset(s) to " + adir);
-  if (log && heavy.length) {
-    heavy.sort((x, y) => y.bytes - x.bytes);
+  heavy.sort((x, y) => y.bytes - x.bytes);
+  const shells = heavy.filter((h) => isRasterShell(h.rasters, h.paths));
+  const vectors = heavy.filter((h) => !shells.includes(h));
+  if (log) for (const h of shells) {
     log(
-      "warn  " + heavy.length + " asset(s) are too heavy to inline — " +
-        heavy.slice(0, 3).map((h) => `${h.file} ${(h.bytes / 1048576).toFixed(2)} MB${h.paths ? ` / ${h.paths} <path> elements` : ""}`).join(", ") +
-        (heavy.length > 3 ? ", …" : "")
+      `warn  ${h.file} ${(h.bytes / 1048576).toFixed(2)} MB is a raster image embedded in an SVG shell — use it as an image ` +
+        "(`<img src>`/URL import), or ask the designer for a PNG/JPG export of that layer; do not inline it"
+    );
+  }
+  if (log && vectors.length) {
+    log(
+      "warn  " + vectors.length + " asset(s) are too heavy to inline — " +
+        vectors.slice(0, 3).map((h) => `${h.file} ${(h.bytes / 1048576).toFixed(2)} MB${h.paths ? ` / ${h.paths} <path> elements` : ""}`).join(", ") +
+        (vectors.length > 3 ? ", …" : "")
     );
     log(
       "      A flattened texture or illustration exports as thousands of vector paths. Inlining one of these " +
@@ -426,24 +459,53 @@ function writeAssets(dir: string, assets: Asset[] | null | undefined, log?: Log,
   return n;
 }
 
-// A high `assetsGeometry` count means a large share of this screen's icons could not be exported as
-// SVG and were recovered as raw path data instead (figma-plugin/src/assets.ts geometryOf) — usable,
-// but a strictly worse asset than a real export. Finding 30: 40% of a screen's nodes fell back this
-// way with `manifest.warnings: []` and no pull-time signal at all — the tool warned unprompted about a
-// heavy SVG (see BIG_ASSET_BYTES above) but stayed silent about degraded icon exports an order of
-// magnitude more consequential. Exported for the caller that has the manifest in hand (writeScreen —
-// owned outside this file; not called from here so as not to reach into that function) to log
-// alongside its other per-screen output.
-const ASSETS_GEOMETRY_WARN_RATIO = 0.1; // 10%+ of nodes recovered as raw geometry is worth a line
-function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined): string | null {
+// `assetsGeometry` counts graphics Figma's exporter returned no SVG for, recovered as raw path data
+// instead (figma-plugin/src/assets.ts geometryOf) — usable, but a strictly worse asset than a real export.
+// Finding 30: 40% of a screen's nodes fell back this way with `manifest.warnings: []` and no pull-time
+// signal at all. It used to warn only at >= 10 % of nodes and blamed "unusual paint/blend"; on the real
+// exports every one of those fallbacks was a HIDDEN node (DT-10), which the plugin no longer exports at
+// all (`assetSkipped:"hidden"`), and an icon container's own background rectangle, which is now a
+// failure instead. What is left is a real degraded vector, so ANY fallback warns (D63), and the line
+// names up to five of them, `name (id)`, read from the tree as written. Exported for writeScreen and tests.
+const GEOMETRY_WARN_LIST = 5;
+function assetsGeometryWarning(manifest: Partial<Manifest> | null | undefined, tree?: unknown): string | null {
   const nodes = manifest && typeof manifest.nodes === "number" ? manifest.nodes : 0;
   const geo = manifest && typeof manifest.assetsGeometry === "number" ? manifest.assetsGeometry : 0;
-  if (!nodes || !geo) return null;
-  const ratio = geo / nodes;
-  if (ratio < ASSETS_GEOMETRY_WARN_RATIO) return null;
-  return `warn  ${geo} of ${nodes} nodes (${Math.round(ratio * 100)}%) fell back to raw geometry instead of an SVG export — ` +
-    `usable, but check a sample of these icons; a bulk fallback like this usually means the source vectors have an ` +
-    `unusual paint/blend setup Figma's exporter can't rasterize.`;
+  if (!geo) return null;
+  const named: string[] = [];
+  let found = 0;
+  const visit = (v: unknown): void => {
+    if (!v || typeof v !== "object") return;
+    if (Array.isArray(v)) { for (const x of v) visit(x); return; }
+    const rec: Record<string, unknown> = Object.fromEntries(Object.entries(v));
+    if (rec.geometry && typeof rec.geometry === "object") {
+      found++;
+      if (named.length < GEOMETRY_WARN_LIST) named.push(`${typeof rec.name === "string" ? rec.name : "?"} (${typeof rec.id === "string" ? rec.id : "?"})`);
+    }
+    visit(rec.children);
+  };
+  visit(tree);
+  return `warn  ${geo}${nodes ? ` of ${nodes}` : ""} node(s) fell back to raw geometry — Figma's exporter returned no SVG for these ` +
+    "visible vectors, so their outlines were inlined as `geometry`; check them against the reference" +
+    (named.length ? ": " + named.join(", ") + (found > named.length || geo > named.length ? ", …" : "") : "");
+}
+
+// D67/D64: the hidden graphics the plugin did not export, and how many the bridge pointed at a visible
+// twin's file. One info line, only when the manifest counted any (an older export has no counter).
+function assetsHiddenLine(manifest: Partial<Manifest> | null | undefined, reuse?: ReuseResult): string | null {
+  const n = manifest && typeof manifest.assetsHidden === "number" ? manifest.assetsHidden : 0;
+  if (!n) return null;
+  const m = reuse ? reuse.reused : 0;
+  return `info  ${n} hidden graphic(s) not exported (\`assetSkipped:"hidden"\`); ${m} reuse a visible twin's file` +
+    (reuse && reuse.crossScreen ? ` (${reuse.crossScreen} from another screen)` : "");
+}
+
+// D67: the hidden nodes the tree keeps — hidden themselves (`hidden:true`) or under a hidden ancestor (no flag
+// of their own; the plugin counts both, R2-6) — designed states a builder wires up, not noise to drop. One
+// info line, only when the manifest counted any (an older export has no counter).
+function hiddenNodesLine(manifest: Partial<Manifest> | null | undefined): string | null {
+  const n = manifest && typeof manifest.hiddenNodes === "number" ? manifest.hiddenNodes : 0;
+  return n ? `info  ${n} node(s) hidden (themselves or under a hidden ancestor) kept in the tree (conditional UI)` : null;
 }
 
 // Reference PNGs land in assets/, the same place a --node pull puts the frame's own reference.
@@ -511,6 +573,12 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
   if (full) {
     const moved = rewireAssetPointers(full.layersDoc, renamedAssets(full.assets, before));
     if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
+    // D64: a page walk reuses a visible twin within its own walk only (no per-screen .assets.json to read).
+    const roots = (full.layersDoc.layers || []).map((l) => l.tree).filter((t): t is IrNode => !!t && typeof t === "object");
+    const reuse = reuseHiddenAssets(roots, { pointerExists: exactExists(dir) });
+    if (log && reuse.hidden) log(`info  ${reuse.hidden} hidden graphic(s) not exported (\`assetSkipped:"hidden"\`); ${reuse.reused} reuse a visible twin's file`);
+    const hn = hiddenNodesLine(full.layersDoc.manifest);
+    if (log && hn) log(hn);
   }
   const pages = full ? writePages(dir, full.layersDoc, log) : null;
   if (full && log) { const d = danglingPointers(dir, full.layersDoc); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
@@ -526,6 +594,46 @@ function writeExport(outDir: string | null | undefined, r: Stamped<FullExportRep
     },
     index: pages ? pages.meta : undefined,
   };
+}
+
+// The other screens' trees that may hold a visible twin for one of `keys`: every pages/**/<base>.assets.json
+// in this export (except this screen's own) with a row whose `reuseKey` is wanted and whose owner carries no
+// paint override, then its sibling <base>.json — read only for those, and re-checked there by
+// reuseHiddenAssets (size, transform, overrides), since one row's key says nothing about the rest. A sibling
+// whose roots include one of `ownRoots` (this pull's root ids) is this frame's own stale JSON — skipped (R2-3b).
+function otherScreenTrees(dir: string, ownAssets: string, keys: ReadonlySet<string>, ownRoots: ReadonlySet<string> = new Set()): IrNode[][] {
+  const out: IrNode[][] = [];
+  const own = path.join(dir, ownAssets);
+  const files: string[] = [];
+  const walk = (d: string): void => {
+    let ents: fs.Dirent[] = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".assets.json") && p !== own) files.push(p);
+    }
+  };
+  walk(path.join(dir, "pages"));
+  for (const f of files) {
+    const doc = readJsonOr(f, null);
+    const rows = doc && typeof doc === "object" && "files" in doc && Array.isArray(doc.files) ? doc.files : [];
+    const wanted = rows.some((row: unknown) => {
+      if (!row || typeof row !== "object") return false;
+      const key = "reuseKey" in row ? row.reuseKey : undefined;
+      const owner = "owner" in row ? row.owner : undefined;
+      const blocked = !!owner && typeof owner === "object" && "paintOverrides" in owner && owner.paintOverrides === true;
+      return typeof key === "string" && keys.has(key) && !blocked;
+    });
+    if (!wanted) continue;
+    const screen = readJsonOr(f.slice(0, -".assets.json".length) + ".json", null);
+    const nodes = screen && typeof screen === "object" && "nodes" in screen && Array.isArray(screen.nodes) ? screen.nodes : null;
+    // The same frame under an older name or page (renamed): its stale JSON is no twin of itself.
+    const roots = nodes ? nodes.filter((n: unknown): n is IrNode => !!n && typeof n === "object") : [];
+    if (roots.some((n) => ownRoots.has(n.id))) continue;
+    if (roots.length) out.push(roots);
+  }
+  return out;
 }
 
 // The selection/single-node export has a different SHAPE than the full one — one `screen` tree plus
@@ -555,9 +663,16 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   // screen JSON is — otherwise nodes point at files that were never written, or (case-insensitive disk) at
   // a different icon, and the index's `reference` at whatever thumbnail held the plain name (DT-25/F-35/F-08).
   const before = (r.assets || []).map((a) => a.file);
-  const assets = writeAssets(dir, r.assets, log);
+  const contentIndex = buildContentIndex(path.join(dir, "assets"));
+  const assets = writeAssets(dir, r.assets, log, undefined, contentIndex);
   const moved = rewireAssetPointers(r.screen.nodes, renamedAssets(r.assets, before));
   if (log && moved) log(`rewired ${moved} asset pointer(s) to the names written (content-reused or collision-renamed files)`);
+  // D64: a hidden graphic the plugin did not export points at a visible twin's file — this pull's tree
+  // first, then the screens already on disk (their .assets.json `reuseKey`, re-checked on their tree).
+  const reuse = reuseHiddenAssets(r.screen.nodes, {
+    otherTrees: (keys) => otherScreenTrees(dir, paths.assets, keys, new Set((r.screen.nodes || []).map((n) => n.id))),
+    pointerExists: exactExists(dir),
+  });
   const screenDoc = r.sourceFile
     ? Object.assign({}, r.screen, { sourceFile: r.sourceFile }, r.sourceFileKey ? { sourceFileKey: r.sourceFileKey } : {})
     : r.screen;
@@ -565,11 +680,18 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
   if (log) { const d = danglingPointers(dir, r.screen.nodes); if (d.length) log(`warn  ${d.length} asset pointer(s) name a file that is not on disk: ${d.slice(0, 3).join(", ")}${d.length > 3 ? ", …" : ""}`); }
   // `variables` is always on a real screen reply; a hand-built one (the tests) may omit it.
   const variables = r.variables ? writeScreenVariables(dir, paths, r.variables, log) : null;
-  const assetIndex = writeScreenAssets(dir, paths, r.assets);
+  const assetIndex = writeScreenAssets(dir, paths, r.assets, r.screen.nodes, contentIndex);
   // Finding 30 / acceptance criterion 10: a screen whose icons largely fell back to raw geometry
   // (figma-plugin/src/assets.ts geometryOf) instead of a real SVG export gets a warning AT PULL TIME,
   // not only if someone happens to go looking in manifest.assetsGeometry later.
-  if (log) { const gw = assetsGeometryWarning(r.screen.manifest); if (gw) log(gw); }
+  if (log) {
+    const gw = assetsGeometryWarning(r.screen.manifest, r.screen.nodes);
+    if (gw) log(gw);
+    const hl = assetsHiddenLine(r.screen.manifest, reuse);
+    if (hl) log(hl);
+    const hn = hiddenNodesLine(r.screen.manifest);
+    if (hn) log(hn);
+  }
 
   // The entry a consumer reads instead of guessing filenames. Every sibling this pull produced is a
   // POINTER here, for the same reason buildPageLayout emits real relative paths: a consumer that
@@ -645,7 +767,7 @@ function writeScreen(outDir: string | null | undefined, r: Stamped<ScreenReply>,
 //
 // One colour throughout = thematic, safe to recolour. More than one = semantic, leave it alone. The
 // builder gets the answer per file instead of having to open each SVG.
-function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; paths: number } {
+function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; paths: number; embeddedRaster?: number } {
   const colors = new Set<string>();
   for (const m of String(text).matchAll(/(?:fill|stroke)\s*=\s*"([^"]+)"/g)) {
     const raw = m[1];
@@ -654,8 +776,10 @@ function svgPalette(text: unknown): { colors: string[]; monochrome: boolean; pat
     if (v === "none" || v === "transparent" || v === "currentcolor" || v.startsWith("url(")) continue;
     colors.add(v);
   }
-  const paths = (String(text).match(/<path\b/g) || []).length;
-  return { colors: [...colors], monochrome: colors.size === 1, paths };
+  const paths = countTag(String(text), PATH_TAG_RE);
+  // DT-09: an `<image>` inside the SVG (a photo in a vector shell) — only written when there is one.
+  const rasters = countTag(String(text), IMAGE_TAG_RE);
+  return rasters ? { colors: [...colors], monochrome: colors.size === 1, paths, embeddedRaster: rasters } : { colors: [...colors], monochrome: colors.size === 1, paths };
 }
 
 function readJsonOr(file: string, fallback: unknown): unknown {
@@ -673,32 +797,19 @@ function readJsonOr(file: string, fallback: unknown): unknown {
 // This index answers it directly, and the content hash makes the duplication visible — the same
 // sidebar icon exported once per instance path shows up as several names under one hash, so a
 // consumer can import one file instead of five without diffing bytes itself.
-// Every file's NORMALISED content hash (bridge/src/svg-normalize.ts), over the WHOLE shared assets/
-// directory — not just this pull's own array. `assets/` is explicitly shared and cumulative (see
-// writeAssets' header), so a duplicate between this screen's icon and one a DIFFERENT screen's pull
-// wrote is exactly as real as one within this pull, and finding 27 is precisely that a per-pull-array
-// computation could never see it: "it cannot see the byte-identical Ellipse_2327 pair or the eight
-// chevrons... it is computed from hashes that are already stale for four of the five screens." The
-// clobber-avoidance fix in writeAssets means a NEW duplicate of this shape mostly can't be created
-// going forward (a re-pull of an unchanged icon now reuses the existing file), but files already on
-// disk from before that fix — or two independently-named layers that just happen to render the same
-// icon — still need catching, hence a real directory scan rather than trusting the write history.
-function sharedAssetHashes(assetsDir: string): Map<string, string[]> {
-  const out = new Map<string, string[]>(); // normalised hash -> ["assets/<file>", ...]
-  let names: string[] = [];
-  try { names = fs.readdirSync(assetsDir); } catch { return out; }
-  for (const name of names) {
-    let bytes: Buffer;
-    try { bytes = fs.readFileSync(path.join(assetsDir, name)); } catch { continue; }
-    const hash = sha1Hex(normalizeForCompare(name, bytes));
-    let group = out.get(hash);
-    if (!group) { group = []; out.set(hash, group); }
-    group.push("assets/" + name);
-  }
-  return out;
-}
+// `duplicates` is computed over the WHOLE shared assets/ directory — not just this pull's own array.
+// `assets/` is explicitly shared and cumulative (see writeAssets' header), so a duplicate between this
+// screen's icon and one a DIFFERENT screen's pull wrote is exactly as real as one within this pull, and
+// finding 27 is precisely that a per-pull-array computation could never see it. The clobber-avoidance in
+// writeAssets means a NEW duplicate of this shape mostly can't be created going forward (a re-pull of an
+// unchanged icon now reuses the existing file), but files already on disk from before that fix — or two
+// independently-named layers that just happen to render the same icon — still need catching, hence the
+// directory's ContentIndex (the same one writeAssets reused with) rather than trusting the write history.
+// Files are never deleted or merged (K-1): a re-pull points at the representative, the rest stay listed.
 
-/** One row of <Screen>.assets.json `files[]` / `reference[]`. The palette fields are present on SVGs only. */
+export type { AssetOwner, AssetContext } from "./asset-owners.ts";
+/** One row of <Screen>.assets.json `files[]` / `reference[]`. The palette fields are present on SVGs only;
+ *  the owner fields (DT-54, D62) on rows the screen's tree points at. */
 export interface AssetIndexEntry {
   file: string;
   node: string | undefined;
@@ -708,11 +819,54 @@ export interface AssetIndexEntry {
   colors?: string[];
   monochrome?: boolean;
   paths?: number;
+  /** Asset.name — the layer name of `node` */
+  name?: string;
+  /** the owner of `node` (else of the first use that has one) */
+  owner?: AssetOwner;
+  /** the instance above the owner */
+  context?: AssetContext;
+  /** every node id in THIS screen whose `asset` is this file, tree order, capped at USED_BY_CAP */
+  usedBy?: string[];
+  /** the full count, present only when `usedBy` was capped */
+  usedByCount?: number;
+  /** how many of those uses are hidden (the node or an ancestor); absent when none */
+  hiddenUses?: number;
+  /** the hidden-reuse key of the use `owner` describes (asset-owners.ts reuseKeyOf) — what another screen's
+   *  hidden graphic matches on; absent when that use is hidden */
+  reuseKey?: string;
+  /** DT-09: how many `<image>` elements the SVG embeds; absent when none */
+  embeddedRaster?: number;
+  /** a file this pull did not export: a hidden node here reuses it from a visible twin in ANOTHER screen
+   *  (D64) — the twin's node id (`assetFrom` of the row's `node`); absent on every file this pull wrote */
+  reusedFrom?: string;
+}
+const USED_BY_CAP = 50;
+
+// The owner half of a row: `uses` are the tree's nodes pointing at the row's file, in tree order.
+function ownerFields(entry: AssetIndexEntry, uses: readonly Graphic[] | undefined): void {
+  if (!uses || !uses.length) return;
+  const primary = uses.find((g) => g.node.id === entry.node && g.owner) || uses.find((g) => g.owner);
+  if (primary && primary.owner) {
+    entry.owner = primary.owner;
+    if (primary.context) entry.context = primary.context;
+    if (primary.reuseKey !== undefined && !primary.hidden) entry.reuseKey = primary.reuseKey;
+  }
+  entry.usedBy = uses.slice(0, USED_BY_CAP).map((g) => g.node.id);
+  if (uses.length > USED_BY_CAP) entry.usedByCount = uses.length;
+  const hidden = uses.filter((g) => g.hidden).length;
+  if (hidden) entry.hiddenUses = hidden;
 }
 
-function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined): { count: number; duplicates: number; totalBytes: number } | null {
-  if (!Array.isArray(assets) || !assets.length) return null;
-  const shared = sharedAssetHashes(path.join(dir, "assets"));
+// `tree` is the screen's nodes as written (after rewiring and hidden reuse) — the owner fields come from it;
+// `index` the directory's ContentIndex writeAssets already used (built here when absent).
+function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | null | undefined, tree?: readonly IrNode[] | null, index?: ContentIndex): { count: number; duplicates: number; totalBytes: number } | null {
+  const uses = usesByPointer(collectGraphics(tree));
+  // No index for a pull that exported nothing — unless a hidden node reuses another screen's file (M-3).
+  const reusesAny = [...uses.values()].some((list) => list.some((u) => typeof u.node.assetFrom === "string"));
+  if (!Array.isArray(assets) || (!assets.length && !reusesAny)) return null;
+  const groups = (index || buildContentIndex(path.join(dir, "assets"))).groups().filter((g) => g.files.length > 1);
+  const groupOf = new Map<string, { hash: string; files: string[] }>(); // basename -> its duplicate group
+  for (const g of groups) for (const f of g.files) groupOf.set(f, g);
   const files: AssetIndexEntry[] = [];
   const reference: AssetIndexEntry[] = []; // the frame's own screenshot — see note below on why it's split out
   const dupHashes = new Set<string>();
@@ -722,8 +876,10 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     const hash = bytes ? sha1Hex(bytes) : null; // exact bytes-on-disk hash (writeAssets keeps a.text/a.base64 in sync with disk on reuse)
     const file = "assets/" + path.basename(a.file);
     const entry: AssetIndexEntry = { file, node: a.id, bytes: bytes ? bytes.length : 0, hash };
+    if (typeof a.name === "string" && a.name) entry.name = a.name;
     if (Array.isArray(a.from) && a.from.length > 1) entry.from = a.from; // one file, several nodes reached it
     if (a.text != null && /\.svg$/i.test(a.file)) Object.assign(entry, svgPalette(a.text));
+    if (a.kind !== "reference") ownerFields(entry, uses.get(file));
     // The whole-frame reference PNG (a.kind === "reference", <id>_ref.png — see figma-plugin/src/assets.ts)
     // is a discovery/self-check aid, not a shippable UI asset: on one real screen it was 196,049 of
     // 312,234 total bytes (63%) and headed the `heavy` list purely because of its own size (finding 28).
@@ -731,17 +887,38 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     // which exist to answer "how much of this do I actually ship".
     if (a.kind === "reference") { reference.push(entry); continue; }
     files.push(entry);
-    const normHash = bytes ? sha1Hex(normalizeForCompare(a.file, bytes)) : null;
-    if (normHash && (shared.get(normHash) || []).length > 1) dupHashes.add(normHash);
+    const g = groupOf.get(path.basename(a.file));
+    if (g) dupHashes.add(g.hash);
   }
-  const duplicates = [...dupHashes].map((hash) => {
-    const group = shared.get(hash) || []; // always present: dupHashes only holds hashes found in `shared`
+  // M-3: a hidden node that reuses a file from ANOTHER screen's pull (reuseHiddenAssets' cross-screen step)
+  // points at a file this pull never exported — still one this screen references, so it gets a row too,
+  // its bytes read from disk, `reusedFrom` naming the twin. A pointer that names no file on disk (by exact
+  // name) gets no row: danglingPointers already warned about it.
+  const listed = new Set([...files, ...reference].map((f) => f.file));
+  const onDisk = exactExists(dir);
+  for (const [pointer, list] of uses) {
+    const reused = list.find((u) => typeof u.node.assetFrom === "string");
+    if (listed.has(pointer) || !reused || !onDisk(pointer)) continue;
+    let bytes: Buffer;
+    try { bytes = fs.readFileSync(path.join(dir, pointer)); } catch { continue; }
+    const entry: AssetIndexEntry = { file: pointer, node: reused.node.id, bytes: bytes.length, hash: sha1Hex(bytes) };
+    if (typeof reused.node.name === "string" && reused.node.name) entry.name = reused.node.name;
+    if (/\.svg$/i.test(pointer)) Object.assign(entry, svgPalette(bytes.toString("utf8")));
+    ownerFields(entry, list);
+    if (typeof reused.node.assetFrom === "string") entry.reusedFrom = reused.node.assetFrom;
+    files.push(entry);
+    listed.add(pointer);
+    const g = groupOf.get(path.basename(pointer));
+    if (g) dupHashes.add(g.hash);
+  }
+  const duplicates = groups.filter((g) => dupHashes.has(g.hash)).map((g) => {
+    const group = g.files.map((f) => "assets/" + f); // the representative first
     const first = files.find((f) => group.includes(f.file));
-    return { hash, bytes: first ? first.bytes : undefined, files: group };
+    return { hash: g.hash, bytes: first ? first.bytes : undefined, files: group };
   });
   const monochrome = files.filter((f) => f.monochrome).map((f) => f.file);
   // ts-port: `f.paths` is undefined on a non-SVG row, and `undefined >= n` is false — same as before.
-  const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || (f.paths !== undefined && f.paths >= BUSY_SVG_PATHS)).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths }));
+  const heavy = files.filter((f) => f.bytes >= BIG_ASSET_BYTES || (f.paths !== undefined && f.paths >= BUSY_SVG_PATHS)).map((f) => ({ file: f.file, bytes: f.bytes, paths: f.paths, ...ifDefined("embeddedRaster", f.embeddedRaster) }));
   const doc = {
     screen: paths.base,
     count: files.length,
@@ -752,10 +929,15 @@ function writeScreenAssets(dir: string, paths: ScreenPaths, assets: Asset[] | nu
     reference: reference.length ? reference : undefined,
     note:
       "Every SHIPPABLE asset this screen references, with a content hash. `duplicates` is computed over " +
-      "the WHOLE shared assets/ directory (every screen ever pulled), not just this screen's own files, " +
-      "and treats two SVGs as the same asset when they agree modulo Figma's own sub-pixel export noise " +
-      "(bridge/src/svg-normalize.ts) — so it also catches the same icon exported under two different names or " +
-      "in two different pulls. `monochrome` lists the SVGs whose every fill/stroke is one colour — those " +
+      "the WHOLE shared assets/ directory (every screen ever pulled), not just this screen's own files: two " +
+      "SVGs are the same asset when they differ only in def ids and in numbers by at most 0.01 (Figma's own " +
+      "re-export noise, bridge/src/svg-normalize.ts svgFingerprint) — the numbers of a transform on <use>/<image> " +
+      "and of a <pattern>'s x/y/width/height (an embedded image's scale, offset and tile) relatively, by at most " +
+      "1 % of their size; other files must be byte-identical. Each " +
+      "group lists its representative first — the file a re-pull points at; the others are never deleted. " +
+      "`owner`/`context`/`name` say what each file IS (the component and variant that own it) — search those, " +
+      "not file names; `usedBy` lists this screen's nodes that point at it; `reusedFrom` marks a file another " +
+      "screen's pull exported that a hidden node here reuses. `monochrome` lists the SVGs whose every fill/stroke is one colour — those " +
       "are the ones safe to recolour to currentColor at render time; the rest carry semantic colour (a red " +
       "trash, a green tick) and must keep it. `heavy` lists assets too large to inline. `reference` (if " +
       "present) is the frame's own whole-screen screenshot — useful for visual comparison, not something " +
@@ -819,4 +1001,4 @@ function inlineLimitChars(env: NodeJS.ProcessEnv = process.env): number {
   return Math.floor((tokens > 0 ? tokens : 25000) * 4 * 0.8);
 }
 
-export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };
+export { DEFAULT_OUT_DIR, inlineLimitChars, resolveOutDir, assertInsideCwd, writeJson, writePages, writeDesignSystem, writeLibrary, writeAssets, writeScreenAssets, assetsGeometryWarning, assetsHiddenLine, writeScreenshot, writeScreenVariables, writeExport, writeScreen, writeAny };

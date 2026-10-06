@@ -15,6 +15,7 @@ import { safe, errMsg, exportedAt, nonEmpty, isList } from "./util";
 import { toNodeId } from "../../bridge/src/node-id.ts";
 import { ifDefined } from "../../bridge/src/json-util.ts";
 import { NO_NODE_ID, type ListPagesArgs } from "../../bridge/src/commands.ts";
+import { deriveTitle, firstText, type TextWalkNode } from "../../bridge/src/pages-layout.ts";
 import { type Asset, assets, stats, resetRun, manifest, runOpts, warn, loadAllPages } from "./state";
 import { checkCancelled, enterPage, progress } from "./progress";
 import type { ReadOptName } from "../../bridge/src/read-opts.ts";
@@ -47,7 +48,13 @@ export interface DesignSystemResult { designSystem: BuiltDesignSystem }
 /** collectScreenshot: one node's reference PNG (its path; the bytes ride in `assets`). */
 export interface ScreenshotResult { id: string; name: string; type: string; reference: string; manifest: Manifest; assets: Asset[] }
 /** summarize(): the ONLY shape the cheap index reads emit — structure, never an export. */
-export interface NodeSummary { name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean }
+export interface NodeSummary {
+  name: string; id: string; type: string; w?: number; h?: number; hidden?: true; hasChildren?: boolean;
+  /** number of direct children, when they are readable */
+  childCount?: number;
+  /** first-visible-text title — only on rows that share name + size with another row (listChildren) */
+  title?: string;
+}
 export interface PageListing { name: string; id: string; current?: true; unreadable?: true; frames?: NodeSummary[] }
 export interface ListPagesResult {
   exportedAt: string; file: string; depth: 1 | 2; pages: PageListing[];
@@ -75,17 +82,38 @@ export interface CollectOpts extends Partial<Record<ReadOptName, boolean>> {
 // emits a stray reference asset. Keeping every root-only read here (rather than a `depth === 0`
 // branch inside the recursive serializer) means "computed once per exported root" has ONE home.
 // Callers attach ref/dev where their own doc shape wants them (inline vs sibling fields).
-async function serializeWithRefs(node: SceneNode): Promise<{ tree: IrNode | null; ref?: string; dev?: IrDevResource[] }> {
-  const tree = await serialize(node, 0);
+// `underHidden`: the root sits under a hidden ancestor (hiddenAncestor below) — page-walk roots are a
+// page's own children, so only the node/selection collectors ever pass it.
+async function serializeWithRefs(node: SceneNode, underHidden?: boolean): Promise<{ tree: IrNode | null; ref?: string; dev?: IrDevResource[] }> {
+  const tree = await serialize(node, 0, undefined, underHidden);
   if (!tree) return { tree: null };
   const [ref, dev, modes] = await Promise.all([collectReference(node), devResources(node), resolvedModes(node)]);
   if (modes) tree.resolvedModes = modes;
   return { tree, ...ifDefined("ref", ref || undefined), ...ifDefined("dev", dev || undefined) };
 }
 
+// Is any ANCESTOR of this root hidden? Walked once per root, up to its page: a frame pulled by id out
+// of a hidden panel is just as unrendered as the panel, and serialize() only sees downward from the
+// root. `parent` is a synchronous read under dynamic-page access (the node's page is loaded).
+function hiddenAncestor(node: BaseNode): boolean {
+  for (let p = node.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent) {
+    if ("visible" in p && p.visible === false) return true;
+  }
+  return false;
+}
+
 // Serialize a root and attach the enrichment inline (the shape both single-scope collectors want).
+// A root that is hidden itself or sits under a hidden ancestor (a frame pulled by id out of a hidden panel)
+// exports as usual, but none of its graphics is rendered (`assetSkipped:"hidden"`) and Figma may render
+// its reference blank — the root itself carries no flag for an ancestor, so the pull says so (M-4).
 async function rootTree(node: SceneNode): Promise<IrNode | null> {
-  const { tree, ref, dev } = await serializeWithRefs(node);
+  const self = "visible" in node && node.visible === false;
+  const underHidden = hiddenAncestor(node);
+  if (self || underHidden) {
+    warn("'" + node.name + "' (" + node.id + ") is hidden " + (self ? "itself" : "under a hidden ancestor") +
+      " — its graphics are not exported (assetSkipped:\"hidden\") and its reference image may be blank");
+  }
+  const { tree, ref, dev } = await serializeWithRefs(node, underHidden);
   if (!tree) return null;
   if (ref) tree.reference = ref;
   if (dev) tree.devResources = dev;
@@ -122,11 +150,91 @@ async function screenResult(title: string, fileBase: string, nodes: IrNode[], or
 // by listPages and listChildren so a new field can't be added to one index and missed on the other.
 // PageNode is admitted because listChildren on the DOCUMENT node lists pages; pages have neither a
 // size nor `visible`, which the `in` checks below already handle.
+// `childCount` is the `.length` of the children array — the one extra read, and the cheapest signal
+// that tells two same-name, same-size frames apart. A page that is not loaded throws on `.children`:
+// the count is then simply omitted (its loader already warned).
 function summarize(nd: SceneNode | PageNode): NodeSummary {
   const o: NodeSummary = { name: nd.name, id: nd.id, type: nd.type };
   if ("width" in nd) { o.w = Math.round(nd.width); o.h = Math.round(nd.height); }
   if ("visible" in nd && nd.visible === false) o.hidden = true;
+  if ("children" in nd) {
+    try {
+      o.childCount = nd.children.length;
+    } catch (e) { /* unreadable page — see above */ }
+  }
   return o;
+}
+
+// Rows of one listing that share (name, w, h): the case where an agent cannot tell which frame is
+// which (four "Screen" frames, all 1440×1236). Keyed only for rows that HAVE a size — a page has none.
+function collisionGroups(rows: ReadonlyArray<NodeSummary>): NodeSummary[][] {
+  const by = new Map<string, NodeSummary[]>();
+  for (const r of rows) {
+    if (typeof r.w !== "number") continue;
+    const k = JSON.stringify([r.name, r.w, r.h]);
+    const g = by.get(k);
+    if (g) g.push(r);
+    else by.set(k, [r]);
+  }
+  return Array.from(by.values()).filter((g) => g.length > 1);
+}
+function collisionNote(g: ReadonlyArray<NodeSummary>, what: string, tellBy: string): string {
+  const first = g[0];
+  const name = first ? first.name : "";
+  const size = first ? first.w + "×" + first.h : "";
+  return g.length + " " + what + " share name '" + name + "' and size " + size + " — told apart by " + tellBy +
+    "; when those match too, `dtwin screenshot <id> --scale 0.25` each (" + g.map((r) => r.id).join(", ") + ")";
+}
+
+// The title preview for a colliding row: the SAME rule the pages/ index uses (pages-layout deriveTitle —
+// "Page Title" slot first, else the first visible TEXT, hidden subtrees skipped), run over the live
+// node instead of an exported tree. The adapter is lazy — a node's children are wrapped one at a time,
+// only as a walker reaches them, and memoised so deriveTitle's second pass re-reads nothing — and every
+// node a walker VISITS counts toward TITLE_VISIT_CAP. The cap is PER SEARCH (L-5): the "Page Title"
+// slot search walks the whole tree, so when it runs out, the first-text fallback still gets its own
+// budget — a frame of 6000 cells whose first TEXT is its heading keeps that title. Only when the
+// fallback runs out too does the row carry none (and listChildren says so).
+const TITLE_VISIT_CAP = 5000;
+class TitleCapReached extends Error {}
+function titleOf(node: SceneNode | PageNode): string | undefined {
+  let visits = 0;
+  const visit = (): void => { if (++visits > TITLE_VISIT_CAP) throw new TitleCapReached(); };
+  const wrap = (n: SceneNode | PageNode): TextWalkNode => {
+    let src: ReadonlyArray<SceneNode> | undefined;
+    const kids: TextWalkNode[] = [];
+    const children: Iterable<TextWalkNode> = {
+      [Symbol.iterator]: (): Iterator<TextWalkNode> => {
+        let i = 0;
+        return {
+          next: (): IteratorResult<TextWalkNode> => {
+            if (!src) src = "children" in n ? n.children : [];
+            const c = src[i];
+            if (!c) return { done: true, value: undefined };
+            visit();
+            const w = kids[i] || (kids[i] = wrap(c));
+            i++;
+            return { done: false, value: w };
+          },
+        };
+      },
+    };
+    return {
+      name: n.name,
+      type: n.type,
+      hidden: "visible" in n && n.visible === false,
+      get text() { return n.type === "TEXT" ? n.characters : ""; }, // read only when a walker hits a TEXT
+      children,
+    };
+  };
+  visit();
+  const root = wrap(node);
+  try {
+    return deriveTitle(root);
+  } catch (e) {
+    if (!(e instanceof TitleCapReached)) throw e;
+  }
+  visits = 1; // the root, again
+  return firstText(root) || undefined; // throws TitleCapReached again only past the fallback's own budget
 }
 
 // Load ONE page, degrading to a warning. Deliberately not loadAllPagesAsync: the docs are explicit
@@ -433,6 +541,8 @@ export async function listPages(opts?: ListPagesArgs): Promise<ListPagesResult> 
         continue;
       }
       const frames = children.filter((nd) => TOP_LEVEL_TYPES.has(nd.type)).map(summarize);
+      // Same note as listChildren's, per page; no titles here — this index stays O(top-level frames).
+      for (const g of collisionGroups(frames)) sink("page '" + page.name + "': " + collisionNote(g, "frames", "`childCount`"));
       frameCount += frames.length;
       entry.frames = frames;
     }
@@ -487,15 +597,27 @@ export async function listChildren(rawId: string): Promise<ListChildrenResult> {
     await Promise.all((kids as ReadonlyArray<PageNode>).map((p) => loadPageSafely(p, sink, "— hasChildren omitted")));
   }
   for (const nd of kids) {
+    // A page that failed to load above: childCount (and so hasChildren) simply omitted — already
+    // warned by loadPageSafely.
     const c = summarize(nd);
-    if ("children" in nd) {
+    if (c.childCount !== undefined) c.hasChildren = c.childCount > 0;
+    children.push(c);
+  }
+  // `title` ONLY where it is needed: rows sharing name + size. Bounds the cost (a walk per row) to
+  // the ambiguous case instead of every listing.
+  for (const g of collisionGroups(children)) {
+    for (const row of g) {
+      const nd = kids.find((k) => k.id === row.id);
+      if (!nd) continue;
       try {
-        c.hasChildren = nd.children.length > 0;
+        const t = titleOf(nd);
+        if (t) row.title = t;
       } catch (e) {
-        // A page that failed to load above: hasChildren simply omitted (already warned by loadPageSafely).
+        if (!(e instanceof TitleCapReached)) throw e;
+        sink("no title for '" + row.name + "' (" + row.id + "): more than " + TITLE_VISIT_CAP + " nodes to search");
       }
     }
-    children.push(c);
+    sink(collisionNote(g, "children", "`title`/`childCount`"));
   }
   return {
     exportedAt: exportedAt(),

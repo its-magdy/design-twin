@@ -31,7 +31,9 @@ Field names are exact; units and shapes are in `../../build-screen/references/ir
 - **Designer notes.** Every `annotations[]` (`label`/`markdown`) and `devResources` (Jira/Storybook
   links) is a requirement — list them in the report and check the design honors them.
 - **Export completeness.** `manifest.truncated`/`assetsFailed`/`warnings`; nodes with `geometry`
-  (asset export failed) or `assetSkipped`.
+  (asset export failed) or `assetSkipped` (`true` = `--no-assets`; `"hidden"` = a hidden graphic, fine).
+  A `heavy-asset` with `embeddedRaster` and few paths is a raster inside an SVG shell — ask for a PNG/JPG, don't simplify.
+  Don't flag spacing on an icon/asset leaf: its inset is baked into the file.
 
 ## 2. Tokens and design-system binding
 - **Colors bound?** `fills[].tokens`, `strokes` tokens, `styles.fill`, text `textTokens.fills` /

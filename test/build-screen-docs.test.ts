@@ -444,4 +444,41 @@ console.log("build-screen docs (group 12b):");
   check("[12c F-2/F-8] verify skill: the reference is read from the project owning the expectation; a positive offset is a note",
     /project that owns the expectation/.test(v3[1] ?? "") && /alignment unverified/.test(v3[1] ?? ""));
 }
+console.log("build-screen docs (group 13, assets):");
+{
+  const irf = flat(read("claude-plugin/skills/build-screen/references/ir-fields.md"));
+  const exl = flat(read("claude-plugin/skills/build-screen/references/export-layout.md"));
+  const ext = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const readme = flat(read("bridge/README.md"));
+  const mcp = flat(read("bridge/src/figma-mcp.ts"));
+  const hv = flat(read("claude-plugin/skills/audit-design/references/heuristics.md"));
+  const ck = flat(read("claude-plugin/skills/audit-design/references/checklist.md"));
+  check("[13 DT-53] ir-fields: assetSkipped \"hidden\" + assetFrom (the visible twin's file, still hidden:true)", /`assetSkipped`.{0,400}`"hidden"`/.test(irf) && /`assetFrom`/.test(irf) && /keeps `hidden:true`/.test(irf));
+  check("[13 DT-72] ir-fields: sourceTransform is already drawn into the asset file — never rotate/flip again", /`sourceTransform`.{0,200}drawn into it\. Never rotate or flip/.test(irf) && /bare `rotation`\/`flipped` still applies on a `geometry` leaf/.test(irf));
+  check("[13 DT-50] ir-fields: layout is absent on asset/geometry/assetSkipped leaves", /`layout` is absent on asset, `geometry` and `assetSkipped` leaves/.test(irf));
+  check("[13 DT-53] extract manifest table: assetsHidden + hiddenNodes, and any geometry fallback warns", /\| `assetsHidden` \|/.test(ext) && /\| `hiddenNodes` \|/.test(ext) && /any fallback warns and names them/.test(ext));
+  check("[13 DT-54] export-layout: .assets.json row fields and 'search owner/name, not file names'", ["name", "owner", "context", "usedBy", "usedByCount", "hiddenUses", "reuseKey", "componentKey", "paintOverrides"].every((k) => exl.includes("`" + k + "`")) && /[Ss]earch `owner`\/`name`, not file names/.test(exl));
+  check("[13 DT-18] export-layout + SKILL: duplicates is a tolerant compare, not byte-identical", /±0\.01/.test(exl) && !/byte-identical/.test(skill) && /the same artwork under different names/.test(skill));
+  check("[13 DT-09] heavy: embeddedRaster named in export-layout, SKILL and the audit heuristics", /`embeddedRaster`/.test(exl) && /`embeddedRaster`/.test(skill) && /`embeddedRaster`/.test(hv) && /`embeddedRaster`/.test(ck));
+  check("[13 DT-50] audit docs: no spacing finding on icon/asset leaves", /never on an icon\/asset leaf/.test(hv) && /Don't flag spacing on an icon\/asset leaf/.test(ck));
+  // fix 1 (review 1)
+  check("[13 fix1 L-8/M-4] ir-fields + SKILL: an assetSkipped:\"hidden\" graphic is hidden itself or under a hidden ancestor (not \"is `hidden:true`\"); a hidden root warns",
+    /`"hidden"`: the graphic is hidden itself or under a hidden ancestor/.test(irf) && !/the graphic is `hidden:true`, so the plugin/.test(irf) && /hidden itself or under a hidden\s+ancestor/.test(skill) && !/a `hidden:true` graphic with `assetSkipped:"hidden"`/.test(skill) && /A pulled ROOT that is hidden itself or under a hidden\s+ancestor gets a pull warning/.test(irf));
+  check("[13 fix1 M-3] export-layout + README: `reusedFrom` marks another screen's file a hidden node reuses", /`reusedFrom`/.test(exl) && /`reusedFrom`/.test(readme));
+  check("[13 fix1 L-7] the raster-shell wording carries the paths rule (export-layout, audit heuristics)", /`embeddedRaster` with under 50 `paths`/.test(exl) && /`embeddedRaster` with under 50 `<path>`s/.test(hv));
+  // fix 2 (review 2): R2-6 — the counter is every node hidden itself or under a hidden ancestor.
+  check("[13 fix1 L-6/R2-6] README: the hidden-node pull line says themselves or under a hidden ancestor, not \"kept as hidden:true\"",
+    /N node\(s\) hidden \(themselves or under a hidden ancestor\) kept in the tree \(conditional UI\)/.test(readme) && !/kept as hidden:true/.test(readme));
+  check("[13 fix2 R2-6] extract manifest table: hiddenNodes is not \"kept as `hidden:true`\"",
+    /\| `hiddenNodes` \| nodes hidden themselves or under a hidden ancestor, kept in the tree/.test(ext) && !/nodes kept as `hidden:true`/.test(ext));
+  check("[13 fix2 R2-8] README + export-layout: an embedded image's numbers (<use>/<image> transform, <pattern> x/y/width/height) compare relatively",
+    [readme, exl].every((d) => /`<use>`\/`<image>`/.test(d) && /`<pattern>`'s\s+x\/y\/width\/height/.test(d) && /relatively, within 1 %/.test(d)));
+  check("[13 fix2 R2-1] ir-fields: a hidden graphic's twin has the same variable modes", /same component and parent variants, same variable modes, size/.test(irf));
+  check("[13 fix2 known misses] README limits: a stale sibling screen JSON (no component version), the title-cap fallback",
+    /however old/.test(readme) && /no\s+component version/.test(readme) && /falls back to the first text/.test(readme) && /differ from the\s+title the pages index/.test(readme));
+  check("[13 fix1 known misses] README limits: ancestor rotation/flip, pull-order dependence, one reuseKey per row, old-plugin warning",
+    /not an\s+ancestor's/.test(readme) && /depends on pull order/.test(readme) && /one `reuseKey`/.test(readme) && /old plugin still loaded/.test(readme));
+  check("[13 DT-04] list children: childCount + title on colliding rows + per-group warning (README and MCP tool)", /`childCount`/.test(readme) && /`title`/.test(readme) && /once per such group/.test(readme) && /childCount\/hasChildren/.test(mcp) && /share name \+ size also carry a `title`/.test(mcp));
+  check("[13] README: the pull summary lines (geometry warn, hidden info) are documented", /fell back to raw geometry/.test(readme) && /hidden graphic\(s\) not exported/.test(readme));
+}
 report();

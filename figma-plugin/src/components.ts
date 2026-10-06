@@ -142,7 +142,7 @@ function variantValues(main: ComponentNode): Record<string, string> | undefined 
 // Function type of serialize.ts's `serialize` — injected as a parameter rather than imported, since
 // serialize.ts already imports FROM components.ts (instanceComponentRef/componentPropRefs/
 // instanceOverrides) and a direct import back here would be a cycle.
-type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean) => Promise<IrNode | null>;
+type SerializeFn = (node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean) => Promise<IrNode | null>;
 
 // Per-variant visual/layout truth (opt-in, runOpts.variantVisuals): the master COMPONENT itself, not
 // the COMPONENT_SET wrapper's own selection-chrome visuals. Depth-capped well below serialize.ts's

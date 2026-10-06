@@ -3617,11 +3617,15 @@ void (async () => {
     ok("[ref-asset] the reference PNG still gets a manifest row, under `reference`", Array.isArray(doc.reference) && doc.reference.length === 1);
   }
   {
-    // Finding 30: a screen with a high `assetsGeometry` ratio should be flaggable at pull time.
+    // Finding 30: a screen with geometry fallbacks is flagged at pull time. D63 (group 13): every fallback
+    // left after the plugin stopped exporting hidden graphics is a real degraded vector, so ANY count warns —
+    // the old 10 % threshold (and its "a low ratio produces nothing" case) is gone on purpose.
     ok("[geometry-warn] a 40% geometry-fallback ratio produces a warning",
-      typeof writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) === "string");
-    ok("[geometry-warn] a low ratio produces nothing",
-      writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) === null);
+      /^warn {2}40 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 40 }) ?? ""));
+    ok("[geometry-warn] a low ratio warns too (D63: every fallback)",
+      /^warn {2}2 of 100 node\(s\) fell back to raw geometry/.test(writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 2 }) ?? ""));
+    ok("[geometry-warn] no fallback produces nothing",
+      writeOut.assetsGeometryWarning({ nodes: 100, assetsGeometry: 0 }) === null && writeOut.assetsGeometryWarning({ nodes: 100 }) === null);
   }
   {
     // Criterion 10, end to end: writeScreen() itself must surface the warning through `log` — not just

@@ -52,7 +52,11 @@ export interface TextWalkNode {
   name?: string;
   type?: string;
   text?: string;
-  children?: readonly TextWalkNode[];
+  /** a hidden DESCENDANT and its subtree are skipped by every walker; the walk's own root is read even
+   *  when hidden (a hidden frame pulled on its own keeps its title and texts — M-4) */
+  hidden?: boolean;
+  /** any iterable: an IR node's array, or the plugin's lazy live-node adapter (collect.ts titleOf) */
+  children?: Iterable<TextWalkNode>;
 }
 
 // Filesystem-boundary sanitiser for names that become paths. Asset filenames are NOT derived here —
@@ -71,11 +75,14 @@ export function safe(id: unknown): string {
 // "Global Policies" also appears as a `Sub titles` nav item on all three Organization-management
 // screens) — so the rule is: the first TEXT node inside a descendant literally named "Page Title",
 // and ONLY that; anywhere else and we would rather carry no title than a wrong one.
+// Every walker below skips a hidden CHILD (and so its subtree), never the node it was called on: `shown`.
+const shown = (c: TextWalkNode | null | undefined): c is TextWalkNode => !!c && typeof c === "object" && !c.hidden;
+
 export function firstByName(node: TextWalkNode | null | undefined, name: string): TextWalkNode | null {
   if (!node || typeof node !== "object") return null;
   if (node.name === name) return node;
   for (const c of node.children || []) {
-    const found = firstByName(c, name);
+    const found = shown(c) ? firstByName(c, name) : null;
     if (found) return found;
   }
   return null;
@@ -94,7 +101,7 @@ export function firstText(node: TextWalkNode | null | undefined): string | null 
     if (t && !PLACEHOLDER_TEXT.has(t.toLowerCase())) return node.text;
   }
   for (const c of node.children || []) {
-    const found = firstText(c);
+    const found = shown(c) ? firstText(c) : null;
     if (found) return found;
   }
   return null;
@@ -111,7 +118,7 @@ function firstNamedText(node: TextWalkNode | null | undefined, name: string): st
     return node.text;
   }
   for (const c of node.children || []) {
-    const found = firstNamedText(c, name);
+    const found = shown(c) ? firstNamedText(c, name) : null;
     if (found) return found;
   }
   return null;
@@ -140,8 +147,8 @@ export function collectTexts(root: TextWalkNode | null | undefined, limit?: numb
   const n = limit || 8;
   const seen = new Set<string>();
   const out: string[] = [];
-  (function walk(node: TextWalkNode | null | undefined): void {
-    if (!node || typeof node !== "object" || out.length >= n) return;
+  (function walk(node: TextWalkNode | null | undefined, isRoot: boolean): void {
+    if (!node || typeof node !== "object" || (node.hidden && !isRoot) || out.length >= n) return;
     if (node.type === "TEXT" && typeof node.text === "string") {
       const t = node.text.trim();
       if (t && !seen.has(t)) {
@@ -151,9 +158,9 @@ export function collectTexts(root: TextWalkNode | null | undefined, limit?: numb
     }
     for (const c of node.children || []) {
       if (out.length >= n) break;
-      walk(c);
+      walk(c, false);
     }
-  })(root);
+  })(root, true);
   return out;
 }
 

@@ -104,7 +104,31 @@ async function nodeCss(node: SceneNode): Promise<Record<string, string> | undefi
   }
 }
 
-export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean): Promise<IrNode | null> {
+// An asset/geometry/skipped node is a LEAF that ships as one picture, so its own `layout` (inferred
+// padding, or a real auto-layout icon frame's padding/gap) describes an inset the file already
+// contains — verify compared it and audit flagged it as off-grid spacing. Its role in its PARENT
+// (widthMode/heightMode/alignSelf/grow/absolute/x/y/box) stays: the builder still places the leaf.
+function leaf(out: IrNode): IrNode {
+  delete out.layout;
+  return out;
+}
+
+// exportAsync draws the node in its on-screen orientation (an `angle-left` VECTOR at rotation 90 +
+// flipped exports an 18×10 down chevron whose box already matches), so a bare rotation/flipped/skew
+// on an `asset` leaf invites a consumer to apply it a SECOND time. They move under sourceTransform:
+// what Figma already baked in, kept for provenance. Not for `geometry` leaves — fillGeometry is in the
+// node's local space, so their bare transform still applies.
+function bakeTransform(out: IrNode): void {
+  const st: NonNullable<IrNode["sourceTransform"]> = {};
+  if (out.rotation !== undefined) { st.rotation = out.rotation; delete out.rotation; }
+  if (out.flipped) { st.flipped = true; delete out.flipped; }
+  if (out.skew !== undefined) { st.skew = out.skew; delete out.skew; }
+  putNonEmpty(out, "sourceTransform", st);
+}
+
+// `underHidden`: some ANCESTOR is `visible:false`. A root's own ancestor chain is computed once by its
+// collector (collect.ts hiddenAncestor); below that it is threaded down here, never re-walked.
+export async function serialize(node: SceneNode, depth: number, parentControlsLayout?: boolean, underHidden?: boolean): Promise<IrNode | null> {
   if (depth > MAX_DEPTH) {
     stats.truncated++;
     if (stats.truncated === 1) warn("depth limit " + MAX_DEPTH + " reached — deep subtrees truncated (first: " + node.name + ")");
@@ -115,6 +139,8 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // are part of the design and must be implementable; codegen decides render vs display:none.
   const out: IrNode = { type: node.type, name: node.name, id: node.id };
   if ("visible" in node && node.visible === false) out.hidden = true;
+  const hidden = !!out.hidden || !!underHidden;
+  if (hidden) stats.hiddenNodes++;
 
   if (node.type === "INSTANCE" && node.componentProperties) {
     const props: ComponentPropValues = {};
@@ -373,7 +399,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     instanceComponentRef(node),
     boundTokens(node),
     nodeStyles(node),
-    collectAsset(node),
+    collectAsset(node, hidden),
     simplifyReactions(node),
     variableModes(node),
     runOpts.css ? nodeCss(node) : Promise.resolve(undefined),
@@ -397,19 +423,22 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
   // flattens this node to one SVG/PNG, so descending here would hand back a DIFFERENT tree than the
   // default export — the structural drift --no-assets promises not to cause. Flagged per-node (not
   // just counted in the manifest) so a consumer can tell "graphic omitted here" from "no graphic".
+  // A HIDDEN graphic is the same kind of leaf, marked `"hidden"`: it was never rendered (see
+  // collectAsset), and the bridge may point it at a visible twin's file (asset-owners.ts).
   if (asset && "skipped" in asset) {
-    out.assetSkipped = true;
-    return out;
+    out.assetSkipped = asset.skipped;
+    return leaf(out);
   }
   if (asset && "geometry" in asset) {
     // exportAsync refused a node that genuinely paints something, so its resolved outlines stand in.
     // Still a LEAF, exactly as a successful export would be — the paths ARE the whole subtree.
     out.geometry = asset.geometry;
-    return out;
+    return leaf(out);
   }
   if (asset) {
     out.asset = asset.path;
-    return out; // asset nodes are leaves — skip children
+    bakeTransform(out);
+    return leaf(out); // asset nodes are leaves — skip children
   }
 
   // Tables expose NO `children` — cells are reached only via cellAt(r,c).
@@ -449,7 +478,7 @@ export async function serialize(node: SceneNode, depth: number, parentControlsLa
     const controlsChildren = "layoutMode" in node && node.layoutMode && node.layoutMode !== "NONE";
     const kids: IrNode[] = [];
     for (const c of children) {
-      const s = await serialize(c, depth + 1, controlsChildren);
+      const s = await serialize(c, depth + 1, controlsChildren, hidden);
       if (s) kids.push(s);
     }
     if (kids.length) out.children = kids;

@@ -420,7 +420,7 @@ function isTextStylesDoc(x) {
 }
 isTextStylesDoc.expected = "a text-style sheet: an object with a `styles` array of {name, \u2026}";
 function isScreenAssetsDoc(x) {
-  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number") && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
+  return isObj(x) && optArrayOf(x.heavy, (h) => isObj(h) && typeof h.file === "string" && typeof h.bytes === "number" && (h.paths === void 0 || typeof h.paths === "number") && (h.embeddedRaster === void 0 || typeof h.embeddedRaster === "number")) && optArrayOf(x.files, (f) => isObj(f) && typeof f.file === "string" && optStr(f.node));
 }
 isScreenAssetsDoc.expected = "a screen asset manifest: an object whose `heavy` ({file, bytes}) and `files` ({file, node?}), when present, are arrays";
 function isLibrariesIndex(x) {
@@ -1388,6 +1388,14 @@ if (false) process.exitCode = main(process.argv.slice(2));
 
 // design-to-code/audit.ts
 import { parseArgs as parseArgs2 } from "node:util";
+
+// bridge/src/svg-normalize.ts
+var RASTER_SHELL_MAX_PATHS = 50;
+function isRasterShell(rasters, paths) {
+  return (rasters ?? 0) > 0 && (paths ?? 0) < RASTER_SHELL_MAX_PATHS;
+}
+
+// design-to-code/audit.ts
 var SEVERITY_ORDER2 = { blocker: 0, warning: 1, info: 2 };
 var TOUCH_MIN = { web: 24, ios: 44, android: 48, "react-native": 44, flutter: 48 };
 var PLATFORMS = Object.keys(TOUCH_MIN);
@@ -1656,7 +1664,7 @@ function audit(input, opts = {}) {
       }
       if (!hiddenBranch) textChecks(node, ancestors, here);
     }
-    if (node.layout) {
+    if (node.layout && !isAssetLeaf && !node.assetSkipped) {
       const L = node.layout;
       const spacing = [];
       if (typeof L.gap === "number") spacing.push(["gap", L.gap, hasTok(node, "itemSpacing")]);
@@ -1883,14 +1891,9 @@ function audit(input, opts = {}) {
       const nodeId = (Array.isArray(a.files) ? a.files : []).find((f) => f.file === h.file)?.node;
       if (nodeId && hiddenIds.has(nodeId)) continue;
       const node = nodeId ? nodesById.get(nodeId) : void 0;
-      add(
-        "info",
-        "heavy-asset",
-        `'${h.file}' is ${(h.bytes / 1048576).toFixed(2)} MB${h.paths ? ` / ${h.paths} <path> elements` : ""} \u2014 too heavy to inline; import it by URL, or ask the designer for a raster export. Do not redraw or simplify it`,
-        node || null,
-        { label },
-        { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths) }
-      );
+      const mb = (h.bytes / 1048576).toFixed(2);
+      const msg = isRasterShell(h.embeddedRaster, h.paths) ? `'${h.file}' is ${mb} MB \u2014 a raster image embedded in an SVG shell; use it as an image (<img src>/URL import) or ask the designer for a PNG/JPG export of that layer. Do not inline it` : `'${h.file}' is ${mb} MB${h.paths ? ` / ${h.paths} <path> elements` : ""} \u2014 too heavy to inline; import it by URL, or ask the designer for a raster export. Do not redraw or simplify it`;
+      add("info", "heavy-asset", msg, node || null, { label }, { file: h.file, bytes: h.bytes, ...ifDefined("paths", h.paths), ...ifDefined("embeddedRaster", h.embeddedRaster) });
     }
   }
   for (const n of navigations.values()) {
