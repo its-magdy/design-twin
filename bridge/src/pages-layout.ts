@@ -92,7 +92,7 @@ export function firstByName(node: TextWalkNode | null | undefined, name: string)
 // literal string "Text" (verified in the real export: a `Page Title` instance's leading `Breadcrumb`
 // child carries one, "Back to Employees" style nav trails do too) — never a real title, so it is
 // excluded rather than trusted as "the first text we found".
-const PLACEHOLDER_TEXT = new Set(["text", "label"]);
+export const PLACEHOLDER_TEXT: ReadonlySet<string> = new Set(["text", "label"]);
 
 export function firstText(node: TextWalkNode | null | undefined): string | null {
   if (!node || typeof node !== "object") return null;

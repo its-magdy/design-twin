@@ -1157,13 +1157,20 @@ function crossCheck(input) {
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f2) => f2.name));
+    const foreignKeys = new Set(fp.foreign.map((f2) => f2.key).filter((k) => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k) => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
     const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
     const seen = /* @__PURE__ */ new Set();
     for (const v of screenVars) {
-      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      if (!v || !v.name || !v.collection) continue;
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
       const id = v.key || `${v.collection}\0${v.name}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
       const dv = dsVarByName.get(v.name);
       if (!dv) {
         nameMap.absent++;
@@ -1177,12 +1184,12 @@ function crossCheck(input) {
     const n = seen.size;
     let offline = "";
     if (n) {
-      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "");
+      offline = `Offline check (no Figma needed): of the ${n} variables in those collections, ${nameMap.agree} have a design-system variable of the same name resolving the same in every shared mode, ${nameMap.differ} resolve differently (listed as token-name-collision), ${nameMap.undecidable} cannot be compared (no shared mode), ${nameMap.absent} have no same-name variable. ` + (nameMap.differ === 0 && nameMap.agree > 0 ? `Mapping by NAME is safe for the ${nameMap.agree}: the screen's own .vars.json is the ground truth for names and values. ` : "") + (nameMap.agree === 0 && nameMap.absent === n ? `None of them exists here by name \u2014 this is not the screen's library; pull the one it uses. ` : "") + (ambiguous ? `(${ambiguous} of them come from a collection whose name a design-system collection also has \u2014 this export predates collection keys on variables; re-pull to tell them apart.) ` : "");
     }
     const f = findings[fp.at];
     if (f) {
       f.message = fp.head + offline + fp.tail;
-      f.nameMap = nameMap;
+      f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap;
     }
   }
   if (tokens && screenVarByName.size) {

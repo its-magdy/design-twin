@@ -132,6 +132,8 @@ export interface NodeSummary {
   childCount?: number;
   /** first-visible-text title, only on rows that share name + size with another row of the same listing */
   title?: string;
+  /** K-6 (D145): colliding rows whose titles do not tell them apart — ≤ 3 texts this row shows and its twins do not */
+  distinctTexts?: string[];
 }
 /** One page of a listPages reply. `frames` is present at depth 2 only, and absent on an `unreadable` page. */
 export interface PageSummary {

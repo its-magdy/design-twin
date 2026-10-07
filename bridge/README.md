@@ -294,7 +294,10 @@ Don't confuse it with its two neighbors:
 - `--children <id>` peeks at one node's **direct children only** — no recursion, no assets, for
   deciding whether to pull further. Each row has `childCount`; rows sharing name + size also get a
   `title` (the first visible text), and the listing warns once per such group ("N children share name
-  … and size … — told apart by `title`/`childCount`").
+  … and size … — told apart by `title`/`childCount`"). When the titles match too, those rows also get
+  `distinctTexts` (up to 3 texts that row shows and its twins do not); the listing shares one budget of
+  node reads, and a group with a row it runs out on gets none, with one warning naming them. When a row has
+  no `distinctTexts`, screenshot each candidate.
 - `--screenshot <id>` renders a **PNG only** — skips `serialize()` and the asset walk entirely, for
   visual validation after you've already generated code.
 - `--node <id>` is the one that actually **exports** — real node tree + real assets, just scoped
@@ -819,6 +822,7 @@ Pre-approve tools in `.claude/settings.json`:
   component version to check). Re-pull every screen in a sync.
 - `list children` titles a colliding row from its "Page Title" slot; when that search runs past its node
   cap (a very large frame), the row's `title` falls back to the first text — which can differ from the
-  title the pages index gives the same screen after a pull.
+  title the pages index gives the same screen after a pull. `distinctTexts` reads the same way, with a
+  budget of 20000 node reads for the whole listing (a group with a row it cuts off gets none — see the warning).
 - Write ops are a deliberately small, explicit set — extend `applyWrite()` in
   `../figma-plugin/src/writes.ts` (rebuild `code.js`) and add a matching `registerTool` here as needed.

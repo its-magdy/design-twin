@@ -128,7 +128,10 @@ only. A library's components need it on the `--as-library` pull (in the library 
 **Several frames with the same name?** Real files have them — one page held two frames with the same
 name and the same size. `list children` gives every row a `childCount`, and rows that share name + size a
 `title` (the first visible text) plus one warning per group — often enough. When the titles collide too
-(a shared section heading), don't take the first id: `dtwin screenshot <id>` renders ONE node to
+(a shared section heading), those rows also get `distinctTexts` (up to 3 texts that row shows and its twins
+do not) — read them before pulling; when a listing is so large that its node-read budget runs out, the
+remaining rows get none and one warning says `distinctTexts` was skipped. When `distinctTexts` is empty or
+missing, don't take the first id: `dtwin screenshot <id>` renders ONE node to
 `design/export/assets/<id>_ref.png` cheaply (no `serialize()`, no asset walk, well under a second
 warm). Shoot each candidate, look, then pull the right one. At the default scale that PNG lands in
 exactly the place a later `--node` pull of the same frame writes its own reference, so shooting first

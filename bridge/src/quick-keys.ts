@@ -37,8 +37,8 @@ Read these before writing ANY script against an export JSON (field names guessed
   or \`absolute:true\`); inside an auto-layout parent the position comes from the parent's \`layout\` (padding, gap,
   order). \`layout.inferred:true\` is a guess on a frame without auto layout — its children still carry \`x\`/\`y\`.
 - **\`absolute:true\`** = out of the parent's auto-layout flow, placed by \`x\`/\`y\`; absent = in flow. \`layout\` describes
-  how a node lays out ITS OWN children: \`layout.mode:"absolute"\` means "no auto layout inside" (every TEXT carries it)
-  — it never means the node itself is absolute.
+  how a node lays out ITS OWN children, so only a node that can hold children has it: \`layout.mode:"absolute"\` =
+  no auto layout inside — it never means the node itself is absolute.
 - **Child order.** \`children[]\` is Figma's layer list: paint order bottom → top (reversed when the parent's
   \`layout.reverseZ\` is set). In an auto-layout parent it is also the flow order (first = leading); otherwise — and for
   every \`absolute:true\` child — the visual order comes only from \`x\`/\`y\`.
@@ -46,8 +46,10 @@ Read these before writing ANY script against an export JSON (field names guessed
   flagged on its account (they may carry their own). Skip a node when it OR ANY ANCESTOR is hidden. There is no
   node-level \`visible\` key.
 - **Scroll.** \`clip:true\`; \`scroll\` (\`horizontal\`/\`vertical\`/\`both\`, a node field — not under \`layout\`);
-  \`fixedChildren:N\` = the LAST N entries of \`children[]\` stay pinned while the rest scrolls (Figma keeps them on top);
-  place each by its \`y\` (top bar → sticky top, bottom bar → sticky bottom). A "Sticky" child is not marked at all.
+  \`fixedChildren:N\` = the LAST N entries of \`children[]\` stay pinned while the rest scrolls (Figma moves fixed layers
+  to the top of the layer list); fixed only — "sticky" is not exposed, so a Sticky child is not marked. Each pinned
+  child carries \`x\`/\`y\` (in an auto-layout frame Figma lets only an \`absolute:true\` child be fixed); place it by its
+  \`y\` (top bar → sticky top, bottom bar → sticky bottom).
 - **Render bounds.** \`renderBox\` (only when it differs from \`box\`) = Figma's render bounds: larger than \`box\` for
   shadow / stroke / blur; on a TEXT usually smaller than \`box\` (observed).
 - **Three \`strokes\`.** \`strokes\` is always an object (\`colors[]\`, \`weight\` or \`weights{}\`, \`align\`…);
@@ -59,5 +61,8 @@ Read these before writing ANY script against an export JSON (field names guessed
 - **Files.** \`asset\` and \`reference\` are paths relative to \`design/export/\` (\`assets/<file>\`); \`assetFrom\` = a hidden
   graphic reusing a visible twin's file; \`assetSkipped\` = no file at all. \`<Screen>.assets.json\`
   (single-screen pulls) lists every file.
-- **Noise to ignore.** \`gridColumnStart:-1\` / \`gridRowStart:-1\` on a node that is not a grid child (observed).
+- **Older exports.** A file pulled with an older plugin also has \`gridColumnStart:-1\` / \`gridRowStart:-1\` on every node,
+  \`gridAlignSelf\` / \`gridJustifySelf\` on a node whose parent is not a grid, and \`layout.mode:"absolute"\` on every
+  TEXT, shape, SLICE, STICKY and other leaf type (a node TYPE that cannot hold children has no \`layout\` now) — ignore all of it
+  (design-diff does).
 `;

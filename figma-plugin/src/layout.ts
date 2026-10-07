@@ -115,7 +115,11 @@ interface LayoutNode extends FlexLike {
 }
 
 // Auto Layout -> flex intent. NONE with an inferred layout -> flex (flagged). NONE otherwise -> absolute.
+// `layout` describes how a node lays out ITS OWN children, so only a node that can hold children gets
+// one: TEXT/TEXT_PATH and the shapes/vectors have no `children` (no ChildrenMixin), and their
+// `{mode:"absolute",width,height}` only repeated box.w/h. A childless FRAME/GROUP/INSTANCE keeps it.
 export function layout(node: SceneNode): LayoutSpec | undefined {
+  if (!("children" in node)) return undefined;
   const n = node as SceneNode & LayoutNode;
   if (!("layoutMode" in node) || n.layoutMode === "NONE") {
     // inferredAutoLayout upgrades a non-auto-layout frame to flex intent (better than raw coords).

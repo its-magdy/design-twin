@@ -453,7 +453,7 @@ Copy this checklist into your notes and keep it updated:
      strings and its own navigation stack is not done.
    - **Layout** — the profile's stack constructs from `layout`; `fill` → stretch, `hug` → intrinsic,
      fixed only when truly fixed; `sizeLimits` → min/max. `layout.mode:"absolute"` means no auto layout
-     inside that node (every TEXT carries it; the node's own out-of-flow flag is `absolute:true`) — infer
+     inside that node (only on nodes that hold children; the node's own out-of-flow flag is `absolute:true`) — infer
      a flow, never transcribe coordinates. Real grids stay grids. `clip`/`scroll`/`fixedChildren` (the LAST
      N entries of `children[]`) → the profile's scroll & sticky section.
    - **Text** — map to the type scale by style name; convert `lineHeight`/`letterSpacing` **with their

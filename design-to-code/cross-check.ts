@@ -194,7 +194,7 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
     if (c.name) dsCollByName.set(norm(c.name), c);
   }
   const screenColls = (variables && variables.collections) || [];
-  let foreignPatch: { foreign: Array<{ name: string }>; head: string; tail: string; at: number } | null = null;
+  let foreignPatch: { foreign: Array<{ name: string; key?: string }>; head: string; tail: string; at: number } | null = null;
 
   if (!tokens) {
     notChecked.push(
@@ -327,19 +327,30 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
   }
 
   // DT-07: classify the screen's variables in the flagged foreign collections against the design system BY
-  // NAME (collection-blind, K-4): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
-  // Collections are matched by NAME too: when the screen uses two collections of one name (two `Spacing`,
-  // different keys) and only one is flagged, the other's variables are counted in as well (K-4).
+  // NAME (collection-blind): agree / differ / undecidable / absent — the offline answer to "can I map by name?".
+  // Which variables are IN a foreign collection is decided by the collection's KEY when the row carries one
+  // (`collectionKey`, FU-namemap: names repeat — two `Spacing`, one of them the design system's own). An
+  // export from before collection keys has only the collection NAME: those rows are matched by name as
+  // before, and counted in `ambiguous` when a non-foreign collection of the screen has that name too (the
+  // row may belong to either of them).
   if (foreignPatch) {
     const fp = foreignPatch;
     const foreignNames = new Set(fp.foreign.map((f) => f.name));
+    const foreignKeys = new Set(fp.foreign.map((f) => f.key).filter((k): k is string => !!k));
+    const screenKeys = new Set(screenColls.map((c) => c.key).filter((k): k is string => !!k));
+    const sharedNames = new Set(screenColls.filter((c) => c.key && dsCollByKey.has(c.key) && foreignNames.has(c.name)).map((c) => c.name));
     const nameMap = { agree: 0, differ: 0, undecidable: 0, absent: 0 };
+    let ambiguous = 0;
     const seen = new Set<string>();
     for (const v of screenVars) {
-      if (!v || !v.name || !v.collection || !foreignNames.has(v.collection)) continue;
+      if (!v || !v.name || !v.collection) continue;
+      // A key the screen's collection list does not know cannot select anything: fall back to the name.
+      const byKey = !!v.collectionKey && screenKeys.has(v.collectionKey);
+      if (byKey ? !foreignKeys.has(v.collectionKey ?? "") : !foreignNames.has(v.collection)) continue;
       const id = v.key || `${v.collection}\u0000${v.name}`;
       if (seen.has(id)) continue;
       seen.add(id);
+      if (!byKey && sharedNames.has(v.collection)) ambiguous++;
       const dv = dsVarByName.get(v.name);
       if (!dv) { nameMap.absent++; continue; }
       const r = sameResolution(v, dv);
@@ -357,10 +368,13 @@ function crossCheck(input: CrossCheckInput): CrossCheckReport {
           : "") +
         (nameMap.agree === 0 && nameMap.absent === n
           ? `None of them exists here by name — this is not the screen's library; pull the one it uses. `
+          : "") +
+        (ambiguous
+          ? `(${ambiguous} of them come from a collection whose name a design-system collection also has — this export predates collection keys on variables; re-pull to tell them apart.) `
           : "");
     }
     const f = findings[fp.at];
-    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = nameMap; }
+    if (f) { f.message = fp.head + offline + fp.tail; f.nameMap = ambiguous ? { ...nameMap, ambiguous } : nameMap; }
   }
 
   if (tokens && screenVarByName.size) {
