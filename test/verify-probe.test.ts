@@ -592,6 +592,14 @@ t("[M3] 'Target page, context or browser has been closed' (or a closed page) →
   errorKind("page.evaluate: Target page, context or browser has been closed", false) === "gone" && errorKind("anything", true) === "gone");
 t("[M3] a destroyed execution context → navigated", () => errorKind("page.evaluate: Execution context was destroyed, most likely because of a navigation", false) === "navigated");
 t("[M3] an unrelated message that merely says 'navigating' is not a reload", () => errorKind("locator.hover: element is navigating away? (invented)", false) === "other");
+// D135 (ABORT-2): a failed load's cause in plain words — a 204 and a download both end net::ERR_ABORTED; the thrown message
+// tells them apart; another cause is Playwright's first line, as before
+t("[D135 ABORT-2] loadFailureWhy: net::ERR_ABORTED → no document (e.g. 204 No Content) or the page stopped its own load",
+  () => /^the browser cancelled the navigation before any page arrived \(net::ERR_ABORTED\) — the URL answered with no document \(e\.g\. 204 No Content\) or the page stopped its own load; point it at the page that renders the screen$/.test(VP.loadFailureWhy("page.goto: net::ERR_ABORTED at http://h/none\nCall log:\n  - navigating")));
+t("[D135 ABORT-2] loadFailureWhy: 'Download is starting' → a file download, not a page",
+  () => VP.loadFailureWhy("page.goto: Download is starting\nCall log:\n  - navigating") === "the URL started a file download, not a page — point it at the page that renders the screen");
+t("[D135 ABORT-2] loadFailureWhy: another cause → its first line, unchanged",
+  () => VP.loadFailureWhy("page.goto: net::ERR_CONNECTION_REFUSED at http://h/\nCall log:") === "page.goto: net::ERR_CONNECTION_REFUSED at http://h/");
 
 // real expected.json rows (buildExpectation), not hand-typed specs
 {

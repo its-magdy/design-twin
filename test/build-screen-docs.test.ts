@@ -720,6 +720,19 @@ console.log("build-screen docs (group 17):");
     /and of every module the plan's anchors\/components map/.test(skill) && /resolves like an import, `\.tsx`\/`\.ts`\/`\.jsx`\/`\.js` then `\/index\.\*`/.test(skill) && /`--status` and the verify report name it once/.test(skill));
   check("[L4] verify skill: paintedBy's known miss — a sibling/overlay painting over the element may pass; children painting all of it → no painter",
     /A sibling or overlay painting over the element is not seen \(it may pass\)/.test(verifySkill) && /its own children paint all over gets no painter/.test(verifySkill));
+  // group 20 (DOC-1)
+  const readme20 = flat(read("bridge/README.md"));
+  const help20 = flat(read("claude-plugin/skills/help/SKILL.md"));
+  const extract20 = flat(read("claude-plugin/skills/extract/SKILL.md"));
+  const audit20 = flat(read("claude-plugin/skills/audit-design/SKILL.md"));
+  check("[DOC-1a] README + help: an owning MCP server exits when its client goes away, unless its socket was used, then idles out on FIGMA_DAEMON_IDLE_MIN",
+    [readme20, help20].every((d) => /exits when its client goes away/.test(d) && /FIGMA_DAEMON_IDLE_MIN/.test(d) && /unless another process has used/.test(d)));
+  check("[DOC-1b] extract + README: the implicit page/full spill keeps <file>.json.prev (wrote.prevKept) AND a screen spill keeps <screen>.json.prev (wrote.prev) — D137",
+    [readme20, extract20].every((d) => /page\/full\/design-system\/library spill/.test(d) && /\.json\.prev/.test(d) && /prevKept/.test(d)
+      && /screen spill keeps `<screen>\.json\.prev` \(`wrote\.prev`\)|screen spill as `<screen>\.json\.prev` \(`wrote\.prev`\)/.test(d)));
+  check("[DOC-1c] build-screen + audit-design: the legacy code#i id is accepted with a warning",
+    [skill, audit20].every((d) => /`code#i` is still accepted,? \(?with a warning/.test(d)));
+  check("[DOC-1d] README + extract: outDir is checked before the export", [readme20, extract20].every((d) => /before the export/.test(d)));
 }
 
 report();

@@ -513,11 +513,25 @@ async function ownGoto(page: Page, log: NavLog, url: string, timeout: number): P
   };
   // fix 6: committed = the NEWEST main-frame navigation was answered — a page that arrives, then (before its load) goes on
   // to a server that never answers is "could not load", not measured (its evaluates would wait on that request for good)
+  // D135: a newest navigation the browser cancelled (net::ERR_ABORTED — the page's own `location.href = …; window.stop()`)
+  // brought no new document: the one before it (committed or not) is still the page — restore its state. A 204 or a
+  // download commits (response < 300) and then fails ERR_ABORTED, so it goes back to the state before it: no document.
+  let newest: Request | null = null;
+  let before = false;
   const onRequest = (r: Request): void => {
-    try { if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.redirectedFrom() === null) committed = false; } catch { /* no frame */ }
+    try {
+      if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.redirectedFrom() === null) { newest = r; before = committed; committed = false; }
+    } catch { /* no frame */ }
+  };
+  const onFailed = (r: Request): void => {
+    // a cancelled navigation that was redirected fails on its LAST hop: compare the chain's first request
+    let root: Request = r;
+    for (let up = root.redirectedFrom(); up !== null; up = up.redirectedFrom()) root = up;
+    if (root === newest && /net::ERR_ABORTED/.test(r.failure()?.errorText ?? "")) committed = before;
   };
   page.on("request", onRequest);
   page.on("response", onResponse);
+  page.on("requestfailed", onFailed);
   try {
     await page.goto(url, { waitUntil: "load", timeout });
   } catch (e) {
@@ -535,7 +549,19 @@ async function ownGoto(page: Page, log: NavLog, url: string, timeout: number): P
   } finally {
     page.off("response", onResponse);
     page.off("request", onRequest);
+    page.off("requestfailed", onFailed);
   }
+}
+
+/** D135: a plain-language cause for a failed load (Playwright's first line otherwise). A 204 and a download both end
+ *  net::ERR_ABORTED as a request; only the goto's thrown message tells them apart ("Download is starting"). */
+export function loadFailureWhy(message: string): string {
+  const first = message.split("\n")[0] ?? "";
+  if (/Download is starting/i.test(first)) return "the URL started a file download, not a page — point it at the page that renders the screen";
+  if (/net::ERR_ABORTED/.test(first)) {
+    return "the browser cancelled the navigation before any page arrived (net::ERR_ABORTED) — the URL answered with no document (e.g. 204 No Content) or the page stopped its own load; point it at the page that renders the screen";
+  }
+  return first;
 }
 
 /** Replay the steps (each settles after it). Which loads are the steps' own (added to log.gotos, never "after the initial
@@ -562,7 +588,7 @@ async function runSteps(page: Page, log: NavLog, o: ProbeOptions): Promise<void>
         await ownGoto(page, log, target.href, o.timeout);
       } catch (e) {
         if (e instanceof BrowserGoneError) throw e;
-        throw new StepError(`${name} could not load ${target.href}: ${errMsg(e).split("\n")[0]}`);
+        throw new StepError(`${name} could not load ${target.href}: ${loadFailureWhy(errMsg(e))}`);
       } finally {
         log.owner = null; // a goto ends the previous click's ownership too
       }
@@ -619,7 +645,7 @@ async function reachPage(page: Page, log: NavLog, o: ProbeOptions): Promise<Sett
     await ownGoto(page, log, o.url, o.timeout);
   } catch (e) {
     if (e instanceof BrowserGoneError) throw e;
-    throw new UnreachableError(`could not load ${o.url}: ${errMsg(e).split("\n")[0]}`);
+    throw new UnreachableError(`could not load ${o.url}: ${loadFailureWhy(errMsg(e))}`);
   }
   const steps = o.steps || [];
   if (!steps.length) return settle(page, log, o.ready, o.timeout);

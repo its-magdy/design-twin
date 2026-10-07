@@ -283,7 +283,7 @@ Copy this checklist into your notes and keep it updated:
      the user has decided to build past it, record that decision in the plan's
      `auditGate: {auditFile, crossCheckFile, verdict, overridden: [<blocker ids>], reason, decidedBy, decidedAt}` —
      a blocker id is the finding's `id`: its `code`, or `code@nodeId` when it carries a node (a repeat gets
-     `~2`); the old positional `code#i` is still accepted, and so, for a finding with no node, is its bare
+     `~2`); the old positional `code#i` is still accepted (with a warning mapping it to the stable id and naming stale ones "(drop it)"), and so, for a finding with no node, is its bare
      code (which is its id). `crossCheckFile` is the cross-check report beside the audit
      (`<audit>.cross.json`), when there is one. `plan-skeleton.js` pre-fills it from the audit; the Stop hook warns (never blocks) if a current
      blocker id is missing from `overridden` or `reason` is empty.

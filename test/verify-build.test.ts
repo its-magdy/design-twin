@@ -1593,7 +1593,24 @@ void build(tmp).then(async () => {
     };
     const gateWith = (overridden: string[]): string[] => auditGateWarnings({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } }, mk(), null);
     const legacy = gateWith(["missing-font#0", "token-name-collision#1"]);
-    check(`[F44-2] a plan overriding the legacy positional ids (missing-font#0, token-name-collision#1) still covers its blockers (got ${JSON.stringify(legacy)})`, legacy.length === 0);
+    const notListed = (w: string[]): string[] => w.filter((x) => /not listed in this plan's auditGate\.overridden/.test(x));
+    const legacyWarn = (w: string[]): string[] => w.filter((x) => /old positional id/.test(x));
+    check(`[F44-2] a plan overriding the legacy positional ids (missing-font#0, token-name-collision#1) still covers its blockers — no "not listed" warning (got ${JSON.stringify(legacy)})`, notListed(legacy).length === 0);
+    // LEG-2 (D134): …but exactly ONE non-blocking warning maps each legacy entry to its stable id.
+    const lw = legacyWarn(legacy);
+    check(`[LEG-2] legacy ids: exactly one warning, naming both → pairs (got ${JSON.stringify(legacy)})`,
+      legacy.length === 1 && lw.length === 1 && (lw[0] ?? "").includes("missing-font#0 → missing-font@1:1") && (lw[0] ?? "").includes("token-name-collision#1 → token-name-collision") && !/drop it/.test(lw[0] ?? ""));
+    const stableOnly = gateWith(["missing-font@1:1", "token-name-collision"]);
+    check(`[LEG-2] stable ids only: no legacy warning at all (got ${JSON.stringify(stableOnly)})`, stableOnly.length === 0);
+    const stale = gateWith(["missing-font@1:1", "token-name-collision", "contrast#3"]);
+    check(`[LEG-2] a positional entry matching no blocker is named "(drop it)" (got ${JSON.stringify(stale)})`,
+      stale.length === 1 && /no current blocker: contrast#3 \(drop it\)/.test(stale[0] ?? "")
+      // D137: only stale entries → no "Replace each with its stable id" (there is nothing to replace)
+      && /None of them covers a current blocker/.test(stale[0] ?? "") && !/Replace each with its stable id/.test(stale[0] ?? ""));
+    const both = gateWith(["missing-font#0", "token-name-collision", "contrast#3"]);
+    check(`[LEG-2] a legacy cover and a stale entry share ONE warning (got ${JSON.stringify(both)})`,
+      both.length === 1 && (both[0] ?? "").includes("missing-font#0 → missing-font@1:1") && (both[0] ?? "").includes("contrast#3 (drop it)")
+      && /Replace each with its stable id/.test(both[0] ?? ""));
     const bare = gateWith(["missing-font@1:1", "token-name-collision"]);
     check(`[F44-3] a plan overriding the bare code of a node-less blocker (token-name-collision) covers it (got ${JSON.stringify(bare)})`, bare.length === 0);
     const none = gateWith([]);
@@ -1602,7 +1619,25 @@ void build(tmp).then(async () => {
       none.length === 1 && msg.includes("missing-font@1:1") && msg.includes("token-name-collision") && !/#\d/.test(msg));
     const mixed = gateWith(["missing-font#0"]);
     check("[F44-4] a legacy id covers only its own blocker — the other is still listed by its new id",
-      mixed.length === 1 && (mixed[0] ?? "").includes("token-name-collision") && !(mixed[0] ?? "").includes("missing-font"));
+      notListed(mixed).length === 1 && (notListed(mixed)[0] ?? "").includes("token-name-collision") && !(notListed(mixed)[0] ?? "").includes("missing-font"));
+  }
+  // LEG-1 (D134, FU-legacy-id): a position shifts when an earlier blocker is fixed. Two missing-font blockers; the
+  // plan overrode `missing-font#0` (the first). Once 1:1 is fixed the audit holds only missing-font@2:2 — which is
+  // now `missing-font#0`, so the old entry silently covers a DIFFERENT blocker. The warning must say so.
+  {
+    const mkAudit = (nodes: string[]): string => {
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "leg1-"));
+      fs.mkdirSync(path.join(d, "design", "audit"), { recursive: true });
+      fs.writeFileSync(path.join(d, "design", "audit", "Sample_Screen__1_1.json"), JSON.stringify({ summary: { blockers: nodes.length, warnings: 0, info: 0 }, findings: nodes.map((nodeId) => ({ severity: "blocker", code: "missing-font", message: "font", nodeId })) }));
+      return d;
+    };
+    const planOver = (overridden: string[]): Plan => ({ screenName: "Sample Screen", auditGate: { auditFile: "design/audit/Sample_Screen__1_1.json", verdict: "blocked", overridden, reason: "acknowledged", decidedBy: "owner", decidedAt: "2026-10-07" } });
+    const before = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["1:1", "2:2"]), null);
+    check(`[LEG-1] before the fix: missing-font#0 covers 1:1, 2:2 is still not listed (got ${JSON.stringify(before)})`,
+      before.some((x) => /not listed/.test(x) && x.includes("missing-font@2:2")) && before.some((x) => x.includes("missing-font#0 → missing-font@1:1")));
+    const after = auditGateWarnings(planOver(["missing-font#0"]), mkAudit(["2:2"]), null);
+    check(`[LEG-1] 1:1 fixed: the shifted missing-font#0 now covers 2:2 — the warning names missing-font#0 → missing-font@2:2 (got ${JSON.stringify(after)})`,
+      after.length === 1 && (after[0] ?? "").includes("missing-font#0 → missing-font@2:2"));
   }
 
   {

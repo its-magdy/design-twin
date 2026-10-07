@@ -72,7 +72,7 @@ const NODE_SUITES: readonly string[] = [
   "verify-probe-drive-e2e.test.ts", "verify-own-pixels.test.ts", "verify-probe-behaviour-e2e.test.ts",
   "visual-diff.test.ts", "verify-visual.test.ts", "verify-probe-visual-e2e.test.ts", "cross-check.test.ts",
   "design-diff.test.ts", "identity.test.ts", "plan-skeleton.test.ts", "resolve-screen.test.ts", "ui.test.ts",
-  "mcp-share.test.ts", "mcp-smoke.test.ts",
+  "mcp-share.test.ts", "mcp-smoke.test.ts", "mcp-lifecycle.test.ts",
   // group 16: this runner's own self-test (fast, so early)
   "run-suites.test.ts",
 ];
