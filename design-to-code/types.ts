@@ -177,18 +177,25 @@ export type AuditFindingCode =
   | "stroke-align" | "fixed-size-text" | "contrast-manual" | "low-contrast" | "negative-spacing" | "off-grid-spacing"
   | "corner-smoothing" | "shadow-spread" | "background-blur" | "progressive-blur" | "exotic-effect" | "blend-mode"
   | "small-touch-target" | "near-duplicate-colors" | "missing-component-states" | "component-states-unchecked"
-  | "low-token-binding" | "heavy-asset" | "prototype-navigation" | "state-in-sibling" | "unexported-frames";
+  | "low-token-binding" | "heavy-asset" | "prototype-navigation" | "state-in-sibling" | "unexported-frames"
+  | "default-copy-in-instance" | "prototype-target-not-exported" | "non-text-contrast" | "undesigned-open-state"
+  | "near-token-color" | "duplicate-root-subtree";
 export type CrossCheckFindingCode =
   | "foreign-token-library" | "token-library-matches" | "token-name-collision" | "token-name-collision-elsewhere"
   | "token-absent-from-design-system" | "unresolvable-token" | "catalog-rekeyed" | "catalog-covers-nothing"
   | "partial-catalog-coverage" | "catalog-covers-screen" | "name-matched-components" | "ambiguous-component-name"
   | "font-family-stray" | "font-not-in-design-system" | "text-style-near-miss" | "text-style-absent"
-  | "sentinel-token-value" | "single-mode-export" | "derived-mode-contrast";
+  | "sentinel-token-value" | "single-mode-export" | "derived-mode-contrast" | "mixed-mode-bindings" | "token-pair-contrast";
 
 /** One sentinel token value (cross-check's sentinel-token-value). */
 export interface SentinelTokenValue { name: string; collection: string | undefined; mode: string; value: number }
 /** One text/background token pair below WCAG AA in a mode nobody rendered (cross-check's derived-mode-contrast). */
 export interface ContrastFailure { mode: string; fg: string; bg: string; ratio: number; nodes: string[]; sample: string }
+/** One token pair below WCAG in a mode a screen RENDERS, deduplicated over the run's screens (cross-check's
+ *  token-pair-contrast): text at 4.5:1 (3:1 large), a control's stroke against the background around it at 3:1. */
+export interface TokenPairRow { kind: "text" | "non-text"; fg: string; bg: string; mode: string; ratio: number; required: number; screens: string[]; nodes: string[] }
+/** One colour collection a screen binds from, in the mode it resolves to (cross-check's mixed-mode-bindings). */
+export interface ModeBindingRow { collection: string; mode: string; tokens: string[]; nodes: string[] }
 /**
  * The extra fields a finding carries beside severity/code/message, by the code that writes them (the
  * writers are audit.ts `add(…, extra)` and cross-check.ts `push(…, extra)`; a finding of any other code
@@ -221,6 +228,16 @@ export interface FindingExtras {
   category?: AuditCategory;
   /** near-duplicate-colors (the hexes, as the export spells them) */
   colors?: string[];
+  /** default-copy-in-instance / non-text-contrast / undesigned-open-state: every node the finding covers (nodeId = the first) */
+  nodeIds?: string[];
+  /** default-copy-in-instance: the copy the not-overridden instances show, and the copies the others show */
+  copies?: { default: string; overridden: string[] };
+  /** prototype-navigation: false when the destination was never exported (no index row, not drawn in this tree) */
+  exported?: boolean;
+  /** non-text-contrast: the stroke and the colour around the control (hex), and the tokens bound to them when any */
+  stroke?: string; backdrop?: string; strokeToken?: string; backdropToken?: string;
+  /** duplicate-root-subtree: the in-flow node the stray absolute copy duplicates */
+  twinId?: string;
   /** D1/D11: a cross-file warning to CONFIRM with the user before building on its default — the question */
   confirm?: string;
   // ---- cross-check.ts
@@ -249,6 +266,10 @@ export interface FindingExtras {
   styles?: string[] | Array<{ name: string; near: string }>;
   /** derived-mode-contrast */
   mode?: string; pairs?: ContrastFailure[];
+  /** token-pair-contrast (the rendered modes, deduplicated over the run's screens) */
+  tokenPairs?: TokenPairRow[];
+  /** mixed-mode-bindings: per bound colour collection, the mode it resolves to and what binds it */
+  bindings?: ModeBindingRow[];
   /** single-mode-export */
   collection?: string; exportedMode?: string; modes?: string[];
 }
@@ -321,8 +342,8 @@ export interface CrossCheckReport {
 /** audit.js report.crossFile: the cross-check report, or — no design system given — a stub with coverage:null and `inputs: {}`. */
 export type AuditCrossFile = CrossCheckReport | (Omit<CrossCheckReport, "inputs"> & { inputs: Partial<CrossCheckInputs> });
 
-export type ControlKind = "button" | "input" | "toggle" | "tab" | "link";
-export type ControlState = "hover" | "pressed" | "focus" | "disabled" | "error" | "selected" | "loading";
+export type ControlKind = "button" | "input" | "select" | "toggle" | "tab" | "link";
+export type ControlState = "hover" | "pressed" | "focus" | "disabled" | "error" | "selected" | "loading" | "open";
 /** One control's state coverage. `catalog` says which catalog defined it and `matchedBy` how it was found there. */
 export interface AuditComponentRow { name: string; kind: ControlKind; known: boolean; sampled?: boolean; present: ControlState[]; missing: ControlState[]; note?: string; catalog?: string; matchedBy?: "key" | "name" }
 export interface AuditAnnotation { nodeId: string; nodeName: string; screen: string; label?: string }
