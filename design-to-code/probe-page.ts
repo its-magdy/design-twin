@@ -25,6 +25,9 @@ interface PElement extends PNode {
   children: ArrayLike<PElement>;
   parentElement: PElement | null;
   placeholder?: string;
+  /** the left / top border widths (the padding box's offset inside the border box) */
+  clientLeft: number;
+  clientTop: number;
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   getBoundingClientRect(): PRect;
@@ -46,6 +49,7 @@ interface PDocument {
   createRange(): PRange;
   createElement(tag: "canvas"): PCanvas;
   activeElement: PElement | null;
+  elementFromPoint(x: number, y: number): PElement | null;
 }
 declare const document: PDocument;
 declare const scrollX: number;
@@ -249,10 +253,14 @@ export interface MeasureItem {
   nodeId: string; path: string; isText: boolean; isPaint: boolean; isPlaceholder: boolean;
   /** a TEXT spec read on its tagged ancestor's element (`<button data-dt-node=X>label</button>`): that id — the box is X's, not the text's */
   sharesWith: string | null;
+  /** F-74 / DT-48 (D111): the spec states a backgroundColor — a transparent element then says who paints it (styles.paintedBy) */
+  backgroundSpec?: boolean;
 }
 export interface MeasureInput {
   /** the frame root's rect, PAGE coordinates — x/y/textBox are reported relative to it */
   frameRect: Rect;
+  /** the frame root's element path — the highest ancestor paintedBy looks at (absent: up to <html>) */
+  framePath?: string | null;
   /** every key each node's styles must carry (verify-screen.ts STYLE_KEYS) */
   keys: readonly string[];
   items: MeasureItem[];
@@ -411,6 +419,57 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
       if (oo === 0) return (strokeMemo = { width: ow, color: oc, from: "outline", align: "outside" });
       return strokeMemo;
     };
+    // F-74 / DT-48 (D111): who paints an element whose own background-color is transparent — a <td> under a `tr:hover`
+    // row, a wrapper whose only child carries the fill. First a chain of only-children with the element's box (±1px): the
+    // first that paints lies ON TOP of the element (an ancestor's paint would be hidden under it); else the nearest ancestor
+    // that paints, up to and including the frame root, when its border box holds the element's (±1px). A background-image
+    // (a gradient, a picture) on the way, or a painting ancestor that does not hold the element, ends the search with no
+    // answer: its colour is not one value. L5: when the element's own children paint all of it (its 4 corners, inset 2px,
+    // and its centre each lie on a painting child — a transparent row whose cells carry the hover), no ancestor's colour
+    // shows on it: no answer either. Ancestor opacity/filter, ::before painters and a sibling/overlay painting over the
+    // element are not looked at (known misses: an overlay may make it pass — LIMITS).
+    const frameRoot = input.framePath ? document.querySelector(input.framePath) : null;
+    const paintOf = (e: PElement): { color: string | null; image: boolean } => {
+      const s = getComputedStyle(e), img = s.getPropertyValue("background-image").trim();
+      return { color: rgba(s.getPropertyValue("background-color")), image: img !== "" && img !== "none" };
+    };
+    const painter = (e: PElement, via: "ancestor" | "child", depth: number, color: string): PValue => {
+      const dt = e.getAttribute("data-dt-node");
+      return { backgroundColor: color, via, tag: e.tagName.toLowerCase(), depth, ...(dt !== null ? { dt } : {}) };
+    };
+    const paintedBy = (): PValue | null => {
+      const near = (a: number, b: number): boolean => Math.abs(a - b) <= 1;
+      let cur = el, depth = 0;
+      for (;;) {
+        const kids = Array.from(cur.children);
+        const only = kids.length === 1 ? kids[0] : undefined;
+        if (!only) break;
+        const r = pageRect(only.getBoundingClientRect());
+        if (!(near(r.x, rect.x) && near(r.y, rect.y) && near(r.w, rect.w) && near(r.h, rect.h))) break;
+        cur = only; depth++;
+        const p = paintOf(cur);
+        if (p.image) return null;
+        if (!transparentColour(p.color) && p.color !== null) return painter(cur, "child", depth, p.color);
+      }
+      const kids = Array.from(el.children).filter((k) => { const p = paintOf(k); return p.image || !transparentColour(p.color); }).map((k) => pageRect(k.getBoundingClientRect()));
+      if (kids.length && rect.w > 4 && rect.h > 4) {
+        const l = rect.x + 2, r = rect.x + rect.w - 2, t = rect.y + 2, b = rect.y + rect.h - 2;
+        const pts: Array<[number, number]> = [[l, t], [r, t], [l, b], [r, b], [rect.x + rect.w / 2, rect.y + rect.h / 2]];
+        if (pts.every(([x, y]) => kids.some((k) => x >= k.x && x <= k.x + k.w && y >= k.y && y <= k.y + k.h))) return null;
+      }
+      depth = 0;
+      for (let a = el.parentElement; a; a = a.parentElement) {
+        depth++;
+        const p = paintOf(a);
+        if (p.image || !transparentColour(p.color)) {
+          const r = pageRect(a.getBoundingClientRect());
+          const holds = rect.x >= r.x - 1 && rect.y >= r.y - 1 && rect.x + rect.w <= r.x + r.w + 1 && rect.y + rect.h <= r.y + r.h + 1;
+          return !p.image && holds && p.color !== null ? painter(a, "ancestor", depth, p.color) : null;
+        }
+        if (a === frameRoot) break;
+      }
+      return null;
+    };
     const putStroke = (): void => {
       const st = drawnStroke();
       if (st) { styles.strokeFrom = st.from; styles.strokeAlign = st.align; }
@@ -449,7 +508,12 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
         case "lineHeight": { const v = typoCs.getPropertyValue("line-height"); put(k, v === "normal" ? null : px(v), "line-height: normal — its pixel value depends on the font's metrics"); break; }
         case "letterSpacing": { const v = typoCs.getPropertyValue("letter-spacing"); put(k, v === "normal" ? 0 : px(v), "no computed letter-spacing"); break; }
         case "color": put(k, rgba(typoCs.getPropertyValue("color")), "no computed color"); break;
-        case "backgroundColor": put(k, rgba(cs.getPropertyValue("background-color")), "no computed background-color"); break;
+        case "backgroundColor": {
+          const bg = rgba(cs.getPropertyValue("background-color"));
+          put(k, bg, "no computed background-color");
+          if (item.backgroundSpec && bg !== null && transparentColour(bg)) { const pb = paintedBy(); if (pb !== null) styles.paintedBy = pb; }
+          break;
+        }
         case "fill": { const f = fill(); if (f.source) res.fillSource = f.source; put(k, f.v, f.why); break; }
         case "placeholderColor":
           if (!item.isPlaceholder) put(k, null, "not an input placeholder");
@@ -522,8 +586,39 @@ export function measureElements(input: MeasureInput): MeasureResult[] {
         default: put(k, null, `verify-probe does not know how to read '${k}'`);
       }
     }
+    // F-69 (D114): the computed text-transform of the text's owner (inherited) — the rendered string is `text` under it.
+    // Optional (not a STYLE_KEY): absent when unreadable, never a null to explain.
+    if (item.isText && !item.isPlaceholder) { const tt = typoCs.getPropertyValue("text-transform").trim(); if (tt) styles.textTransform = tt; }
     return res;
   });
+}
+
+// ---------------------------------------------------------------- owner hover (F-74)
+/** Where to hover the owner of a drawn state (`owner`, e.g. the row) so that IT is hovered and the measured element
+ *  (`avoid`, a control inside it) is not: the first of the owner's 4 corners (inset 3px), 4 edge midpoints (inset 3px),
+ *  centre that lies outside the measured element's box, whose document.elementFromPoint is the owner or inside it, and
+ *  that is not over an interactive descendant (a control with its own :hover). Relative to the owner's PADDING box
+ *  (Playwright's `position`); viewport points only (call it after scrolling the owner into view). SELF-CONTAINED. */
+export function freeHoverPoint(arg: { owner: string; avoid: string }): { x: number; y: number } | null {
+  // L2: tabindex="-1" is not a control — ARIA-grid cells carry it (roving focus); hovering one is a free point
+  const INTERACTIVE = "a, button, input, select, textarea, [role=button], [role=link], [role=checkbox], [tabindex]:not([tabindex='-1'])";
+  const owner = document.querySelector(arg.owner);
+  if (!owner) return null;
+  const avoidEl = document.querySelector(arg.avoid);
+  const o = owner.getBoundingClientRect();
+  const a = avoidEl ? avoidEl.getBoundingClientRect() : null;
+  const l = o.x + 3, r = o.x + o.width - 3, t = o.y + 3, b = o.y + o.height - 3, cx = o.x + o.width / 2, cy = o.y + o.height / 2;
+  const points: Array<[number, number]> = [[l, t], [r, t], [l, b], [r, b], [cx, t], [r, cy], [cx, b], [l, cy], [cx, cy]];
+  for (const [x, y] of points) {
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || r < l || b < t) continue;
+    if (a && a.width > 0 && a.height > 0 && x >= a.x && x <= a.x + a.width && y >= a.y && y <= a.y + a.height) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !owner.contains(hit) || (avoidEl && avoidEl.contains(hit))) continue;
+    const ctl = hit.closest(INTERACTIVE);
+    if (ctl && ctl !== owner && owner.contains(ctl)) continue;
+    return { x: Math.round((x - o.x - owner.clientLeft) * 100) / 100, y: Math.round((y - o.y - owner.clientTop) * 100) / 100 };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- focus (D16)

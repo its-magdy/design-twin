@@ -45,7 +45,10 @@ you looked for>"}` and return. Do not install tooling or add dependencies withou
 folder, or pass `--project <dir>`). It resolves the project's Playwright and launches Chromium once;
 nothing is measured. Exit 3 means no usable renderer: **stop and ask the user** — the command prints the
 install line. Never run `npx playwright install` (or `npm i -D playwright`) yourself: it edits the
-project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask.
+project's dependencies and, on a cold machine, downloads ~150 MB. Say the cost when you ask. If the user names a
+Chromium they already have cached, `--browser-path <executable>` (on `--check` and on the probe) launches that one instead
+— the binary itself, on macOS the one inside the `.app` (`…/Contents/MacOS/…`); a path that is not an executable file is
+exit 3. It is only guaranteed with the bundled Chromium; `measured.json` records the browser as `custom`, never the path.
 
 ## 2. Say you're alive as you go
 
@@ -107,6 +110,10 @@ recorded in this run. `--publish` then copies each staged file into `design/veri
 evidence published in this run is recorded as this run's. If the project reloads anyway (e.g. your own writes
 elsewhere), suggest `server.watch.ignored: ['**/design/**']` (Vite) or a Tailwind `@source not` for
 `design/` to the caller; these are suggestions, never edits to their config.
+
+**Scratch files go in the run cache too.** Any throwaway script or probe you write to look at something goes in
+`node_modules/.cache/designtwin-verify/scratch/` (project-local, writable from the project root, created on demand) —
+never under `src/` or `design/`, where the project's linter, type-checker and dev server pick it up. Delete it when done.
 
 ## 2a. Process, permission and time limits
 
@@ -234,8 +241,8 @@ Pass `--run <id>` so it writes the `measuring` / `measured` status itself. Rules
   match `:focus-visible` in Chromium, so check a designed focus ring visually or by keyboard Tab and put it in the evidence; whether
   a Tab stop shows a ring at all is the probe's `keyboard.focus-visible`); pressed and every designed interaction you drive yourself, recording results as in
   "Also collect" below into `<Screen>.evidence.json` (staged, §2) — an object
-  `{"interactions": [...], "components": [{"setName", "present": false, "detail"}]}` that the caller passes as
-  `--interactions`. Do not add them to `measured.json`.
+  `{"interactions": [...], "components": [{"setName", "present": false, "detail"}], "inferred": [...]}` that the caller passes as
+  `--interactions` (`inferred` is optional, see "Also collect"). Do not add them to `measured.json`.
 - **Behaviour is the probe's too.** The probe runs the dialog, keyboard, landmark, name, forced-colours and
   overflow battery (and axe when the project has it) after the measurement; read `report.behaviour`
   once the caller has compared, and do not re-drive the battery the probe ran. Never accept "the tool cannot
@@ -280,7 +287,9 @@ for a native stack's equivalent:
 | `fill` | for an SVG/vector node: `getComputedStyle(<path/rect/circle>).fill` — an SVG's colour is never `background-color` |
 | `placeholderText` / `placeholderColor` | for a placeholder spec (`placeholder: true`): `el.placeholder`, and `getComputedStyle(el, '::placeholder').color` or the stylesheet rule — `textContent` of an empty input is `""` |
 | `tag` | `el.tagName.toLowerCase()` — lets the comparison route table rows, containers and leaves correctly |
-| `states.<hover\|pressed\|focus>` | the same styles **with the element in that state** — required for every spec carrying `drawnState` (the designer drew that row hovered; measuring it at rest reports a colour bug that is not there) |
+| `paintedBy` | optional, inside `styles`: when the element's own `backgroundColor` is transparent, `{backgroundColor, via: "ancestor"\|"child", tag, depth}` of the nearest containing ancestor (or same-box child) that paints — a hovered `<tr>` paints through its transparent `<td>`s; `--compare` then compares that colour and says so |
+| `textTransform` | optional: the computed `text-transform` of a TEXT element — a designed upper/lower/title case is compared against the rendered string, so a CSS `uppercase` is not a copy bug |
+| `states.<hover\|pressed\|focus>` | the same styles **with the element in that state** — required for every spec carrying `drawnState` (the designer drew that row hovered; measuring it at rest reports a colour bug that is not there). It sits **beside** `styles` on the node (`nodes[].states`), never inside it — a `states` key inside `styles` is listed as an unknown key and never read — and only for a spec with `drawnState`: a state measured on a node the design never drew in that state is not compared, only listed under "Inferred, not designed" |
 
 On native stacks put `expectationSha256` (the sha256 of the `.expected.json` you measured against — `shasum -a 256`) at
 the top level, so a report can never be read against a newer expectation than it was measured on.
@@ -302,6 +311,15 @@ the top level, so a report can never be read against a newer expectation than it
   its position in the list), and `outline` with `outline-offset: -Npx` is an inside stroke. Report it as
   `borderWidth` / `borderColor` with `strokeFrom` (`box-shadow` | `outline`) and `strokeAlign`
   (`inside` | `outside`), as the probe does — `border-width: 0` alone is not a missing stroke.
+
+- **Whose hover it was.** A control inside a row the designer drew hovered inherits that state: its spec carries
+  `drawnStateFrom` (the row's node id), and the probe hovers the OWNER at a point clear of the control, so the row's
+  `:hover` is on and the control's own is not. Do the same if you measure by hand: hover the owner, not the control. A
+  note "hovered the element itself" means no free point or no tagged owner was found — tag the owner with its id.
+- **Hover and press feedback is more than a background.** Before calling a hover or press "no change", read
+  background, colour, `filter`, `opacity`, `box-shadow`, `transform` and `outline` with the element in that state —
+  all of them are readable with `getComputedStyle` (and `rotate`, above). The probe's effective-paint check
+  (`paintedBy`) covers `backgroundColor` only; the others are yours to look at, as a `note`.
 
 Also collect:
 
@@ -344,6 +362,12 @@ Also collect:
     recorded like any other; `--compare` reports it `undesigned`, which never fails the screen. A control
     that looks deliberately inert is still recorded as it behaves — descoping it is the user's decision,
     and you never write waivers or descopes.
+
+- **inferred**: something the build does that the design never drew (an error message, an empty list, an open
+  dropdown, a loading state) — one row `{"nodeId"?, "state", "built", "why"?}` in `inferred[]` of the evidence object.
+  `--compare` lists it under "Inferred, not designed" next to the plan-declared and undesigned interactions: judged
+  against best practice and the design's intent, never "matched", never part of the verdict. Say what you saw, not
+  that it is right or wrong.
 
 On web, `components` and `interactions` go to `<Screen>.evidence.json` in the staging directory (§2), published into `design/verify/` at `done` (§4) and the probe writes
 `measured.json`. On native stacks write it all to `design/verify/<screen>.measured.json`:
@@ -398,7 +422,8 @@ Report anything the measurement cannot express as a `note` (name the region and 
   (`nodeId`, field, value) AND the export node's own value (`"text": …`, `"radius": …`). Open the
   export and check before you write it. A reported "lodge specific vs Lodge Specific" copy bug was
   fabricated — the export itself says `"text": "lodge specific"`; the build was right. If you cannot
-  quote a contradicting line, it is not a defect.
+  quote a contradicting line, it is not a defect. Quote the report's own delta text — it names the axis or
+  dimension — and never restate a bound from memory.
 
 ## 6. Return
 

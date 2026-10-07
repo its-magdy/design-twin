@@ -681,6 +681,81 @@ function fileHashes(files, cwd) {
   }
   return out;
 }
+var isRec = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+var RESOLVE_EXT = ["tsx", "ts", "jsx", "js"];
+var isFile = (abs) => {
+  try {
+    return fs4.statSync(abs).isFile();
+  } catch {
+    return false;
+  }
+};
+function mappedModulePath(raw, cwd) {
+  if (typeof raw !== "string") return null;
+  const s = (raw.split("#")[0] ?? "").trim().split("\\").join("/");
+  if (!s || s.startsWith("/") || /^[A-Za-z]:/.test(s) || /^[@~]/.test(s) || s.includes(":")) return null;
+  const rel = path3.posix.normalize(s).replace(/\/+$/, "");
+  if (rel === ".." || rel.startsWith("../") || rel === "." || !rel) return null;
+  const dotted = /\.[A-Za-z0-9]+$/.test(path3.posix.basename(rel));
+  if (cwd === void 0) return dotted ? rel : null;
+  if (dotted && isFile(path3.join(cwd, rel))) return rel;
+  const tries = [...RESOLVE_EXT.map((e) => `${rel}.${e}`), ...RESOLVE_EXT.map((e) => `${rel}/index.${e}`)];
+  return tries.find((t) => isFile(path3.join(cwd, t))) ?? (dotted ? rel : null);
+}
+function mapModules(plan) {
+  const out = [];
+  if (isRec(plan.anchors)) {
+    for (const a of Object.values(plan.anchors)) if (isRec(a)) out.push(a.mapModule);
+  }
+  if (isUnknownArray(plan.components)) {
+    for (const c of plan.components) if (isRec(c)) out.push(c.mapModule);
+  }
+  return out;
+}
+function planCodeFiles(plan, cwd) {
+  const listed = isUnknownArray(plan.files) ? plan.files.map(String) : [];
+  const seen = new Set(listed.map((f) => path3.posix.normalize(f.trim().split("\\").join("/"))));
+  const extra = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    const rel = mappedModulePath(m, cwd);
+    if (rel !== null && !seen.has(rel)) extra.add(rel);
+  }
+  return [...listed, ...[...extra].sort()];
+}
+function planCodeSkipped(plan, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of mapModules(plan)) {
+    if (typeof m !== "string" || !m.trim()) continue;
+    const rel = mappedModulePath(m, cwd);
+    if (rel === null || !isFile(path3.join(cwd, rel))) out.add(m.trim());
+  }
+  return [...out].sort();
+}
+function planCodeSkippedNote(plan, cwd) {
+  const s = planCodeSkipped(plan, cwd);
+  return s.length ? `mapModule path(s) not hashed with this plan's code: ${s.slice(0, 6).join(", ")}${s.length > 6 ? `, +${s.length - 6} more` : ""} \u2014 not a file under the project (an \`@/\`/\`~/\` alias, a package, a path outside the project, or a path that names no file even with .tsx/.ts/.jsx/.js or /index added), so an edit to it does not reopen the plan; for code this project owns write the project-relative file path` : null;
+}
+function planHash(plan) {
+  const copy = { ...plan || {} };
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  delete copy.verification;
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
+function legacyPlanHash(plan) {
+  const copy = structuredClone({ ...plan || {} });
+  delete copy.status;
+  delete copy.waivers;
+  delete copy.descopes;
+  if (isRec(copy.verification)) {
+    const v = { ...copy.verification };
+    delete v.hook;
+    if (Object.keys(v).length) copy.verification = v;
+    else delete copy.verification;
+  }
+  return sha256(JSON.stringify(copy)).slice(0, 16);
+}
 
 // design-to-code/verify-build.ts
 var HOOK_TIMEOUT_MS = () => Number(process.env.DTWIN_HOOK_TIMEOUT_MS) || 6e4;
@@ -788,36 +863,38 @@ var lifecycleOf = (plan) => {
   const s = String(plan && plan.status || "pending").trim().toLowerCase();
   return isLifecycle(s) ? s : "pending";
 };
-var sha = (buf) => crypto3.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 function fileHashes2(plan, cwd) {
-  return fileHashes(plan && plan.files, cwd);
+  return fileHashes(planCodeFiles(plan || {}, cwd), cwd);
 }
-function planHash(plan) {
-  const copy = structuredClone(plan || {});
-  delete copy.status;
-  delete copy.waivers;
-  delete copy.descopes;
-  if (copy.verification) {
-    delete copy.verification.hook;
-    if (!Object.keys(copy.verification).length) delete copy.verification;
-  }
-  return sha(JSON.stringify(copy));
-}
-function changedFiles(plan, cwd) {
+var planHash2 = (plan) => planHash(plan);
+var hookHashMatches = (hook, plan) => hook.planHash === planHash2(plan) || hook.planHash === legacyPlanHash(plan);
+function hookFileDiff(plan, cwd) {
   const hook = plan.verification && plan.verification.hook;
   if (!hook || !hook.files) return null;
   const now = fileHashes2(plan, cwd);
-  const changed = [];
+  const listed = new Set(Array.isArray(plan.files) ? plan.files.map(String) : []);
+  const changed = [], unhashed = [];
   const all = /* @__PURE__ */ new Set([...Object.keys(hook.files), ...Object.keys(now)]);
-  for (const f of all) if (hook.files[f] !== now[f]) changed.push(now[f] === void 0 ? `${f} (no longer in files[])` : hook.files[f] === void 0 ? `${f} (added to files[])` : now[f] === null ? `${f} (missing)` : f);
-  return changed;
+  for (const f of all) {
+    if (hook.files[f] === now[f]) continue;
+    if (now[f] === void 0) changed.push(`${f} (no longer hashed: not in files[] nor a mapped module that resolves)`);
+    else if (hook.files[f] === void 0) {
+      if (listed.has(f)) changed.push(`${f} (added to files[])`);
+      else unhashed.push(`${f} (now hashed: mapped module)`);
+    } else changed.push(now[f] === null ? `${f} (missing)` : f);
+  }
+  return { changed, unhashed };
+}
+function changedFiles(plan, cwd) {
+  const d = hookFileDiff(plan, cwd);
+  return d && d.changed;
 }
 function isOpen(p, cwd) {
   if (lifecycleOf(p.plan) !== "pending") return false;
   if (isStale(p.file)) return false;
   const hook = p.plan.verification && p.plan.verification.hook;
   if (!hook || hook.result !== "pass") return true;
-  if (hook.planHash !== planHash(p.plan)) return true;
+  if (!hookHashMatches(hook, p.plan)) return true;
   const ch = changedFiles(p.plan, cwd);
   return !ch || ch.length > 0;
 }
@@ -1152,8 +1229,20 @@ function verificationWarnings(plan) {
   const out = [];
   const c = v.coverage;
   if (!c || !Array.isArray(c.rendered) || !c.rendered.length) out.push('verification.coverage is missing \u2014 record {rendered:[\u2026], notChecked:[{what, why}]} so the report can say which states/themes/sizes were never rendered (references/verify.md, "Beyond the ideal frame")');
-  if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}); when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
+  if (!v.a11y) out.push("verification.a11y is missing \u2014 copy report.behaviour.summary into it ({tool, violations: summary.fail, warnings: summary.warn, report: the report.json it came from}) \u2014 `verify-screen --compare --record-plan` writes it; when no behaviour checks ran, no accessibility check is recorded \u2014 say so in the report rather than implying one ran");
   return out;
+}
+function recordedReportWarnings(plan, cwd) {
+  const rec = plan.verification && typeof plan.verification === "object" ? plan.verification.recorded : void 0;
+  if (!rec || typeof rec !== "object" || typeof rec.report !== "string" || !rec.report) return [];
+  let bytes;
+  try {
+    bytes = fs5.readFileSync(path4.resolve(cwd, rec.report));
+  } catch {
+    return [];
+  }
+  const now = crypto3.createHash("sha256").update(bytes).digest("hex");
+  return now === rec.reportSha256 ? [] : [`plan.verification records an older run of ${rec.report} \u2014 re-run ${scriptCmd("verify-screen")} --compare --record-plan (the report is the verdict)`];
 }
 var newestOwn = (reports) => {
   const own = reports.filter((r) => r.matchedBy === "name");
@@ -1216,7 +1305,8 @@ function verificationContradictions(plan, reports) {
   }
   for (const e of notChecked) if (rendered.includes(what(e).trim().toLowerCase())) out.push(`verification contradicts itself: "${what(e)}" is listed both in coverage.rendered and in coverage.notChecked`);
   for (const r of reports || []) {
-    if (Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
+    const recordedHere = !!(v.recorded && typeof v.recorded === "object" && v.recorded.report === r.rel);
+    if (!recordedHere && Array.isArray(v.deltas) && !v.deltas.length && Array.isArray(r.deltas) && r.deltas.length) out.push(`verification.deltas is [] but ${r.rel} lists ${r.deltas.length} delta(s) \u2014 copy them (or the ones you judged real, with why) into the plan`);
     for (const k of ["verifyScreenVerdict", "verdict"]) {
       const claimed = v[k];
       const s = claimed && typeof claimed === "object" ? claimed.verdict : claimed;
@@ -1662,6 +1752,7 @@ function checkPlan({ plan, file }, cwd, opts) {
   warnings.push(...undeclaredColourTokens(live, graph()));
   warnings.push(...checkVerification(plan, cwd));
   warnings.push(...verificationWarnings(plan));
+  warnings.push(...recordedReportWarnings(plan, cwd));
   const reports = o.reports || locateReports(plan, file, cwd, exp);
   warnings.push(...verificationContradictions(plan, reports));
   warnings.push(...behaviourWarnings(plan, reports, { cwd, planFile: file }));
@@ -1789,7 +1880,7 @@ function reportVerdict(plan, cwd, exp, reports) {
     const measured = r.code && r.code.files && typeof r.code.files === "object" ? r.code.files : null;
     if (!measured) return { status: "unverified", reasons: [`${r.rel} does not record which code it measured (inputs.code) \u2014 re-run ${scriptCmd("verify-screen")} --compare from the project root, where design/plan/ lists this screen's files`] };
     const now = fileHashes2(plan, cwd);
-    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]);
+    const differ = Object.keys(now).filter((f) => measured[f] !== now[f]).map((f) => measured[f] === void 0 ? `${f} (not recorded)` : f);
     if (differ.length) return { status: "unverified", reasons: [`${r.rel} measured different code \u2014 changed since: ${differ.slice(0, 6).join(", ")}${differ.length > 6 ? `, +${differ.length - 6} more` : ""} \u2014 re-run --compare`] };
     if (waiversChanged(r, waiversNow)) return { status: "unverified", reasons: [`${r.rel}: ${WAIVERS_CHANGED} (the plan's waivers[]/descopes[] are not the ones the report applied)`] };
   }
@@ -1810,27 +1901,29 @@ function computeStatus(plan, opts) {
   const reports = o.reports || locateReports(plan, o.planFile, cwd, exp);
   const rv = reportVerdict(plan, cwd, exp, reports);
   const hook = plan.verification && plan.verification.hook;
-  let hookState = null, hookWhy = [];
+  let hookState = null, hookWhy = [], unhashedWhy = [];
   if (!hook || !hook.result) {
     hookState = "pending";
     hookWhy = ["the build-screen Stop hook has not checked this plan"];
-  } else if (hook.planHash && hook.planHash !== planHash(plan)) {
+  } else if (hook.planHash && !hookHashMatches(hook, plan)) {
     hookState = "pending";
     hookWhy = ["the plan changed after the hook's last check"];
   } else if (hook.result !== "pass") {
     hookState = "blocked";
     hookWhy = hook.blocking && hook.blocking.length ? hook.blocking : ["the hook's last check blocked"];
   } else {
-    const ch = changedFiles(plan, cwd) || [];
+    const d = hookFileDiff(plan, cwd);
+    const ch = d ? d.changed : [];
     if (ch.length) {
       hookState = "stale";
       hookWhy = [`file(s) changed since the hook passed: ${ch.slice(0, 6).join(", ")}${ch.length > 6 ? `, +${ch.length - 6} more` : ""}`];
     }
+    if (d && d.unhashed.length) unhashedWhy = [`hook: not hashed by the hook's last check (its record predates D117), so not a change: ${d.unhashed.slice(0, 6).join(", ")}${d.unhashed.length > 6 ? `, +${d.unhashed.length - 6} more` : ""} \u2014 the hook's next check of this plan records it; until then an edit to it does not reopen the plan (\`verify-build <plan>\` re-checks now)`];
   }
   const reportWhy = rv.reasons.map((r) => (hookState ? "report: " : "") + r);
-  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h)), reports };
-  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy), reports };
-  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons), reports };
+  if (rv.status === "failed") return { status: "failed", reasons: notes.concat(reportWhy, hookWhy.map((h) => "hook: " + h), unhashedWhy), reports };
+  if (hookState) return { status: hookState, reasons: notes.concat(hookWhy, reportWhy, unhashedWhy), reports };
+  return { status: rv.status, reasons: notes.concat(rv.status === "verified" || rv.status === "verified-with-deviations" ? ["hook passed; " + rv.reasons[0]] : rv.reasons, unhashedWhy), reports };
 }
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 function transcriptActions(text, ownOnly) {
@@ -2046,13 +2139,14 @@ var USAGE2 = [
   "  1. abandoned | awaiting-user  set by a person in plan.status; nothing else is evaluated",
   "  2. failed       a verify-report@2 for this screen says fail (never hidden behind the hook's state)",
   "  3. blocked      the Stop hook's last check blocked",
-  "  4. stale        a file in files[] changed (by content) since the hook passed",
+  "  4. stale        a file in files[] or a module anchors/components map changed (by content) since the hook passed",
   "  5. pending      the hook has not checked this version of the plan",
   "  6. unverified | static-only | verified | verified-with-deviations   what the report says: verified",
   "     only for an @2 'pass' that measured this design, these files and the plan's current waivers[]/",
   "     descopes[], by content hash (no report / a pre-@2 report / other design, code or waivers ->",
   "     unverified); verified-with-deviations when every report passes and >=1 says 'pass-with-deviations'.",
-  `     A stored "verified" is ignored. waivers[]/descopes[] are not part of the hook's planHash.`,
+  `     A stored "verified" is ignored. waivers[]/descopes[] and verification{} are not part of the hook's`,
+  "     planHash (a hook record with the older formula, which hashed verification, is still accepted).",
   "Every non-verified status carries a non-empty why: the hook's state AND what the report says (a",
   "report too old to trust is named with its schema). --json prints {plan, status, why, reasons, reports}."
 ].join("\n");
@@ -2071,7 +2165,7 @@ function checkAndRecord(p, cwd, graph) {
     checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
     blocking,
     warnings: warnings.length,
-    planHash: planHash(plan),
+    planHash: planHash2(plan),
     files: fileHashes2(plan, cwd),
     ...tagCoverage ? { tagCoverage } : {}
   };
@@ -2113,7 +2207,11 @@ ${USAGE2}`);
       const r = path4.relative(process.cwd(), f);
       return r.startsWith("..") ? f : r;
     };
-    const rows = plans.map((p) => Object.assign({ plan: show(p.file) }, computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) })));
+    const rows = plans.map((p) => {
+      const st = computeStatus(p.plan, { planFile: p.file, cwd: rootOfPlan(p.file) });
+      const skipped = planCodeSkippedNote(p.plan, rootOfPlan(p.file));
+      return Object.assign({ plan: show(p.file) }, st, skipped ? { reasons: [...st.reasons, `note: ${skipped}`] } : {});
+    });
     if (json) console.log(JSON.stringify(rows.map((r) => ({ plan: r.plan, status: r.status, why: r.reasons.join(" \xB7 ") || null, reasons: r.reasons, reports: r.reports.map((x) => ({ file: x.rel, verdict: x.verdict, matchedBy: x.matchedBy })) })), null, 2));
     else for (const r of rows) console.log(`${r.plan}: ${r.status}${r.reasons.length ? "\n  - " + r.reasons.join("\n  - ") : ""}`);
     if (!plans.length) console.error("verify-build: no plans found (design/plan/*.json)");
@@ -2210,6 +2308,7 @@ export {
   colorKey,
   colorLiterals,
   computeStatus,
+  deviationConflicts,
   deviationWarnings,
   fileHashes2 as fileHashes,
   importsOf,
@@ -2221,8 +2320,9 @@ export {
   main,
   moduleImported,
   ownPlans,
-  planHash,
+  planHash2 as planHash,
   readHookInput,
+  recordedReportWarnings,
   scanText,
   validatePlanHeader,
   verificationContradictions,

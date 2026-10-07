@@ -13,7 +13,8 @@
 //   verify-probe.js --expected design/verify/<S>.expected.json --url <url> [--out design/verify/<S>]
 //                   [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>]
 //                   [--run <id>] [--max-time <ms>] [--steps <steps.json | plan.json>] [--behaviour on|off]
-//   verify-probe.js --check [--project <dir>]
+//                   [--browser-path <executable>]
+//   verify-probe.js --check [--project <dir>] [--browser-path <executable>]
 //
 // Playwright is the PROJECT's (D2): resolved with createRequire(<project>/package.json) — playwright, then
 // @playwright/test, then playwright-core — never bundled, never installed, and no browser is ever
@@ -64,9 +65,9 @@ import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Browser, BrowserType, Page, Request, Response } from "playwright";
 import { spawnSync } from "node:child_process";
-import { collectCandidates, focusablePath, focusInfo, measureElements } from "./probe-page.ts";
-import type { Candidate, CollectOutput, MeasureItem, Rect } from "./probe-page.ts";
-import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
+import { collectCandidates, focusablePath, focusInfo, freeHoverPoint, measureElements } from "./probe-page.ts";
+import type { Candidate, CollectOutput, MeasureInput, MeasureItem, Rect } from "./probe-page.ts";
+import { buildPool, census, chooseMatch, claimOnce, isMatch, isPaintSpec, ownerHover, positionBoxes, resolveFrame, shapeNode, specText } from "./probe-match.ts";
 import type { Match, NoMatch, ResolvedFrame } from "./probe-match.ts";
 import { STYLE_KEYS } from "./verify-screen.ts";
 import { isVerifyExpectation } from "./doc-guards.ts";
@@ -154,21 +155,32 @@ export function resolveAxe(dir: string): AxeResolution {
   return { ok: true, source: mod.source, version, file };
 }
 
-function rendererUnavailable(reason: string, hint: string): number {
+/** hint null (DT-30: a --browser-path that is no executable) → one line: there is nothing to install. */
+function rendererUnavailable(reason: string, hint: string | null): number {
+  if (hint === null) { console.error(`verify-probe: renderer unavailable — ${reason} — nothing was measured or written.`); return 3; }
   console.error(`verify-probe: renderer unavailable — ${reason}\n` +
     `  nothing was measured or written. Ask the user to run:  ${hint}\n` +
     "  (verify-probe never installs a package or downloads a browser itself.)");
   return 3;
 }
 
-async function launch(r: Extract<Resolution, { ok: true }>, dir: string): Promise<{ browser: Browser } | { error: string; hint: string }> {
+/** DT-30 (D112): `executablePath` = --browser-path (validated by browserPathError first); absent → Playwright's own chromium. */
+async function launch(r: Extract<Resolution, { ok: true }>, dir: string, executablePath?: string): Promise<{ browser: Browser } | { error: string; hint: string }> {
   // --disable-lcd-text: grayscale text antialiasing, as Figma's renderer and macOS draw it. Linux chromium's default LCD
   // (subpixel RGB) text has colour fringes that depend on each glyph's sub-pixel phase, so unchanged text at the reference's
   // 4-decimal scale came out as hot regions in the visual diff (the e2e's correct twin, on CI). It changes no layout.
-  try { return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"] }) }; } catch (e) {
+  try { return { browser: await r.mod.chromium.launch({ headless: true, args: ["--disable-lcd-text"], ...(executablePath !== undefined ? { executablePath } : {}) }) }; } catch (e) {
     const first = (errMsg(e).split("\n").find((l) => l.trim()) || "launch failed").trim();
-    return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch: ${first}`, hint: browserHint(dir) };
+    return { error: `${r.pkg} ${r.version} resolved, but chromium did not launch${executablePath !== undefined ? ` from --browser-path ${executablePath} (only guaranteed with the bundled Chromium)` : ""}: ${first}`, hint: browserHint(dir) };
   }
+}
+
+/** DT-30 (D112): why a --browser-path cannot be launched (not a file, not executable), or null. A macOS .app is a directory:
+ *  the binary is inside it. */
+export function browserPathError(p: string): string | null {
+  let ok = false;
+  try { ok = fs.statSync(p).isFile(); if (ok) fs.accessSync(p, fs.constants.X_OK); } catch { ok = false; }
+  return ok ? null : `--browser-path ${p} is not an executable file (on macOS pass the binary inside the .app: …/Contents/MacOS/…)`;
 }
 
 // ---------------------------------------------------------------- identity
@@ -727,8 +739,11 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     // one element, one spec (H1: five rows' identical dates all landed on one cell)
     const claimed = claimOnce(matches.map(({ m }) => m));
     matches.forEach((x, i) => { const c = claimed[i]; if (c) x.m = c; });
-    const item = (spec: VerifySpec, m: Match): MeasureItem => ({ nodeId: spec.nodeId, path: m.path, isText: spec.type === "TEXT", isPaint: isPaintSpec(spec), isPlaceholder: spec.placeholder === true, sharesWith: m.sharesWith ?? null });
-    const frameRectOf = (spec: VerifySpec): Rect => { const f = frames.get(spec.frameId ?? frameIn[0]?.nodeId ?? ""); return f ? f.rect : { x: 0, y: 0, w: o.viewport.w, h: o.viewport.h }; };
+    const item = (spec: VerifySpec, m: Match): MeasureItem => ({ nodeId: spec.nodeId, path: m.path, isText: spec.type === "TEXT", isPaint: isPaintSpec(spec), isPlaceholder: spec.placeholder === true, sharesWith: m.sharesWith ?? null,
+      ...(typeof spec.backgroundColor === "string" ? { backgroundSpec: true } : {}) });
+    const frameOf = (spec: VerifySpec): ResolvedFrame | null | undefined => frames.get(spec.frameId ?? frameIn[0]?.nodeId ?? "");
+    const frameRectOf = (spec: VerifySpec): Rect => { const f = frameOf(spec); return f ? f.rect : { x: 0, y: 0, w: o.viewport.w, h: o.viewport.h }; };
+    const measureIn = (spec: VerifySpec, items: MeasureItem[]): MeasureInput => ({ frameRect: frameRectOf(spec), framePath: frameOf(spec)?.path ?? null, keys: STYLE_KEYS, items });
 
     // measure, one evaluate per frame (x/y/textBox are relative to that frame's root)
     const nodes = new Map<string, MeasuredNode>();
@@ -737,7 +752,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     for (const group of byFrame.values()) {
       const first = group[0];
       if (!first) continue;
-      const raw = await page.evaluate(measureElements, { frameRect: frameRectOf(first.spec), keys: STYLE_KEYS, items: group.map(({ spec, m }) => item(spec, m)) });
+      const raw = await page.evaluate(measureElements, measureIn(first.spec, group.map(({ spec, m }) => item(spec, m))));
       group.forEach(({ spec, m }, i) => { const r = raw[i]; if (r) nodes.set(spec.nodeId, shapeNode(spec, m, r, STYLE_KEYS)); });
     }
 
@@ -747,11 +762,15 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
       const node = nodes.get(spec.nodeId);
       const state = spec.drawnState;
       if (!node || !isMatch(m) || (state !== "hover" && state !== "focus")) continue;
-      const target = m.hoverVia ?? hoverTarget(m.cand, pool.byTag) ?? m.path;
+      const own = m.hoverVia ?? hoverTarget(m.cand, pool.byTag) ?? m.path;
       let focusPath: string | null = null;
       try {
-        if (state === "hover") { await page.mouse.move(0, 0); await page.locator(target).first().hover({ timeout: 2000 }); }
-        else {
+        if (state === "hover") {
+          await page.mouse.move(0, 0);
+          const via = await hoverDrawnState(page, spec, m, own, pool.byTag);
+          if (via.hovered !== m.path) node.hoverVia = via.hovered;
+          if (via.note !== null) node.note = node.note ? `${node.note}; ${via.note}` : via.note;
+        } else {
           // focus lands on the element or its closest focusable ancestor — or nowhere (then no state is written)
           focusPath = await page.evaluate(focusablePath, m.path);
           if (focusPath === null) { node.note = "focus state not measured: the element is not focusable (nor is any ancestor)"; continue; }
@@ -771,7 +790,7 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
           if (!info.focused) { delete node.focusVia; node.note = "focus state not measured: the element would not take focus"; continue; }
         }
         await raf2(page);
-        const [r] = await page.evaluate(measureElements, { frameRect: frameRectOf(spec), keys: STYLE_KEYS, items: [item(spec, m)] });
+        const [r] = await page.evaluate(measureElements, measureIn(spec, [item(spec, m)]));
         if (r) {
           // nulls stay (with their reasons): a value the probe could not read in the state is not the resting one
           const shaped = shapeNode(spec, m, r, STYLE_KEYS);
@@ -819,6 +838,38 @@ async function pass(page: Page, log: NavLog, o: ProbeOptions): Promise<PassResul
     if (errorKind(errMsg(e), false) === "navigated") throw new NavigatedError(errMsg(e).split("\n")[0]);
     throw e;
   }
+}
+
+/** F-74 (D111): hover for a drawn hover state. A spec whose state is its owner's (drawnStateFrom — a control in a row drawn
+ *  hovered) hovers the OWNER's tagged element at a free point (outside the control, not over another control — freeHoverPoint),
+ *  so the row's :hover is on and the control's own is not; no free point, or no tagged owner → the element as before
+ *  (`own`), with a note. Returns the path hovered. */
+async function hoverDrawnState(page: Page, spec: VerifySpec, m: Match, own: string, byTag: Map<string, Candidate[]>): Promise<{ hovered: string; note: string | null }> {
+  const oh = ownerHover(spec, m, byTag);
+  let note: string | null = null;
+  if (oh.kind === "untagged") note = `hovered the element itself: its drawn-hovered container ${oh.owner} has no visible tagged element (tag it with data-dt-node="${oh.owner}")`;
+  if (oh.kind === "owner") {
+    // L1: the owner's element first, then the other tagged candidates below it — a same-box wrapper has no free point
+    const tried: string[] = [];
+    let covered: string | null = null;
+    for (const c of [{ id: oh.id, path: oh.path }, ...oh.next]) {
+      const loc = page.locator(c.path).first();
+      await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+      const position = await page.evaluate(freeHoverPoint, { owner: c.path, avoid: m.path });
+      tried.push(c.id);
+      if (position === null) continue;
+      // facts P4: a covered point is retried until the timeout — elementFromPoint said it is free, so a short one
+      try { await loc.hover({ position, timeout: 1000 }); return { hovered: c.path, note: null }; } catch (e) {
+        if (errorKind(errMsg(e), page.isClosed()) !== "other") throw e;
+        covered ??= `the free point on ${c.id} was covered (${errMsg(e).split("\n")[0]})`;
+        await page.mouse.move(0, 0);
+      }
+    }
+    const on = `its drawn-hovered container ${tried[0]}${tried.length > 1 ? ` (nor on ${tried.slice(1).join(", ")})` : ""}`;
+    note = covered !== null ? `hovered the element itself: no usable free point on ${on} — ${covered}` : `hovered the element itself: no free point on ${on}`;
+  }
+  await page.locator(own).first().hover({ timeout: 2000 });
+  return { hovered: own, note };
 }
 
 /** The element to hover for a drawn hover state: the matched one, or — when it has no size at rest (hover-only
@@ -936,7 +987,7 @@ const USAGE =
   "usage:\n" +
   `  ${scriptCmd("verify-probe")} --expected design/verify/<Screen>.expected.json --url <url> [--out design/verify/<Screen>]\n` +
   "      [--ready <selector>] [--viewport WxH] [--project <dir>] [--position] [--timeout <ms>] [--run <id>] [--max-time <ms>]\n" +
-  "      [--steps <steps.json | plan.json>] [--behaviour on|off]\n" +
+  "      [--steps <steps.json | plan.json>] [--behaviour on|off] [--browser-path <executable>]\n" +
   "      renders <url> in the PROJECT's Playwright (chromium), matches every expectation row (tag → shared path → alias →\n" +
   "      text → text-ordinal → --position), and writes <out>.measured.json + <out>.png for verify-screen --compare.\n" +
   "      --out defaults to the .expected.json path minus `.expected`; --viewport to the frame's w×h; --project to cwd.\n" +
@@ -961,7 +1012,10 @@ const USAGE =
   "      reference's scale and diffed against the Figma reference after the browser closes: measured.visual + <out>.diff.png\n" +
   "      (informational — never the verdict, never an exit 4; not skipped by --behaviour off). Its design/export/… PNG is read\n" +
   "      from the project that owns the expectation (the folder above design/verify/), else from --project.\n" +
-  `  ${scriptCmd("verify-probe")} --check [--project <dir>]\n` +
+  "      --browser-path: launch this Chromium executable instead of the one Playwright installed (a cached browser) — only\n" +
+  "      guaranteed with the bundled Chromium; on macOS the binary inside the .app (…/Contents/MacOS/…). Not an executable\n" +
+  "      file → exit 3. measured.probe.browser.executable says \"custom\"; the path is printed, never written to a file.\n" +
+  `  ${scriptCmd("verify-probe")} --check [--project <dir>] [--browser-path <executable>]\n` +
   "      resolves the project's Playwright and launches chromium once — nothing measured, nothing written.\n" +
   "exit: 0 wrote · 2 usage · 3 renderer unavailable (ask the user to install; never installed here) · 4 the page kept\n" +
   "      navigating / reloaded twice during measurement / was unreachable / timed out / passed --max-time / a --steps step\n" +
@@ -1005,7 +1059,7 @@ export async function main(argv: string[]): Promise<number> {
   const OPTIONS = {
     expected: { type: "string" }, url: { type: "string" }, out: { type: "string" }, ready: { type: "string" }, viewport: { type: "string" },
     project: { type: "string" }, position: { type: "boolean" }, timeout: { type: "string" }, check: { type: "boolean" }, help: { type: "boolean", short: "h" },
-    run: { type: "string" }, "max-time": { type: "string" }, steps: { type: "string" }, behaviour: { type: "string" },
+    run: { type: "string" }, "max-time": { type: "string" }, steps: { type: "string" }, behaviour: { type: "string" }, "browser-path": { type: "string" },
   } as const;
   const { values: f } = cliParse("verify-probe", argv, OPTIONS, USAGE, 2, (args) => parseArgs({ args, options: OPTIONS, allowPositionals: false }));
   const project = path.resolve(f.project ?? ".");
@@ -1072,6 +1126,9 @@ export async function main(argv: string[]): Promise<number> {
     }
     return code;
   };
+  // DT-30: checked before anything else is resolved or launched (a flag, no env var: shell state does not persist between calls)
+  const browserPath = f["browser-path"];
+  if (browserPath !== undefined) { const bad = browserPathError(browserPath); if (bad !== null) return ended(rendererUnavailable(bad, null)); }
   const res = resolvePlaywright(project);
   if (!res.ok) return ended(rendererUnavailable(res.reason, res.hint));
   // written BEFORE the browser starts, and outside the project tree (F-91/H1); false when refused (or no --run)
@@ -1084,15 +1141,17 @@ export async function main(argv: string[]): Promise<number> {
   const runDeadline = Date.now() + maxTime;
   const watchdog = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), maxTime); });
   const work = (async (): Promise<number | { run: Extract<ProbeRun, { kind: "ok" }>; identity: ProbeIdentity; driven: InteractionEvidence[] | null; driveNote: string | null; behaviour: MeasuredBehaviour; forcedPng: Buffer | null; prep: VisualPrep; visualCap: VisualCapture | { why: string }; captureMs: number }> => {
-    const launched = await launch(res, project);
+    const launched = await launch(res, project, browserPath);
     if ("error" in launched) return rendererUnavailable(launched.error, launched.hint);
     const browser = launched.browser;
     held.browser = browser;
-    const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version() } };
+    const identity: ProbeIdentity = { name: "verify-probe", version: probeVersion(), sha256: selfSha256(), playwright: { package: res.pkg, version: res.version }, browser: { name: "chromium", version: browser.version(), ...(browserPath !== undefined ? { executable: "custom" as const } : {}) } };
+    // DT-30: the path is printed (stdout/stderr), never written into a file
+    const browserLine = `chromium ${identity.browser.version}${browserPath !== undefined ? ` (--browser-path ${browserPath})` : ""}`;
 
     if (f.check || !expectation || !expBytes || !f.expected || !f.url) {
       await browser.close();
-      console.log(`ok  ${res.pkg} ${res.version} (from ${path.relative(project, res.file) || res.file}) · chromium ${identity.browser.version} · verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…)`);
+      console.log(`ok  ${res.pkg} ${res.version} (from ${path.relative(project, res.file) || res.file}) · ${browserLine} · verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…)`);
       return 0;
     }
 
@@ -1305,7 +1364,7 @@ export async function main(argv: string[]): Promise<number> {
   console.error(behaviourLine(behaviour));
   console.error(visualLine(visual));
   for (const n of allNotes) console.error(`note  ${n}`);
-  console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}`);
+  console.error(`probe verify-probe ${identity.version ?? "?"} (sha ${identity.sha256.slice(0, 12)}…) · ${res.pkg} ${res.version} · chromium ${identity.browser.version}${browserPath !== undefined ? ` (--browser-path ${browserPath})` : ""}`);
   if (statusRefused && runId !== undefined) {
     // M-1: say which write was refused and what --compare will make of it; the recovery records the measured file's
     // sha after the same checks `done` applies (it reads <verify dir>/<S>.measured.json, else the run's stage dir)

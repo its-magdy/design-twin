@@ -281,8 +281,9 @@ export function publishStatus(base: string, doc: VerifyStatusV2): void {
   writeFileAtomic(statusFile(base), JSON.stringify(doc, null, 2) + "\n");
 }
 
-// Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these).
-const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json)$/;
+// Files the verify tools own: a staged copy must never replace them (--expect / --compare / --status write these;
+// L13: --expect keeps a replaced expectation as <S>.expected.prev.json — `*.prev.json` is tool-written too).
+const TOOL_OWNED = /\.(expected\.json|report\.json|report\.md|status\.json|prev\.json)$/;
 /**
  * Copy every regular file of `stageDir` (top level only) into `destDir`: each goes to `<dest>.tmp-<pid>` IN the
  * destination directory, then is renamed over `<dest>` — so the copy crosses filesystems (EXDEV) and the

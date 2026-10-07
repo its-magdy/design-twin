@@ -11,7 +11,7 @@ import { checkPlan, computeStatus, colorLiterals, arbitraryPx, colorKey, isStale
   scanText, isSourceFile, verificationContradictions, deviationWarnings, auditGateWarnings } from "../design-to-code/verify-build.ts";
 import { blockerIds } from "../design-to-code/audit.ts";
 import { normHex, parseHex } from "../design-to-code/color.ts";
-import { exportContentSha256, fileHashes as hashFiles } from "../design-to-code/content-hash.ts";
+import { exportContentSha256, fileHashes as hashFiles, planCodeFiles, planCodeSkipped } from "../design-to-code/content-hash.ts";
 import { waiversHash } from "../design-to-code/plan-waivers.ts";
 import { build, ENTRIES } from "../claude-plugin/build-scripts.ts";
 import type { CheckPlanResult, ReportRef } from "../design-to-code/verify-build.ts";
@@ -353,6 +353,102 @@ check("[§2.9c] a hand edit to a file the plan describes turns `static-only` int
   const stale = statusOf(root);
   const r = runHook(root);
   return ok1 && stale === "stale" && r.status === 2 && statusOf(root) === "blocked";
+})());
+// FU-shared-shell (D117): the plan's anchors/components map a shared shell another plan lists in its files[] — the
+// hook and the report hash it too, so a shell edit reopens THIS plan (before: it stayed verified/static-only).
+check("[D117] planCodeFiles = files[] (as written, in order) then the mapped modules not already listed, sorted; `#Export` stripped; absolute / `..` / package / alias / extensionless skipped", (() => {
+  const got = planCodeFiles({
+    files: ["src/b/Screen.tsx", "src/a/Table.tsx"],
+    anchors: { "1:1": { mapModule: "src/shell/Sidebar.tsx#Sidebar" }, "1:2": { mapModule: " src/shell/Header.tsx " }, "1:3": { mapModule: "./src/a/Table.tsx" }, "1:4": { mapModule: "/abs/Shell.tsx" },
+      "1:5": { mapModule: "../other/Shell.tsx" }, "1:6": { mapModule: "react" }, "1:7": { mapModule: "@/components/Shell.tsx" }, "1:8": { mapModule: "@scope/ui" }, "1:9": { mapModule: "src/shell" },
+      "1:10": { mapModule: "C:\\work\\Shell.tsx" }, "1:11": { omitted: "decorative" }, "1:12": { mapModule: "src/x/../../../up.tsx" } },
+    components: [{ name: "Button", mapModule: "src/ui/Button.tsx" }, { name: "Badge", mapModule: null }, { name: "Icon", mapModule: "node:fs" }],
+  });
+  return JSON.stringify(got) === JSON.stringify(["src/b/Screen.tsx", "src/a/Table.tsx", "src/shell/Header.tsx", "src/shell/Sidebar.tsx", "src/ui/Button.tsx"]);
+})());
+{
+  const files = { "src/Screen.tsx": "export const Screen = () => null;\n", "src/shell/Shell.tsx": "export const Shell = () => null;\n" };
+  const root = project(files, { status: "pending", files: ["src/Screen.tsx"], anchors: { "1:2": { mapModule: "src/shell/Shell.tsx#Shell" } }, verification: STATIC });
+  const r = runHook(root);
+  const hooked = hookOf(root).files || {};
+  check(`[D117] the hook passes and hashes the mapped shell outside files[] (got ${JSON.stringify(Object.keys(hooked))})`,
+    r.status === 0 && statusOf(root) === "static-only" && JSON.stringify(Object.keys(hooked)) === JSON.stringify(["src/Screen.tsx", "src/shell/Shell.tsx"]) && typeof hooked["src/shell/Shell.tsx"] === "string");
+  fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// a shared nav item\n");
+  const st = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  check(`[D117] editing the shared shell → stale, naming it (before: still static-only) (got ${st.status}: ${st.reasons.join(" | ")})`,
+    st.status === "stale" && st.reasons.some((x) => /file\(s\) changed since the hook passed: src\/shell\/Shell\.tsx$/.test(x)));
+  // M2 (fix pass 1): a hook record written before D117 hashed files[] only — the shell key is absent. That is the
+  // upgrade, not a change: the plan the hook closed stays closed (before: stale + open with no file changed), one note
+  runHook(root);
+  const p = planOf(root);
+  const hook = p.verification?.hook;
+  if (hook) delete hook.files["src/shell/Shell.tsx"];
+  const planFile = path.join(root, "design", "plan", "login.json");
+  fs.writeFileSync(planFile, JSON.stringify(p, null, 2));
+  const old = computeStatus(planOf(root), { cwd: root, planFile });
+  check(`[M2] a pre-D117 hook record (shell not hashed) → NOT stale, not open; a note "src/shell/Shell.tsx (now hashed: mapped module)" (got ${old.status}: ${old.reasons.join(" | ")})`,
+    old.status === "static-only" && !verifyBuild.isOpen({ file: planFile, plan: planOf(root) }, root)
+    && old.reasons.some((x) => /^hook: not hashed by the hook's last check \(its record predates D117\), so not a change: src\/shell\/Shell\.tsx \(now hashed: mapped module\)/.test(x))
+    && !old.reasons.some((x) => /file\(s\) changed since/.test(x)));
+  check("[M2] …the Stop hook's fast path stays silent on it (closed)", (() => { const r = runHook(root); return r.status === 0 && r.stderr === "" && hookOf(root).files?.["src/shell/Shell.tsx"] === undefined; })());
+  // a files[] entry the old record never hashed is still a change
+  const p2 = planOf(root);
+  if (p2.verification?.hook) delete p2.verification.hook.files["src/Screen.tsx"];
+  fs.writeFileSync(planFile, JSON.stringify(p2, null, 2));
+  const st2 = computeStatus(planOf(root), { cwd: root, planFile });
+  check(`[M2] control: a files[] entry missing from the record is still a change → stale "(added to files[])" (got ${st2.status})`,
+    st2.status === "stale" && st2.reasons.some((x) => x.includes("src/Screen.tsx (added to files[])")));
+  // once the hook records the shell, an edit to it reopens the plan
+  spawnSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root, encoding: "utf8" }); // an explicit check re-records
+  const recorded = typeof hookOf(root).files?.["src/shell/Shell.tsx"] === "string";
+  fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// edited after the record\n");
+  check("[M2] once a hook check records it, an edit to the shell is a change again (stale)", recorded && statusOf(root) === "stale");
+}
+// Extensionless mapModule paths (fix pass 1, queued): resolved like an import, under the project, and the resolved FILE
+// hashed; aliases / packages / no file → one hook warning naming them (L12); a resolved module gone → labelled (L9).
+check("[D117+] planCodeFiles(plan, cwd): an extensionless mapModule resolves .tsx/.ts/.jsx/.js, then /index.*; none found, an alias or a package → skipped and named by planCodeSkipped", (() => {
+  const root = project({ "src/Screen.tsx": "x", "src/shell/Sidebar.tsx": "x", "src/shell/Header.ts": "x", "src/shell/nav/index.tsx": "x", "src/ui/Card.jsx": "x", "src/ui/Card.js": "x", "src/Screen.ts": "x" }, {});
+  const plan: Plan = { files: ["src/Screen.tsx"], anchors: { "1:1": { mapModule: "src/shell/Sidebar#Sidebar" }, "1:2": { mapModule: "./src/shell/Header" }, "1:3": { mapModule: "src/shell/nav/" },
+    "1:4": { mapModule: "src/ui/Card" }, "1:5": { mapModule: "src/Screen" }, "1:6": { mapModule: "src/shell/Gone" }, "1:7": { mapModule: "@/components/Shell" }, "1:8": { mapModule: "~/shell/Header" },
+    "1:9": { mapModule: "react" }, "1:10": { mapModule: "../other/Shell" } } };
+  const got = planCodeFiles(plan, root), noCwd = planCodeFiles(plan);
+  const skipped = planCodeSkipped(plan, root);
+  return JSON.stringify(got) === JSON.stringify(["src/Screen.tsx", "src/shell/Header.ts", "src/shell/Sidebar.tsx", "src/shell/nav/index.tsx", "src/ui/Card.jsx"])
+    && JSON.stringify(noCwd) === JSON.stringify(["src/Screen.tsx"])
+    && JSON.stringify(skipped) === JSON.stringify(["../other/Shell", "@/components/Shell", "react", "src/shell/Gone", "~/shell/Header"]);
+})());
+{
+  const files = { "src/Screen.tsx": "export const Screen = () => null;\n", "src/shell/Shell.tsx": "export const Shell = () => null;\n" };
+  const root = project(files, { status: "pending", files: ["src/Screen.tsx"], anchors: { "1:2": { mapModule: "src/shell/Shell#Shell" }, "1:3": { mapModule: "@/components/Footer" }, "1:4": { mapModule: "~/ui/Badge" } }, verification: STATIC });
+  const r = runHook(root);
+  check(`[D117+] an extensionless shell mapModule: the hook hashes the resolved file (got ${JSON.stringify(Object.keys(hookOf(root).files || {}))})`,
+    r.status === 0 && statusOf(root) === "static-only" && typeof hookOf(root).files?.["src/shell/Shell.tsx"] === "string");
+  fs.appendFileSync(path.join(root, "src/shell/Shell.tsx"), "// a shared nav item\n");
+  check("[D117+] …editing it → stale", statusOf(root) === "stale");
+  // L12 (D119 addendum): named once in --status, never by the Stop hook (it would repeat on every stop)
+  const NOTE = /mapModule path\(s\) not hashed with this plan's code: @\/components\/Footer, ~\/ui\/Badge — not a file under the project \(an `@\/`\/`~\/` alias/;
+  const sj = spawnSync(process.execPath, [HOOK, "--status", "--json"], { cwd: root, encoding: "utf8" });
+  const rows: unknown = JSON.parse(sj.stdout || "[]");
+  const reasons = isStatusRows(rows) ? rows.flatMap((x) => x.reasons) : [];
+  check(`[L12] verify-build --status: ONE note naming the alias mapModules (got ${JSON.stringify(reasons.filter((x) => /mapModule/.test(x)))})`,
+    reasons.filter((x) => NOTE.test(x)).length === 1 && reasons.some((x) => x.startsWith("note: mapModule path(s) not hashed")));
+  const hookRun = runHook(root, { cwd: root });
+  const hookSaid = spawnSync(process.execPath, [HOOK, "design/plan/login.json"], { cwd: root, encoding: "utf8" });
+  check("[L12] …the Stop hook says nothing about it (no warning on the fast path nor on an explicit check; not among checkPlan's warnings)",
+    !/mapModule path\(s\) not hashed/.test(hookRun.stderr + hookSaid.stderr) && hookSaid.status === 0
+    && !checkPlan({ plan: planOf(root), file: path.join(root, "design", "plan", "login.json") }, root).warnings.some((x) => /mapModule path\(s\) not hashed/.test(x)));
+  runHook(root);
+  fs.rmSync(path.join(root, "src/shell/Shell.tsx"));
+  const gone = computeStatus(planOf(root), { cwd: root, planFile: path.join(root, "design", "plan", "login.json") });
+  check(`[L9] the resolved module deleted → stale, labelled "no longer hashed" (not "no longer in files[]") (got ${gone.reasons.join(" | ")})`,
+    gone.status === "stale" && gone.reasons.some((x) => x.includes("src/shell/Shell.tsx (no longer hashed: not in files[] nor a mapped module that resolves)")) && !gone.reasons.some((x) => /\(no longer in files\[\]\)/.test(x)));
+}
+// DT-55 (D116): "the reference PNG is illustrative here" is a deviations[] row with field "reference" — the existing
+// shape, so verify-build's deviation checks accept it unchanged (compare surfaces it in report.visual.illustrative).
+check("[DT-55] a deviation with field \"reference\" passes deviationWarnings and deviationConflicts unchanged (no warning)", (() => {
+  const plan: Plan = { deviations: [{ nodeId: "1:2", field: "reference", designed: "the PNG shows sample rows", built: "rows come from the API", reason: "the reference is illustrative: the rows are sample data" }] };
+  return deviationWarnings(plan).length === 0 && verifyBuild.deviationConflicts(plan).length === 0
+    && !problems({}, { ...plan, verification: STATIC }).some((m) => /deviation/i.test(m));
 })());
 check("a plan paused on a user question (awaiting-user) does not block the stop, and is never closed", (() => {
   const root = project({}, { status: "awaiting-user", files: [], tokens: [{ value: "#123456", kind: "color", codeToken: null, verdict: "missing" }] });
@@ -781,6 +877,17 @@ console.log("P2b round 2 — freshness by content, never by clock (livetest-4 fi
   const g5 = st();
   check(`[DT-28] a failing report stays failed after the owner accepts something, and says to re-compare (got ${g5.status})`,
     g5.status === "failed" && /waivers changed since the last compare/.test(g5.reasons.join(" ")));
+  // D117: the plan now maps a shared shell the report never hashed (a report written before D117, or before the
+  // mapping) → unverified, the shell labelled "(not recorded)": one re-compare records it
+  const shellPlan = readFixture(planFile, isPlan);
+  withReport("pass", { plan: `design/plan/${JR}.json`, sha256: waiversHash(shellPlan) });
+  fs.writeFileSync(path.join(root, "app/src/layout/Shell.tsx"), "export const Shell = () => null;\n");
+  shellPlan.anchors = { ...shellPlan.anchors, "7314:87192": { mapModule: "app/src/layout/Shell.tsx#Shell" } };
+  fs.writeFileSync(planFile, JSON.stringify(shellPlan, null, 2));
+  hook();
+  const g6 = st();
+  check(`[D117] a mapped shell the report did not hash → unverified "measured different code — changed since: app/src/layout/Shell.tsx (not recorded)" (got ${g6.status}: ${g6.reasons.join(" | ").slice(0, 200)})`,
+    g6.status === "unverified" && /measured different code — changed since: app\/src\/layout\/Shell\.tsx \(not recorded\)/.test(g6.reasons.join(" ")));
 }
 check("[DT-28] a plan claiming \"pass-with-deviations\" beside that report is no contradiction (/pass/i also matched the new verdict)",
   verificationContradictions({ verification: { verifyScreenVerdict: "pass-with-deviations" } }, [reportRef({ rel: "design/verify/x.report.json", verdict: "pass-with-deviations" })]).length === 0

@@ -127,11 +127,15 @@ Render at least once each, when the stack supports it:
 - A narrow and a wide width (small phone / tablet, or web breakpoints) for fill/hug behavior.
 
 Record what you covered in the plan's `verification.coverage` — `{rendered:[…], notChecked:[{what,
-why}]}` — and, when an accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
+why}]}` (yours to write) — and, on web, let `verify-screen.js --compare … --record-plan` write the rest of `verification`
+(`mode`, `renderer`, `artifacts`, open `deltas`, `a11y` from `report.behaviour.summary`, `recorded`); elsewhere, when an
+accessibility check ran, `verification.a11y` — `{tool, violations, warnings, report}`, copied from `report.behaviour.summary`. One
 rendered frame is a legitimate result; an unstated one is not, because the report would then read as
 "verified" for states nobody looked at. The Stop hook only warns when these are missing.
 
 ## The fix loop
+- Record the differences you already know about as `deviations[]` (with a reason) when you build them, not after the
+  report lists them; a line-height taller than its fixed text box is a choice to make deliberately, not a delta to chase.
 - Fix the largest structural or numeric delta first, re-render, re-compare. Keep a one-line log per
   round (what changed, what the delta became).
 - Cap at **5 rounds per component**, and stop sooner when a round fixes nothing. If a fix to one value

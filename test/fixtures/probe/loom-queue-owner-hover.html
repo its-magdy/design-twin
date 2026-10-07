@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- group 17 e2e page (invented names): whose drawn state is hovered and who paints (F-74, DT-48), and the computed
+     text-transform of a TEXT node (F-69). A row painted by `tr:hover` over transparent tagged cells; controls in the rows
+     with their OWN :hover (red — never drawn); a transparent wrapper whose only child paints; a control that covers its
+     whole drawn-hovered container (no free point); a card whose owner is untagged but which is the tagged ancestor below it.
+     Fix pass 1 (D119): a same-box tagged <span> around a control whose next tagged ancestor has room (L1); an ARIA-grid
+     row whose cells carry tabindex="-1" (L2); a row with a checkbox in its first corner and a tile covered by a
+     transparent overlay (freeHoverPoint's interactive-descendant and avoid-box guards); a transparent box its own two
+     children paint all over (L5). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Loom Queue</title>
+<style>
+  body { margin: 0; font-family: Arial, sans-serif; }
+  .frame { width: 800px; height: 600px; background: rgb(18, 19, 25); color: rgb(212, 212, 212); padding: 24px; box-sizing: border-box; }
+  table { border-collapse: collapse; width: 600px; }
+  td { padding: 0 12px; height: 48px; }
+  tr:hover { background: rgb(70, 70, 79); }
+  button { all: unset; display: inline-block; width: 32px; height: 32px; background: rgb(41, 41, 49); }
+  button:hover { background: rgb(255, 0, 0); }
+  .wrap { width: 200px; height: 40px; margin-top: 16px; }
+  .wrap > div { width: 200px; height: 40px; background: rgb(44, 44, 52); }
+  .pill { display: inline-block; margin-top: 16px; }
+  .pill > button { display: block; width: 120px; height: 32px; }
+  .card { width: 300px; height: 60px; margin-top: 16px; padding: 12px; box-sizing: border-box; }
+  .card:hover { background: rgb(30, 60, 90); }
+  .card a { color: rgb(200, 200, 200); }
+  .card a:hover { color: rgb(255, 0, 0); }
+  .cap { text-transform: capitalize; }
+  .fx { display: flex; width: 300px; height: 28px; margin-top: 6px; }
+  .strip > .sbox { display: block; width: 28px; height: 28px; }
+  .strip > .sbox > button { display: block; width: 28px; height: 28px; }
+  .grow > div { flex: 1; height: 28px; }
+  .grow button { display: block; width: 28px; height: 28px; }
+  .crow > input { width: 28px; height: 28px; margin: 0; }
+  .crow > span { flex: 1; }
+  .crow > button { width: 28px; height: 28px; }
+  .tile { position: relative; }
+  .tile > span { display: block; width: 150px; height: 28px; }
+  .tile > i { position: absolute; inset: 0; }
+  .paint2 > div { flex: 1; height: 28px; background: rgb(60, 60, 60); }
+</style>
+</head>
+<body>
+<div class="frame" data-dt-node="70:1">
+  <table data-dt-node="70:2"><tbody>
+    <tr data-dt-node="70:3"><td data-dt-node="70:4">Warp spool</td><td data-dt-node="70:5"><button data-dt-node="70:6" aria-label="Remove warp spool"></button></td></tr>
+    <tr data-dt-node="70:20"><td>Weft spool</td><td><button data-dt-node="70:21" aria-label="Remove weft spool"></button></td></tr>
+  </tbody></table>
+  <div class="wrap" data-dt-node="70:8"><div></div></div>
+  <div class="pill" data-dt-node="70:10"><button data-dt-node="70:11">Queue</button></div>
+  <div class="card" data-dt-node="70:12"><a href="#spools" data-dt-node="70:13">Open</a></div>
+  <p data-dt-node="70:30"><span class="cap">spool order</span></p>
+  <p data-dt-node="70:31">bobbin count</p>
+  <div class="fx strip" data-dt-node="70:42"><span class="sbox" data-dt-node="70:43"><button data-dt-node="70:44" aria-label="Run spool"></button></span></div>
+  <div role="grid"><div role="row" class="fx grow" data-dt-node="70:50"><div role="gridcell" tabindex="-1">Shuttle</div><div role="gridcell" tabindex="-1"><button data-dt-node="70:51" aria-label="Remove shuttle"></button></div></div></div>
+  <div class="fx crow" data-dt-node="70:60"><input type="checkbox" aria-label="Pick heddle"><span>Heddle</span><button data-dt-node="70:61" aria-label="Remove heddle"></button></div>
+  <div class="fx tile" data-dt-node="70:70"><span data-dt-node="70:71">Reed</span><i></i></div>
+  <div class="fx paint2" data-dt-node="70:80"><div></div><div></div></div>
+</div>
+</body>
+</html>
